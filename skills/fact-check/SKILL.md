@@ -1,6 +1,6 @@
 ---
 name: fact-check
-description: Use when the user asks to fact-check, verify, audit citations, or check whether sources support the manuscript's claims. Runs citation-by-citation verification of a document against Zotero / MCP-retrieved sources and quantitative claims against the authoritative results file. Unlike the critic-loop evidence critic, this skill runs as a standalone one-shot audit with no revision loop.
+description: Use when the user asks to fact-check a manuscript, verify citations, audit sources, or check whether a paper's cited sources actually support the claims made about them. Trigger phrases: "fact-check", "verify citations", "audit citations", "check the sources", "do these papers actually say that", "verify the numbers in this draft". Runs citation-by-citation verification against Zotero / MCP-retrieved sources, and quantitative claims against the authoritative results file. Unlike the `critic-loop` evidence critic, this skill is a standalone one-shot audit with no revision loop.
 ---
 
 # fact-check

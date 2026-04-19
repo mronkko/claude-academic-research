@@ -1,6 +1,6 @@
 ---
 name: zotero-operations
-description: Use when performing Zotero reference-management operations outside a systematic review — importing items, deduplication, attaching PDFs, maintaining BBT citation keys, enriching metadata, or writing structured child notes. Covers the patterns for mixing the local Zotero client (fast bulk reads) with the remote API (writes), and the three-check dedup protocol.
+description: Use when the user asks to work with a Zotero library — adding missing abstracts, attaching missing PDFs, enriching metadata, importing items, deduplicating, fixing BBT (Better BibTeX) citation keys, or writing structured child notes. Common trigger phrases the harness should match on: "add abstracts to Zotero", "attach PDFs", "enrich my Zotero library", "fix citation keys", "find duplicates in Zotero", "update Zotero items". Do NOT use for a full PRISMA-style systematic review — use the `systematic-review` skill instead.
 ---
 
 # zotero-operations

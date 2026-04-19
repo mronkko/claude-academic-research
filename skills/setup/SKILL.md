@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Use when the user invokes `/setup` after installing the academic-research plugin for the first time, or wants to reconfigure API keys, permissions, or MCP servers. Walks the user through API key entry, writes `~/.config/academic-research/config.toml` (mode 0600), patches `~/.claude/settings.json` with plugin-scoped permission rules, registers MCP servers, and installs Playwright Chromium. Chat-driven — no terminal required.
+description: Use when the user invokes `/setup`, asks to configure the academic-research plugin for the first time, wants to add or rotate API keys (Zotero, Elsevier, WoS, Anthropic, Semantic Scholar, Wiley TDM, OpenAlex), register MCP servers, or patch permission rules. Also fires when any other academic-research procedural skill (zotero-operations, systematic-review, fact-check, critic-loop) reports `NOT CONFIGURED` on its pre-flight check. Walks the user through API-key entry, writes `~/.config/academic-research/config.toml` (mode 0600), patches `~/.claude/settings.json`, registers MCP servers, installs Playwright Chromium. Chat-driven — no terminal required.
 ---
 
 # setup

@@ -1,6 +1,6 @@
 ---
 name: critic-loop
-description: Revise an academic manuscript through parallel critic subagents. Main agent edits → tests pass → render → four critics review in parallel (evidence, method, argument, expert) → main agent adjudicates and applies → loop until no critic asks for a MAJOR revision. Invoke as `/critic-loop <document-path>`.
+description: Use when the user asks to revise, polish, or critique an academic manuscript, chapter, thesis, or paper through parallel critic perspectives. Trigger phrases: "run critic-loop", "/critic-loop", "revise this manuscript", "run critics on this draft", "run a critical review", "review this chapter". Main agent edits → tests pass → render → four critics review in parallel (evidence, method, argument, expert) → main agent adjudicates and applies → loop until no critic asks for a MAJOR revision. Invoke as `/critic-loop <document-path>`.
 ---
 
 # critic-loop

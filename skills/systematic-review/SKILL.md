@@ -1,6 +1,6 @@
 ---
 name: systematic-review
-description: Use when running a systematic literature review (SLR) — PRISMA-style search, screening, coding, and export. Provides the end-to-end pipeline from scripted Scopus/WoS search → Zotero import → abstract fetch → PDF attach → Claude-driven abstract and full-text screening → QA with evaluator agents → human adjudication → export to manuscript. Targets social-sciences SLRs (management, entrepreneurship, IS, organizational behavior); medical-SLR instruments (RoB 2, ROBINS-I, evidence hierarchies) are explicitly out of scope.
+description: Use when running a full systematic literature review (SLR) — PRISMA-style search, screening, coding, and export. End-to-end pipeline from scripted Scopus/WoS search → Zotero import → abstract fetch → PDF attach → Claude-driven abstract and full-text screening → QA evaluator agents → human adjudication in Zotero → export to manuscript. Trigger phrases: "systematic review", "SLR", "PRISMA", "screen papers", "code the included papers", "run the search", "full-text screening". For isolated Zotero enrichment work (adding abstracts, attaching PDFs to an existing library) that is NOT part of a full SLR pipeline, use the `zotero-operations` skill instead. Targets social-sciences research; medical-SLR instruments (RoB 2, ROBINS-I, evidence hierarchies I–VII, PRISMA-P) are out of scope.
 ---
 
 # systematic-review
