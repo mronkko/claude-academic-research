@@ -1,0 +1,6 @@
+# Beall's list — standalone journal entries.
+# One journal name per line. Substring-matched (case-insensitive) against
+# the journal's title. Source: https://beallslist.net/
+# Populate before running the systematic-review pipeline.
+
+_placeholder

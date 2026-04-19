@@ -1,0 +1,8 @@
+{
+  "name": "academic-research",
+  "version": "0.1.0",
+  "description": "Rule-books and procedures for academic research with Claude Code: MCP-grounded citations, empirical integrity, systematic reviews, Zotero operations, and a parallel-critic manuscript revision loop. Includes a chat-driven /setup wizard for non-technical users.",
+  "author": { "name": "Mikko Rönkkö", "email": "mikko.ronkko@jyu.fi" },
+  "license": "MIT",
+  "homepage": "https://github.com/mronkko/claude-academic-research"
+}

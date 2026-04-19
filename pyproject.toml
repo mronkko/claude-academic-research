@@ -1,0 +1,42 @@
+[project]
+name = "claude-academic-research"
+version = "0.1.0"
+description = "Dev/test tooling for the claude-academic-research Claude Code plugin. Runtime scripts use uv + PEP 723 inline deps and do not depend on this pyproject."
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Mikko Rönkkö", email = "mikko.ronkko@jyu.fi" }]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "responses>=0.25",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+# Legacy pipeline scripts were copied over as working code. They use some
+# one-line `if: break` and `x += 1; continue` patterns that are stylistic,
+# not bugs. Don't gate CI on rewriting them.
+[tool.ruff.lint.per-file-ignores]
+"scripts/pipelines/*.py" = ["E701", "E702"]
+
+# IDE static analysis: pipeline scripts add `scripts/` to sys.path at runtime
+# so they can import sibling packages (publishers, sources, core). Tell the
+# analyzer about it so imports like `from publishers.registry import ...`
+# resolve without warnings.
+[tool.pyrefly]
+search-path = ["scripts"]
+
+[tool.pyright]
+extraPaths = ["scripts"]

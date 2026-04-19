@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# uv
+.uv-cache/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Local / secrets (belt-and-braces — real config lives under ~/.config/academic-research/)
+.env
+.env.local
+config.toml
+
+# Test artefacts
+/tmp/
+htmlcov/
+.coverage
+coverage.xml
+
+# Local review / scratch notes
+REVIEW_NOTES.md

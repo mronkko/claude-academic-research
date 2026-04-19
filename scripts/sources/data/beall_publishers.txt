@@ -1,0 +1,6 @@
+# Beall's list — publisher-level entries.
+# One publisher name per line. Substring-matched (case-insensitive) against
+# the journal's publisher/title. Source: https://beallslist.net/
+# Populate before running the systematic-review pipeline.
+
+_placeholder

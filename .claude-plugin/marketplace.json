@@ -1,0 +1,15 @@
+{
+  "name": "mronkko",
+  "owner": {
+    "name": "Mikko Rönkkö",
+    "email": "mikko.ronkko@jyu.fi",
+    "url": "https://github.com/mronkko"
+  },
+  "plugins": [
+    {
+      "name": "academic-research",
+      "source": "./",
+      "description": "Rule-books and procedures for academic research with Claude Code: MCP-grounded citations, empirical integrity, systematic reviews, Zotero operations, and a parallel-critic manuscript revision loop."
+    }
+  ]
+}
