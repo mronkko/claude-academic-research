@@ -5,6 +5,27 @@ description: Use when performing Zotero reference-management operations outside 
 
 # zotero-operations
 
+## Pre-flight (ALWAYS run first)
+
+Before any step below, verify the plugin has been configured:
+
+```bash
+test -f ~/.config/academic-research/config.toml && echo "configured" || echo "NOT CONFIGURED"
+```
+
+If the result is `NOT CONFIGURED`, stop immediately and tell the user:
+
+> The academic-research plugin has not been set up on this machine
+> yet. Run `/setup` first to configure API keys, MCP servers, and
+> permission rules. Do not attempt Zotero operations before that.
+
+Do not call MCP tools, run scripts, or proceed with the procedure.
+`/setup` is the required first step.
+
+If the result is `configured`, proceed.
+
+---
+
 For SLR-specific operations (bulk screening, coding, QA tags), use the
 `systematic-review` skill. This skill covers general Zotero patterns
 that apply outside an SLR context.

@@ -7,6 +7,28 @@ description: Revise an academic manuscript through parallel critic subagents. Ma
 
 **Invocation:** `/critic-loop <document-path> [--critics evidence,method,argument,expert] [--max-iter 4] [--no-test] [--render-cmd "quarto render {doc} --to gfm"]`
 
+## Pre-flight (ALWAYS run first)
+
+Before any step below, verify the plugin has been configured:
+
+```bash
+test -f ~/.config/academic-research/config.toml && echo "configured" || echo "NOT CONFIGURED"
+```
+
+If the result is `NOT CONFIGURED`, stop immediately and tell the user:
+
+> The academic-research plugin has not been set up on this machine
+> yet. Run `/setup` first — the evidence critic depends on MCP
+> citation lookups (Zotero, OpenAlex, Semantic Scholar), which
+> require MCP servers that `/setup` registers.
+
+Do not launch critics or proceed with the loop. `/setup` is the
+required first step.
+
+If the result is `configured`, proceed.
+
+---
+
 Execute the editing loop documented in the `academic-writing` skill. This
 skill is the *procedure*; that skill is the *doctrine*. Read it first if
 you have not recently.

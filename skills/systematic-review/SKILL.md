@@ -5,6 +5,28 @@ description: Use when running a systematic literature review (SLR) — PRISMA-st
 
 # systematic-review
 
+## Pre-flight (ALWAYS run first)
+
+Before any step below, verify the plugin has been configured:
+
+```bash
+test -f ~/.config/academic-research/config.toml && echo "configured" || echo "NOT CONFIGURED"
+```
+
+If the result is `NOT CONFIGURED`, stop immediately and tell the user:
+
+> The academic-research plugin has not been set up on this machine
+> yet. Run `/setup` first to configure API keys (Zotero, Elsevier,
+> WoS, Anthropic, Semantic Scholar), MCP servers, and permission
+> rules. Do not attempt an SLR before that.
+
+Do not call MCP tools, run pipeline scripts, or proceed with any stage
+of the procedure. `/setup` is the required first step.
+
+If the result is `configured`, proceed.
+
+---
+
 ## Core architecture
 
 Every systematic review runs through the same stages:

@@ -5,6 +5,28 @@ description: Use when the user asks to fact-check, verify, audit citations, or c
 
 # fact-check
 
+## Pre-flight (ALWAYS run first)
+
+Before any step below, verify the plugin has been configured:
+
+```bash
+test -f ~/.config/academic-research/config.toml && echo "configured" || echo "NOT CONFIGURED"
+```
+
+If the result is `NOT CONFIGURED`, stop immediately and tell the user:
+
+> The academic-research plugin has not been set up on this machine
+> yet. Run `/setup` first — fact-check depends on Zotero and MCP
+> citation lookups, which require API keys and MCP servers that
+> `/setup` configures.
+
+Do not call MCP tools or proceed with the audit. `/setup` is the
+required first step.
+
+If the result is `configured`, proceed.
+
+---
+
 This skill is the standalone cousin of the `critic-loop` evidence
 critic. The evidence critic fires inside the revision loop; fact-check
 runs one-shot when the user explicitly asks for a citation/claim audit.
