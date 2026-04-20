@@ -553,11 +553,51 @@ async def main_async():
     publishers = load_publishers(args.publishers_json)
     items = load_items(publishers, args.log_csv, args.filter_keys_file)
 
-    print(f"\nTotal missing PDFs (matching configured publishers): {len(items)}",
+    # Summary of what will happen, *before* Chromium opens. Non-technical
+    # users seeing a browser window pop up with no context is jarring; this
+    # block exists specifically to give them advance notice.
+    pub_counts = [(info["name"], sum(1 for x in items if x["publisher"] == pub))
+                  for pub, info in publishers.items()]
+    active = [(name, n) for name, n in pub_counts if n > 0]
+
+    print()
+    print("=" * 72, flush=True)
+    print("  Browser-based PDF fetcher", flush=True)
+    print("=" * 72, flush=True)
+    print(flush=True)
+    if not active:
+        print("  No items match any configured publisher. Nothing to do.",
+              flush=True)
+        print("=" * 72, flush=True)
+        return
+    print("  A Chromium browser window is about to open. You will see it on",
           flush=True)
-    for pub, info in publishers.items():
-        n = sum(1 for x in items if x["publisher"] == pub)
-        print(f"  {info['name']}: {n}", flush=True)
+    print("  your desktop. For each publisher, you may need to:", flush=True)
+    print(flush=True)
+    print("    1. Solve a one-time Cloudflare challenge (click the checkbox",
+          flush=True)
+    print("       or similar). Only once per publisher domain per session.",
+          flush=True)
+    print("    2. Sign in via your institution's SSO if the publisher",
+          flush=True)
+    print("       prompts for it.", flush=True)
+    print(flush=True)
+    print("  After you pass the challenge for a publisher, the script",
+          flush=True)
+    print("  downloads every queued PDF for that publisher automatically,",
+          flush=True)
+    print("  using the same authenticated session.", flush=True)
+    print(flush=True)
+    print(f"  Publishers queued ({len(active)}):", flush=True)
+    for name, n in active:
+        print(f"    • {name}: {n} paper{'s' if n != 1 else ''}", flush=True)
+    print(flush=True)
+    print(f"  Total:  {sum(n for _, n in active)} papers across {len(active)} publishers", flush=True)
+    print("  Leave this terminal and the browser window open until done.",
+          flush=True)
+    print("  Press Ctrl-C to abort at any time.", flush=True)
+    print("=" * 72, flush=True)
+    print(flush=True)
 
     to_run = list(publishers.keys()) if args.publisher == "all" else [args.publisher]
     for pub in to_run:

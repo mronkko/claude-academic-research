@@ -39,15 +39,40 @@ exact invocation.
 | User intent | Script | Invocation |
 |---|---|---|
 | Audit a library for items missing abstracts / PDFs / empty stubs | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group <id>` |
-| Add missing abstracts to items | `fetch_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_abstracts.py --filter-keys-file /tmp/need_abstract.keys` |
-| Attach missing PDFs (fast HTTP cascade) | `attach_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/attach_pdfs.py --filter-keys-file /tmp/need_pdf.keys` |
+| Add missing abstracts to items | `fetch_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_abstracts.py --filter-keys-file /tmp/zotero_audit.missing_abstract.keys` |
+| Attach missing PDFs (fast HTTP cascade) | `attach_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/attach_pdfs.py --filter-keys-file /tmp/zotero_audit.missing_pdf.keys` |
 | Attach PDFs from Wiley journals | `fetch_pdfs_wiley_tdm.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_pdfs_wiley_tdm.py` |
 | Attach PDFs from Cloudflare-gated publishers (Sage, APA, T&F, Emerald, …) | `fetch_pdfs_browser.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_pdfs_browser.py` |
 | Generate `references.bib` from a manuscript's citation keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py <project_dir>` |
 
+The audit script writes both a JSON report and three `.keys` files
+(`/tmp/zotero_audit.{missing_abstract,missing_pdf,empty_stubs}.keys`)
+— feed them straight to the next stage's `--filter-keys-file` flag.
+**Do not improvise a `jq` step to extract keys**; the script wrote them
+for you.
+
 Each script reads API keys from `~/.config/academic-research/config.toml`
 (the `/setup` wizard writes it) inside its own process via
 `core.config_loader`. **The keys never pass through your tool layer.**
+
+### Narrate before surprising the user
+
+Some pipeline stages do things the user may find startling if
+unannounced. **Always tell the user what is about to happen before
+running these stages:**
+
+- `fetch_pdfs_browser.py` — opens a visible Chromium window on their
+  desktop; they may need to solve a Cloudflare challenge or sign in
+  via institutional SSO. Tell them *before* launching:
+  *"Next step: browser-based PDF fetcher. A Chromium window will
+  open on your desktop. For each publisher you may need to click
+  through a Cloudflare challenge once. Ready?"* and wait for
+  acknowledgement.
+- `attach_pdfs.py` on a large library — can take 5–15 minutes with
+  multi-source cascade. Warn if > 20 items.
+- `fetch_pdfs_wiley_tdm.py` — silent HTTP, no warning needed.
+- First run of any `uv run` command installs Python dependencies
+  (~1–20 s). Mention it if noticeable.
 
 ### Canonical workflow for "add missing abstracts and PDFs to a library"
 
@@ -55,13 +80,14 @@ Each script reads API keys from `~/.config/academic-research/config.toml`
    `mcp__zotero__zotero_list_libraries` if you need to see what is
    available. Never guess the group ID.
 2. Run `audit_zotero_library.py --group <id>`. Read the summary counts.
-3. Report the counts to the user and ask which to fix (missing
-   abstracts, missing PDFs, empty stubs, or all).
-4. Extract the relevant keys to a file:
-   `jq -r '.missing_abstract[].key' /tmp/zotero_audit.json > /tmp/need_abstract.keys`
-5. Run `fetch_abstracts.py --filter-keys-file /tmp/need_abstract.keys`
-   and / or `attach_pdfs.py --filter-keys-file /tmp/need_pdf.keys`.
-6. Re-run the audit to confirm counts dropped.
+   The script writes `/tmp/zotero_audit.{missing_abstract,missing_pdf,
+   empty_stubs}.keys` alongside the JSON report.
+3. Report counts to the user and ask which to fix (missing abstracts,
+   missing PDFs, empty stubs, or all).
+4. Run the stage(s) the user chose, passing the matching `.keys` file
+   to `--filter-keys-file`. The audit script prints the exact commands
+   in its "Next steps" output — use those verbatim.
+5. Re-run the audit to confirm counts dropped.
 
 ### Do not improvise
 

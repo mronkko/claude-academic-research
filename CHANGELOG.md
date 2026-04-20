@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] — 2026-04-20
+
+### UX polish after first real-pipeline run
+
+- **Audit script writes `.keys` files directly.** After
+  `audit_zotero_library.py` runs, `/tmp/zotero_audit.missing_abstract.keys`,
+  `.missing_pdf.keys`, and `.empty_stubs.keys` land next to the JSON —
+  feedable straight to the next pipeline stage's `--filter-keys-file`
+  flag. Eliminates the `jq` extraction step (which triggered a
+  permission prompt and invited the `empty_stub` vs `empty_stubs`
+  singular/plural typo). The script's "Next steps" output now shows
+  the exact command to run for each non-empty category.
+- **Browser fetcher announces itself.** `fetch_pdfs_browser.py` prints
+  a 20-line banner before launching Chromium: what is about to happen,
+  which publishers are queued with counts, what the user may be asked
+  to do (solve CF challenge, sign in via SSO). No more surprise
+  browser windows.
+- **Skill-level narration rule.** `zotero-operations` now instructs
+  Claude to announce potentially startling stages to the user *before*
+  running them (browser fetches, long attach_pdfs runs, first-run uv
+  installs).
+- **Canonical workflow prose updated** — the skill's "add missing
+  abstracts and PDFs" walkthrough drops the `jq` step and references
+  the `.keys` files directly.
+
 ## [0.1.2] — 2026-04-20
 
 ### Security hardening

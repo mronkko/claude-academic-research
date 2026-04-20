@@ -150,6 +150,19 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
+    # Write one-key-per-line files next to the JSON so downstream pipeline
+    # stages can consume them via --filter-keys-file without any jq step.
+    stem = out_path.with_suffix("")  # strip .json
+    keys_files: dict[str, Path] = {}
+    for category in ("missing_abstract", "missing_pdf", "empty_stubs"):
+        keys_path = Path(f"{stem}.{category}.keys")
+        keys_path.write_text(
+            "\n".join(entry["key"] for entry in report.get(category, [])) + "\n"
+            if report.get(category) else "",
+            encoding="utf-8",
+        )
+        keys_files[category] = keys_path
+
     print()
     print(f"Library audit ({library_type} {library_id})")
     print(f"  Total items:                {report['total_items']}")
@@ -158,12 +171,18 @@ def main() -> int:
     print(f"  Empty PDF stubs:            {report['empty_stub_count']}")
     print(f"  Missing abstract:           {report['missing_abstract_count']}")
     print(f"  Details written to:         {out_path}")
+    print(f"  Keys files written to:      {stem}.{{missing_abstract,missing_pdf,empty_stubs}}.keys")
     print()
-    print("Next steps (use the JSON keys as --filter-keys-file inputs):")
-    print(f"  1. jq -r '.missing_abstract[].key' {out_path} > /tmp/need_abstract.keys")
-    print(f"  2. uv run {SCRIPT_DIR}/fetch_abstracts.py --filter-keys-file /tmp/need_abstract.keys")
-    print(f"  3. jq -r '.missing_pdf[].key' {out_path} > /tmp/need_pdf.keys")
-    print(f"  4. uv run {SCRIPT_DIR}/attach_pdfs.py --filter-keys-file /tmp/need_pdf.keys")
+    print("Next steps — feed the .keys files directly into pipeline stages:")
+    if report["missing_abstract_count"]:
+        print(f"  uv run {SCRIPT_DIR}/fetch_abstracts.py "
+              f"--filter-keys-file {keys_files['missing_abstract']}")
+    if report["missing_pdf_count"]:
+        print(f"  uv run {SCRIPT_DIR}/attach_pdfs.py "
+              f"--filter-keys-file {keys_files['missing_pdf']}")
+    if report["empty_stub_count"]:
+        print(f"  # {report['empty_stub_count']} empty stubs to delete; see "
+              f"{keys_files['empty_stubs']}")
     return 0
 
 
