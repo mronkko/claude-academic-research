@@ -119,12 +119,18 @@ def _print_header() -> None:
 
 
 def _prompt(spec: KeySpec, existing: str | None, interactive: bool) -> str:
+    env_value = os.environ.get(spec.env_var, "").strip()
     if not interactive:
-        return os.environ.get(spec.env_var, existing or "")
+        return env_value or (existing or "")
+
+    # Default precedence: env var, then existing config value, then empty.
+    default = env_value or (existing or "")
+    source = "environment" if env_value else ("existing config" if existing else "")
 
     marker = " [REQUIRED]" if spec.required else " [optional, press Enter to skip]"
-    if existing:
-        marker += f" (current: {'*' * 8 if spec.hidden else existing})"
+    if default:
+        display = "*" * 8 if spec.hidden else default
+        marker += f" (from {source}: {display}; press Enter to keep)"
     print(f"\n  {spec.label}{marker}")
     print(f"    {spec.explanation}")
     try:
@@ -135,8 +141,8 @@ def _prompt(spec: KeySpec, existing: str | None, interactive: bool) -> str:
     except (EOFError, KeyboardInterrupt):
         print("\n  Aborted.")
         sys.exit(1)
-    # Empty input keeps existing value; otherwise the new value replaces it.
-    return value or (existing or "")
+    # Empty input keeps the default; any non-empty input replaces it.
+    return value or default
 
 
 def _load_existing_config() -> dict[str, dict[str, str]]:
@@ -292,6 +298,11 @@ def main() -> int:
     interactive = not args.non_interactive
     if interactive:
         _print_header()
+        env_hits = [k.env_var for k in KEYS if os.environ.get(k.env_var, "").strip()]
+        if env_hits:
+            print(f"  Detected environment variables: {', '.join(env_hits)}")
+            print("  These will be offered as defaults below (press Enter to accept).")
+            print()
 
     values = _collect_keys(interactive)
     _write_config(values)

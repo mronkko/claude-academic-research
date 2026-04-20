@@ -63,3 +63,26 @@ def test_every_key_has_explanation() -> None:
     for k in mod.KEYS:
         assert k.explanation, f"key {k.env_var} has no explanation"
         assert len(k.explanation) >= 20, f"key {k.env_var} explanation too short"
+
+
+def test_non_interactive_reads_env_vars(monkeypatch) -> None:
+    mod = _load()
+    spec = next(k for k in mod.KEYS if k.env_var == "ZOTERO_API_KEY")
+    monkeypatch.setenv("ZOTERO_API_KEY", "test-from-env")
+    assert mod._prompt(spec, None, interactive=False) == "test-from-env"
+
+
+def test_non_interactive_env_overrides_existing_config(monkeypatch) -> None:
+    """If both env and existing config have a value, env wins (explicit >
+    implicit)."""
+    mod = _load()
+    spec = next(k for k in mod.KEYS if k.env_var == "ZOTERO_API_KEY")
+    monkeypatch.setenv("ZOTERO_API_KEY", "from-env")
+    assert mod._prompt(spec, "from-config", interactive=False) == "from-env"
+
+
+def test_non_interactive_falls_back_to_existing_when_no_env(monkeypatch) -> None:
+    mod = _load()
+    spec = next(k for k in mod.KEYS if k.env_var == "ZOTERO_API_KEY")
+    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+    assert mod._prompt(spec, "from-config", interactive=False) == "from-config"
