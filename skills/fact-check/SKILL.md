@@ -172,3 +172,8 @@ the full report into the chat.
 - The paper's abstract contradicts the manuscript claim, and you are
   softening the flag to MINOR because the contradiction is
   "interpretive". Direction reversals are MAJOR.
+- You are about to read `~/.config/academic-research/config.toml` via
+  `cat`, `head`, `tail`, `grep`, `less`, `more`, `awk`, `sed`, a
+  Python script, or any other command. **NEVER read that file.** It
+  holds API keys. No part of a fact-check audit needs those keys in
+  your context.

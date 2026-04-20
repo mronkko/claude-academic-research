@@ -434,3 +434,7 @@ reports into the chat — point to the files under `/tmp/critic-loop/`.
 - A critic that flagged MAJORs in iter N-1 now returns SHIP in iter N
   despite minimal visible revision — anti-sycophancy violation; re-prompt
   or discard that iteration's critic output.
+- You are about to read `~/.config/academic-research/config.toml` via
+  `cat`, `head`, `tail`, `grep`, `less`, `more`, `awk`, `sed`, a
+  Python script, or any other command. **NEVER read that file.** It
+  holds API keys. The critic loop has no legitimate need for them.

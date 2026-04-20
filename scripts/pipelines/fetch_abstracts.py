@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "pyzotero>=1.6",
+#     "pybliometrics>=3.6",
+# ]
+# ///
 """
 Fetch missing abstracts for items in a Zotero group library.
 

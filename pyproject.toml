@@ -36,7 +36,7 @@ ignore = ["E501"]
 # analyzer about it so imports like `from publishers.registry import ...`
 # resolve without warnings.
 [tool.pyrefly]
-search-path = ["scripts"]
+search-path = ["scripts", "scripts/pipelines"]
 
 [tool.pyright]
-extraPaths = ["scripts"]
+extraPaths = ["scripts", "scripts/pipelines"]

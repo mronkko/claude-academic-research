@@ -519,13 +519,24 @@ def _permission_patterns() -> tuple[list[str], list[str]]:
         "Bash(playwright install-deps)",
         f"Read({absolute_home_pattern}/.config/academic-research/)",
     ]
+    # Deny patterns for the config file. Claude Code's permission matcher
+    # is prefix-based, so we enumerate the common shapes (absolute path,
+    # tilde, with/without redirects). Not exhaustive — reading `~/.claude/`
+    # config via an obscure tool (xxd, od, strings, inline python) can slip
+    # through. The skill-level "never read config.toml" red flags are the
+    # first line of defence; these deny patterns are belt-and-suspenders.
+    config_abs = f"{home}/.config/academic-research/config.toml"
+    config_tilde = "~/.config/academic-research/config.toml"
+    deny_paths = [config_abs, config_tilde]
     deny = [
         f"Read({absolute_home_pattern}/.config/academic-research/config.toml)",
-        f"Bash(cat {home}/.config/academic-research/config.toml)",
-        f"Bash(head {home}/.config/academic-research/config.toml*)",
-        f"Bash(tail {home}/.config/academic-research/config.toml*)",
-        f"Bash(grep*{home}/.config/academic-research/config.toml*)",
+        "Read(~/.config/academic-research/config.toml)",
     ]
+    for path in deny_paths:
+        for cmd in ("cat", "head", "tail", "grep", "less", "more",
+                    "awk", "sed", "od", "xxd", "strings", "bat"):
+            deny.append(f"Bash({cmd} {path}:*)")
+            deny.append(f"Bash({cmd} {path})")
     return allow, deny
 
 

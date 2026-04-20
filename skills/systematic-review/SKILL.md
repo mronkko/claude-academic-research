@@ -275,3 +275,18 @@ is domain-inappropriate.
   asking whether the source data should be fixed instead.
 - A predatory-journal flagged paper is being silently excluded instead
   of surfaced to the author for decision.
+- You are about to read `~/.config/academic-research/config.toml` via
+  `cat`, `head`, `tail`, `grep`, `less`, `more`, `awk`, `sed`, a
+  Python script, or any other command. **NEVER read that file.** It
+  holds API keys. Pipeline scripts read it via Python's `open()`
+  outside your tool layer; you have no legitimate reason to inspect
+  it. If debugging feels like it needs a look inside the file, ask
+  the user to re-run `/setup` — that's the reset path.
+- You are about to write a Bash heredoc or an inline Python script to
+  run a pipeline-style task (enumerate a library, compute stats,
+  mutate Zotero, fetch abstracts, etc.). **Never improvise.** If a
+  shipped script under `scripts/pipelines/` covers the task, invoke
+  it. If none does, tell the user which task is missing and propose
+  adding a shipped script — do not write a one-off. Improvised
+  scripts leak keys through your context and sidestep pre-approved
+  permissions.

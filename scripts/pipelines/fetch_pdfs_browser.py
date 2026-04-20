@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "pyzotero>=1.6",
+#     "playwright>=1.40",
+# ]
+# ///
 """
 Interactive browser-based PDF fetcher for papers behind Cloudflare.
 

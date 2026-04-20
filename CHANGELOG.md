@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] — 2026-04-20
+
+### Security hardening
+
+- **Canonical scripts replace improvised pipeline code.** When Claude
+  was asked to "add missing abstracts and PDFs" it composed a Python
+  heredoc that read `config.toml` to extract the API key and run a
+  library audit. That approach leaks keys through Claude's tool
+  context. The fix ships a real audit script
+  (`scripts/pipelines/audit_zotero_library.py`) and hardens the
+  `zotero-operations` skill to forbid improvisation.
+- **Shared config reader** (`scripts/core/config_loader.py`) — all
+  pipeline scripts now have a single canonical path to read
+  `~/.config/academic-research/config.toml`. Env vars take precedence;
+  `require()` raises a clear error if a required value is missing.
+- **Broader `permissions.deny` patterns** — wizard now writes deny
+  entries for `cat`/`head`/`tail`/`grep`/`less`/`more`/`awk`/`sed`/
+  `od`/`xxd`/`strings`/`bat` against both the absolute and tilde-prefix
+  form of the config file. Not exhaustive (Python heredocs still
+  slip through), so skill-level red flags are the primary defence.
+- **Explicit "never read config" red flag** added to every procedural
+  skill (`systematic-review`, `zotero-operations`, `fact-check`,
+  `critic-loop`).
+- **Explicit "never improvise a pipeline script" red flag** added to
+  `zotero-operations` and `systematic-review`.
+
+### New functionality
+
+- `scripts/pipelines/audit_zotero_library.py` — classify a library's
+  items into have-PDF / missing-PDF / empty-stub / missing-abstract
+  categories. Prints summary, writes JSON. Intended to drive
+  `fetch_abstracts.py` and `attach_pdfs.py` via their
+  `--filter-keys-file` argument.
+
+### uv + PEP 723 inline dependencies
+
+- All pipeline scripts now declare their runtime deps in a PEP 723
+  header. `uv run <script>` auto-installs into an ephemeral venv on
+  first run — no more `pip install` before use, no system-Python
+  pollution.
+
+### Skill updates
+
+- `zotero-operations` — added a canonical "intent → script" table, a
+  step-by-step workflow for "add abstracts and PDFs", and forbids
+  directory probing or improvised scripts.
+- Systematic-review, fact-check, critic-loop, zotero-operations —
+  now each have the two new hard-rule red flags above.
+
 ## [0.1.1] — 2026-04-20
 
 ### Security fix (breaking UX change)

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
 """
 generate_bib.py — Scan thesis Markdown chapters for citation keys;
                    fetch each entry from Zotero via Better BibTeX JSON-RPC;

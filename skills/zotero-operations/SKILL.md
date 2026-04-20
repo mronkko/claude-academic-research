@@ -30,6 +30,57 @@ For SLR-specific operations (bulk screening, coding, QA tags), use the
 `systematic-review` skill. This skill covers general Zotero patterns
 that apply outside an SLR context.
 
+## Pipeline scripts — direct path, no probing
+
+Do **not** list the plugin's `scripts/pipelines/` directory to figure
+out what is available. The mapping below is authoritative; use the
+exact invocation.
+
+| User intent | Script | Invocation |
+|---|---|---|
+| Audit a library for items missing abstracts / PDFs / empty stubs | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group <id>` |
+| Add missing abstracts to items | `fetch_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_abstracts.py --filter-keys-file /tmp/need_abstract.keys` |
+| Attach missing PDFs (fast HTTP cascade) | `attach_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/attach_pdfs.py --filter-keys-file /tmp/need_pdf.keys` |
+| Attach PDFs from Wiley journals | `fetch_pdfs_wiley_tdm.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_pdfs_wiley_tdm.py` |
+| Attach PDFs from Cloudflare-gated publishers (Sage, APA, T&F, Emerald, …) | `fetch_pdfs_browser.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_pdfs_browser.py` |
+| Generate `references.bib` from a manuscript's citation keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py <project_dir>` |
+
+Each script reads API keys from `~/.config/academic-research/config.toml`
+(the `/setup` wizard writes it) inside its own process via
+`core.config_loader`. **The keys never pass through your tool layer.**
+
+### Canonical workflow for "add missing abstracts and PDFs to a library"
+
+1. Identify the Zotero library the user means (ask if ambiguous). Use
+   `mcp__zotero__zotero_list_libraries` if you need to see what is
+   available. Never guess the group ID.
+2. Run `audit_zotero_library.py --group <id>`. Read the summary counts.
+3. Report the counts to the user and ask which to fix (missing
+   abstracts, missing PDFs, empty stubs, or all).
+4. Extract the relevant keys to a file:
+   `jq -r '.missing_abstract[].key' /tmp/zotero_audit.json > /tmp/need_abstract.keys`
+5. Run `fetch_abstracts.py --filter-keys-file /tmp/need_abstract.keys`
+   and / or `attach_pdfs.py --filter-keys-file /tmp/need_pdf.keys`.
+6. Re-run the audit to confirm counts dropped.
+
+### Do not improvise
+
+If the user's request does not clearly map to one of the rows above,
+**ask before acting**. Specifically:
+
+- Do **not** probe the plugin directory with `ls` to see what scripts
+  exist (they are listed here — this is authoritative).
+- Do **not** write a Bash heredoc or a Python script to read
+  Zotero / config / library data yourself. Use the shipped scripts.
+- Do **not** extract values from `~/.config/academic-research/config.toml`
+  under any circumstance — scripts read it internally.
+
+If you truly need an operation the table above does not cover, tell
+the user which operation is missing and propose adding a new shipped
+script to the plugin. A one-off improvised script has no place here —
+it breaks the security model (API keys flow through your context)
+and sidesteps pre-approved permissions.
+
 ## Local client for reads, remote for writes
 
 `pyzotero.zotero.Zotero(group, "group", key, local=True)` reads from
@@ -140,3 +191,14 @@ reviewable in Zotero itself:
 - You are letting the local client do a write (use remote API).
 - You are re-running a pipeline with `--full-recode` but not deleting
   prior child notes first.
+- You are about to read `~/.config/academic-research/config.toml` via
+  `cat`, `head`, `tail`, `grep`, `less`, `more`, `awk`, `sed`, a
+  Python script, or any other command. **NEVER read that file.** It
+  holds API keys. Pipeline scripts read it via Python's `open()`
+  outside your tool layer; you have no legitimate reason to inspect
+  it. If you feel like you need to debug by looking inside, you are
+  on the wrong track — ask the user to re-run `/setup` instead.
+- You are about to write a Bash heredoc or an inline Python script to
+  do Zotero work. **Never improvise.** Use the shipped scripts in
+  the intent-to-script table above. If nothing fits, ask the user
+  whether to add a new shipped script — don't write a one-off.

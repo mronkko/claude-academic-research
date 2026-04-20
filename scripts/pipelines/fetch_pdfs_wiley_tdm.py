@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "pyzotero>=1.6",
+#     "wiley-tdm>=0.2",
+# ]
+# ///
 """
-Fetch Wiley PDFs via the official Wiley TDM Python client.
+Fetch Wiley PDFs via the official Wiley Text and Data Mining client.
 
 Wiley provides a first-party Text and Data Mining API that bypasses
 Cloudflare, rate limits cleanly, and requires only an API token. This
