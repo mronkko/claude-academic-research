@@ -32,8 +32,25 @@ def test_key_schema_has_required_core_keys() -> None:
     mod = _load()
     required_env = {k.env_var for k in mod.KEYS if k.required}
     assert "ZOTERO_API_KEY" in required_env
-    assert "ZOTERO_GROUP" in required_env
     assert "ANTHROPIC_API_KEY" in required_env
+    # ZOTERO_GROUP deliberately NOT required — group IDs are per-project,
+    # not global config. The wizard discovers user_id from the Zotero API
+    # using the collected API key; group is set per-project via env var.
+    assert "ZOTERO_GROUP" not in {k.env_var for k in mod.KEYS}
+
+
+def test_discover_zotero_identity_returns_none_on_network_failure(monkeypatch) -> None:
+    import urllib.error
+    mod = _load()
+    def raise_url_error(*a, **kw):
+        raise urllib.error.URLError("simulated offline")
+    monkeypatch.setattr(mod.urllib if hasattr(mod, "urllib") else __import__("urllib.request"),
+                        "urlopen", raise_url_error, raising=False)
+    # Simpler path: monkeypatch the function inside the module's import tree.
+    import urllib.request as urlreq
+    monkeypatch.setattr(urlreq, "urlopen", raise_url_error)
+    result = mod._discover_zotero_identity("fake-key", interactive=False)
+    assert result is None
 
 
 def test_permission_patterns_cover_plugin_scripts() -> None:

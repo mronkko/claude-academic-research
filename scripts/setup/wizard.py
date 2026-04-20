@@ -51,13 +51,10 @@ KEYS: tuple[KeySpec, ...] = (
     KeySpec(
         "ZOTERO_API_KEY", "zotero", "api_key", "Zotero API key",
         required=True, hidden=True,
-        explanation="Generate at https://www.zotero.org/settings/keys with write access.",
-    ),
-    KeySpec(
-        "ZOTERO_GROUP", "zotero", "group_id", "Zotero group library ID",
-        required=True, hidden=False,
-        explanation="Numeric ID from the group URL (https://www.zotero.org/groups/<this>). "
-                    "Use your user-library ID if you have no group.",
+        explanation="Generate at https://www.zotero.org/settings/keys with write access. "
+                    "After you enter this, the wizard will contact Zotero to discover your "
+                    "user ID and accessible groups automatically. Group library IDs are "
+                    "per-project and are NOT stored in this global config.",
     ),
     KeySpec(
         "ANTHROPIC_API_KEY", "anthropic", "api_key", "Anthropic API key",
@@ -143,6 +140,58 @@ def _prompt(spec: KeySpec, existing: str | None, interactive: bool) -> str:
         sys.exit(1)
     # Empty input keeps the default; any non-empty input replaces it.
     return value or default
+
+
+def _discover_zotero_identity(api_key: str, interactive: bool) -> dict[str, str] | None:
+    """Query Zotero's /keys/{key} endpoint to discover userID and accessible groups.
+
+    Returns a dict with 'user_id', 'username', and 'groups' (comma-separated
+    IDs) on success, or None on failure.
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    url = f"https://api.zotero.org/keys/{api_key}"
+    req = urllib.request.Request(url, headers={"Zotero-API-Version": "3"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = _json.loads(response.read())
+    except urllib.error.HTTPError as e:
+        if interactive:
+            print(f"    ! Zotero rejected the key ({e.code} {e.reason}). "
+                  f"Double-check it at https://www.zotero.org/settings/keys.")
+        return None
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        if interactive:
+            print(f"    ! Could not reach Zotero to verify the key ({e}). "
+                  f"Saving without verification; scripts will error on first use if the key is wrong.")
+        return None
+
+    user_id = str(data.get("userID", ""))
+    username = data.get("username", "")
+    groups = data.get("access", {}).get("groups", {})
+    group_ids = sorted(groups.keys())
+
+    if interactive:
+        print(f"    ✓ Verified. userID={user_id}, username={username or '<none>'}.")
+        if group_ids:
+            print(f"    Accessible group libraries ({len(group_ids)}):")
+            for gid in group_ids[:10]:
+                print(f"      - groupID {gid}")
+            if len(group_ids) > 10:
+                print(f"      ... and {len(group_ids) - 10} more")
+            print("    Projects set ZOTERO_GROUP per-project (env var or project CLAUDE.md) "
+                  "to target a specific group.")
+        else:
+            print("    No group libraries accessible by this key — you can still work "
+                  "with your personal library.")
+
+    return {
+        "user_id": user_id,
+        "username": username,
+        "accessible_group_ids": ",".join(group_ids),
+    }
 
 
 def _load_existing_config() -> dict[str, dict[str, str]]:
@@ -305,6 +354,18 @@ def main() -> int:
             print()
 
     values = _collect_keys(interactive)
+
+    # If a Zotero API key was collected, discover the user identity and
+    # accessible groups. Do this before writing config so the extra fields
+    # land in the same [zotero] section.
+    zotero_key = values.get("zotero", {}).get("api_key", "")
+    if zotero_key:
+        identity = _discover_zotero_identity(zotero_key, interactive)
+        if identity:
+            values.setdefault("zotero", {}).update({
+                k: v for k, v in identity.items() if v
+            })
+
     _write_config(values)
     allow_added, deny_added = _patch_settings()
 
