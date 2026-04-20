@@ -22,78 +22,50 @@ Read the plugin path from the `ls` output — that is `$CLAUDE_PLUGIN_ROOT`
 for this session. If config already exists, ask whether the user wants
 to re-run the wizard (to update or add keys) or skip setup.
 
-## Step 1 — Decide the launch path
+## Step 1 — Hand the user the wizard command
 
-**CRITICAL:** never ask the user to paste API keys into the Claude chat.
-Any text typed into the chat is transmitted to Anthropic. The wizard
-exists specifically so keys stay local.
+**CRITICAL:** never ask the user to paste API keys into the Claude
+chat. Any text typed into the chat is transmitted to Anthropic. The
+wizard exists so keys stay local.
 
-Detect the environment:
+Do **not** try to launch the wizard yourself via `Bash`. Even in
+terminal Claude Code, the Bash tool pipes the subprocess's stdin, so
+`getpass` and interactive prompts won't behave correctly. Always hand
+the user the command to run themselves.
 
-```bash
-test -t 0 && echo "tty" || echo "no-tty"
-```
+Read `$CLAUDE_PLUGIN_ROOT` (the `ls` output from pre-flight tells you
+the path — e.g. `~/.claude/plugins/cache/mronkko/academic-research/0.1.1/`)
+and paste the following message to the user, with the plugin path
+filled in:
 
-### If `tty` (CLI Claude Code in a terminal)
-
-Claude can launch the wizard directly in-process — the user types into
-the same terminal window, and their keystrokes go to the wizard via
-`getpass`, not through Claude. Tell the user:
-
-> I'll launch the setup wizard now. When it asks for a key, type it at
-> the prompt in this terminal — the keystrokes go directly to the
-> wizard, not to me. I can't see what you type.
-
-Then run:
-
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py
-```
-
-When the wizard exits, it prints a one-line summary Claude can read to
-confirm success.
-
-### If `no-tty` (Desktop app, Positron native, VSCode extension, headless)
-
-Claude cannot take interactive input. Tell the user exactly how to open
-a terminal on their OS, paste one command, and run it.
-
-**Copy-paste this to the user** (adapt to the detected OS — read
-`uname` if unsure):
-
-> I can't launch an interactive wizard from this chat interface, so you'll
-> run it yourself in a terminal window. Don't worry — it's one command.
->
-> **macOS:**
->   1. Press ⌘-Space, type *Terminal*, press Enter.
->   2. Paste the command below and press Enter.
->
-> **Windows:**
->   1. Press Windows key, type *PowerShell*, press Enter.
->   2. Paste the command below and press Enter.
->
-> **Linux:**
->   1. Open your terminal (Ctrl-Alt-T on most distros).
->   2. Paste the command below and press Enter.
+> Open a terminal window and run this command. If you're already in a
+> terminal (you're running `claude` directly in one, for example), just
+> open a new tab or pane — or exit Claude with Ctrl-C, run the wizard,
+> and come back with `claude -c` to resume this conversation.
 >
 > ```
-> python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py
+> python3 <CLAUDE_PLUGIN_ROOT>/scripts/setup/wizard.py
 > ```
 >
-> (On Windows, if `python3` is not found, try `python` instead.)
+> **How to open a terminal** if you're not already in one:
+> - **macOS:** ⌘-Space → type *Terminal* → Enter.
+> - **Windows:** Windows key → type *PowerShell* → Enter. If `python3`
+>   isn't recognised, try `python` instead.
+> - **Linux:** Ctrl-Alt-T (or your distro's terminal app).
 >
-> The wizard will walk you through each API key. When it says "Setup
-> complete", come back here and tell me.
+> The wizard will walk you through each API key with hidden input
+> (keystrokes don't appear on screen). When it prints "Setup complete",
+> come back here and tell me.
 
-After the user says they are done, verify:
+After the user confirms completion, verify:
 
 ```bash
 test -f ~/.config/academic-research/config.toml && stat -f "%Sp" ~/.config/academic-research/config.toml 2>/dev/null || stat -c "%A" ~/.config/academic-research/config.toml
 ```
 
-The mode should be `-rw-------` (0600). If it does not exist or has
-looser permissions, something went wrong — ask the user to paste the
-wizard's output.
+The mode should be `-rw-------` (0600). If the file doesn't exist or
+has looser permissions, something went wrong — ask the user to paste
+the wizard's output.
 
 ## Step 2 — MCP server verification
 
