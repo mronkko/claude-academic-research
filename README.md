@@ -51,7 +51,7 @@ Eight skills:
 skills/                    # SKILL.md per skill
 scripts/
   core/                    # llm, http, pdf, zotero primitives
-  sources/                 # abstract/metadata sources (Crossref, S2, Scopus, ...)
+  sources/                 # abstract/metadata sources (Crossref, Semantic Scholar, Scopus, ...)
   publishers/              # per-publisher PDF retrieval (Wiley, Elsevier, ...)
   pipelines/               # attach_pdfs, fetch_abstracts, generate_bib, ...
   setup/                   # first-run configuration helpers

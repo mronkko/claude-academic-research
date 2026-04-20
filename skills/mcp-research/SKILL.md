@@ -90,7 +90,7 @@ scripts it invokes:
   Unpaywall, OpenAlex OA). Parallel downloads, serial Zotero uploads.
 - **Abstract retrieval**:
   `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_abstracts.py` —
-  6-source cascade (Crossref, S2, Scopus, ScienceDirect, OpenAlex GROBID).
+  6-source cascade (Crossref, Semantic Scholar, Scopus, ScienceDirect, OpenAlex GROBID).
 - **Bibliography**:
   `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py <project_dir>`
   — Scan manuscript for citation keys, generate `references.bib` via BBT.

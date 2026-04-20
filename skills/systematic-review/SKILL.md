@@ -63,14 +63,15 @@ Principles:
 
 | Variable | Used by | Purpose |
 |----------|---------|---------|
-| `ZOTERO_API_KEY` | All scripts | Zotero API authentication |
-| `ZOTERO_GROUP` | All scripts | Zotero group library ID |
-| `ELSEVIER_API_KEY` | `attach_pdfs.py` | Elsevier/ScienceDirect PDF access |
+| `ZOTERO_API_KEY` | All scripts | Zotero API authentication (required) |
+| `ZOTERO_GROUP` | All scripts | Zotero group library ID (per-project, set in the project's own CLAUDE.md or shell) |
+| `ANTHROPIC_API_KEY` | Screening scripts | Claude API (required for LLM screening) |
+| `ELSEVIER_API_KEY` | `attach_pdfs.py` | Elsevier/ScienceDirect full-text retrieval |
+| `SCOPUS_API_KEY` | Search scripts | Scopus API (often same as `ELSEVIER_API_KEY`; some institutions issue separately) |
 | `WILEY_TDM_TOKEN` | `fetch_pdfs_wiley_tdm.py` | Wiley TDM UUID token |
-| `OPENALEX_API_KEY` | PDF + abstract scripts | OpenAlex Content API ($0.01/download) |
-| `S2_API_KEY` | `fetch_abstracts.py` | Semantic Scholar |
-| `CROSSREF_MAILTO` | All scripts | Crossref polite pool |
-| `ANTHROPIC_API_KEY` | Screening scripts | Claude API |
+| `OPENALEX_API_KEY` | PDF + abstract scripts | OpenAlex Content API ($0.01/download, paid) |
+| `SEMANTIC_SCHOLAR_API_KEY` | `fetch_abstracts.py` | Semantic Scholar (higher rate limit with key) |
+| `CROSSREF_MAILTO` | All scripts | Crossref polite pool (any email) |
 | `WOS_API_KEY_EXTENDED` | Search scripts | WoS Expanded (full Boolean, `IS=` works) — **prefer this** |
 | `WOS_API_KEY` | Search scripts | WoS Starter (field-limited, no `IS=`) — piloting only |
 

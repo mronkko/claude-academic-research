@@ -17,7 +17,7 @@ Required environment variables:
   ZOTERO_API_KEY    — Zotero API key
   ZOTERO_GROUP      — Zotero group ID
   CROSSREF_MAILTO   — Email for Crossref polite pool
-  S2_API_KEY        — Semantic Scholar API key (optional but recommended)
+  SEMANTIC_SCHOLAR_API_KEY        — Semantic Scholar API key (optional but recommended)
   OPENALEX_API_KEY  — OpenAlex Content API key (optional, for GROBID)
 
 Usage:
@@ -47,11 +47,11 @@ from datetime import date
 # ---------------------------------------------------------------------------
 # Configuration (from environment variables)
 # ---------------------------------------------------------------------------
-ZOTERO_API_KEY   = os.environ.get("ZOTERO_API_KEY", "")
-ZOTERO_GROUP     = os.environ.get("ZOTERO_GROUP", "")
-S2_API_KEY       = os.environ.get("S2_API_KEY", "")
-CROSSREF_MAILTO  = os.environ.get("CROSSREF_MAILTO", "")
-OPENALEX_API_KEY = os.environ.get("OPENALEX_API_KEY", "")
+ZOTERO_API_KEY           = os.environ.get("ZOTERO_API_KEY", "")
+ZOTERO_GROUP             = os.environ.get("ZOTERO_GROUP", "")
+SEMANTIC_SCHOLAR_API_KEY = os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "")
+CROSSREF_MAILTO          = os.environ.get("CROSSREF_MAILTO", "")
+OPENALEX_API_KEY         = os.environ.get("OPENALEX_API_KEY", "")
 
 ZOTERO_BASE = f"https://api.zotero.org/groups/{ZOTERO_GROUP}"
 
@@ -164,7 +164,7 @@ def fetch_from_crossref(doi: str) -> str | None:
 
 def fetch_from_semantic_scholar(doi: str) -> str | None:
     url = f"https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}?fields=abstract"
-    headers = {"x-api-key": S2_API_KEY} if S2_API_KEY else {}
+    headers = {"x-api-key": SEMANTIC_SCHOLAR_API_KEY} if SEMANTIC_SCHOLAR_API_KEY else {}
     data = get_json(url, headers=headers)
     if data:
         return data.get("abstract") or None
@@ -172,7 +172,7 @@ def fetch_from_semantic_scholar(doi: str) -> str | None:
 
 
 def fetch_from_semantic_scholar_by_title(doi: str, title: str) -> str | None:
-    """Fall back to S2 title search when DOI lookup returns nothing."""
+    """Fall back to Semantic Scholar title search when DOI lookup returns nothing."""
     if not title:
         return None
     encoded = urllib.parse.quote(title[:100])
@@ -180,7 +180,7 @@ def fetch_from_semantic_scholar_by_title(doi: str, title: str) -> str | None:
         f"https://api.semanticscholar.org/graph/v1/paper/search"
         f"?query={encoded}&fields=externalIds,abstract&limit=5"
     )
-    headers = {"x-api-key": S2_API_KEY} if S2_API_KEY else {}
+    headers = {"x-api-key": SEMANTIC_SCHOLAR_API_KEY} if SEMANTIC_SCHOLAR_API_KEY else {}
     data = get_json(url, headers=headers)
     if not data:
         return None
@@ -234,7 +234,7 @@ def fetch_from_openalex_grobid(doi: str, cache_dir: str) -> str | None:
     """Retrieve abstract from OpenAlex GROBID full-text extraction.
 
     Downloads the GROBID-parsed TEI XML and extracts the abstract element.
-    Last-resort fallback — Crossref and S2 abstracts are preferred.
+    Last-resort fallback — Crossref and Semantic Scholar abstracts are preferred.
     Uses a local cache to avoid redundant downloads ($0.01 per download).
     """
     if not OPENALEX_API_KEY:
