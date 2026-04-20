@@ -15,15 +15,22 @@ Before asking any questions, check what has already been done. Run:
 
 ```bash
 test -f ~/.config/academic-research/config.toml && echo "config exists" || echo "no config"
-test -L ~/.claude/settings.json && readlink ~/.claude/settings.json || echo "settings is a regular file or missing"
-test -d ~/.claude/plugins/mronkko/academic-research && echo "plugin installed" || echo "plugin not installed"
+ls -d ~/.claude/plugins/cache/mronkko/academic-research/*/ 2>/dev/null | head -1 || echo "plugin not installed"
+echo "USER=$USER"
 ```
 
-Report what you find. If the plugin is not installed, stop and tell the
-user the install commands (`/plugin marketplace add
+The plugin install layout is
+`~/.claude/plugins/cache/mronkko/academic-research/<version>/`. If the
+`ls -d ...` line prints a path, the plugin is installed; note the
+version for later reference.
+
+Report what you find. If the plugin is not installed, stop and tell
+the user the install commands (`/plugin marketplace add
 mronkko/claude-academic-research` then `/plugin install
-academic-research@mronkko`). If config already exists, ask whether the
-user wants to reconfigure (replace) or update selected keys only.
+academic-research@mronkko`) — though in practice if `/setup` is
+firing, the plugin is installed, so this branch is defensive. If
+config already exists, ask whether the user wants to reconfigure
+(replace) or update selected keys only.
 
 ## Step 1 — API keys
 
