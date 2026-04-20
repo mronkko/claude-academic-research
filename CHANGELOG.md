@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] — 2026-04-20
+
+### Security fix (breaking UX change)
+
+- **`/setup` now launches a terminal wizard** (`scripts/setup/wizard.py`)
+  instead of collecting API keys in chat. The previous design asked
+  the user to paste API keys into the Claude chat, which would have
+  transmitted them to Anthropic's API as part of the user message.
+  The wizard reads keys with `getpass` in the user's terminal — keys
+  never enter Claude's context.
+- The setup skill now detects TTY and either launches the wizard
+  in-process (CLI Claude Code) or instructs the user to open a
+  terminal (Desktop / Positron / VSCode / headless).
+- Wizard is idempotent; re-run to update or add keys.
+- Wizard patches `~/.claude/settings.json` with the plugin's
+  permission rules (allow `Bash(... ${CLAUDE_PLUGIN_ROOT}/scripts/**)`,
+  deny `Read` on the config file). Backs settings.json up before
+  mutating.
+
 ## [Unreleased]
 
 ### critic-loop extensions (deferred from 2026-04-19 prior-art review)

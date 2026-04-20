@@ -1,270 +1,154 @@
 ---
 name: setup
-description: Use when the user invokes `/setup`, asks to configure the academic-research plugin for the first time, wants to add or rotate API keys (Zotero, Elsevier, WoS, Anthropic, Semantic Scholar, Wiley TDM, OpenAlex), register MCP servers, or patch permission rules. Also fires when any other academic-research procedural skill (zotero-operations, systematic-review, fact-check, critic-loop) reports `NOT CONFIGURED` on its pre-flight check. Walks the user through API-key entry, writes `~/.config/academic-research/config.toml` (mode 0600), patches `~/.claude/settings.json`, registers MCP servers, installs Playwright Chromium. Chat-driven — no terminal required.
+description: Use when the user invokes `/setup`, asks to configure the academic-research plugin for the first time, wants to add or rotate API keys (Zotero, Elsevier, WoS, Anthropic, Semantic Scholar, Wiley TDM, OpenAlex), register MCP servers, or patch permission rules. Also fires when any other academic-research procedural skill (zotero-operations, systematic-review, fact-check, critic-loop) reports `NOT CONFIGURED` on its pre-flight check. Launches a terminal wizard that collects API keys with hidden input, writes the config file, and patches settings.json. API keys entered in the wizard never pass through Claude's context.
 ---
 
 # setup
 
-The plugin does not function until `/setup` has run. Walk the user
-through configuration interactively. Each step is chat-driven: ask,
-confirm, write. The user does not need to open a terminal.
+Setup runs as a terminal wizard (`scripts/setup/wizard.py`). The wizard
+collects API keys with hidden input and writes configuration files
+directly. **Keys entered in the wizard never pass through Claude's
+context.** The skill's job is to launch the wizard (CLI) or walk the
+user through running it in a terminal (GUI / Desktop).
 
 ## Pre-flight
-
-Before asking any questions, check what has already been done. Run:
 
 ```bash
 test -f ~/.config/academic-research/config.toml && echo "config exists" || echo "no config"
 ls -d ~/.claude/plugins/cache/mronkko/academic-research/*/ 2>/dev/null | head -1 || echo "plugin not installed"
 ```
 
-The plugin install layout is
-`~/.claude/plugins/cache/mronkko/academic-research/<version>/`. If the
-`ls -d ...` line prints a path, the plugin is installed; note the
-version for later reference. The user's home directory is already
-exposed in your environment block — no need to ask the user for their
-username or run `echo $HOME`.
+Read the plugin path from the `ls` output — that is `$CLAUDE_PLUGIN_ROOT`
+for this session. If config already exists, ask whether the user wants
+to re-run the wizard (to update or add keys) or skip setup.
 
-Report what you find. If the plugin is not installed, stop and tell
-the user the install commands (`/plugin marketplace add
-mronkko/claude-academic-research` then `/plugin install
-academic-research@mronkko`) — though in practice if `/setup` is
-firing, the plugin is installed, so this branch is defensive. If
-config already exists, ask whether the user wants to reconfigure
-(replace) or update selected keys only.
+## Step 1 — Decide the launch path
 
-## Step 1 — API keys
+**CRITICAL:** never ask the user to paste API keys into the Claude chat.
+Any text typed into the chat is transmitted to Anthropic. The wizard
+exists specifically so keys stay local.
 
-Collect the keys below. For each one, ask a single focused question
-with a short explanation of what it is and whether it's required or
-optional. Do NOT batch — ask one at a time. Never display or echo a key
-after the user provides it.
-
-**Required for core functionality (most workflows):**
-
-- `ZOTERO_API_KEY` — Zotero write access. Generate at
-  <https://www.zotero.org/settings/keys>. Required for all Zotero
-  operations.
-- `ZOTERO_GROUP` — Zotero group library ID (numeric). Visible in the
-  group URL: `https://www.zotero.org/groups/<this-number>`. Required
-  for group-library workflows; set to user library ID if personal.
-- `ANTHROPIC_API_KEY` — Required for LLM screening/coding in
-  `systematic-review`. Generate at
-  <https://console.anthropic.com/settings/keys>.
-
-**Required for systematic reviews:**
-
-- `WOS_API_KEY_EXTENDED` — Web of Science Expanded API. Institutional
-  access required. Prefer this over the Starter API.
-- `ELSEVIER_API_KEY` — ScienceDirect full text + abstract retrieval.
-  Institutional access required.
-- `S2_API_KEY` — Semantic Scholar. Free tier works for low volume;
-  request a key at
-  <https://www.semanticscholar.org/product/api#api-key-form> to get
-  higher rate limits.
-- `CROSSREF_MAILTO` — an email address used as Crossref's polite-pool
-  identifier. Any valid email.
-
-**Optional:**
-
-- `WILEY_TDM_TOKEN` — UUID issued under the institution's Wiley TDM
-  agreement. Required only if pulling Wiley PDFs; ask your librarian.
-- `OPENALEX_API_KEY` — paid tier for the OpenAlex Content API
-  (\$0.01/PDF). Skip unless you need high-volume PDF retrieval.
-- `WOS_API_KEY` — Web of Science Starter API (field-limited; useful
-  only for piloting).
-
-If the user doesn't have a key ready for an optional field, proceed
-and note it as `""` in the config. They can rerun `/setup` later.
-
-## Step 2 — Write the config file
-
-Write `~/.config/academic-research/config.toml` with mode `0600`:
+Detect the environment:
 
 ```bash
-mkdir -p ~/.config/academic-research
-chmod 700 ~/.config/academic-research
+test -t 0 && echo "tty" || echo "no-tty"
 ```
 
-Then write the file with this structure (omit keys the user did not
-provide — don't leave empty quoted strings for every optional key):
+### If `tty` (CLI Claude Code in a terminal)
 
-```toml
-# Academic-research plugin configuration.
-# File permissions: 0600. Not tracked in git. Not cloud-synced to
-# non-encrypted providers. If this file is compromised, rotate every
-# key listed here.
+Claude can launch the wizard directly in-process — the user types into
+the same terminal window, and their keystrokes go to the wizard via
+`getpass`, not through Claude. Tell the user:
 
-[zotero]
-api_key = "..."
-group_id = "..."
+> I'll launch the setup wizard now. When it asks for a key, type it at
+> the prompt in this terminal — the keystrokes go directly to the
+> wizard, not to me. I can't see what you type.
 
-[anthropic]
-api_key = "..."
-
-[wos]
-expanded_key = "..."
-# starter_key = ""
-
-[elsevier]
-api_key = "..."
-
-[semantic_scholar]
-api_key = "..."
-
-[crossref]
-mailto = "user@example.com"
-
-# [wiley]
-# tdm_token = ""
-
-# [openalex]
-# api_key = ""
-```
-
-After writing, set file mode:
+Then run:
 
 ```bash
-chmod 600 ~/.config/academic-research/config.toml
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py
 ```
 
-Confirm with `ls -l ~/.config/academic-research/config.toml` — mode
-should show `-rw-------`.
+When the wizard exits, it prints a one-line summary Claude can read to
+confirm success.
 
-## Step 3 — Patch settings.json (permissions)
+### If `no-tty` (Desktop app, Positron native, VSCode extension, headless)
 
-Ask explicit consent before editing `~/.claude/settings.json`. Show the
-diff you plan to apply. The user can say no and the setup continues
-(without pre-approval they will see per-script permission prompts).
+Claude cannot take interactive input. Tell the user exactly how to open
+a terminal on their OS, paste one command, and run it.
 
-The patterns to add under `permissions.allow` (use `$HOME` from your
-environment block — typically `/Users/<username>` on macOS — to build
-the absolute path):
+**Copy-paste this to the user** (adapt to the detected OS — read
+`uname` if unsure):
 
-```json
-"Bash(uv run ${CLAUDE_PLUGIN_ROOT}/scripts/**)",
-"Bash(uv run -s ${CLAUDE_PLUGIN_ROOT}/scripts/**)",
-"Bash(uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/**)",
-"Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/**)",
-"Bash(${CLAUDE_PLUGIN_ROOT}/scripts/**.py:*)",
-"Bash(playwright install chromium)",
-"Bash(playwright install-deps)",
-"Read(<HOME>/.config/academic-research/)"
-```
+> I can't launch an interactive wizard from this chat interface, so you'll
+> run it yourself in a terminal window. Don't worry — it's one command.
+>
+> **macOS:**
+>   1. Press ⌘-Space, type *Terminal*, press Enter.
+>   2. Paste the command below and press Enter.
+>
+> **Windows:**
+>   1. Press Windows key, type *PowerShell*, press Enter.
+>   2. Paste the command below and press Enter.
+>
+> **Linux:**
+>   1. Open your terminal (Ctrl-Alt-T on most distros).
+>   2. Paste the command below and press Enter.
+>
+> ```
+> python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py
+> ```
+>
+> (On Windows, if `python3` is not found, try `python` instead.)
+>
+> The wizard will walk you through each API key. When it says "Setup
+> complete", come back here and tell me.
 
-Under `permissions.deny` (create the array if absent):
-
-```json
-"Read(<HOME>/.config/academic-research/config.toml)",
-"Bash(cat <HOME>/.config/academic-research/config.toml)",
-"Bash(head <HOME>/.config/academic-research/config.toml*)",
-"Bash(tail <HOME>/.config/academic-research/config.toml*)",
-"Bash(grep*<HOME>/.config/academic-research/config.toml*)"
-```
-
-Where `<HOME>` is the user's actual home directory, prefixed correctly
-for the permission pattern format. The existing Read() patterns in the
-user's settings.json use a `//` prefix for absolute paths (e.g.
-`Read(//Users/mronkko/.claude/scripts/**)`), so on macOS the final form
-looks like `Read(//Users/mronkko/.config/academic-research/config.toml)`.
-Get the home path from your environment — do not ask the user or run
-`echo $USER` / `whoami`.
-
-The deny rules stop Claude from reading the config file — API keys
-stay out of conversation context. Scripts read the file directly via
-Python's `open()`, which is not mediated by Claude's tool layer.
-
-Explain the deny rules to the user: *"These prevent me from ever
-reading your config file myself. Your scripts can read it because they
-run outside my tool layer, but if I'm ever asked to 'just check the
-config', the read will fail. This keeps API keys out of anything I
-send to Anthropic."*
-
-## Step 4 — Register MCP servers
-
-The plugin relies on four MCP servers. The user must have each
-installed. Check with:
+After the user says they are done, verify:
 
 ```bash
-claude mcp list
+test -f ~/.config/academic-research/config.toml && stat -f "%Sp" ~/.config/academic-research/config.toml 2>/dev/null || stat -c "%A" ~/.config/academic-research/config.toml
 ```
 
-Expected entries (or equivalent):
+The mode should be `-rw-------` (0600). If it does not exist or has
+looser permissions, something went wrong — ask the user to paste the
+wizard's output.
 
-- `openalex` — OpenAlex API (`mcp__openalex__*`).
-- `semantic-scholar` — Semantic Scholar API.
-- `zotero` — local Zotero library access.
-- `paper-search` or `paper-search-nodejs` — multi-source paper search.
+## Step 2 — MCP server verification
 
-For each missing server, ask the user if they want it registered now.
-Give them the `claude mcp add ...` command for their target server
-implementation — the plugin does not bundle MCP server code, so
-installation details depend on which implementation the user prefers.
-Common published options as of 2026-04:
+The plugin expects these MCP servers to be registered with Claude Code:
 
-- openalex: `openalex-research-mcp` (npm)
-- semantic-scholar: `@xbghc/semanticscholar-mcp` (npm)
-- zotero: `zotero-mcp` (pyzotero-backed; requires local Zotero running)
-- paper-search: `paper-search-nodejs` (npm)
+- `openalex`
+- `semantic-scholar`
+- `zotero`
+- `paper-search` (or equivalent)
 
-Offer the user the command lines, let them run them (or copy them), and
-verify after.
+The wizard's final report lists any missing servers. If any are
+missing, suggest registration commands like
+`claude mcp add openalex <command>` and let the user run them — the
+plugin does not bundle MCP server code because there are multiple
+competing implementations.
 
-## Step 5 — Install Playwright Chromium
+## Step 3 — Playwright (optional, for CF-gated PDF fetching)
 
-For CF-gated publisher PDF retrieval, run:
+For publisher sites behind Cloudflare (Sage, Emerald, APA PsycNET), the
+plugin uses Playwright's Chromium. If the user plans to run the PDF
+pipeline against those publishers, they should install it:
 
 ```bash
 playwright install chromium
-playwright install-deps   # Linux only; skip on macOS
+playwright install-deps   # Linux only; skip on macOS/Windows
 ```
 
-Ask first — the install downloads ~100 MB. If the user declines,
-browser-based PDF retrieval won't work but everything else will.
+Ask first — the install downloads ~100 MB. Skip if they say no.
 
-## Step 6 — Verification
+## Step 4 — Onboarding
 
-Run a smoke test:
-
-```bash
-test -r ~/.config/academic-research/config.toml && echo "config readable"
-grep -q "ZOTERO\|zotero" ~/.config/academic-research/config.toml && echo "zotero configured"
-claude mcp list
-```
-
-If any fail, walk back to the failing step.
-
-## Step 7 — Onboarding the user
-
-After verification, show the user a short "what's next" menu:
+After everything verifies, show the user this menu:
 
 > **Done.** You now have:
 >
-> - `/mcp-research` rules active for citation work (fires automatically).
-> - `/empirical-integrity` rules active for manuscript edits
->   (fires automatically).
-> - `/academic-writing` rules active for draft/revise/polish work
->   (fires automatically).
-> - `/critic-loop <doc>` to revise a manuscript with 4 parallel critics.
-> - `/systematic-review` for PRISMA-style SLRs.
-> - `/zotero-operations` for Zotero-specific work outside an SLR.
-> - `/fact-check <doc>` to audit citations against sources.
+> - `mcp-research`, `empirical-integrity`, `academic-writing` — eager
+>   rule-books that fire automatically on relevant work.
+> - `/critic-loop <doc>` — parallel-critic manuscript revision.
+> - `systematic-review` — PRISMA-style SLR pipeline (say "run a systematic
+>   review on X").
+> - `zotero-operations` — Zotero enrichment outside an SLR (say "add
+>   abstracts and PDFs to my Zotero library").
+> - `fact-check` — one-shot citation/claim audit.
 >
-> Suggested first step: try `/critic-loop README.md --no-test` on a
-> draft you have, or pick an SLR project to run the pipeline on.
+> Suggested first step: try `fact-check` on a short draft you have, or
+> tell me what you want to work on.
 
 ## Red flags
 
-- You are about to display an API key the user just typed. Never.
-- You are about to commit `config.toml` to git, or copy it into a
-  project folder. Never — it lives at `~/.config/academic-research/`
-  only.
-- You are skipping the 0600 chmod because "it'll probably be fine".
-  Always set it.
-- You are editing `~/.claude/settings.json` without showing the diff
-  and asking for explicit consent.
-- You are sending any key to Anthropic in a tool call argument, log
-  line, or chat message.
-- You are running `claude mcp add ...` yourself with a key baked into
-  the command line. Have the user run it so the key never passes
-  through your tool layer.
+- You are about to ask the user to paste a key into the chat. **Never.**
+  The wizard is the only acceptable path for keys.
+- You are about to run the wizard on a headless machine where no
+  terminal is available. In that case, give the user the command and
+  wait for them to run it themselves.
+- The wizard wrote `config.toml` but not mode 0600. Re-run with correct
+  `chmod` or tell the user the wizard has a bug.
+- You are about to log, echo, or repeat a key the user typed in any
+  form. Never — the wizard hides input for this exact reason.
