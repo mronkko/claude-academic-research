@@ -1,126 +1,86 @@
 ---
 name: setup
-description: Use when the user invokes `/setup`, asks to configure the academic-research plugin for the first time, wants to add or rotate API keys (Zotero, Elsevier, WoS, Anthropic, Semantic Scholar, Wiley TDM, OpenAlex), register MCP servers, or patch permission rules. Also fires when any other academic-research procedural skill (zotero-operations, systematic-review, fact-check, critic-loop) reports `NOT CONFIGURED` on its pre-flight check. Launches a terminal wizard that collects API keys with hidden input, writes the config file, and patches settings.json. API keys entered in the wizard never pass through Claude's context.
+description: Use when the user invokes `/setup`, asks to configure the academic-research plugin for the first time, wants to add or rotate API keys (Zotero, Elsevier, WoS, Anthropic, Semantic Scholar, Wiley TDM, OpenAlex), register MCP servers, or patch permission rules. Also fires when any other academic-research procedural skill (zotero-operations, systematic-review, fact-check, critic-loop) reports `NOT CONFIGURED` on its pre-flight check. Hands the user a single terminal command that launches a setup wizard. The wizard reads keys with hidden input and writes configuration locally. API keys never pass through Claude's context.
 ---
 
 # setup
 
-Setup runs as a terminal wizard (`scripts/setup/wizard.py`). The wizard
-collects API keys with hidden input and writes configuration files
-directly. **Keys entered in the wizard never pass through Claude's
-context.** The skill's job is to launch the wizard (CLI) or walk the
-user through running it in a terminal (GUI / Desktop).
+Setup runs as a terminal wizard the **user** executes. Claude's role is
+only to give them the command and confirm when they are done. Do not
+run any tool calls — no Bash, no Read, no probes. All the information
+needed is already known:
 
-## Pre-flight
+- **Wizard path:** `~/.claude/plugins/cache/mronkko/academic-research/*/scripts/setup/wizard.py`
+  (the shell glob `*` matches whichever version is installed).
+- **Config written to:** `~/.config/academic-research/config.toml` (mode 0600).
+- **Settings patched:** `~/.claude/settings.json` (backed up as `.bak-wizard`).
+- **Wizard is idempotent:** re-running updates or adds keys without
+  clobbering existing ones.
 
-```bash
-test -f ~/.config/academic-research/config.toml && echo "config exists" || echo "no config"
-ls -d ~/.claude/plugins/cache/mronkko/academic-research/*/ 2>/dev/null | head -1 || echo "plugin not installed"
-```
-
-Read the plugin path from the `ls` output — that is `$CLAUDE_PLUGIN_ROOT`
-for this session. If config already exists, ask whether the user wants
-to re-run the wizard (to update or add keys) or skip setup.
-
-## Step 1 — Hand the user the wizard command
+## Procedure
 
 **CRITICAL:** never ask the user to paste API keys into the Claude
 chat. Any text typed into the chat is transmitted to Anthropic. The
 wizard exists so keys stay local.
 
-Do **not** try to launch the wizard yourself via `Bash`. Even in
-terminal Claude Code, the Bash tool pipes the subprocess's stdin, so
-`getpass` and interactive prompts won't behave correctly. Always hand
-the user the command to run themselves.
+Paste the following message to the user (no tool calls needed — just
+text):
 
-Read `$CLAUDE_PLUGIN_ROOT` (the `ls` output from pre-flight tells you
-the path — e.g. `~/.claude/plugins/cache/mronkko/academic-research/0.1.1/`)
-and paste the following message to the user, with the plugin path
-filled in:
-
-> Open a terminal window and run this command. If you're already in a
-> terminal (you're running `claude` directly in one, for example), just
-> open a new tab or pane — or exit Claude with Ctrl-C, run the wizard,
-> and come back with `claude -c` to resume this conversation.
+> I'll hand you the setup wizard. It runs in your terminal, prompts for
+> each API key with hidden input (keystrokes don't appear), and writes
+> your config file and permission rules locally. **Your keys never pass
+> through Claude's chat.**
+>
+> Paste this into a terminal and press Enter:
 >
 > ```
-> python3 <CLAUDE_PLUGIN_ROOT>/scripts/setup/wizard.py
+> python3 ~/.claude/plugins/cache/mronkko/academic-research/*/scripts/setup/wizard.py
 > ```
 >
-> **How to open a terminal** if you're not already in one:
+> **How to open a terminal** if you are not already in one:
 > - **macOS:** ⌘-Space → type *Terminal* → Enter.
 > - **Windows:** Windows key → type *PowerShell* → Enter. If `python3`
->   isn't recognised, try `python` instead.
+>   is not recognised, try `python` instead.
 > - **Linux:** Ctrl-Alt-T (or your distro's terminal app).
 >
-> The wizard will walk you through each API key with hidden input
-> (keystrokes don't appear on screen). When it prints "Setup complete",
-> come back here and tell me.
-
-After the user confirms completion, verify:
-
-```bash
-test -f ~/.config/academic-research/config.toml && stat -f "%Sp" ~/.config/academic-research/config.toml 2>/dev/null || stat -c "%A" ~/.config/academic-research/config.toml
-```
-
-The mode should be `-rw-------` (0600). If the file doesn't exist or
-has looser permissions, something went wrong — ask the user to paste
-the wizard's output.
-
-## Step 2 — MCP server verification
-
-The plugin expects these MCP servers to be registered with Claude Code:
-
-- `openalex`
-- `semantic-scholar`
-- `zotero`
-- `paper-search` (or equivalent)
-
-The wizard's final report lists any missing servers. If any are
-missing, suggest registration commands like
-`claude mcp add openalex <command>` and let the user run them — the
-plugin does not bundle MCP server code because there are multiple
-competing implementations.
-
-## Step 3 — Playwright (optional, for CF-gated PDF fetching)
-
-For publisher sites behind Cloudflare (Sage, Emerald, APA PsycNET), the
-plugin uses Playwright's Chromium. If the user plans to run the PDF
-pipeline against those publishers, they should install it:
-
-```bash
-playwright install chromium
-playwright install-deps   # Linux only; skip on macOS/Windows
-```
-
-Ask first — the install downloads ~100 MB. Skip if they say no.
-
-## Step 4 — Onboarding
-
-After everything verifies, show the user this menu:
-
-> **Done.** You now have:
+> Already running Claude in a terminal? Either open a new tab and run
+> it there, or press Ctrl-C to exit this Claude session, run the
+> wizard, then `claude -c` to resume this conversation.
 >
-> - `mcp-research`, `empirical-integrity`, `academic-writing` — eager
->   rule-books that fire automatically on relevant work.
-> - `/critic-loop <doc>` — parallel-critic manuscript revision.
-> - `systematic-review` — PRISMA-style SLR pipeline (say "run a systematic
->   review on X").
-> - `zotero-operations` — Zotero enrichment outside an SLR (say "add
->   abstracts and PDFs to my Zotero library").
-> - `fact-check` — one-shot citation/claim audit.
->
-> Suggested first step: try `fact-check` on a short draft you have, or
-> tell me what you want to work on.
+> When the wizard prints "Setup complete", return here and say "done"
+> (or similar). I'll confirm and we'll continue.
+
+After the user says they finished the wizard, respond with a short
+confirmation ("Setup done. Ready for the next task.") and let the next
+conversational turn drive the work. Do not run a verification Bash
+call — if something went wrong with the wizard, the user's next
+invocation of `zotero-operations` / `systematic-review` / etc. will
+hit its own pre-flight check and bounce here again.
+
+## If the wizard reports errors
+
+The wizard prints to stdout. If the user pastes output showing a
+problem:
+
+- **Python missing**: tell them to install Python 3.11+ — macOS can use
+  Homebrew (`brew install python`), Windows can use python.org's
+  installer (check "Add Python to PATH"), Linux uses the distro's
+  package manager.
+- **Tkinter not required** — the wizard is terminal-only. Any Python
+  3.11+ install works.
+- **Permission denied writing config**: user's home directory has
+  unusual permissions. Unlikely on a single-user machine.
+- **Can't parse existing settings.json**: the file is malformed. The
+  wizard backs up to `.bak-wizard` before touching; restore from
+  there, fix manually, or delete and re-run.
 
 ## Red flags
 
-- You are about to ask the user to paste a key into the chat. **Never.**
-  The wizard is the only acceptable path for keys.
-- You are about to run the wizard on a headless machine where no
-  terminal is available. In that case, give the user the command and
-  wait for them to run it themselves.
-- The wizard wrote `config.toml` but not mode 0600. Re-run with correct
-  `chmod` or tell the user the wizard has a bug.
+- You are about to run a `Bash` tool call in this skill. **Don't.**
+  This skill has no Bash probes by design — they cause permission
+  prompts for no benefit. The wizard handles everything.
+- You are about to ask the user to paste a key into the chat.
+  **Never.** The wizard is the only acceptable path for keys.
 - You are about to log, echo, or repeat a key the user typed in any
-  form. Never — the wizard hides input for this exact reason.
+  form. The wizard hides input for this exact reason; don't
+  accidentally capture it in follow-up questions.
