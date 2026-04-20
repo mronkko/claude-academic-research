@@ -16,13 +16,14 @@ Before asking any questions, check what has already been done. Run:
 ```bash
 test -f ~/.config/academic-research/config.toml && echo "config exists" || echo "no config"
 ls -d ~/.claude/plugins/cache/mronkko/academic-research/*/ 2>/dev/null | head -1 || echo "plugin not installed"
-echo "USER=$USER"
 ```
 
 The plugin install layout is
 `~/.claude/plugins/cache/mronkko/academic-research/<version>/`. If the
 `ls -d ...` line prints a path, the plugin is installed; note the
-version for later reference.
+version for later reference. The user's home directory is already
+exposed in your environment block — no need to ask the user for their
+username or run `echo $HOME`.
 
 Report what you find. If the plugin is not installed, stop and tell
 the user the install commands (`/plugin marketplace add
@@ -136,7 +137,9 @@ Ask explicit consent before editing `~/.claude/settings.json`. Show the
 diff you plan to apply. The user can say no and the setup continues
 (without pre-approval they will see per-script permission prompts).
 
-The patterns to add under `permissions.allow`:
+The patterns to add under `permissions.allow` (use `$HOME` from your
+environment block — typically `/Users/<username>` on macOS — to build
+the absolute path):
 
 ```json
 "Bash(uv run ${CLAUDE_PLUGIN_ROOT}/scripts/**)",
@@ -146,24 +149,30 @@ The patterns to add under `permissions.allow`:
 "Bash(${CLAUDE_PLUGIN_ROOT}/scripts/**.py:*)",
 "Bash(playwright install chromium)",
 "Bash(playwright install-deps)",
-"Read(//Users/${USER}/.config/academic-research/)"
+"Read(<HOME>/.config/academic-research/)"
 ```
 
 Under `permissions.deny` (create the array if absent):
 
 ```json
-"Read(//Users/${USER}/.config/academic-research/config.toml)",
-"Bash(cat //Users/${USER}/.config/academic-research/config.toml)",
-"Bash(head //Users/${USER}/.config/academic-research/config.toml*)",
-"Bash(tail //Users/${USER}/.config/academic-research/config.toml*)",
-"Bash(grep*//Users/${USER}/.config/academic-research/config.toml*)"
+"Read(<HOME>/.config/academic-research/config.toml)",
+"Bash(cat <HOME>/.config/academic-research/config.toml)",
+"Bash(head <HOME>/.config/academic-research/config.toml*)",
+"Bash(tail <HOME>/.config/academic-research/config.toml*)",
+"Bash(grep*<HOME>/.config/academic-research/config.toml*)"
 ```
 
-Substitute `${USER}` with the actual username (read `echo $USER` or
-`whoami`). The deny rules stop Claude from reading the config file —
-API keys stay out of conversation context. Scripts read the file
-directly via Python's `open()`, which is not mediated by Claude's tool
-layer.
+Where `<HOME>` is the user's actual home directory, prefixed correctly
+for the permission pattern format. The existing Read() patterns in the
+user's settings.json use a `//` prefix for absolute paths (e.g.
+`Read(//Users/mronkko/.claude/scripts/**)`), so on macOS the final form
+looks like `Read(//Users/mronkko/.config/academic-research/config.toml)`.
+Get the home path from your environment — do not ask the user or run
+`echo $USER` / `whoami`.
+
+The deny rules stop Claude from reading the config file — API keys
+stay out of conversation context. Scripts read the file directly via
+Python's `open()`, which is not mediated by Claude's tool layer.
 
 Explain the deny rules to the user: *"These prevent me from ever
 reading your config file myself. Your scripts can read it because they
