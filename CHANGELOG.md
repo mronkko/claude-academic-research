@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] — 2026-04-20
+
+### Live test suite
+
+New opt-in test suite that probes every external service the plugin
+talks to: PDF endpoints, abstract endpoints, authentication
+workflows. Runs only when explicitly invoked, never automatically,
+never in CI.
+
+- **`pytest -m live`** — 23 direct-HTTP tests: 8 PDF (Crossref TDM
+  metadata, PMC, Elsevier/ScienceDirect, OpenAlex Content, Springer
+  direct, Unpaywall, OpenAlex OA URLs, Wiley TDM), 5 abstract
+  (Crossref, Semantic Scholar, Scopus, ScienceDirect, OpenAlex
+  GROBID), 10 auth workflows (one per KeySpec, reusing the wizard's
+  `_verify_*` helpers so the test exercises the same path the wizard
+  uses at setup).
+- **`pytest -m live_browser`** — 9 tests parametrized directly from
+  `publishers.registry.DEFAULT_PUBLISHERS`. Opens a shared persistent
+  Chromium; user solves CF challenge + institutional SSO once per
+  publisher domain; assertions use `%PDF-` magic bytes (catches
+  HTML-wrapper responses that masquerade as 200 OK).
+- **Coverage guard** at `tests/unit/test_live_coverage.py` (runs on
+  every default `pytest` invocation). Asserts every registry entry,
+  every `KeySpec`, every `fetch_*_pdf`, and every `fetch_from_*` has
+  a matching live test. Failing produces an actionable message
+  naming the gap. Enforces the "every new service ships with a
+  test" project policy.
+- **Dependencies are opt-in.** Tests `pytest.importorskip` the
+  Python packages they need (`wiley-tdm`, `playwright`,
+  `pybliometrics`), so default contributors don't pay the install
+  cost. README at `tests/live/README.md` documents the one-line
+  install.
+- **Known-stable DOIs** in `tests/live/conftest.py` — best-guess
+  starting points. Users may need to edit for journals not covered
+  by their institutional subscription.
+
+### Numbers
+
+- Default `pytest`: 54 unit tests (was 50). +4 guard tests.
+- `pytest -m live`: 23 tests. Each skips cleanly if its key is
+  missing.
+- `pytest -m live_browser`: 9 tests. `-x` bails at first failure.
+- Total with both markers: 86 tests.
+
 ## [0.1.3] — 2026-04-20
 
 ### UX polish after first real-pipeline run

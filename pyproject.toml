@@ -15,7 +15,11 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers -m 'not live and not live_browser'"
+markers = [
+    "live: direct-HTTP live-endpoint tests (PDF + abstract + auth); opt in with `pytest -m live`",
+    "live_browser: Playwright live tests for Cloudflare-gated publishers (user clicks through CF); opt in with `pytest -m live_browser`",
+]
 
 [tool.ruff]
 line-length = 100
