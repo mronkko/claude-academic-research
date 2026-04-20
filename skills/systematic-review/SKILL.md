@@ -82,20 +82,33 @@ file.
 ## Pipeline scripts
 
 All scripts live under `${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/`. Invoke
-with `uv run`:
+with `uv run`; first-run `uv` installs declared deps into an ephemeral
+venv automatically.
 
-```bash
-uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/import_to_zotero.py --project <dir>
-uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_abstracts.py --project <dir>
-uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/attach_pdfs.py --project <dir>
-uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/abstract_screen.py --project <dir>
-uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_screen.py --project <dir>
-uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/export_coded_includes.py --project <dir>
-```
+| Stage | Script | Invocation |
+|---|---|---|
+| Import deduplicated search CSV into Zotero | `import_to_zotero.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/import_to_zotero.py --group <id> --input <search.csv> [--collection <key>]` |
+| Fetch missing abstracts | `fetch_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_abstracts.py --filter-keys-file <keys>` |
+| Attach missing PDFs | `attach_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/attach_pdfs.py --filter-keys-file <keys>` |
+| Audit library (missing abstracts / PDFs / stubs) | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group <id>` |
+| Export includes-only coded view | `export_coded_includes.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/export_coded_includes.py --log-csv <screening.csv> --out <coded.csv>` |
+| Generate `references.bib` from manuscript keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py <project_dir>` |
 
-Project-specific scripts (search, export shape, test suite) live in the
-project's own `scripts/` directory. The plugin ships a template at
-`${CLAUDE_PLUGIN_ROOT}/templates/sr_claude_md.md` for new SLR projects.
+The scripts below are **not yet shipped** and are deferred to later
+plugin versions. Projects that need them today either roll their own
+in the project's `scripts/` directory or wait.
+
+- **Search** (`search.py` / `_scopus` / `_wos` / `_openalex`) —
+  shipped in a future release.
+- **Abstract screening** (`abstract_screen.py`) — Claude Haiku on
+  title + abstract. Shipped in a future release.
+- **Full-text screening and coding** (`fulltext_code.py`) — Claude
+  Sonnet on full PDF text. Shipped in a future release.
+- **Test suite template** — shipped in a future release at
+  `${CLAUDE_PLUGIN_ROOT}/templates/test_suite.py`.
+
+A project CLAUDE.md template for new SLR projects lives at
+`${CLAUDE_PLUGIN_ROOT}/templates/sr_claude_md.md`.
 
 ## Key methodological rules
 

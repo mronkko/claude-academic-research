@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] — 2026-04-20
+
+### Two new pipeline scripts — first steps toward end-to-end SLR
+
+Ported from the `SLR motivation` reference project, generalised for
+plugin use. Both had been referenced in the `systematic-review` skill
+but were missing from the plugin.
+
+- **`scripts/pipelines/import_to_zotero.py`** — read a deduplicated
+  search CSV, create or update Zotero items with three-layer dedup
+  (DOI match → title+first-author match → within-batch dedup). Accepts
+  `--group`, `--collection`, `--input`, `--dry-run`; no project-specific
+  defaults. Reads API key via `core.config_loader` so the key stays
+  out of Claude's context. Prints an explicit `NEXT STEP — run a
+  duplicate check` reminder.
+- **`scripts/pipelines/export_coded_includes.py`** — filter a
+  full-text-screening CSV to the `decision=include` subset with
+  last-row-wins semantics on `item_key` (so adjudication flips via
+  appended rows take effect). Configurable output columns and
+  decision filter (`--decision exclude` useful for PRISMA reporting).
+  Pure stdlib, no external deps.
+- **Unit tests** — 5 new tests for the export script's filtering,
+  last-row-wins, dry-run, column restriction, and alternative-decision
+  behaviours.
+- **`systematic-review` skill** — stage-to-script table updated to
+  include the two new scripts and call out explicitly which scripts
+  are still deferred (search, abstract-screen, fulltext-code,
+  test-suite template).
+
+54 → 59 default tests. Ruff clean.
+
+### Still deferred (roadmap)
+
+- Search scripts (Scopus / WoS / OpenAlex variants + `search_config.py`
+  template).
+- Abstract screening (`abstract_screen.py`, Haiku) and full-text
+  coding (`fulltext_code.py`, Sonnet) — the biggest lift because
+  both require schema-driven prompt templates.
+- `test_suite.py` template.
+- QA evaluator pattern documentation in `systematic-review` skill.
+- Quarto manuscript scaffold + `stats.py` builder pattern.
+
 ## [0.1.4] — 2026-04-20
 
 ### Live test suite
