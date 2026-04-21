@@ -90,22 +90,17 @@ venv automatically.
 | Scripted Scopus + (optional) WoS search | `search.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search.py --config ./search_config.py [--wos] [--output-dir analysis/raw]` |
 | Scripted OpenAlex search (free, no key) | `search_openalex.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_openalex.py --config ./search_config.py [--output-dir analysis/raw]` |
 | Import deduplicated search CSV into Zotero | `import_to_zotero.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/import_to_zotero.py --group <id> --input <search.csv> [--collection <key>]` |
+| Abstract screening (Claude Haiku on title+abstract) | `abstract_screen.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/abstract_screen.py --group <id> --collection <key> --config ./screening_config.py` |
+| Full-text screening + structured coding (Claude Sonnet) | `fulltext_code.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs` |
 | Fetch missing abstracts | `fetch_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_abstracts.py --filter-keys-file <keys>` |
 | Attach missing PDFs | `attach_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/attach_pdfs.py --filter-keys-file <keys>` |
 | Audit library (missing abstracts / PDFs / stubs) | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group <id>` |
 | Export includes-only coded view | `export_coded_includes.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/export_coded_includes.py --log-csv <screening.csv> --out <coded.csv>` |
 | Generate `references.bib` from manuscript keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py <project_dir>` |
 
-The scripts below are **not yet shipped** and are deferred to later
-plugin versions. Projects that need them today either roll their own
-in the project's `scripts/` directory or wait.
+Additional templates shipped with the plugin:
 
-- **Abstract screening** (`abstract_screen.py`) — Claude Haiku on
-  title + abstract. Shipped in a future release.
-- **Full-text screening and coding** (`fulltext_code.py`) — Claude
-  Sonnet on full PDF text. Shipped in a future release.
-- **Test suite template** — shipped at
-  `${CLAUDE_PLUGIN_ROOT}/templates/test_suite.py`. Copy into the
+- **Test suite template** — `${CLAUDE_PLUGIN_ROOT}/templates/test_suite.py`. Copy into the
   project's `scripts/test_suite.py` and uncomment / customise the
   project-specific sections (coding-field completeness, forbidden
   methodology literals, manuscript citation resolution, stats.json

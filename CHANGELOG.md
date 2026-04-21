@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] — 2026-04-21
+
+### Screening scripts — Milestone F
+
+Ports `abstract_screen.py` and `fulltext_code.py` from the SLR
+reference project with full generalisation: prompts, coding schema,
+and model choice all come from a per-project `screening_config.py`,
+so the plugin's copies of the scripts are deliberately generic.
+
+New files:
+
+- **`scripts/pipelines/abstract_screen.py`** (~220 lines) — stage-1
+  screening. Claude Haiku on title+abstract at temperature=0. Reads
+  `ABSTRACT_SCREENING_SYSTEM_PROMPT`, `ABSTRACT_SCREENING_MODEL`, and
+  `ABSTRACT_SCREENING_PROMPT_VERSION` from the config. Parallelised
+  with `ThreadPoolExecutor` + `threading.Lock` on the CSV log. Append-
+  only log with `item_key` as key; re-running skips already-screened
+  items. Flags: `--dry-run`, `--sample N`, `--workers N`.
+- **`scripts/pipelines/fulltext_code.py`** (~320 lines) — stage-2
+  screening + structured coding. Claude Sonnet on full PDF text.
+  Reads `FULLTEXT_CODING_SYSTEM_PROMPT` and `FULLTEXT_CODING_FIELDS`
+  from the config. **The coding schema is dynamic**: the script
+  renders the field list into the system prompt's JSON-schema
+  section, and builds the output CSV's columns from the same list —
+  add a field to `FULLTEXT_CODING_FIELDS` and both the prompt and
+  CSV schema update automatically. Uses `core.llm.extract_pdf_text`
+  (pdfplumber + pypdf fallback) and `core.llm.extract_json_from_response`
+  for lenient JSON parsing of Sonnet's output. Flags: `--dry-run`,
+  `--limit N`, `--only-keys K1,...`, `--workers N`, `--rerun`
+  (reprocess error rows), `--full-recode` (backup + rebuild).
+- **`templates/screening_config.py`** — minimal-but-runnable template
+  for both screening stages. Placeholder research question, inclusion
+  criteria, exclusion codes, and three starter coding fields
+  (`key_findings`, `sample`, `method`) for the user to extend. Each
+  prompt carries a `PROMPT_VERSION` string that lands in every CSV
+  row for traceability.
+
+`systematic-review` skill's stage-to-script table now includes both;
+the "deferred" section shrinks to just the Quarto manuscript
+scaffold.
+
+**Deferred to v0.2.x**: automatic write-back of `fulltext:include` /
+`fulltext:exclude` tags and coded-field child notes to Zotero
+(currently documented as a post-run reminder in the script output).
+
+72 tests pass (no new unit tests for the screening scripts — they're
+thin wrappers over API clients; live smoke testing is the right
+approach). Ruff clean.
+
 ## [0.1.8] — 2026-04-21
 
 ### Search scripts — first half of Milestone E
