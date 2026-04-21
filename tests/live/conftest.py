@@ -50,10 +50,14 @@ KNOWN_DOIS: dict[str, str] = {
     "openalex_oa": "10.1371/journal.pone.0012345",
     "wiley_tdm": "10.1002/smj.70090",                    # SMJ (user-confirmed in TDM scope). ETP moved to Sage in 2022.
 
-    # Direct-HTTP abstract endpoints (DOIs with well-known abstracts)
-    "crossref_abstract": "10.1016/j.jbusvent.2006.10.003",
-    "semantic_scholar_abstract": "10.1016/j.jbusvent.2006.10.003",
-    "scopus_abstract": "10.1016/j.jbusvent.2006.10.003",
+    # Direct-HTTP abstract endpoints.
+    # Publishers increasingly have Semantic Scholar elide abstracts per-DOI;
+    # only fully-OA papers (PLOS, PMC) reliably return them via the S2 API.
+    # Crossref abstracts depend on publisher deposit — Wiley deposits, many
+    # Elsevier papers do not. Pick each DOI for the specific provider.
+    "crossref_abstract": "10.1002/smj.70090",            # Wiley — deposits JATS abstracts at Crossref
+    "semantic_scholar_abstract": "10.1371/journal.pone.0012345",  # PLOS ONE — not elided by publisher
+    "scopus_abstract": "10.1016/j.jbusvent.2006.10.003",  # Scopus has via pybliometrics view=FULL
     "sciencedirect_abstract": "10.1016/j.jbusvent.2006.10.003",
     "openalex_grobid": "10.1016/j.jbusvent.2006.10.003",
 
