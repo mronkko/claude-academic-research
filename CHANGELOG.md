@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] — 2026-04-21
+
+### `searchers/` package — one ABC, four implementations
+
+Extracted the per-database search logic from `search.py` /
+`search_openalex.py` into a clean abstract-base-class package so
+that (a) adding a new database is writing one small file, and (b)
+the orchestrator's database loop becomes data-driven.
+
+Mirrors the `fetchers/` package pattern (fetchers = retrieve content
+for a known DOI; searchers = discover DOIs matching a query) without
+overlapping it.
+
+New package `scripts/pipelines/searchers/`:
+
+- **`base.py`** — `SearchSource` ABC with `name`, `supports_journal_scope`,
+  `supports_block_queries` attributes; `run(config, ctx)` method;
+  `credentials_error(ctx)` hook. `SearchContext` dataclass carries
+  year window, ISSN list, mailto. Common `SEARCH_ROW_FIELDS` schema
+  that harmonises Scopus / WoS / OpenAlex / Semantic Scholar outputs
+  (union of per-source identifiers + OA metadata where available).
+- **`scopus.py`** — `ScopusSearch` using `pybliometrics`.
+  `supports_journal_scope=True`, not block queries. Credentials:
+  either `~/.config/pybliometrics.cfg` or `SCOPUS_API_KEY`.
+- **`wos.py`** — `WosSearch` against the Expanded API with 100-row
+  paging. Requires `WOS_API_KEY_EXTENDED` (Starter tier does not
+  support `IS=` so is not a substitute). `supports_journal_scope=True`.
+- **`openalex.py`** — `OpenAlexSearch` with the block-query pattern
+  (run Block A and Block B separately, merge) that preserves recall
+  against OpenAlex's relevance-ranked `search=`. Free tier; no key.
+  `supports_block_queries=True`.
+- **`semantic_scholar.py`** — `SemanticScholarSearch` via the
+  graph-API bulk endpoint. New database in the plugin. Same block
+  pattern as OpenAlex. `supports_journal_scope=False` — S2 doesn't
+  reliably filter server-side, so the source post-filters
+  client-side against `ctx.issns`. API key optional but strongly
+  recommended (unauthenticated tier is 1 rps shared globally).
+
+Refactored:
+
+- **`search.py`** now reads the registry, picks sources that pass
+  `credentials_error()` by default (or respects `--databases scopus,wos`),
+  and dispatches each source's `run()`. Existing dedup + metadata +
+  integrity-gatekeeper logic unchanged. ~100 lines shorter net.
+- **`search_openalex.py`** reduces to a thin shim that re-dispatches
+  to `search.py --databases openalex`.
+
+New thin single-DB wrappers for piloting:
+`search_scopus.py`, `search_wos.py`, `search_semantic_scholar.py`
+(each ≈30 lines, each delegates to `search.py --databases <name>`).
+
+Tests: `tests/unit/test_searchers_base.py` (17 tests) — ABC cannot
+be instantiated; every registered source declares `name`,
+`supports_*` flags; registry returns fresh instances; empty-row
+schema invariants; per-source credential checks.
+
+Skill update: `systematic-review` stage table lists every search
+entry point.
+
+165 → 182 default tests. Ruff clean on my additions.
+
 ## [0.2.1] — 2026-04-21
 
 ### systematic-review skill: QA-evaluator pattern fully documented

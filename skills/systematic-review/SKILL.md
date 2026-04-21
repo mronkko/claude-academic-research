@@ -87,8 +87,11 @@ venv automatically.
 
 | Stage | Script | Invocation |
 |---|---|---|
-| Scripted Scopus + (optional) WoS search | `search.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search.py --config ./search_config.py [--wos] [--output-dir analysis/raw]` |
-| Scripted OpenAlex search (free, no key) | `search_openalex.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_openalex.py --config ./search_config.py [--output-dir analysis/raw]` |
+| Multi-database formal search | `search.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search.py --config ./search_config.py [--databases scopus,wos,openalex,semantic_scholar]` |
+| Single-database piloting (Scopus) | `search_scopus.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_scopus.py --config ./search_config.py` |
+| Single-database piloting (Web of Science) | `search_wos.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_wos.py --config ./search_config.py` |
+| Single-database piloting (OpenAlex, free) | `search_openalex.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_openalex.py --config ./search_config.py` |
+| Single-database piloting (Semantic Scholar) | `search_semantic_scholar.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_semantic_scholar.py --config ./search_config.py` |
 | Import deduplicated search CSV into Zotero | `import_to_zotero.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/import_to_zotero.py --group <id> --input <search.csv> [--collection <key>]` |
 | Abstract screening (Claude Haiku on title+abstract) | `abstract_screen.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/abstract_screen.py --group <id> --collection <key> --config ./screening_config.py` |
 | Full-text screening + structured coding (Claude Sonnet) | `fulltext_code.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs` |
