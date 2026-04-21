@@ -117,9 +117,11 @@ Additional templates shipped with the plugin:
   that reads every pipeline output and returns keys like
   `screen.n_included`, `search.unique_dois`, etc. for inline lookup
   in the manuscript.
-- **`${CLAUDE_PLUGIN_ROOT}/templates/_tables.py`** — pandas-based
-  table functions (methods, regions, exclusion reasons) for Quarto
-  code chunks. Keeps prose readable.
+- **`${CLAUDE_PLUGIN_ROOT}/templates/tables.py`** — pandas-based
+  table functions (methods, regions, exclusion reasons, construct
+  families) for Quarto code chunks. Keeps prose readable. Copy into
+  the project's `manuscript/tables.py` so the `.qmd` can `from tables
+  import ...`.
 - **`${CLAUDE_PLUGIN_ROOT}/templates/manuscript.qmd`** — Quarto
   scaffold with setup chunk importing `build_stats()`, placeholder
   sections, and example inline expressions showing every

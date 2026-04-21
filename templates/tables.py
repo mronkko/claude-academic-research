@@ -7,7 +7,7 @@ logic in a separate, testable module.
 
 Typical Quarto usage:
     ```{python}
-    from manuscript._tables import tbl_exclusion_reasons, tbl_methods
+    from manuscript.tables import tbl_exclusion_reasons, tbl_methods
     print(tbl_methods().to_markdown(index=False))
     ```
 
@@ -86,6 +86,34 @@ def tbl_exclusion_reasons() -> pd.DataFrame:
     codes = Counter((r.get("exclusion_code", "") or "uncoded") for r in excluded)
     return pd.DataFrame(codes.most_common(),
                         columns=["Exclusion code", "N"])
+
+
+def tbl_construct_families(stats: dict) -> pd.DataFrame:
+    """Counts of included papers by construct family.
+
+    Reads `coding.family.<slug>` keys produced by `stats.py` — only
+    populated when the project's `stats.py:CONSTRUCT_FAMILIES` regex
+    list is non-empty. If the stats dict contains no family keys, the
+    returned DataFrame is empty (the manuscript's family section then
+    falls back to its static prose).
+
+    Pass the `build_stats()` output in from the Quarto setup chunk:
+
+        ```{python}
+        from tables import tbl_construct_families
+        print(tbl_construct_families(s).to_markdown(index=False))
+        ```
+    """
+    rows = []
+    for key, value in stats.items():
+        if not key.startswith("coding.family."):
+            continue
+        slug = key[len("coding.family."):]
+        display = slug.replace("_", " ").capitalize()
+        rows.append((display, value))
+    df = pd.DataFrame(sorted(rows, key=lambda r: (-r[1], r[0])),
+                      columns=["Construct family", "N"])
+    return df
 
 
 def tbl_included_papers() -> pd.DataFrame:

@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] — 2026-04-19
+
+### Manuscript scaffold maturity + `_tables.py` → `tables.py` rename
+
+The manuscript templates are the public API a user's Quarto
+manuscript imports from. Leading the file with an underscore
+implied "private / implementation detail" — the opposite of intent.
+Dropped the underscore and grew the scaffold to cover two common
+gaps: PRISMA flow and construct-family grouping.
+
+Templates:
+
+- **`templates/_tables.py` → `templates/tables.py`** (git rename,
+  history preserved). The Quarto manuscript imports `from tables
+  import …`, so the file name should match the import. All cross-refs
+  updated (skill + manuscript).
+- **`templates/tables.py`** — added `tbl_construct_families(stats)`
+  helper that reads `coding.family.<slug>` keys from `build_stats()`
+  output and returns a sorted DataFrame. Empty DataFrame when no
+  families configured, so the manuscript can fall back to a
+  placeholder comment cleanly.
+- **`templates/manuscript.qmd`** — new PRISMA Mermaid code chunk in
+  the Methods section, driven entirely by inline `s[...]` lookups
+  (no hand-typed counts). New `tbl-families` chunk in Findings that
+  renders `tbl_construct_families(s)` when configured, otherwise
+  emits a placeholder HTML comment. Updated all imports to `from
+  tables import …`.
+- **`templates/stats.py`** — expanded the `CONSTRUCT_FAMILIES` comment
+  block into a proper worked example explaining how the field name,
+  rule tuples, and downstream `tbl_construct_families()` fit together.
+  The list still ships empty (feature is opt-in).
+
+Skill update: `systematic-review/SKILL.md` points at `tables.py`
+instead of `_tables.py`, and notes the copy-into-project step so
+the `.qmd`'s `from tables import …` resolves.
+
 ## [0.2.2] — 2026-04-21
 
 ### `searchers/` package — one ABC, four implementations

@@ -45,8 +45,19 @@ STATS_OUT_PATH       = PROJECT_ROOT / "analysis" / "results" / "stats.json"
 
 # ---------------------------------------------------------------------------
 # Optional: rule-based grouping of a free-text coding field into families.
-# Example below groups the free-text `motivational_constructs` field; replace
-# with whatever field + families your manuscript needs, or delete entirely.
+#
+# Worked example — for an SLR on entrepreneur motivation, each row in
+# `coded_papers.csv` has a free-text `motivational_constructs` column like
+# "growth aspirations; self-efficacy". Uncomment the list below to group
+# those strings into families. `_coding_stats()` then emits one
+# `coding.family.<slug>` key per family, and `tbl_construct_families(s)`
+# in `tables.py` renders them as a Findings table. Order matters — the
+# first regex that matches wins, so put a broad "Other" last.
+#
+# To adapt to your own SLR: replace the field name in `_coding_stats()`
+# below, replace the (label, regex) tuples here, and the pipeline does
+# the rest. Leaving the list empty disables the feature entirely (the
+# family table in `manuscript.qmd` falls back to a placeholder comment).
 # ---------------------------------------------------------------------------
 
 CONSTRUCT_FAMILIES: list[tuple[str, str]] = [
@@ -54,7 +65,7 @@ CONSTRUCT_FAMILIES: list[tuple[str, str]] = [
     # ("Growth intentions / aspirations",
     #  r"growth\s+(intent|aspir|ambit|motivat)"),
     # ("Self-efficacy", r"self[- ]?efficacy"),
-    # ("Other", r".*"),  # catch-all
+    # ("Other", r".*"),  # catch-all — keep last
 ]
 
 

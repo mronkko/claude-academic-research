@@ -22,7 +22,7 @@ csl: apa.csl
   empirical-integrity skill for the full rationale and the test suite
   template for a regression check that greps for forbidden literals.
 
-  Table functions live in `manuscript/_tables.py`. Keep prose readable
+  Table functions live in `manuscript/tables.py`. Keep prose readable
   by putting table logic there.
 
   Delete these HTML comments before final submission.
@@ -35,7 +35,7 @@ csl: apa.csl
 import sys
 from pathlib import Path
 
-# Make analysis/stats.py and manuscript/_tables.py importable
+# Make analysis/stats.py and manuscript/tables.py importable
 _ROOT = Path().resolve()
 for _p in (_ROOT, _ROOT / "analysis", _ROOT / "manuscript"):
     if str(_p) not in sys.path:
@@ -101,6 +101,41 @@ Every screening decision is in an append-only CSV log; the final
 decision per paper is the last row keyed on `item_key`, which captures
 any human-adjudication flips appended after the automated run.
 
+### PRISMA flow
+
+@fig-prisma summarises the four-stage funnel (search → dedup → abstract
+screen → full-text include). Every count below is an inline lookup
+against `stats.json`, so re-rendering the manuscript after any
+screening / adjudication change updates the diagram automatically.
+
+```{python}
+#| label: fig-prisma
+#| fig-cap: "PRISMA 2020 flow for this review."
+#| echo: false
+#| output: asis
+print(f"""
+```{{mermaid}}
+flowchart TD
+    A["Records identified<br/>across {s['search.databases']}<br/>N = {s['search.total_raw_rows']}"]
+    B["Unique records after DOI dedup<br/>N = {s['search.unique_records']}"]
+    C1["Abstract-stage include<br/>N = {s['screen.abstract.n_include']}"]
+    C2["Abstract-stage borderline<br/>N = {s['screen.abstract.n_borderline']}"]
+    C3["Abstract-stage exclude<br/>N = {s['screen.abstract.n_exclude']}"]
+    D["Full-text assessed<br/>N = {s['screen.fulltext.n_total']}"]
+    E1["Full-text include<br/>N = {s['screen.fulltext.n_include']}"]
+    E2["Full-text exclude<br/>N = {s['screen.fulltext.n_exclude']}"]
+    A --> B
+    B --> C1
+    B --> C2
+    B --> C3
+    C1 --> D
+    C2 --> D
+    D --> E1
+    D --> E2
+```
+""")
+```
+
 
 # Findings
 
@@ -110,7 +145,7 @@ any human-adjudication flips appended after the automated run.
 #| label: tbl-methods
 #| tbl-cap: "Distribution of the included papers by research method."
 #| echo: false
-from _tables import tbl_methods
+from tables import tbl_methods
 print(tbl_methods().to_markdown(index=False))
 ```
 
@@ -118,8 +153,21 @@ print(tbl_methods().to_markdown(index=False))
 #| label: tbl-regions
 #| tbl-cap: "Geographic regions represented in the sample."
 #| echo: false
-from _tables import tbl_sample_regions
+from tables import tbl_sample_regions
 print(tbl_sample_regions().to_markdown(index=False))
+```
+
+```{python}
+#| label: tbl-families
+#| tbl-cap: "Included papers grouped by construct family."
+#| echo: false
+#| output: asis
+from tables import tbl_construct_families
+_fam = tbl_construct_families(s)
+if _fam.empty:
+    print("<!-- No construct families configured — see CONSTRUCT_FAMILIES in stats.py -->")
+else:
+    print(_fam.to_markdown(index=False))
 ```
 
 ## <INSERT YOUR FIRST THEME / CONSTRUCT FAMILY / RESEARCH STREAM>
@@ -147,7 +195,7 @@ between initial automated decision and final human judgment.
 #| label: tbl-exclusions
 #| tbl-cap: "Full-text exclusions by reason code."
 #| echo: false
-from _tables import tbl_exclusion_reasons
+from tables import tbl_exclusion_reasons
 print(tbl_exclusion_reasons().to_markdown(index=False))
 ```
 
