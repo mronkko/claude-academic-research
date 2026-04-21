@@ -87,6 +87,8 @@ venv automatically.
 
 | Stage | Script | Invocation |
 |---|---|---|
+| Scripted Scopus + (optional) WoS search | `search.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search.py --config ./search_config.py [--wos] [--output-dir analysis/raw]` |
+| Scripted OpenAlex search (free, no key) | `search_openalex.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_openalex.py --config ./search_config.py [--output-dir analysis/raw]` |
 | Import deduplicated search CSV into Zotero | `import_to_zotero.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/import_to_zotero.py --group <id> --input <search.csv> [--collection <key>]` |
 | Fetch missing abstracts | `fetch_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_abstracts.py --filter-keys-file <keys>` |
 | Attach missing PDFs | `attach_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/attach_pdfs.py --filter-keys-file <keys>` |
@@ -98,8 +100,6 @@ The scripts below are **not yet shipped** and are deferred to later
 plugin versions. Projects that need them today either roll their own
 in the project's `scripts/` directory or wait.
 
-- **Search** (`search.py` / `_scopus` / `_wos` / `_openalex`) —
-  shipped in a future release.
 - **Abstract screening** (`abstract_screen.py`) — Claude Haiku on
   title + abstract. Shipped in a future release.
 - **Full-text screening and coding** (`fulltext_code.py`) — Claude

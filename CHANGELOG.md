@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] — 2026-04-21
+
+### Search scripts — first half of Milestone E
+
+Ported the two main search scripts from the SLR motivation reference,
+plus a template for the per-project search configuration. Pipeline
+can now run a real formal search against Scopus / WoS / OpenAlex from
+a project's own `search_config.py`.
+
+New files:
+
+- **`scripts/pipelines/search.py`** (~335 lines) — Scopus + Web of
+  Science Expanded orchestrator. Reads a per-project
+  `search_config.py` by path (via `--config`). Runs each `QUERY_DEFS`
+  entry against Scopus (via pybliometrics) and optionally WoS
+  (`--wos`). Deduplicates across databases by DOI with a
+  title+first-author fallback for no-DOI records; merges abstracts
+  when they exist. Writes `search_results_raw.csv`,
+  `search_results.csv`, `search_metadata.json`, and a DOI-set hash
+  in `search_run.json` (the integrity gatekeeper every downstream
+  test reads).
+- **`scripts/pipelines/search_openalex.py`** (~250 lines) — free
+  alternative using OpenAlex REST API. Runs two block queries
+  (`BLOCK_A_TERMS`, `BLOCK_B_TERMS` from `search_config.py`)
+  separately and merges, because OpenAlex's relevance-ranked
+  `search=` parameter loses recall on combined queries. No API key
+  required; uses `CROSSREF_MAILTO` for polite-pool identification.
+- **`templates/search_config.py`** — minimal-but-runnable example
+  with 5 entrepreneurship journals, two `QUERY_DEFS` entries
+  (narrow + broad), and two OpenAlex block-term lists. Comments
+  explain per-query Scopus vs. WoS stemming differences and the
+  recall reasoning behind the block-query approach.
+
+Updated `systematic-review` skill: the script-invocation table now
+lists `search.py` and `search_openalex.py`, and the "deferred"
+section drops the search-scripts bullet.
+
+**Still deferred for later milestones:** standalone `search_scopus.py`
+/ `search_wos.py` (users can run `search.py` with just one database
+today), `abstract_screen.py`, `fulltext_code.py`, Quarto manuscript
+scaffold.
+
+No changes to existing plugin code. Default tests unchanged (72 pass).
+
 ## [0.1.7] — 2026-04-21
 
 ### Live-test fixes after first real run
