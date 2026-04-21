@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] — 2026-04-21
+
+### Live-test fixes after first real run
+
+First real-keys run of the new live suite flushed out three failures.
+Root causes were a mix of test-code bugs and wrong test DOIs:
+
+- **`test_scopus_abstract` was genuinely broken.** I used
+  `view="META_ABS"` which populates `.description` and leaves
+  `.abstract` as `None` — a pybliometrics quirk. The plugin's
+  production code at `fetch_abstracts.py` correctly uses
+  `view="FULL"`. Test now matches production. (Also dropped a
+  one-off debug helper at `scripts/debug/inspect_scopus_abstract.py`
+  that surfaces this kind of pybliometrics field-naming oddity for
+  future debugging.)
+- **`test_crossref_tdm_link_present` had the wrong DOI.** PLOS ONE
+  DOIs have no text-mining link on Crossref because they are fully
+  open-access and expose full text elsewhere. Switched to an Elsevier
+  DOI (verified: 2 text-mining links). On any future DOI that still
+  lacks a TDM link, the test skips with an explanation pointing at
+  `KNOWN_DOIS['crossref_tdm']`.
+- **`test_wiley_tdm_downloads_pdf` had an out-of-scope DOI.** The
+  ETP 2010 DOI was not in the institution's Wiley TDM scope (ETP
+  moved to Sage in 2022; older issues may or may not be TDM-accessible
+  at Wiley). Switched to an SMJ 2024 DOI. On "Unknown Doi" / "not
+  entitled" / "forbidden" responses, the test skips with an
+  institutional-scope explanation rather than failing.
+- **Browser-test `wiley` DOI updated** — same ETP-at-Sage issue; now
+  points at the same SMJ DOI.
+
+Test-design principle codified: **PASS when the endpoint works, SKIP
+when the test DOI falls outside the provider's coverage, FAIL only
+when the endpoint itself is broken.** On your machine today:
+18 passed, 5 skipped (all known-legitimate), 0 failed.
+
+### Wizard MCP-server registration
+
+The `/setup` wizard now checks five Model Context Protocol servers
+and offers to register any that are missing:
+
+- **Zotero** (required tier — every citation skill depends on it).
+- **Scopus / Semantic Scholar / OpenAlex** (search-database tier —
+  at least one required for literature search).
+- **paper-search** (optional — ArXiv / PubMed PDF retrieval).
+
+Each server has a `McpServerSpec` with a homepage, an install
+command, and a free-text install note. The wizard parses
+`claude mcp list` output to classify each server as connected /
+needs-auth / failed / missing, prints a summary with counts per
+tier, and exits with code 4 if the required Zotero server is not
+connected. The `setup` skill's error-handling guidance is updated
+to cover "command not found" for each underlying MCP binary and
+the new exit-code-4 case.
+
+Wizard grew by ~380 lines; tests grew accordingly (72 default tests,
+was 59).
+
+### No changes to plugin production-pipeline code.
+
 ## [0.1.6] — 2026-04-20
 
 ### Test-suite template for SLR projects

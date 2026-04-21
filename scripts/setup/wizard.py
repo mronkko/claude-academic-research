@@ -39,6 +39,18 @@ SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 
 PLUGIN_ROOT_ENV = "${CLAUDE_PLUGIN_ROOT}"
 
+# MCP server connection statuses, parsed from `claude mcp list` output.
+MCP_STATUS_CONNECTED = "connected"
+MCP_STATUS_NEEDS_AUTH = "needs_auth"
+MCP_STATUS_FAILED = "failed"
+MCP_STATUS_UNKNOWN = "unknown"
+MCP_STATUS_MISSING = "missing"  # not in `claude mcp list` at all
+
+# Tiers for EXPECTED_MCP (drives summary grouping and banners in main()).
+MCP_TIER_REQUIRED = "required"
+MCP_TIER_SEARCH_DB = "search_database"
+MCP_TIER_OPTIONAL = "optional"
+
 # ---------------------------------------------------------------------------
 # Per-provider verification helpers.
 #
@@ -369,6 +381,89 @@ KEYS: tuple[KeySpec, ...] = (
 
 
 # ---------------------------------------------------------------------------
+# MCP server registry
+#
+# The wizard checks five MCP (Model Context Protocol) servers, organised
+# in three tiers:
+#   - required:        zotero (every citation skill routes through it)
+#   - search_database: scopus / semantic-scholar / openalex (at least one
+#                      must be connected for literature search to work)
+#   - optional:        paper-search (PDF cascade for ArXiv/PubMed/bioRxiv)
+#
+# Commands and homepages were verified against each project's README.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class McpServerSpec:
+    name: str
+    purpose: str
+    add_args: tuple[str, ...]   # args after `claude mcp add`
+    homepage: str
+    install_cmd: str            # exact shell command, or "" if auto via npx/uvx
+    install_note: str           # extra step or prerequisite
+    tier: str                   # MCP_TIER_*
+
+
+EXPECTED_MCP: tuple[McpServerSpec, ...] = (
+    McpServerSpec(
+        name="zotero",
+        purpose="Reference manager — full-text retrieval, notes, citation keys.",
+        add_args=("-s", "user", "zotero", "--", "zotero-mcp"),
+        homepage="https://github.com/54yyyu/zotero-mcp",
+        install_cmd="uv tool install zotero-mcp-server",
+        install_note="After install, run: zotero-mcp setup. "
+                     "PyPI alt: pip install zotero-mcp-server.",
+        tier=MCP_TIER_REQUIRED,
+    ),
+    McpServerSpec(
+        name="scopus",
+        purpose="Elsevier's bibliographic database for systematic-review search.",
+        add_args=("-s", "user", "scopus", "--", "scopus-mcp"),
+        homepage="https://github.com/qwe4559999/scopus-mcp",
+        install_cmd="uv tool install scopus-mcp",
+        install_note="PyPI alt: pip install scopus-mcp. "
+                     "SCOPUS_API_KEY is read from your shell env.",
+        tier=MCP_TIER_SEARCH_DB,
+    ),
+    McpServerSpec(
+        name="semantic-scholar",
+        purpose="Free AI-powered academic search with open citation graphs.",
+        add_args=("-s", "user", "semantic-scholar", "--",
+                  "npx", "-y", "aira-semanticscholar"),
+        homepage="https://github.com/hamid-vakilzadeh/AIRA-SemanticScholar",
+        install_cmd="",   # auto-installed by npx on first call
+        install_note="Requires Node.js + npm. npx downloads the package "
+                     "automatically on first use.",
+        tier=MCP_TIER_SEARCH_DB,
+    ),
+    McpServerSpec(
+        name="openalex",
+        purpose="Open catalog of 240M+ scholarly works, authors, venues.",
+        add_args=("-s", "user", "openalex", "--",
+                  "npx", "-y", "openalex-research-mcp"),
+        homepage="https://github.com/oksure/openalex-research-mcp",
+        install_cmd="",
+        install_note="Requires Node.js + npm. npx downloads the package "
+                     "automatically on first use.",
+        tier=MCP_TIER_SEARCH_DB,
+    ),
+    McpServerSpec(
+        name="paper-search",
+        purpose="ArXiv / PubMed / bioRxiv discovery and PDF download.",
+        add_args=("-s", "user", "paper-search", "--",
+                  "uvx", "--from", "paper-search-mcp",
+                  "python", "-m", "paper_search_mcp.server"),
+        homepage="https://github.com/openags/paper-search-mcp",
+        install_cmd="",
+        install_note="Requires uv (https://astral.sh/uv). uvx fetches the "
+                     "package automatically on first use.",
+        tier=MCP_TIER_OPTIONAL,
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
 # Prompt / collection flow
 # ---------------------------------------------------------------------------
 
@@ -576,25 +671,251 @@ def _patch_settings() -> tuple[int, int]:
     return allow_added, deny_added
 
 
-def _check_mcp_servers() -> list[str]:
-    path = shutil.which("claude")
-    if not path:
-        return []
+def _parse_mcp_list(stdout: str) -> dict[str, str]:
+    """Parse `claude mcp list` output into {name: status}.
+
+    Each interesting line has the shape:
+        <name>: <command-or-url> - <status-emoji> <status-text>
+    e.g.:
+        zotero: zotero-mcp  - ✓ Connected
+        scopus: scopus-mcp  - ! Needs authentication
+        openalex: npx -y openalex-research-mcp - ✗ Failed
+
+    Built-in claude.ai servers ("claude.ai Google Calendar: …") have a
+    space in the name and are skipped — they are not in EXPECTED_MCP.
+    """
+    out: dict[str, str] = {}
+    for raw in stdout.splitlines():
+        line = raw.rstrip()
+        if not line or line.startswith(" "):
+            continue
+        if ":" not in line:
+            continue
+        name, rest = line.split(":", 1)
+        name = name.strip()
+        # Skip "claude.ai Google Calendar"-style built-ins (have whitespace
+        # in the name) and any non-name junk lines.
+        if not name or " " in name:
+            continue
+
+        lowered = rest.lower()
+        if "✓" in rest or "connected" in lowered:
+            status = MCP_STATUS_CONNECTED
+        elif "needs authentication" in lowered or "needs auth" in lowered:
+            status = MCP_STATUS_NEEDS_AUTH
+        elif "✗" in rest or "failed" in lowered or "error" in lowered:
+            status = MCP_STATUS_FAILED
+        else:
+            status = MCP_STATUS_UNKNOWN
+        out[name] = status
+    return out
+
+
+def _check_mcp_servers() -> dict[str, str]:
+    """Run `claude mcp list` and return {name: status}.
+
+    Fail-open: returns {} if the `claude` CLI is missing or the call
+    fails for any reason. Callers must treat an empty dict as "unknown",
+    not "everything is missing".
+    """
+    if not shutil.which("claude"):
+        return {}
     import subprocess
     try:
         result = subprocess.run(
             ["claude", "mcp", "list"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=15,
         )
         if result.returncode != 0:
-            return []
-        return [
-            line.split()[0].rstrip(":")
-            for line in result.stdout.splitlines()
-            if line.strip() and not line.startswith(" ")
-        ]
+            return {}
+        return _parse_mcp_list(result.stdout)
     except Exception:
-        return []
+        return {}
+
+
+def _format_register_command(spec: McpServerSpec) -> str:
+    """Render the `claude mcp add ...` command as a copy-pasteable string."""
+    return "claude mcp add " + " ".join(spec.add_args)
+
+
+def _print_mcp_offer(spec: McpServerSpec, status: str) -> None:
+    if status == MCP_STATUS_MISSING:
+        headline = f"{spec.name} — not registered"
+    elif status == MCP_STATUS_NEEDS_AUTH:
+        headline = f"{spec.name} — registered but needs authentication"
+    elif status == MCP_STATUS_FAILED:
+        headline = f"{spec.name} — registered but failed to connect"
+    else:
+        headline = f"{spec.name} — status: {status}"
+
+    install_line = (
+        spec.install_cmd if spec.install_cmd
+        else "(auto-installed on first use; no separate install command)"
+    )
+
+    print(f"\n  {headline}")
+    print(f"    What it is: {spec.purpose}")
+    print(f"    Project:    {spec.homepage}")
+    print(f"    Install:    {install_line}")
+    if spec.install_note:
+        print(f"                {spec.install_note}")
+    print(f"    Register:   {_format_register_command(spec)}")
+
+
+def _run_claude_mcp(args: list[str], timeout: int = 30) -> tuple[int, str, str]:
+    """Run a `claude mcp <args>` command. Returns (returncode, stdout, stderr)."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["claude", "mcp", *args],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        return result.returncode, result.stdout, result.stderr
+    except FileNotFoundError as e:
+        return 127, "", str(e)
+    except Exception as e:
+        return 1, "", str(e)
+
+
+_MISSING_BINARY_HINTS = (
+    "command not found", "no such file", "enoent",
+    "is not recognized", "executable not found",
+)
+
+
+def _looks_like_missing_binary(stderr: str) -> bool:
+    s = stderr.lower()
+    return any(hint in s for hint in _MISSING_BINARY_HINTS)
+
+
+def _offer_register_mcp(
+    specs: tuple[McpServerSpec, ...],
+    current: dict[str, str],
+    interactive: bool,
+) -> tuple[int, dict[str, str]]:
+    """For each spec not currently connected, offer to register it.
+
+    Returns (registered_count, updated_status_map). The status map is
+    `current` augmented with any servers we successfully registered
+    (status = "connected" once `claude mcp add` returns 0). On failure
+    we fall back to MCP_STATUS_MISSING / FAILED.
+
+    In non-interactive mode we don't prompt or call `claude mcp add` —
+    we just return the current map unchanged so the summary can report
+    the state.
+    """
+    updated = dict(current)
+    if not interactive:
+        return 0, updated
+    if not shutil.which("claude"):
+        return 0, updated
+
+    registered = 0
+    for spec in specs:
+        status = current.get(spec.name, MCP_STATUS_MISSING)
+        if status == MCP_STATUS_CONNECTED:
+            continue
+
+        _print_mcp_offer(spec, status)
+
+        if status == MCP_STATUS_MISSING:
+            prompt = "    Register now? [Y/n] "
+        else:
+            prompt = "    Re-register now (will replace the existing entry)? [Y/n] "
+
+        try:
+            answer = input(prompt).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            print("    Skipped (input ended).")
+            continue
+
+        if answer not in ("", "y", "yes"):
+            print("    Skipped.")
+            continue
+
+        # If already registered (needs_auth/failed), remove first so the
+        # add doesn't fail with "already exists".
+        if status in (MCP_STATUS_NEEDS_AUTH, MCP_STATUS_FAILED, MCP_STATUS_UNKNOWN):
+            rc, _out, err = _run_claude_mcp(["remove", spec.name, "-s", "user"])
+            if rc != 0 and "not found" not in err.lower():
+                print(f"    ✗ Could not remove existing {spec.name}: {err.strip() or 'unknown error'}")
+                continue
+
+        rc, _out, err = _run_claude_mcp(["add", *spec.add_args])
+        if rc == 0:
+            print(f"    ✓ Registered {spec.name}.")
+            updated[spec.name] = MCP_STATUS_CONNECTED
+            registered += 1
+            if spec.name == "zotero":
+                print("    Note: for local-mode (Zotero desktop instead of cloud), "
+                      "re-run with `-e ZOTERO_LOCAL=true` — see the project page.")
+        else:
+            err_clean = err.strip() or "unknown error"
+            print(f"    ✗ Registration failed: {err_clean}")
+            if _looks_like_missing_binary(err) and spec.install_cmd:
+                print("    The required command isn't on your PATH.")
+                print(f"    Install it with: {spec.install_cmd}")
+                if spec.install_note:
+                    print(f"                    {spec.install_note}")
+                print("    Then re-run this wizard.")
+            updated[spec.name] = updated.get(spec.name, MCP_STATUS_MISSING)
+
+    return registered, updated
+
+
+def _print_mcp_summary(current: dict[str, str]) -> tuple[bool, bool]:
+    """Print the tiered MCP summary block.
+
+    Returns (zotero_missing, all_search_dbs_missing) so main() can emit
+    the appropriate banners and exit code.
+    """
+    by_tier: dict[str, list[McpServerSpec]] = {
+        MCP_TIER_REQUIRED: [],
+        MCP_TIER_SEARCH_DB: [],
+        MCP_TIER_OPTIONAL: [],
+    }
+    for spec in EXPECTED_MCP:
+        by_tier[spec.tier].append(spec)
+
+    tier_labels = {
+        MCP_TIER_REQUIRED: "Required:",
+        MCP_TIER_SEARCH_DB: "Citation databases (at least one needed for literature search):",
+        MCP_TIER_OPTIONAL: "Optional:",
+    }
+
+    status_glyphs = {
+        MCP_STATUS_CONNECTED: "✓ connected",
+        MCP_STATUS_NEEDS_AUTH: "! needs authentication",
+        MCP_STATUS_FAILED: "✗ failed to connect",
+        MCP_STATUS_UNKNOWN: "? unknown status",
+        MCP_STATUS_MISSING: "✗ not registered",
+    }
+
+    print("    MCP servers")
+    name_width = max(len(s.name) for s in EXPECTED_MCP)
+    for tier in (MCP_TIER_REQUIRED, MCP_TIER_SEARCH_DB, MCP_TIER_OPTIONAL):
+        print(f"      {tier_labels[tier]}")
+        for spec in by_tier[tier]:
+            status = current.get(spec.name, MCP_STATUS_MISSING)
+            glyph = status_glyphs.get(status, status_glyphs[MCP_STATUS_UNKNOWN])
+            print(f"        {spec.name:<{name_width}}  {glyph}")
+            if status != MCP_STATUS_CONNECTED:
+                if spec.install_cmd:
+                    print(f"          Install:  {spec.install_cmd}")
+                else:
+                    print("          Install:  (auto via npx/uvx — see project page)")
+                print(f"          Project:  {spec.homepage}")
+
+    zotero_status = current.get("zotero", MCP_STATUS_MISSING)
+    zotero_missing = zotero_status != MCP_STATUS_CONNECTED
+
+    search_dbs = [s.name for s in EXPECTED_MCP if s.tier == MCP_TIER_SEARCH_DB]
+    all_search_dbs_missing = all(
+        current.get(name) != MCP_STATUS_CONNECTED for name in search_dbs
+    )
+
+    return zotero_missing, all_search_dbs_missing
 
 
 def main() -> int:
@@ -623,23 +944,41 @@ def main() -> int:
     _write_config(values)
     allow_added, deny_added = _patch_settings()
 
-    mcp_servers = _check_mcp_servers()
-    expected_mcp = {"openalex", "semantic-scholar", "zotero", "paper-search"}
-    missing_mcp = sorted(expected_mcp - set(mcp_servers))
+    current_mcp = _check_mcp_servers()
+    if interactive:
+        print()
+        print("  Checking MCP servers (Model Context Protocol — provides Claude")
+        print("  with tools for Zotero, citation databases, and PDF retrieval).")
+        registered, current_mcp = _offer_register_mcp(
+            EXPECTED_MCP, current_mcp, interactive=True,
+        )
+        if registered:
+            # Re-poll so the final summary reflects post-registration state.
+            current_mcp = _check_mcp_servers() or current_mcp
 
     print()
     print("  Setup complete.")
     print(f"    Config:   {CONFIG_PATH} (mode 0600)")
     print(f"    Settings: {SETTINGS_PATH} (+{allow_added} allow, +{deny_added} deny)")
-    if missing_mcp:
-        print(f"    MCP servers still to register: {', '.join(missing_mcp)}")
-        print("    Register each via `claude mcp add <name> <command>`.")
-    else:
-        print("    MCP servers: all expected servers appear to be registered.")
+    zotero_missing, all_search_dbs_missing = _print_mcp_summary(current_mcp)
+
+    if zotero_missing:
+        print()
+        print("  *** REQUIRED: Zotero MCP is not connected. ***")
+        print("  Every academic-research skill routes through Zotero.")
+        print("  Install and register it (see the Install/Project lines above),")
+        print("  then re-run this wizard. The wizard is idempotent.")
+    if all_search_dbs_missing:
+        print()
+        print("  *** WARNING: no citation database is reachable. ***")
+        print("  Literature search will not work without at least one of:")
+        print("  scopus, semantic-scholar, openalex. Other skills (e.g.")
+        print("  critic-loop, fact-check on existing items) still work.")
+
     print()
     print("  Return to your Claude Code session and tell Claude setup is done.")
     print()
-    return 0
+    return 4 if zotero_missing else 0
 
 
 if __name__ == "__main__":

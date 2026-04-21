@@ -35,15 +35,6 @@ if str(SCRIPTS_ROOT) not in sys.path:
 
 from core.config_loader import require  # noqa: E402
 
-try:
-    from pyzotero.zotero import Zotero
-except ImportError:
-    sys.exit(
-        "ERROR: pyzotero not installed. Run via `uv run` — the PEP 723 "
-        "block at the top of this script declares the dependency and "
-        "uv will install it into an ephemeral venv automatically."
-    )
-
 
 def _classify(items: list[dict], attachments_by_parent: dict[str, list[dict]]) -> dict:
     missing_abstract: list[dict] = []
@@ -97,6 +88,15 @@ def _classify(items: list[dict], attachments_by_parent: dict[str, list[dict]]) -
 
 
 def main() -> int:
+    try:
+        from pyzotero.zotero import Zotero
+    except ImportError:
+        sys.exit(
+            "ERROR: pyzotero not installed. Run via `uv run` — the PEP 723 "
+            "block at the top of this script declares the dependency and "
+            "uv will install it into an ephemeral venv automatically."
+        )
+
     parser = argparse.ArgumentParser(description=__doc__)
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--group", help="Zotero group library ID (numeric)")

@@ -205,3 +205,240 @@ def test_non_interactive_with_verify_collects_extras(monkeypatch) -> None:
     value, extras = mod._prompt_key(spec, None, interactive=False, verify=True)
     assert value == "valid-key"
     assert extras.get("user_id") == "42"
+
+
+# ---------------------------------------------------------------------------
+# MCP server schema and parser tests
+# ---------------------------------------------------------------------------
+
+
+_MCP_LIST_SAMPLE = """Checking MCP server health…
+
+claude.ai Google Calendar: https://calendarmcp.googleapis.com/mcp/v1 - ! Needs authentication
+zotero: zotero-mcp  - ✓ Connected
+semantic-scholar: npx -y aira-semanticscholar - ✓ Connected
+openalex: npx -y openalex-research-mcp - ✗ Failed
+scopus: scopus-mcp  - ! Needs authentication
+paper-search: uvx --from paper-search-mcp python -m paper_search_mcp.server - ✓ Connected
+"""
+
+
+def test_check_mcp_servers_parses_connected_status() -> None:
+    mod = _load()
+    parsed = mod._parse_mcp_list(_MCP_LIST_SAMPLE)
+    assert parsed["zotero"] == mod.MCP_STATUS_CONNECTED
+    assert parsed["semantic-scholar"] == mod.MCP_STATUS_CONNECTED
+    assert parsed["openalex"] == mod.MCP_STATUS_FAILED
+    assert parsed["scopus"] == mod.MCP_STATUS_NEEDS_AUTH
+    assert parsed["paper-search"] == mod.MCP_STATUS_CONNECTED
+
+
+def test_check_mcp_servers_ignores_claude_ai_builtin_servers() -> None:
+    mod = _load()
+    parsed = mod._parse_mcp_list(_MCP_LIST_SAMPLE)
+    # "claude.ai Google Calendar" has whitespace in the name and must be
+    # skipped — otherwise it would shadow legitimate entries or crash
+    # callers that index by EXPECTED_MCP names.
+    assert "claude.ai" not in parsed
+    assert "Google" not in parsed
+
+
+def test_expected_mcp_contains_five_servers_in_correct_tiers() -> None:
+    mod = _load()
+    by_name = {s.name: s for s in mod.EXPECTED_MCP}
+    assert set(by_name) == {
+        "zotero", "scopus", "semantic-scholar", "openalex", "paper-search",
+    }
+    assert by_name["zotero"].tier == mod.MCP_TIER_REQUIRED
+    assert by_name["scopus"].tier == mod.MCP_TIER_SEARCH_DB
+    assert by_name["semantic-scholar"].tier == mod.MCP_TIER_SEARCH_DB
+    assert by_name["openalex"].tier == mod.MCP_TIER_SEARCH_DB
+    assert by_name["paper-search"].tier == mod.MCP_TIER_OPTIONAL
+
+
+def test_every_mcp_spec_has_homepage_and_install_guidance() -> None:
+    """Analogue of test_every_key_has_full_documentation: every entry must
+    give the user actionable install info, not just a name."""
+    mod = _load()
+    for spec in mod.EXPECTED_MCP:
+        assert spec.homepage.startswith("https://"), f"{spec.name}: bad homepage"
+        assert spec.purpose and len(spec.purpose) > 20, f"{spec.name}: missing purpose"
+        # Either an explicit install_cmd, or an install_note that explains
+        # the auto-install path (npx/uvx).
+        has_cmd = bool(spec.install_cmd)
+        auto_note = "npx" in spec.install_note.lower() or "uvx" in spec.install_note.lower()
+        assert has_cmd or auto_note, (
+            f"{spec.name}: must have install_cmd or auto-install note"
+        )
+
+
+def test_mcp_summary_warns_when_no_search_database_connected() -> None:
+    mod = _load()
+    current = {"zotero": mod.MCP_STATUS_CONNECTED}  # all three search-dbs missing
+    zotero_missing, all_search_missing = mod._print_mcp_summary(current)
+    assert not zotero_missing
+    assert all_search_missing
+
+
+def test_mcp_summary_does_not_warn_when_one_search_database_connected() -> None:
+    mod = _load()
+    current = {
+        "zotero": mod.MCP_STATUS_CONNECTED,
+        "semantic-scholar": mod.MCP_STATUS_CONNECTED,
+    }
+    zotero_missing, all_search_missing = mod._print_mcp_summary(current)
+    assert not zotero_missing
+    assert not all_search_missing
+
+
+def test_mcp_summary_flags_zotero_missing() -> None:
+    mod = _load()
+    current = {
+        "scopus": mod.MCP_STATUS_CONNECTED,
+        "semantic-scholar": mod.MCP_STATUS_CONNECTED,
+        "openalex": mod.MCP_STATUS_CONNECTED,
+        "paper-search": mod.MCP_STATUS_CONNECTED,
+    }
+    zotero_missing, all_search_missing = mod._print_mcp_summary(current)
+    assert zotero_missing
+    assert not all_search_missing
+
+
+def test_offer_register_mcp_runs_claude_mcp_add(monkeypatch) -> None:
+    """Simulate user typing 'y' at the prompt; assert subprocess gets the
+    full `claude mcp add ...` argv from EXPECTED_MCP."""
+    mod = _load()
+    captured: list[list[str]] = []
+
+    def fake_run(args, **_kw):
+        captured.append(list(args))
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(mod.shutil, "which", lambda _x: "/usr/local/bin/claude")
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: "y")
+
+    current: dict[str, str] = {}  # nothing registered
+    registered, updated = mod._offer_register_mcp(
+        mod.EXPECTED_MCP, current, interactive=True,
+    )
+    assert registered == len(mod.EXPECTED_MCP)
+    # Each spec produced one `claude mcp add ...` call.
+    add_calls = [c for c in captured if c[:3] == ["claude", "mcp", "add"]]
+    assert len(add_calls) == len(mod.EXPECTED_MCP)
+    zotero_call = next(c for c in add_calls if "zotero" in c)
+    assert zotero_call == ["claude", "mcp", "add", "-s", "user", "zotero",
+                           "--", "zotero-mcp"]
+    assert all(updated[s.name] == mod.MCP_STATUS_CONNECTED for s in mod.EXPECTED_MCP)
+
+
+def test_offer_register_mcp_skips_when_already_connected(monkeypatch) -> None:
+    mod = _load()
+    called = False
+
+    def fake_run(*_a, **_kw):
+        nonlocal called
+        called = True
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(mod.shutil, "which", lambda _x: "/usr/local/bin/claude")
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: "y")
+
+    current = {s.name: mod.MCP_STATUS_CONNECTED for s in mod.EXPECTED_MCP}
+    registered, _ = mod._offer_register_mcp(
+        mod.EXPECTED_MCP, current, interactive=True,
+    )
+    assert registered == 0
+    assert called is False
+
+
+def test_offer_register_mcp_respects_non_interactive(monkeypatch) -> None:
+    mod = _load()
+    called = False
+
+    def fake_run(*_a, **_kw):
+        nonlocal called
+        called = True
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(mod.shutil, "which", lambda _x: "/usr/local/bin/claude")
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    registered, updated = mod._offer_register_mcp(
+        mod.EXPECTED_MCP, {}, interactive=False,
+    )
+    assert registered == 0
+    assert called is False
+    # Map is returned unchanged.
+    assert updated == {}
+
+
+def test_offer_register_mcp_prints_install_hint_on_missing_binary(
+    monkeypatch, capsys
+) -> None:
+    mod = _load()
+
+    def fake_run(_args, **_kw):
+        # Simulate `claude mcp add -- zotero-mcp` failing because the
+        # binary isn't on PATH.
+        class R:
+            returncode = 1
+            stdout = ""
+            stderr = "zotero-mcp: command not found"
+        return R()
+
+    monkeypatch.setattr(mod.shutil, "which", lambda _x: "/usr/local/bin/claude")
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: "y")
+
+    zotero = next(s for s in mod.EXPECTED_MCP if s.name == "zotero")
+    registered, _ = mod._offer_register_mcp((zotero,), {}, interactive=True)
+    out = capsys.readouterr().out
+    assert registered == 0
+    assert "uv tool install zotero-mcp-server" in out
+    assert "isn't on your PATH" in out
+
+
+def test_offer_register_mcp_no_claude_cli_is_no_op(monkeypatch) -> None:
+    """Fail-open: if `claude` is not on PATH, the function returns
+    (0, current) without any subprocess calls or prompts."""
+    mod = _load()
+    monkeypatch.setattr(mod.shutil, "which", lambda _x: None)
+
+    def boom(*_a, **_kw):
+        raise AssertionError("subprocess.run must not be called when claude CLI is missing")
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", boom)
+    monkeypatch.setattr("builtins.input",
+                        lambda *_a, **_kw: (_ for _ in ()).throw(AssertionError("no prompt")))
+
+    registered, updated = mod._offer_register_mcp(
+        mod.EXPECTED_MCP, {}, interactive=True,
+    )
+    assert registered == 0
+    assert updated == {}
+
+
+def test_format_register_command_is_copy_pasteable() -> None:
+    mod = _load()
+    zotero = next(s for s in mod.EXPECTED_MCP if s.name == "zotero")
+    cmd = mod._format_register_command(zotero)
+    assert cmd == "claude mcp add -s user zotero -- zotero-mcp"

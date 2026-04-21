@@ -27,8 +27,13 @@ Paste the following message to the user (no tool calls needed — just
 text):
 
 > I'll hand you the setup wizard. It runs in your terminal, prompts for
-> each API key with hidden input (keystrokes don't appear), and writes
-> your config file and permission rules locally. **Your keys never pass
+> each API key with hidden input (keystrokes don't appear), then checks
+> five MCP (Model Context Protocol) servers and offers to register any
+> that are missing: **Zotero** (required — every citation skill uses
+> it), at least one of **Scopus / Semantic Scholar / OpenAlex**
+> (required for literature search to work), and **paper-search**
+> (optional — for ArXiv / PubMed PDF retrieval). It then writes your
+> config file and permission rules locally. **Your keys never pass
 > through Claude's chat.**
 >
 > Paste this into a terminal and press Enter:
@@ -73,6 +78,16 @@ problem:
 - **Can't parse existing settings.json**: the file is malformed. The
   wizard backs up to `.bak-wizard` before touching; restore from
   there, fix manually, or delete and re-run.
+- **MCP register fails with "command not found"**: the underlying MCP
+  binary is not installed. The wizard prints the project's homepage and
+  the exact install command (`uv tool install zotero-mcp-server`,
+  `uv tool install scopus-mcp`, or "requires Node.js + npm" for the
+  npx-based servers). Install it, then re-run the wizard — it's
+  idempotent and picks up where it left off.
+- **Wizard exits with code 4**: Zotero MCP is not connected. No
+  academic-research skill works without it. The wizard's summary lists
+  the install and registration commands; run them and re-run the
+  wizard.
 
 ## Red flags
 

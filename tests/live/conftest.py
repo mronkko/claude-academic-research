@@ -42,13 +42,13 @@ if str(SCRIPTS_ROOT / "pipelines") not in sys.path:
 
 KNOWN_DOIS: dict[str, str] = {
     # Direct-HTTP PDF endpoints
-    "crossref_tdm": "10.1371/journal.pone.0012345",  # PLOS ONE, TDM-indexed
-    "pmc": "10.1371/journal.pone.0012345",           # same; PMC-indexed
-    "elsevier": "10.1016/j.jbusvent.2006.10.003",     # JBV 2007, Elsevier
+    "crossref_tdm": "10.1016/j.jbusvent.2006.10.003",  # JBV 2007 — Elsevier deposits 2 text-mining links
+    "pmc": "10.1371/journal.pone.0012345",              # PLOS ONE (PMC-indexed)
+    "elsevier": "10.1016/j.jbusvent.2006.10.003",       # JBV 2007, Elsevier
     "openalex_content": "10.1371/journal.pone.0012345",
     "unpaywall": "10.1371/journal.pone.0012345",
     "openalex_oa": "10.1371/journal.pone.0012345",
-    "wiley_tdm": "10.1111/j.1540-6520.2010.00420.x",  # ETP 2010, Wiley
+    "wiley_tdm": "10.1002/smj.70090",                    # SMJ (user-confirmed in TDM scope). ETP moved to Sage in 2022.
 
     # Direct-HTTP abstract endpoints (DOIs with well-known abstracts)
     "crossref_abstract": "10.1016/j.jbusvent.2006.10.003",
@@ -61,7 +61,7 @@ KNOWN_DOIS: dict[str, str] = {
     "sage":     "10.1177/1042258717725967",           # ETP 2018
     "emerald":  "10.1108/IJEBR-08-2019-0513",         # IJEBR 2020
     "tandf":    "10.1080/08985626.2020.1727096",      # Entrepreneurship & Regional Dev 2020
-    "wiley":    "10.1111/etap.12254",                  # ETP via browser (fallback)
+    "wiley":    "10.1002/smj.70090",                    # SMJ — Wiley browser fallback (ETP moved to Sage in 2022)
     "aom":      "10.5465/amj.2014.0387",               # AMJ 2016
     "informs":  "10.1287/orsc.2017.1182",              # Org Science 2018
     "apa":      "10.1037/0021-9010.93.3.481",          # JAP 2008
