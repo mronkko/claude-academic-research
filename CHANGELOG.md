@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] — 2026-04-19
+
+### test_suite.py template: realign with refactored screening pipeline
+
+The screening scripts no longer define `MODEL` / `PROMPT_VERSION` as
+module-level constants — they read the values from the project's
+`screening_config.py` via `getattr(mod, "ABSTRACT_SCREENING_MODEL", …)`.
+The template's old `test_screening_script_constants_in_log` grepped the
+scripts for `^MODEL = "..."`, found nothing, and silently no-op'd.
+Drift was invisible.
+
+Fixed in `templates/test_suite.py`:
+
+- New `SCREENING_CONFIG` path constant pointing at the project's
+  `screening_config.py` (the canonical source of model + prompt-version
+  declarations).
+- Renamed `test_screening_script_constants_in_log` →
+  `test_screening_config_constants_in_log`. Now greps
+  `screening_config.py` for the four `FULLTEXT_CODING_*` /
+  `ABSTRACT_SCREENING_*` constants and verifies each log's model /
+  prompt_version set is a subset (subset, not equality — so an
+  in-progress re-run mid-transition isn't a false alarm).
+- `test_temperature_zero_pinned` kept as-is but reworded: silently
+  passes when neither script is locally copied, since the plugin's own
+  test suite enforces the invariant for plugin-invoked scripts.
+
+Did not add a `VersionConflictError` leakage test — the error is
+tenacity-retried internally and does not surface in screening CSV rows
+in practice, so it would be speculative.
+
 ## [0.2.3] — 2026-04-19
 
 ### Manuscript scaffold maturity + `_tables.py` → `tables.py` rename

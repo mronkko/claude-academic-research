@@ -116,6 +116,15 @@ SEARCH_RUN      = os.path.join(PROJECT_ROOT, "search_run.json")
 ABSTRACT_LOG    = os.path.join(PROJECT_ROOT, "screening/abstract_screening.csv")
 FULLTEXT_LOG    = os.path.join(PROJECT_ROOT, "screening/fulltext_screening.csv")
 CODED_PAPERS    = os.path.join(PROJECT_ROOT, "analysis/results/coded_papers.csv")
+# Screening config — the project's per-review `screening_config.py`
+# is the canonical source of MODEL and PROMPT_VERSION constants (the
+# screening scripts read them via `getattr(mod, "ABSTRACT_SCREENING_MODEL",
+# ...)`). The scripts themselves live inside the plugin and are invoked
+# by path, so they typically aren't copied into the project.
+SCREENING_CONFIG = os.path.join(PROJECT_ROOT, "screening_config.py")
+# Legacy paths kept for projects that did copy the screening scripts
+# alongside the plugin invocation. Tests below skip gracefully when
+# absent.
 ABSTRACT_SCRIPT = os.path.join(PROJECT_ROOT, "scripts/abstract_screen.py")
 FULLTEXT_SCRIPT = os.path.join(PROJECT_ROOT, "scripts/fulltext_code.py")
 
@@ -206,10 +215,16 @@ def test_coded_count_matches_fulltext_includes() -> None:
 
 
 def test_temperature_zero_pinned() -> None:
-    """Every Claude API call must have temperature=0 — reproducibility invariant."""
+    """Every Claude API call must have temperature=0 — reproducibility invariant.
+
+    Looks at any local copy of `abstract_screen.py` / `fulltext_code.py`
+    if present (legacy layout). Projects that invoke the plugin scripts
+    by path get this invariant enforced by the plugin's own test suite,
+    so the test silently passes when no local copies exist.
+    """
     for script in (ABSTRACT_SCRIPT, FULLTEXT_SCRIPT):
         if not os.path.exists(script):
-            continue  # skip if this stage isn't used in this project
+            continue
         with open(script) as f:
             src = f.read()
         ok = (re.search(r'temperature\s*=\s*0\b', src) is not None
@@ -218,22 +233,44 @@ def test_temperature_zero_pinned() -> None:
         assert ok, f"{script}: no temperature=0 setting found"
 
 
-def test_screening_script_constants_in_log() -> None:
-    """Top-level MODEL and PROMPT_VERSION constants must match what is logged."""
-    if not os.path.exists(FULLTEXT_SCRIPT):
+def test_screening_config_constants_in_log() -> None:
+    """`screening_config.py` is the canonical source of MODEL and
+    PROMPT_VERSION (the pipeline scripts read them via getattr). Each
+    fulltext-log row's logged model/prompt_version must match what's
+    declared in the config, so we can tell when the config changed but
+    a re-run didn't happen."""
+    if not os.path.exists(SCREENING_CONFIG):
         return
-    with open(FULLTEXT_SCRIPT) as f:
+    with open(SCREENING_CONFIG) as f:
         src = f.read()
-    m = re.search(r'^MODEL\s*=\s*"([^"]+)"', src, re.M)
-    p = re.search(r'^PROMPT_VERSION\s*=\s*"([^"]+)"', src, re.M)
-    if not (m and p):
-        return  # optional — scripts may inline constants differently
-    ft_last = last_row_per_key(read_csv(FULLTEXT_LOG))
-    models = {r.get("model", "") for r in ft_last.values() if r.get("model")}
-    pvers = {r.get("prompt_version", "") for r in ft_last.values()
-             if r.get("prompt_version")}
-    assert models == {m.group(1)}, f"model drift: {models} vs {{'{m.group(1)}'}}"
-    assert pvers == {p.group(1)}, f"prompt_version drift: {pvers}"
+    m_ft = re.search(r'^FULLTEXT_CODING_MODEL\s*=\s*"([^"]+)"', src, re.M)
+    p_ft = re.search(r'^FULLTEXT_CODING_PROMPT_VERSION\s*=\s*"([^"]+)"', src, re.M)
+    m_ab = re.search(r'^ABSTRACT_SCREENING_MODEL\s*=\s*"([^"]+)"', src, re.M)
+    p_ab = re.search(r'^ABSTRACT_SCREENING_PROMPT_VERSION\s*=\s*"([^"]+)"', src, re.M)
+
+    if m_ft and p_ft and os.path.exists(FULLTEXT_LOG):
+        ft_last = last_row_per_key(read_csv(FULLTEXT_LOG))
+        models = {r.get("model", "") for r in ft_last.values() if r.get("model")}
+        pvers = {r.get("prompt_version", "") for r in ft_last.values()
+                 if r.get("prompt_version")}
+        assert models <= {m_ft.group(1)}, (
+            f"fulltext model drift vs screening_config.py: {models}"
+        )
+        assert pvers <= {p_ft.group(1)}, (
+            f"fulltext prompt_version drift: {pvers}"
+        )
+
+    if m_ab and p_ab and os.path.exists(ABSTRACT_LOG):
+        ab_last = last_row_per_key(read_csv(ABSTRACT_LOG))
+        models = {r.get("model", "") for r in ab_last.values() if r.get("model")}
+        pvers = {r.get("prompt_version", "") for r in ab_last.values()
+                 if r.get("prompt_version")}
+        assert models <= {m_ab.group(1)}, (
+            f"abstract model drift vs screening_config.py: {models}"
+        )
+        assert pvers <= {p_ab.group(1)}, (
+            f"abstract prompt_version drift: {pvers}"
+        )
 
 
 def test_bbt_keys_unique_in_coded_papers() -> None:
@@ -370,7 +407,7 @@ def main() -> int:
     r.run("PRISMA arithmetic", test_prisma_arithmetic)
     r.run("coded count matches fulltext includes", test_coded_count_matches_fulltext_includes)
     r.run("temperature=0 pinned in Claude calls", test_temperature_zero_pinned)
-    r.run("script constants match log", test_screening_script_constants_in_log)
+    r.run("screening_config constants match log", test_screening_config_constants_in_log)
     r.run("BBT keys unique in coded papers", test_bbt_keys_unique_in_coded_papers)
     r.run("no errors remaining in fulltext log", test_no_remaining_errors_in_fulltext_log)
     r.run("no ghost keys", test_ghosts_handled_consistently)
