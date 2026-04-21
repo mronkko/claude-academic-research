@@ -100,7 +100,27 @@ venv automatically.
 
 Additional templates shipped with the plugin:
 
-- **Test suite template** — `${CLAUDE_PLUGIN_ROOT}/templates/test_suite.py`. Copy into the
+- **`${CLAUDE_PLUGIN_ROOT}/templates/search_config.py`** — journal
+  list, query definitions, year window. Read by `search.py` and
+  `search_openalex.py`.
+- **`${CLAUDE_PLUGIN_ROOT}/templates/screening_config.py`** — system
+  prompts for abstract screening and full-text coding, plus the
+  `FULLTEXT_CODING_FIELDS` list that drives the coding schema.
+- **`${CLAUDE_PLUGIN_ROOT}/templates/test_suite.py`** — `TestRunner`
+  plus 13 universal SR-invariant tests; uncomment 4 project-specific
+  slots (coding-field completeness, forbidden-literals, citekey
+  resolution, stats freshness).
+- **`${CLAUDE_PLUGIN_ROOT}/templates/stats.py`** — flat-dict builder
+  that reads every pipeline output and returns keys like
+  `screen.n_included`, `search.unique_dois`, etc. for inline lookup
+  in the manuscript.
+- **`${CLAUDE_PLUGIN_ROOT}/templates/_tables.py`** — pandas-based
+  table functions (methods, regions, exclusion reasons) for Quarto
+  code chunks. Keeps prose readable.
+- **`${CLAUDE_PLUGIN_ROOT}/templates/manuscript.qmd`** — Quarto
+  scaffold with setup chunk importing `build_stats()`, placeholder
+  sections, and example inline expressions showing every
+  methodology number wired to `s['key']` rather than hand-typed. Copy into the
   project's `scripts/test_suite.py` and uncomment / customise the
   project-specific sections (coding-field completeness, forbidden
   methodology literals, manuscript citation resolution, stats.json

@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-04-21
+
+### Manuscript scaffold — Milestone G, and plugin-v0.2 milestone
+
+Ships the last missing piece of the end-to-end SLR pipeline: the
+manuscript scaffold. With this release, a project can go from search
+results to a rendered manuscript using only plugin-shipped artifacts
+plus the per-project config files.
+
+New templates:
+
+- **`templates/stats.py`** — flat-dict builder that reads every
+  pipeline output (`search_metadata.json`, `search_run.json`, the
+  two screening CSVs, `coded_papers.csv`) and returns keys like
+  `search.unique_dois`, `screen.abstract.n_include`,
+  `screen.n_included`, `provenance.fulltext.model`,
+  `provenance.fulltext.prompt_version`. Flat dotted keys fail loudly
+  on typos in the manuscript, which is the whole point. Also
+  demonstrates an optional regex-based family classifier for free-text
+  coding fields.
+- **`templates/_tables.py`** — pandas-based table helpers that turn
+  `coded_papers.csv` into publication-ready tables (methods,
+  geographic regions, exclusion reasons, included-papers list).
+  Keeps Quarto chunks one-liners.
+- **`templates/manuscript.qmd`** — Quarto scaffold with a setup
+  chunk importing `build_stats()`, placeholder sections (introduction,
+  methods, findings, discussion, limitations, references), and
+  example inline expressions showing every methodology number wired
+  to `s['key']` rather than hand-typed. The scaffold passes its own
+  empirical-integrity check out of the box.
+
+systematic-review skill's "Additional templates" section now lists all
+six templates the plugin ships (search_config, screening_config,
+test_suite, stats, _tables, manuscript) and what each is for.
+
+### Plugin end-to-end status
+
+The pipeline is now complete for social-sciences SLRs from search
+through render. Stages and their shipped scripts:
+
+- Search → `search.py` / `search_openalex.py`
+- Import → `import_to_zotero.py`
+- Enrich → `fetch_abstracts.py` + `attach_pdfs.py` /
+  `fetch_pdfs_wiley_tdm.py` / `fetch_pdfs_browser.py`
+- Audit → `audit_zotero_library.py`
+- Screen → `abstract_screen.py` + `fulltext_code.py`
+- Export → `export_coded_includes.py`
+- Bibliography → `generate_bib.py`
+- Test → `templates/test_suite.py`
+- Render → `templates/manuscript.qmd` + `templates/stats.py` +
+  `templates/_tables.py`
+
+### Still deferred (v0.2.x candidates)
+
+- Zotero tag + child-note write-back from `fulltext_code.py` (coded
+  decisions currently live only in the CSV log).
+- Standalone `search_scopus.py` / `search_wos.py` piloting wrappers.
+- INFORMS and OUP custom flows in `fetch_pdfs_browser.py` (caught by
+  the `live_browser` test suite as FAIL today).
+
+72 default tests pass; ruff clean.
+
 ## [0.1.9] — 2026-04-21
 
 ### Screening scripts — Milestone F

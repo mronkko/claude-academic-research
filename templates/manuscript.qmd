@@ -1,0 +1,158 @@
+---
+title: "<INSERT YOUR TITLE HERE>"
+author: "<INSERT AUTHOR(S)>"
+date: today
+format:
+  html:
+    toc: true
+    number-sections: true
+  docx:
+    toc: false
+    number-sections: true
+bibliography: references.bib
+csl: apa.csl
+---
+
+<!--
+  Quarto manuscript scaffold for an SLR.
+
+  The setup chunk below imports `build_stats()` from the sibling
+  `analysis/stats.py`. Every number you cite in the prose must come
+  from `s['some.key']` — never a literal in the Markdown. See the
+  empirical-integrity skill for the full rationale and the test suite
+  template for a regression check that greps for forbidden literals.
+
+  Table functions live in `manuscript/_tables.py`. Keep prose readable
+  by putting table logic there.
+
+  Delete these HTML comments before final submission.
+-->
+
+
+```{python}
+#| label: setup
+#| echo: false
+import sys
+from pathlib import Path
+
+# Make analysis/stats.py and manuscript/_tables.py importable
+_ROOT = Path().resolve()
+for _p in (_ROOT, _ROOT / "analysis", _ROOT / "manuscript"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+from stats import build_stats  # noqa: E402
+
+s = build_stats()
+```
+
+
+# Introduction
+
+<!-- Static prose — write by hand. No hand-typed methodology numbers. -->
+
+This review addresses the research question:
+
+> <INSERT YOUR RESEARCH QUESTION HERE>
+
+
+# Methods
+
+## Search strategy
+
+We searched `{python} s['search.databases']` for articles published
+between `{python} s['search.from_year']` and `{python} s['search.to_year']`,
+filtered to `{python} s['search.journal_count']` journals selected for
+their relevance to the research question (ABS Journal Guide 2024
+rankings; full journal list in the supplementary `search_config.py`).
+
+The combined search returned `{python} s['search.unique_records']`
+unique records after deduplication by DOI and title+first-author
+fallback for records without a DOI (`{python} s['search.unique_dois']`
+records carry a DOI). The integrity-gatekeeper hash of the DOI set is
+`{python} s['search.doi_sha256'][:12]`… (recorded in
+`search_run.json`).
+
+## Screening
+
+### Stage 1 — abstract screening
+
+Each record's title and abstract were screened by
+`{python} s['provenance.abstract.model']` at temperature 0 with prompt
+version `{python} s['provenance.abstract.prompt_version']`. Of the
+`{python} s['screen.abstract.n_total']` records screened,
+`{python} s['screen.abstract.n_include']` were marked **include**,
+`{python} s['screen.abstract.n_borderline']` **borderline**, and
+`{python} s['screen.abstract.n_exclude']` **exclude**. Borderline
+records were retained for full-text review.
+
+### Stage 2 — full-text screening and coding
+
+The `{python} s['screen.fulltext.n_total']` records carried forward
+were read in full by `{python} s['provenance.fulltext.model']` at
+temperature 0 with prompt version
+`{python} s['provenance.fulltext.prompt_version']`. The model
+simultaneously rendered an include / exclude decision and, for every
+include, extracted the coding fields listed in `screening_config.py`.
+`{python} s['screen.fulltext.n_include']` papers were included for
+final synthesis.
+
+Every screening decision is in an append-only CSV log; the final
+decision per paper is the last row keyed on `item_key`, which captures
+any human-adjudication flips appended after the automated run.
+
+
+# Findings
+
+## Overview of the included corpus
+
+```{python}
+#| label: tbl-methods
+#| tbl-cap: "Distribution of the included papers by research method."
+#| echo: false
+from _tables import tbl_methods
+print(tbl_methods().to_markdown(index=False))
+```
+
+```{python}
+#| label: tbl-regions
+#| tbl-cap: "Geographic regions represented in the sample."
+#| echo: false
+from _tables import tbl_sample_regions
+print(tbl_sample_regions().to_markdown(index=False))
+```
+
+## <INSERT YOUR FIRST THEME / CONSTRUCT FAMILY / RESEARCH STREAM>
+
+<!--
+  For each theme, synthesise the findings across included papers.
+  Do NOT walk one-paper-at-a-time — write thematic prose that cites
+  multiple papers per claim. See the academic-writing skill's
+  "SYNTHESIS over enumeration" rule.
+-->
+
+
+# Discussion
+
+<!-- Static prose. Reference `s['key']` only for numbers. -->
+
+
+# Limitations
+
+The exclusion decisions are summarised in @tbl-exclusions. The
+adjudication log (`screening/qa_review.md`) records every flip
+between initial automated decision and final human judgment.
+
+```{python}
+#| label: tbl-exclusions
+#| tbl-cap: "Full-text exclusions by reason code."
+#| echo: false
+from _tables import tbl_exclusion_reasons
+print(tbl_exclusion_reasons().to_markdown(index=False))
+```
+
+
+# References
+
+::: {#refs}
+:::
