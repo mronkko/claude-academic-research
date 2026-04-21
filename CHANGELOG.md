@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-04-21
+
+### systematic-review skill: QA-evaluator pattern fully documented
+
+The skill already mentioned the three-agent QA step in passing. This
+release writes out the full protocol that the reference SLR project
+uses, so the plugin can drive the QA loop end-to-end without a
+separate external reference.
+
+Added to `skills/systematic-review/SKILL.md`:
+
+- **Three evaluator sketches** (inclusion validator, exclusion
+  validator, coding-quality validator) with each evaluator's
+  sampling strategy, prompt focus, and severity scheme. Includes the
+  default 20 % coding-quality spot-check threshold with tuning
+  guidance for smaller / larger corpora.
+- **Tag-vocabulary table** listing all seven `qa-*` tags, when each
+  is applied, and when each is removed. Closes the ambiguity around
+  whether `fulltext:include` / `fulltext:exclude` move alongside
+  `qa-adjudicated-*` (they do not — screener verdict vs. reviewer
+  process trail are separate records).
+- **Human adjudication loop** as a six-step procedure with the
+  last-row-wins CSV append pattern for flips, plus the separate
+  `qa-wrong-code` path for code corrections that don't flip the
+  decision.
+- **`screening/qa_review.md` structure** with both sections
+  (Scope clarifications + Adjudication log) and the exact line
+  format for each. Cross-references the existing example line.
+- **Red flag** against silently dropping a `qa-flag`ed item without
+  recording a disposition.
+
+No code changes; prose-only. Default tests unchanged (165 pass
+today — the other instance's refactor has already added new tests).
+
 ## [0.2.0] — 2026-04-21
 
 ### Manuscript scaffold — Milestone G, and plugin-v0.2 milestone

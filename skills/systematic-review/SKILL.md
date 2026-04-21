@@ -207,39 +207,126 @@ review whether to keep each flagged paper. Transparent flagging
 
 ### Post-screening QA
 
-After every automated screening or coding run, launch three evaluator
-agents **in parallel** (single message, multiple Agent tool calls):
+After every automated full-text screening / coding run (and after
+every re-run following prompt changes), launch **three parallel
+evaluator agents**, then run a **human adjudication** loop on
+whatever they flag. Abstract screening is typically not re-QAed — its
+errors surface at Stage 2 anyway — but the pattern works identically
+if you want to.
 
-1. **Inclusion validator** — every row decided `include`, with
-   decision reason and key coding fields. Flags false positives;
-   distinguishes HARD (clearly fails criterion) from SOFT (borderline).
-2. **Exclusion validator** — stratified sample across exclusion codes
-   (6–8 per code). Flags false negatives. Also flags `WRONG_CODE` cases
-   where the exclusion stands but the code is wrong.
-3. **Coding quality validator** — random sample of included papers with
-   **all** coding fields shown in full. Checks for bare labels,
-   missing citations where theories are named, fabrication risk,
-   inconsistency, thin/vague entries. Ends with a ship-it verdict.
+#### The three evaluators
 
-Evaluator agents **flag**, they do **not** re-decide. The human
-adjudicates. Flagged items get two Zotero tags: `qa-flag` (sentinel) and
-one of `qa-hard` / `qa-soft-include` / `qa-soft-exclude` (severity).
-Existing `fulltext:include` / `fulltext:exclude` tags stay until the
-human decides.
+Launch in a **single message, multiple `Agent` tool calls** so they
+run in parallel (≈max-of-three latency instead of sum-of-three).
+Every evaluator flags items; **no evaluator ever re-decides**.
 
-After human review, replace `qa-*` severity tags with
-`qa-adjudicated-include` / `qa-adjudicated-exclude`. If the decision
-**flips**, append a new row to the decision CSV (last-row-wins picks it
-up); re-run export. If the decision **kept**, the CSV needs no change.
+- **Inclusion validator.** Input: every row decided `include`, with
+  the automated reason and the key coding fields. Prompt asks it to
+  flag **false positives** — papers that slipped through despite
+  failing one of the inclusion criteria. Each flag marks severity
+  **HARD** (clearly fails a named criterion) or **SOFT** (borderline,
+  defensible). Returns a bulleted list, one per flagged item, with
+  `item_key`, severity, and a one-sentence reason.
+- **Exclusion validator.** Input: a **stratified sample** across
+  exclusion codes — 6–8 items per code. Rationale: each exclusion
+  code is a potential source of systematic false negatives, so
+  sample across codes rather than uniformly across all exclusions.
+  The prompt asks the agent to flag items the screener excluded that
+  *should* have been included (false negatives) — HARD if clearly so,
+  SOFT if borderline. Also flags a separate category `WRONG_CODE`:
+  the exclusion stands but the code is wrong (e.g. exclusion E3 when
+  the real reason is E1).
+- **Coding-quality validator.** Input: a **random sample** of ≈20 %
+  of included papers with **every coding field shown in full** (not
+  truncated). The prompt checks each field for: bare labels (should
+  be prose), missing citations where theories are named, fabrication
+  risk (a claim that sounds too specific to have come from the
+  paper), inconsistency across fields, and thin/vague entries. Ends
+  with a single-word ship-it verdict and per-paper notes.
 
-Every adjudication writes one line to `screening/qa_review.md` under an
-`## Adjudication log` section:
+The 20 % threshold for coding-quality spot-checks is the plugin's
+default. Smaller corpora (< 40 includes) warrant 100 % review;
+larger corpora (> 200 includes) can drop to 10 % with a quality
+audit built in.
+
+#### Tag vocabulary
+
+Evaluators (running as `Agent` calls in the main session) cannot
+tag Zotero directly — the main agent takes each flag they return and
+applies two tags via `mcp__zotero__zotero_add_tag` (or equivalent):
+
+| Tag | When to apply | When to remove |
+|---|---|---|
+| `qa-flag` | Any evaluator flagged this item (sentinel for filtering in Zotero). | After human adjudication (replaced with an `adjudicated` tag below). |
+| `qa-hard` | Evaluator severity was HARD — clear violation of a named inclusion / exclusion criterion. | After adjudication. |
+| `qa-soft-include` | Inclusion-validator SOFT concern — borderline inclusion. | After adjudication. |
+| `qa-soft-exclude` | Exclusion-validator SOFT concern — borderline exclusion. | After adjudication. |
+| `qa-wrong-code` | Exclusion stands, but the exclusion code is wrong. | After the code is corrected in the CSV log (append a new row with the right code). |
+| `qa-adjudicated-include` | Human decided to keep / flip to INCLUDE. | Never (permanent record of adjudication). |
+| `qa-adjudicated-exclude` | Human decided to keep / flip to EXCLUDE. | Never. |
+
+Existing `fulltext:include` / `fulltext:exclude` tags **stay in
+place** through adjudication. They are the screener's verdict; the
+`qa-*` tags are the reviewer's process trail.
+
+#### Human adjudication loop
+
+The human opens Zotero, filters the collection by `qa-flag`, and for
+each flagged item:
+
+1. Reads the attached PDF and the `SLR Coding` child note (or its
+   equivalent in your project — the CSV row is also authoritative).
+2. Decides: **keep** the automated decision, or **flip** it.
+3. Removes the severity tag (`qa-hard` / `qa-soft-*` / `qa-wrong-code`)
+   and adds `qa-adjudicated-include` or `qa-adjudicated-exclude`.
+4. If flipping: **appends a new row** to
+   `screening/fulltext_screening.csv` with the reversed decision.
+   Last-row-wins semantics on `item_key` mean `export_coded_includes.py`
+   picks up the flip automatically; the earlier row remains as
+   history.
+5. If changing an exclusion code without flipping the decision: same
+   pattern — append a new row with the corrected code, remove
+   `qa-wrong-code`.
+6. Writes one line to `screening/qa_review.md` recording the decision
+   (format below).
+
+#### `screening/qa_review.md` structure
+
+A single markdown file in the project's `screening/` directory with
+two sections.
+
+**Scope clarifications.** Protocol-level decisions the adjudicator
+made while working through flags. These apply **going forward** and
+propagate back into the screening prompt version for any future
+re-run. Format:
+
+> 1. **\<one-line rule\>** — \<paragraph rationale\>. *(YYYY-MM-DD)*
+
+Example: *"Cross-country GEM studies at country-year level are in
+scope. Rationale: the GEM cluster is a coherent strand; fragmenting
+it weakens synthesis."*
+
+**Adjudication log.** One line per flagged item, in processing order.
+Format:
 
 > `{item_key}` **{short citation}** — **{kept DECISION / flipped to
-> DECISION}** — rationale. *(YYYY-MM-DD)*
+> DECISION [EXCLUSION_CODE]}** — \<one-to-two-sentence rationale\>.
+> *(YYYY-MM-DD)*
 
-This log is the methods-section evidence for the final manuscript.
-Without it, the adjudication is not reproducible.
+Group related flips onto one line when the rationale is identical
+(e.g. "10 GEM studies — all kept INCLUDE — see scope clarification
+1"). Individual contentious flips get their own line.
+
+This file **is** the methods-section evidence for the manuscript's
+QA paragraph. Without it, the adjudication is not reproducible.
+
+#### Red flag
+
+You are about to **silently drop a `qa-flag`ed item** — remove the
+flag without recording a disposition in the adjudication log. Never.
+Every flagged item gets one line in `qa_review.md`, even if the
+decision is "kept without change". Silent drops break the
+reproducibility invariant that makes the QA step worth the effort.
 
 ## Data integrity
 
