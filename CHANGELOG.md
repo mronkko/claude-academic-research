@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] — 2026-04-20
+
+### Test-suite template for SLR projects
+
+Ports the 528-line project-specific test suite from the reference SLR
+into a generalised template at
+`templates/test_suite.py`. Ship 13 universal tests that check
+invariants every SR pipeline must satisfy, plus commented scaffolding
+for four project-specific test families the user fills in.
+
+**Universal tests (run out of the box):**
+
+- Pipeline artefacts exist and are non-empty.
+- `search_run.json` DOI count matches the deduplicated CSV.
+- `search_metadata.json` has required fields (dates, databases, year
+  bounds, queries).
+- No duplicate DOIs in the deduplicated search output.
+- Abstract / full-text decision states match the allowed whitelists.
+- PRISMA arithmetic: fulltext-screened items all come from the
+  abstract-include+borderline set.
+- Coded-papers row count equals fulltext-include count.
+- Temperature=0 pinned in every Claude API call (regex across
+  `abstract_screen.py` and `fulltext_code.py`).
+- Top-level `MODEL` and `PROMPT_VERSION` constants match what the
+  logs recorded.
+- BBT keys in `coded_papers.csv` are non-empty and unique.
+- No `decision=error` rows remaining after `--rerun`.
+- No "ghost" keys (items in logs but absent from Zotero) — skipped
+  cleanly if `pyzotero` or local Zotero unavailable.
+
+**Project-specific scaffolding (commented out, uncomment to enable):**
+
+- Coding-field completeness — list your schema's required field names.
+- Forbidden methodology literals in manuscript prose (model names,
+  version strings, hand-typed counts).
+- Manuscript `@citekey` resolution against `references.bib`.
+- `stats.json` freshness vs. `coded_papers.csv` modification time.
+
+Shared `TestRunner` infrastructure (verbose + concise output, exit
+code 0/1, unhandled-exception capture) makes customisation low-effort.
+Copy the template, uncomment the tests that apply, run
+`uv run scripts/test_suite.py`.
+
+`systematic-review` skill updated to point at the new template.
+
 ## [0.1.5] — 2026-04-20
 
 ### Two new pipeline scripts — first steps toward end-to-end SLR

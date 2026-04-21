@@ -104,8 +104,14 @@ in the project's `scripts/` directory or wait.
   title + abstract. Shipped in a future release.
 - **Full-text screening and coding** (`fulltext_code.py`) — Claude
   Sonnet on full PDF text. Shipped in a future release.
-- **Test suite template** — shipped in a future release at
-  `${CLAUDE_PLUGIN_ROOT}/templates/test_suite.py`.
+- **Test suite template** — shipped at
+  `${CLAUDE_PLUGIN_ROOT}/templates/test_suite.py`. Copy into the
+  project's `scripts/test_suite.py` and uncomment / customise the
+  project-specific sections (coding-field completeness, forbidden
+  methodology literals, manuscript citation resolution, stats.json
+  freshness). The template's universal tests — pipeline artefacts,
+  PRISMA arithmetic, decision-state whitelists, temperature=0 pinning,
+  BBT-key uniqueness, no-ghost-keys — run out of the box.
 
 A project CLAUDE.md template for new SLR projects lives at
 `${CLAUDE_PLUGIN_ROOT}/templates/sr_claude_md.md`.
