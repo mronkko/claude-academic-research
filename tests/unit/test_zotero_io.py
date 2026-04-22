@@ -149,28 +149,86 @@ def test_collection_items_filters_by_type() -> None:
 
 
 def test_pdf_map_groups_real_vs_stub_attachments() -> None:
+    """Old stubs (dateAdded past the grace window) are classified
+    as stubs. Attachments without md5 but recently added are treated
+    as 'real' to protect in-flight Connector uploads."""
     zc = _client()
     fake = MagicMock()
     fake.everything.return_value = [
         {"key": "ATT1", "data": {"contentType": "application/pdf",
-                                  "parentItem": "PARENT_A", "md5": "deadbeef"}},
+                                  "parentItem": "PARENT_A",
+                                  "md5": "deadbeef",
+                                  "dateAdded": "2020-01-01T00:00:00Z"}},
         {"key": "ATT2", "data": {"contentType": "application/pdf",
-                                  "parentItem": "PARENT_A", "md5": None}},
+                                  "parentItem": "PARENT_A",
+                                  "md5": None,
+                                  "dateAdded": "2020-01-01T00:00:00Z"}},
         {"key": "ATT3", "data": {"contentType": "application/pdf",
-                                  "parentItem": "PARENT_B", "md5": ""}},
+                                  "parentItem": "PARENT_B",
+                                  "md5": "",
+                                  "dateAdded": "2020-01-01T00:00:00Z"}},
         {"key": "ATT4", "data": {"contentType": "text/html",
-                                  "parentItem": "PARENT_B", "md5": None}},
+                                  "parentItem": "PARENT_B",
+                                  "md5": None,
+                                  "dateAdded": "2020-01-01T00:00:00Z"}},
     ]
     zc._local = fake
 
     result = zc.pdf_map()
 
     assert result["PARENT_A"][0] is True              # has real PDF
-    assert result["PARENT_A"][1] == ["ATT2"]          # one stub
+    assert result["PARENT_A"][1] == ["ATT2"]          # one old stub
     assert result["PARENT_B"][0] is False             # only stubs
-    assert result["PARENT_B"][1] == ["ATT3"]          # one stub
+    assert result["PARENT_B"][1] == ["ATT3"]          # one old stub
     # text/html attachments are not indexed
     assert "PARENT_C" not in result
+
+
+def test_pdf_map_grace_window_protects_recent_attachments() -> None:
+    """An attachment added within the grace window but with empty md5
+    is NOT classified as a stub — it's likely an in-flight Connector
+    upload where Zotero Desktop hasn't finished computing / syncing
+    md5 yet. Deleting it would destroy the upload."""
+    import datetime
+    zc = _client()
+    fake = MagicMock()
+    # "Right now" — well within the 1-hour grace window.
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    fake.everything.return_value = [
+        {"key": "RECENT_STUB",
+         "data": {"contentType": "application/pdf",
+                  "parentItem": "PARENT_X",
+                  "md5": "",
+                  "dateAdded": now_iso}},
+    ]
+    zc._local = fake
+
+    result = zc.pdf_map()
+
+    # Treated as real (in-flight upload) — has_real=True, no stubs.
+    assert result["PARENT_X"][0] is True
+    assert result["PARENT_X"][1] == []
+
+
+def test_pdf_map_unparseable_dateadded_protects_attachment() -> None:
+    """Malformed / missing dateAdded → err on the side of keeping the
+    attachment. Deleting a 'stub' that we can't verify as old is the
+    worse outcome."""
+    zc = _client()
+    fake = MagicMock()
+    fake.everything.return_value = [
+        {"key": "WEIRD",
+         "data": {"contentType": "application/pdf",
+                  "parentItem": "PARENT_Y",
+                  "md5": None,
+                  "dateAdded": "not-a-timestamp"}},
+    ]
+    zc._local = fake
+
+    result = zc.pdf_map()
+
+    assert result["PARENT_Y"][0] is True
+    assert result["PARENT_Y"][1] == []
 
 
 def test_attach_pdf_delegates_to_pyzotero_attachment_simple() -> None:

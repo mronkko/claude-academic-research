@@ -39,6 +39,7 @@ from core.config_loader import require  # noqa: E402
 def _classify(items: list[dict], attachments_by_parent: dict[str, list[dict]]) -> dict:
     missing_abstract: list[dict] = []
     missing_pdf: list[dict] = []
+    missing_doi: list[dict] = []
     empty_stubs: list[dict] = []
     have_pdf = 0
 
@@ -58,6 +59,13 @@ def _classify(items: list[dict], attachments_by_parent: dict[str, list[dict]]) -
 
         if not (d.get("abstractNote") or "").strip():
             missing_abstract.append(identifier)
+
+        # Missing DOI check — cheap (Zotero data only, no Crossref).
+        # Feeds enrich_dois.py --find-missing via audit.missing_doi.keys.
+        # Only applies to journalArticle: books / reports / other item
+        # types often legitimately lack DOIs.
+        if item_type == "journalArticle" and not doi.strip():
+            missing_doi.append(identifier)
 
         atts = attachments_by_parent.get(key, [])
         pdfs = [a for a in atts if a.get("data", {}).get("contentType") == "application/pdf"]
@@ -81,8 +89,10 @@ def _classify(items: list[dict], attachments_by_parent: dict[str, list[dict]]) -
         "missing_pdf_count": len(missing_pdf),
         "empty_stub_count": len(empty_stubs),
         "missing_abstract_count": len(missing_abstract),
+        "missing_doi_count": len(missing_doi),
         "missing_abstract": missing_abstract,
         "missing_pdf": missing_pdf,
+        "missing_doi": missing_doi,
         "empty_stubs": empty_stubs,
     }
 
@@ -159,7 +169,7 @@ def main() -> int:
     # stages can consume them via --filter-keys-file without any jq step.
     stem = out_path.with_suffix("")  # strip .json
     keys_files: dict[str, Path] = {}
-    for category in ("missing_abstract", "missing_pdf", "empty_stubs"):
+    for category in ("missing_abstract", "missing_pdf", "missing_doi", "empty_stubs"):
         keys_path = Path(f"{stem}.{category}.keys")
         keys_path.write_text(
             "\n".join(entry["key"] for entry in report.get(category, [])) + "\n"
@@ -175,10 +185,15 @@ def main() -> int:
     print(f"  Missing PDF:                {report['missing_pdf_count']}")
     print(f"  Empty PDF stubs:            {report['empty_stub_count']}")
     print(f"  Missing abstract:           {report['missing_abstract_count']}")
+    print(f"  Missing DOI:                {report['missing_doi_count']}")
     print(f"  Details written to:         {out_path}")
-    print(f"  Keys files written to:      {stem}.{{missing_abstract,missing_pdf,empty_stubs}}.keys")
+    print(f"  Keys files written to:      "
+          f"{stem}.{{missing_abstract,missing_pdf,missing_doi,empty_stubs}}.keys")
     print()
     print("Next steps — feed the .keys files directly into pipeline stages:")
+    if report["missing_doi_count"]:
+        print(f"  uv run {SCRIPT_DIR}/enrich_dois.py "
+              f"--find-missing --filter-keys-file {keys_files['missing_doi']}")
     if report["missing_abstract_count"]:
         print(f"  uv run {SCRIPT_DIR}/enrich_abstracts.py "
               f"--filter-keys-file {keys_files['missing_abstract']}")

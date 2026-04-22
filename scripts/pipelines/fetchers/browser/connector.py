@@ -341,6 +341,15 @@ class ZoteroConnectorHandler(PublisherHandler):
             counter.failed += 1
             return False
 
+        # EBSCO openurl endpoints (and a few other library resolvers)
+        # respond with an intermediate list page that JS-redirects to
+        # the article detail after a couple of seconds. `goto` returns
+        # on first DOMContentLoaded, so without this dwell the
+        # translator poll fires during the pre-redirect view and
+        # Zotero sees a multi-item page → picker. A 3-second wait
+        # catches typical redirect chains at negligible cost.
+        await asyncio.sleep(3.0)
+
         # One-prompt-per-host confirmation. The translator otherwise
         # fires too eagerly on pages that briefly render reCAPTCHA
         # (JSTOR) or a multi-item search list (EBSCO) before
@@ -518,26 +527,21 @@ class ZoteroConnectorHandler(PublisherHandler):
             counter.failed += 1
             return False
 
-        # Wait for the PDF attachment — with md5 populated — to
-        # appear as a child. Three sync stages: parent metadata,
-        # attachment shell, file bytes (md5 lands at stage 3). We
-        # need stage 3 before merging — merging at stage 2 locks in
-        # a record whose md5 is empty, which the next run's
-        # `pdf_map` classifies as a 'stub' and deletes (thrashing
-        # until md5 eventually catches up).
-        print("  │  Parent synced. Waiting for PDF attachment with "
-              "md5 (up to 120s)…", flush=True)
+        # Wait for the attachment record to appear as a child. We
+        # don't require md5 — the merge just PATCHes `parentItem`
+        # on the attachment, which works at any sync stage. The
+        # stub-vs-real race on next run is handled by `pdf_map()`
+        # skipping recently-added attachments.
+        print("  │  Parent synced. Waiting for PDF attachment record "
+              "(up to 30s)…", flush=True)
         has_child = await asyncio.to_thread(
-            _wait_for_child_attachment, zot, new_key, 120,
+            _wait_for_child_attachment, zot, new_key, 30,
         )
         if not has_child:
             print(
-                "  │  No attachment with md5 after 120s — translator\n"
-                "  │  may be metadata-only, the file upload may have\n"
-                "  │  stalled, or Zotero Desktop may be slow to sync.\n"
-                "  │  Proceeding with merge so the duplicate is trashed;\n"
-                "  │  merge will report PARTIAL if no PDF child exists\n"
-                "  │  to move.",
+                "  │  No attachment child after 30s — translator may\n"
+                "  │  be metadata-only. Proceeding with merge; it will\n"
+                "  │  report PARTIAL if no PDF child exists to move.",
                 flush=True,
             )
 
@@ -728,27 +732,22 @@ def _wait_for_cloud_sync(zot, item_key: str, timeout_s: float) -> bool:
 def _wait_for_child_attachment(
     zot, item_key: str, timeout_s: float,
 ) -> bool:
-    """Block until `item_key` has at least one child attachment that
-    carries a non-empty `md5`, visible via the Zotero cloud API.
+    """Block until `item_key` has at least one attachment child
+    visible via the Zotero cloud API.
 
-    When Zotero Desktop saves via the Connector, several stages
-    sync separately:
-      1. Parent metadata record.
-      2. Attachment shell (contentType + filename + url, but no md5
-         yet because the file bytes haven't been uploaded).
-      3. Attachment bytes uploaded; md5 populated on the same record.
+    This is enough to proceed with the merge: the merge PATCHes
+    `parentItem` on the attachment record, which works regardless
+    of whether file bytes have uploaded or md5 has populated. We
+    don't wait for md5 here — for large PDFs that upload can take
+    several minutes and the script would hang pointlessly. The
+    stub-vs-real-PDF race that md5 used to guard against is solved
+    at the `pdf_map()` side by skipping recently-added attachments
+    (see `ZoteroClient.pdf_map`).
 
-    Merging at stage 2 locks in a record without md5. The next
-    pipeline run then classifies that attachment as a 'stub' (see
-    `ZoteroClient.pdf_map` — it keys on empty md5) and deletes it.
-    Waiting for md5 before merging avoids this churn AND ensures
-    our PATCH doesn't race with Desktop's md5 update (which would
-    412 on version mismatch).
-
-    Returns True when such an attachment appears, False on timeout.
-    False is ambiguous (translator may be metadata-only, PDF may
-    still be uploading, or Zotero Desktop may have stalled) —
-    callers should proceed with the merge and let it log PARTIAL.
+    Returns True once an attachment child is visible; False on
+    timeout. False is ambiguous (translator may be metadata-only,
+    or sync is genuinely slow) — callers should proceed with the
+    merge and let it log PARTIAL when no child exists.
     """
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
@@ -758,8 +757,7 @@ def _wait_for_child_attachment(
             children = []
         for c in children:
             data = c.get("data", {}) or {}
-            if (data.get("itemType") == "attachment"
-                    and data.get("md5")):
+            if data.get("itemType") == "attachment":
                 return True
         time.sleep(1.0)
     return False

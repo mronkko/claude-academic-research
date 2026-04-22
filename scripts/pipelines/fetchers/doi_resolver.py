@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -34,11 +34,21 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DoiResolution:
-    """The routing-relevant fields we keep from Crossref's work metadata."""
+    """Fields we keep from Crossref's work metadata.
+
+    `url / publisher / issn` drive the browser-pipeline routing (v0.4.0).
+    `title / author_surnames / issued_year` drive the DOI validation
+    logic in `enrich_dois.py` (v0.5.0): comparing Crossref's metadata
+    against Zotero's record tells us whether the stored DOI is
+    accurate or whether it points to a different paper.
+    """
 
     url: str = ""                  # canonical resource URL, e.g. "https://journals.sagepub.com/doi/…"
     publisher: str = ""            # e.g. "SAGE Publications"
     issn: str = ""                 # first ISSN when Crossref lists several
+    title: str = ""                # Crossref's registered title for the DOI
+    author_surnames: list[str] = field(default_factory=list)  # family names in order
+    issued_year: str = ""          # e.g. "2000"; empty when Crossref has no date
 
 
 class DoiResolverCache:
@@ -62,10 +72,16 @@ class DoiResolverCache:
         raw = self._data.get(doi)
         if not raw:
             return None
+        surnames_raw = raw.get("author_surnames") or []
+        if not isinstance(surnames_raw, list):
+            surnames_raw = []
         return DoiResolution(
             url=str(raw.get("url", "")),
             publisher=str(raw.get("publisher", "")),
             issn=str(raw.get("issn", "")),
+            title=str(raw.get("title", "")),
+            author_surnames=[str(s) for s in surnames_raw if s],
+            issued_year=str(raw.get("issued_year", "")),
         )
 
     def put(self, doi: str, resolution: DoiResolution) -> None:
@@ -78,13 +94,22 @@ class DoiResolverCache:
 
 
 def _extract_resolution(msg: dict) -> DoiResolution:
-    """Pull the three routing-relevant fields out of a Crossref `message`.
+    """Pull the routing + validation fields out of a Crossref `message`.
 
-    The `URL` field is the canonical DOI-registered URL. Crossref
-    sometimes also carries `resource.primary.URL` which usually
-    matches `URL`; when they differ the primary URL is slightly more
-    specific (platform-on-record at time of last metadata update).
-    Prefer primary, fall back to URL.
+    Routing (v0.4.0):
+    - `URL` (or `resource.primary.URL` when more specific) — canonical
+      DOI-registered URL. Used to route Pass 2 to the right browser
+      handler even when the DOI prefix is misleading (ETAP case).
+    - `publisher`, `ISSN[0]` — diagnostic; not routing-critical.
+
+    Validation (v0.5.0):
+    - `title[0]` — Crossref's canonical title. Compared against
+      Zotero's title to flag DOIs pointing at the wrong paper.
+    - `author` — list of `{family, given}` dicts; we keep the family
+      names in order for first-author surname comparison.
+    - `issued.date-parts[0][0]` — publication year as string (empty
+      when Crossref has no date; some older records have no `issued`
+      block at all).
     """
     resource = msg.get("resource") or {}
     primary = (resource.get("primary") or {}).get("URL", "")
@@ -92,7 +117,42 @@ def _extract_resolution(msg: dict) -> DoiResolution:
     publisher = str(msg.get("publisher", "") or "")
     issns = msg.get("ISSN") or []
     issn = str(issns[0]) if issns else ""
-    return DoiResolution(url=url, publisher=publisher, issn=issn)
+
+    # Title: Crossref returns a list, typically with one entry.
+    # Occasionally missing or empty; default to "".
+    titles = msg.get("title") or []
+    title = str(titles[0]) if titles else ""
+
+    # Author surnames: skip entries without a `family` key (corporate
+    # authors / malformed records). Preserve Crossref order so
+    # `surnames[0]` is the first author.
+    authors = msg.get("author") or []
+    surnames: list[str] = []
+    for a in authors:
+        if isinstance(a, dict):
+            fam = a.get("family") or ""
+            if fam:
+                surnames.append(str(fam))
+
+    # Issued year: date-parts is a nested list like [[2000, 4, 15]];
+    # the inner list may be partial (year only) or missing entirely.
+    year = ""
+    issued = msg.get("issued") or {}
+    if isinstance(issued, dict):
+        parts = issued.get("date-parts") or []
+        if parts and isinstance(parts, list):
+            first = parts[0]
+            if first and isinstance(first, list):
+                year = str(first[0]) if first[0] is not None else ""
+
+    return DoiResolution(
+        url=url,
+        publisher=publisher,
+        issn=issn,
+        title=title,
+        author_surnames=surnames,
+        issued_year=year,
+    )
 
 
 def resolve_doi(
@@ -101,11 +161,17 @@ def resolve_doi(
     crossref: Crossref,
     cache: DoiResolverCache | None = None,
 ) -> DoiResolution | None:
-    """Resolve one DOI to its Crossref-registered primary URL.
+    """Resolve one DOI to its Crossref metadata.
 
-    Returns None on any Crossref miss or error — callers must treat
-    None as "unknown, fall back to another routing signal". Never
-    raises.
+    Returns a `DoiResolution` when Crossref responds with `status=ok`
+    and a parsable `message` — individual fields may still be empty
+    (a sparse Crossref record). Callers must check the specific
+    fields they need:
+      - routing wants `resolution.url`;
+      - validation wants `resolution.title`.
+
+    Returns None only on hard errors — network failure, non-ok
+    status, malformed response. Never raises.
     """
     doi_key = (doi or "").strip().lower()
     if not doi_key:
@@ -131,12 +197,6 @@ def resolve_doi(
         return None
 
     resolution = _extract_resolution(msg)
-    if not resolution.url:
-        # Metadata exists but no URL — useless for routing, don't
-        # cache a negative result (next run might get a better answer
-        # if Crossref updates).
-        return None
-
     if cache is not None:
         cache.put(doi_key, resolution)
     return resolution

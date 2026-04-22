@@ -5,6 +5,97 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — unreleased
+
+### DOI validation and missing-DOI search
+
+A new `scripts/pipelines/enrich_dois.py` closes the two common
+metadata-quality gaps that block downstream enrichment: items with
+no DOI (silently skipped by `enrich_abstracts.py` /
+`enrich_pdfs.py`) and items whose DOI is broken or points to the
+wrong paper (wastes cascade attempts, looks like a pipeline failure
+when it's really bad metadata).
+
+Two modes, combined by default:
+
+- **`--validate`** — for every item that has a DOI, look it up on
+  Crossref and compare the registered title / issue year / first-
+  author surname against the Zotero record. Statuses:
+  - `validate_ok` — title matches.
+  - `validate_title_mismatch` — DOI points to a different paper.
+  - `validate_not_in_crossref` — DOI doesn't resolve (broken DOI).
+  - `validate_malformed_doi_fixed` (with `--fix-malformed`) — strips
+    `https://doi.org/`, `doi:`, whitespace prefixes back to the
+    canonical form.
+  - `validate_skipped_no_zotero_title` — can't cross-check without
+    a title.
+
+- **`--find-missing`** — for every item without a DOI (or whose DOI
+  failed validation in the same run), search Crossref by
+  `title + first-author + year`. Score each candidate on three
+  criteria: title match (via `_title_match.matches`, the existing
+  normalised-prefix comparator), issued year within ±1, first-author
+  surname case-insensitive equality. Auto-apply 3/3 matches; prompt
+  on 2/3 (TTY only; `--no-prompt` skips); report
+  `ambiguous_no_clear_match` / `not_found_in_crossref` otherwise.
+
+- **`--all`** (default) — runs both. Items whose existing DOI fails
+  validation feed directly into the find-missing queue. With
+  `--replace-invalid`, 3/3 matches overwrite broken DOIs
+  automatically; without the flag, they're logged as
+  `proposed_replacement` for manual review (safer — a wrong
+  replacement is worse than a broken DOI).
+
+Write safety:
+
+- Default: auto-apply only 3/3 matches.
+- `--dry-run` blocks every write; still reports proposals in the
+  CSV log.
+- `--no-prompt` skips the 2/3 prompt (non-TTY stdin forces this too).
+- `--replace-invalid` opt-in for overwriting existing invalid DOIs.
+
+### Audit integration
+
+`audit_zotero_library.py` gains a `missing_doi` count for
+`journalArticle` items and emits an `audit.missing_doi.keys` file
+alongside the existing `.missing_abstract.keys`, `.missing_pdf.keys`,
+`.empty_stubs.keys`. Non-journal-article types (books, reports)
+aren't flagged — they legitimately often lack DOIs. The audit's
+"Next steps" output now suggests `enrich_dois.py --find-missing
+--filter-keys-file <…>.missing_doi.keys` as the first stage when
+missing DOIs exist.
+
+The recommended workflow:
+
+```
+audit_zotero_library.py --group <id> --output /tmp/audit.json
+enrich_dois.py   --group <id> --filter-keys-file /tmp/audit.missing_doi.keys
+enrich_abstracts.py --group <id> --filter-keys-file /tmp/audit.missing_abstract.keys
+enrich_pdfs.py --all --group <id> --filter-keys-file /tmp/audit.missing_pdf.keys
+```
+
+### New
+
+- `scripts/pipelines/enrich_dois.py` (~500 LOC).
+- `tests/unit/test_enrich_dois.py` — 32 tests covering normalisation,
+  match scoring, validate / find-missing flows, dry-run,
+  non-TTY, replacement with / without `--replace-invalid`.
+
+### Changed
+
+- `DoiResolution` (`fetchers/doi_resolver.py`) gains `title`,
+  `author_surnames`, `issued_year` fields. `_extract_resolution`
+  populates them from Crossref's `title[0]`, `author[*].family`,
+  and `issued.date-parts[0][0]`. Legacy cache entries load cleanly
+  with empty defaults for the new fields.
+- `resolve_doi` no longer returns `None` when Crossref has the DOI
+  but the URL field is empty — it returns a sparse `DoiResolution`
+  so validation callers can still access the title. Callers that
+  need URL (browser-pipeline routing) already check
+  `resolution.url` at the callsite, so their behaviour is unchanged.
+- `audit_zotero_library.py`: adds `missing_doi_count` / `missing_doi`
+  to the JSON report and writes the corresponding `.keys` file.
+
 ## [0.4.0] — unreleased
 
 ### Two-pass PDF retrieval: API cascade first, browser + Connector on residuals

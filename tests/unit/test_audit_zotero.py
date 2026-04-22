@@ -19,9 +19,10 @@ def _load():
 
 
 def _item(key: str, abstract: str = "", item_type: str = "journalArticle",
-          title: str = "") -> dict:
+          title: str = "", doi: str = "") -> dict:
     return {"data": {"key": key, "itemType": item_type,
-                     "abstractNote": abstract, "title": title}}
+                     "abstractNote": abstract, "title": title,
+                     "DOI": doi}}
 
 
 def _pdf_attachment(parent: str, md5: str | None = "deadbeef") -> dict:
@@ -85,3 +86,49 @@ def test_classify_ignores_attachments_and_notes() -> None:
     ]
     r = mod._classify(items, {})
     assert r["total_items"] == 1  # only B1 counts
+
+
+# ---------------------------------------------------------------------------
+# missing_doi classification (v0.5.0)
+# ---------------------------------------------------------------------------
+
+
+def test_classify_missing_doi_counts_journal_article_without_doi() -> None:
+    """A journalArticle without a DOI is a candidate for
+    enrich_dois.py --find-missing."""
+    mod = _load()
+    items = [_item("A1", title="Classic paper", doi="")]
+    r = mod._classify(items, {})
+    assert r["missing_doi_count"] == 1
+    assert r["missing_doi"][0]["key"] == "A1"
+
+
+def test_classify_missing_doi_skips_items_with_doi() -> None:
+    """Items with a DOI do NOT appear in missing_doi — validation is
+    handled separately by enrich_dois.py --validate."""
+    mod = _load()
+    items = [_item("A1", title="Has DOI", doi="10.1/x")]
+    r = mod._classify(items, {})
+    assert r["missing_doi_count"] == 0
+
+
+def test_classify_missing_doi_skips_whitespace_only_doi() -> None:
+    """A whitespace-only DOI field is effectively missing."""
+    mod = _load()
+    items = [_item("A1", title="Almost has DOI", doi="   ")]
+    r = mod._classify(items, {})
+    assert r["missing_doi_count"] == 1
+
+
+def test_classify_missing_doi_ignores_non_journal_articles() -> None:
+    """Books / reports / other item types often legitimately lack
+    DOIs — don't flag them."""
+    mod = _load()
+    items = [
+        _item("B1", item_type="book", title="A book", doi=""),
+        _item("R1", item_type="report", title="A report", doi=""),
+        _item("A1", item_type="journalArticle", title="Paper", doi=""),
+    ]
+    r = mod._classify(items, {})
+    assert r["missing_doi_count"] == 1          # only the journalArticle
+    assert r["missing_doi"][0]["key"] == "A1"

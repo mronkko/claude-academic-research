@@ -39,3 +39,6 @@ tests/fixtures/sfx/
 
 # Local review / scratch notes
 REVIEW_NOTES.md
+
+# Claude Code local state (scheduled task locks, plan files, …)
+.claude/

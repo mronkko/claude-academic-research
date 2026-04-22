@@ -240,16 +240,17 @@ def test_wait_for_child_attachment_returns_true_when_pdf_has_md5() -> None:
     assert _wait_for_child_attachment(zot, "NEW", timeout_s=0.2) is True
 
 
-def test_wait_for_child_attachment_rejects_shell_without_md5() -> None:
-    """Attachment record exists but md5 is still empty — file upload
-    hasn't completed. Merging now would lock in a 'stub' (pdf_map
-    deletes these on the next run).  We must wait."""
+def test_wait_for_child_attachment_accepts_shell_without_md5() -> None:
+    """Attachment record exists but md5 is still empty — that's fine.
+    The merge PATCHes parentItem regardless of upload state; the
+    stub-deletion race is handled at pdf_map() via the dateAdded
+    grace window instead of gating the merge on md5 here."""
     zot = MagicMock()
     zot.cloud.children.return_value = [
         {"key": "PDF1",
          "data": {"itemType": "attachment", "md5": ""}},
     ]
-    assert _wait_for_child_attachment(zot, "NEW", timeout_s=0.2) is False
+    assert _wait_for_child_attachment(zot, "NEW", timeout_s=0.2) is True
 
 
 def test_wait_for_child_attachment_ignores_non_attachment_children() -> None:

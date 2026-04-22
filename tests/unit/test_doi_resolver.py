@@ -51,7 +51,114 @@ def test_extract_resolution_falls_back_to_top_level_url() -> None:
 
 def test_extract_resolution_handles_missing_fields() -> None:
     r = _extract_resolution({})
-    assert r == DoiResolution(url="", publisher="", issn="")
+    assert r == DoiResolution(
+        url="", publisher="", issn="",
+        title="", author_surnames=[], issued_year="",
+    )
+
+
+# ---------------------------------------------------------------------------
+# _extract_resolution — validation fields (title / authors / year)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_resolution_populates_validation_fields() -> None:
+    """Full Crossref payload yields title + author surnames + year."""
+    msg = {
+        "URL": "https://example/x",
+        "title": ["Putting Framing in Perspective: A Review"],
+        "author": [
+            {"family": "Cornelissen", "given": "Joep P."},
+            {"family": "Werner", "given": "Mirjam D."},
+        ],
+        "issued": {"date-parts": [[2014, 6, 15]]},
+    }
+    r = _extract_resolution(msg)
+    assert r.title == "Putting Framing in Perspective: A Review"
+    assert r.author_surnames == ["Cornelissen", "Werner"]
+    assert r.issued_year == "2014"
+
+
+def test_extract_resolution_handles_missing_author_family() -> None:
+    """Corporate / malformed author records (no `family` key) are
+    dropped — we preserve only surnames we can compare against."""
+    msg = {
+        "author": [
+            {"name": "Some Organisation"},         # no family
+            {"family": "Smith", "given": "J."},
+            {"given": "Anonymous"},                # no family
+        ],
+    }
+    r = _extract_resolution(msg)
+    assert r.author_surnames == ["Smith"]
+
+
+def test_extract_resolution_handles_year_only_issued() -> None:
+    """Some Crossref records have year-only date-parts
+    (`[[2000]]`) — still yields the year."""
+    r = _extract_resolution({"issued": {"date-parts": [[2000]]}})
+    assert r.issued_year == "2000"
+
+
+def test_extract_resolution_handles_missing_issued_date() -> None:
+    """`issued.date-parts` can be missing or malformed — no crash."""
+    assert _extract_resolution({}).issued_year == ""
+    assert _extract_resolution(
+        {"issued": {"date-parts": []}},
+    ).issued_year == ""
+    assert _extract_resolution(
+        {"issued": {"date-parts": [[None]]}},
+    ).issued_year == ""
+
+
+def test_extract_resolution_handles_empty_title_list() -> None:
+    """Crossref `title` is always a list but may be empty for some
+    stub records."""
+    assert _extract_resolution({"title": []}).title == ""
+
+
+def test_cache_round_trips_validation_fields(tmp_path) -> None:
+    """The new fields survive a put→get cycle on disk."""
+    c = DoiResolverCache(tmp_path)
+    c.put("10.1/x", DoiResolution(
+        url="https://example/x",
+        title="Some Title",
+        author_surnames=["Smith", "Jones"],
+        issued_year="2014",
+    ))
+    reloaded = DoiResolverCache(tmp_path).get("10.1/x")
+    assert reloaded is not None
+    assert reloaded.title == "Some Title"
+    assert reloaded.author_surnames == ["Smith", "Jones"]
+    assert reloaded.issued_year == "2014"
+
+
+def test_cache_legacy_entry_without_validation_fields_loads() -> None:
+    """v0.4.0 cache entries only had url/publisher/issn. Loading them
+    into the v0.5.0 DoiResolution must not crash; new fields default
+    to empty so validation-callers treat the entry as 'no title to
+    compare'."""
+    import json
+    c_dir = Path("/tmp/test_legacy_cache_entry")
+    c_dir.mkdir(exist_ok=True)
+    legacy = c_dir / "doi_resolver_cache.json"
+    legacy.write_text(json.dumps({
+        "10.1/x": {
+            "url": "https://old",
+            "publisher": "Old",
+            "issn": "1234-5678",
+        }
+    }))
+    try:
+        got = DoiResolverCache(c_dir).get("10.1/x")
+        assert got is not None
+        assert got.url == "https://old"
+        assert got.title == ""
+        assert got.author_surnames == []
+        assert got.issued_year == ""
+    finally:
+        legacy.unlink(missing_ok=True)
+        c_dir.rmdir()
 
 
 # ---------------------------------------------------------------------------
@@ -97,11 +204,20 @@ def test_resolve_doi_returns_none_when_status_not_ok() -> None:
     assert resolve_doi("10.1/x", crossref=cr) is None
 
 
-def test_resolve_doi_returns_none_when_message_lacks_url() -> None:
-    """Crossref has the DOI but no URL metadata → useless for routing
-    and not worth caching as a negative."""
-    cr = _crossref({"publisher": "Some Publisher"})
-    assert resolve_doi("10.1/x", crossref=cr) is None
+def test_resolve_doi_returns_resolution_even_when_url_is_missing() -> None:
+    """Crossref has the DOI but no URL metadata → we still return the
+    resolution because validation (v0.5.0) cares about title even
+    when URL is absent. Callers that need URL (pdf routing) check
+    `resolution.url` at the callsite."""
+    cr = _crossref({
+        "publisher": "Some Publisher",
+        "title": ["A Paper Without URL"],
+    })
+    result = resolve_doi("10.1/x", crossref=cr)
+    assert result is not None
+    assert result.url == ""
+    assert result.publisher == "Some Publisher"
+    assert result.title == "A Paper Without URL"
 
 
 # ---------------------------------------------------------------------------

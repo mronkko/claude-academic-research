@@ -286,21 +286,52 @@ class ZoteroClient:
         z = self._read_client()
         return z.everything(z.collection_items(collection_key, itemType=item_type))
 
-    def pdf_map(self) -> dict[str, tuple[bool, list[str]]]:
+    def pdf_map(
+        self, *, stub_grace_seconds: int = 3600,
+    ) -> dict[str, tuple[bool, list[str]]]:
         """{parent_key: (has_real_pdf, [stub_keys])} across the whole library.
 
-        A "real" PDF has a non-empty `md5`; a "stub" is a metadata-only
-        attachment with no bytes (often left behind by earlier failed
-        uploads). Matches the shape attach_pdfs.get_pdf_map used to return.
+        A "real" PDF has a non-empty `md5`. A "stub" is a
+        metadata-only attachment with no bytes (left behind by
+        earlier failed uploads).
+
+        Grace window: attachments whose `dateAdded` is within the
+        last `stub_grace_seconds` (default 1h) are NOT classified
+        as stubs — their md5 may just not have populated yet because
+        Zotero Desktop is still uploading the file bytes. Deleting
+        those prematurely would destroy an in-flight upload. After
+        the grace window expires, a missing md5 genuinely indicates
+        a failed upload.
         """
+        import datetime
         pdfs = [a for a in self.all_attachments()
                 if a["data"].get("contentType") == "application/pdf"
                 and a["data"].get("parentItem")]
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        grace = datetime.timedelta(seconds=stub_grace_seconds)
 
         by_parent: dict[str, tuple[list, list]] = defaultdict(lambda: ([], []))
         for pdf in pdfs:
             parent = pdf["data"]["parentItem"]
             if pdf["data"].get("md5"):
+                by_parent[parent][0].append(pdf)
+                continue
+            # No md5 — might be a stub, OR an in-flight upload.
+            # Check dateAdded: if the attachment was added within
+            # the grace window, treat as "real" (don't delete).
+            added_raw = pdf["data"].get("dateAdded") or ""
+            is_recent = False
+            try:
+                added = datetime.datetime.fromisoformat(
+                    added_raw.replace("Z", "+00:00")
+                )
+                is_recent = (now - added) < grace
+            except Exception:
+                # Unparseable timestamp — err on the side of
+                # preserving the attachment.
+                is_recent = True
+            if is_recent:
                 by_parent[parent][0].append(pdf)
             else:
                 by_parent[parent][1].append(pdf)
