@@ -217,7 +217,8 @@ def test_validate_doi_title_mismatch() -> None:
         "URL": "https://example/x",
         "title": ["An Entirely Different Paper About Nothing"],
     })
-    cache = MagicMock(); cache.get.return_value = None
+    cache = MagicMock()
+    cache.get.return_value = None
     zot = MagicMock()
 
     result = mod._validate_doi(
@@ -233,7 +234,8 @@ def test_validate_doi_not_in_crossref_when_empty_title() -> None:
     mod = _load()
     item = _item_with_authors([], title="Anything", DOI="10.2307/2640412")
     cr = _crossref_returning({"publisher": "Some Publisher"})   # no title
-    cache = MagicMock(); cache.get.return_value = None
+    cache = MagicMock()
+    cache.get.return_value = None
     zot = MagicMock()
 
     result = mod._validate_doi(
@@ -254,7 +256,8 @@ def test_validate_doi_not_in_crossref_when_resolve_returns_none() -> None:
     item = _item_with_authors([], title="Anything", DOI="10.2307/2640412")
     cr = MagicMock()
     cr.works.side_effect = RuntimeError("not found")
-    cache = MagicMock(); cache.get.return_value = None
+    cache = MagicMock()
+    cache.get.return_value = None
     zot = MagicMock()
 
     result = mod._validate_doi(
@@ -269,7 +272,8 @@ def test_validate_doi_skipped_no_zotero_title() -> None:
     mod = _load()
     item = _item_with_authors([], title="", DOI="10.1/x")
     cr = _crossref_returning({"title": ["Crossref has this title"]})
-    cache = MagicMock(); cache.get.return_value = None
+    cache = MagicMock()
+    cache.get.return_value = None
     zot = MagicMock()
 
     result = mod._validate_doi(
@@ -285,7 +289,8 @@ def test_validate_doi_fix_malformed_writes_clean_form() -> None:
         [], title="Paper", DOI="https://doi.org/10.1/x",
     )
     cr = _crossref_returning({"title": ["Paper"]})
-    cache = MagicMock(); cache.get.return_value = None
+    cache = MagicMock()
+    cache.get.return_value = None
     zot = MagicMock()
 
     result = mod._validate_doi(
@@ -304,7 +309,8 @@ def test_validate_doi_fix_malformed_respects_dry_run() -> None:
         [], title="Paper", DOI="https://doi.org/10.1/x",
     )
     cr = _crossref_returning({"title": ["Paper"]})
-    cache = MagicMock(); cache.get.return_value = None
+    cache = MagicMock()
+    cache.get.return_value = None
     zot = MagicMock()
 
     result = mod._validate_doi(

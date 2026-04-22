@@ -308,7 +308,7 @@ class ZoteroClient:
                 if a["data"].get("contentType") == "application/pdf"
                 and a["data"].get("parentItem")]
 
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         grace = datetime.timedelta(seconds=stub_grace_seconds)
 
         by_parent: dict[str, tuple[list, list]] = defaultdict(lambda: ([], []))

@@ -193,7 +193,7 @@ def test_pdf_map_grace_window_protects_recent_attachments() -> None:
     zc = _client()
     fake = MagicMock()
     # "Right now" — well within the 1-hour grace window.
-    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    now_iso = datetime.datetime.now(datetime.UTC).isoformat()
     fake.everything.return_value = [
         {"key": "RECENT_STUB",
          "data": {"contentType": "application/pdf",
