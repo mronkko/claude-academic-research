@@ -232,7 +232,7 @@ KEYS: tuple[KeySpec, ...] = (
         what="Zotero is a free, open-source reference manager that stores your "
              "citations, PDFs, and notes (https://www.zotero.org). This plugin uses "
              "it as the single source of truth for your bibliography.",
-        used_by="Every skill that touches citations: mcp-research, zotero-operations, "
+        used_by="Every skill that touches citations: grounded-citations, zotero-operations, "
                 "systematic-review, fact-check.",
         impact="No skill in the plugin will work without this key — the plugin is "
                "built around Zotero.",
@@ -317,7 +317,7 @@ KEYS: tuple[KeySpec, ...] = (
              "the Allen Institute for AI (https://www.semanticscholar.org). Broad "
              "coverage, open abstracts, and citation graphs — a good free "
              "alternative to Scopus or Web of Science for metadata lookup.",
-        used_by="mcp-research, fact-check, systematic-review (abstract lookups, "
+        used_by="grounded-citations, fact-check, systematic-review (abstract lookups, "
                 "citation graphs, backup when Crossref lacks an abstract).",
         impact="Requests fall back to the unauthenticated public endpoint with a "
                "much lower rate limit. Skills still work, just more slowly on "

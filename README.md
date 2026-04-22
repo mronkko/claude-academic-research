@@ -22,7 +22,7 @@ Eight skills:
 
 | Skill | Mode | Purpose |
 |---|---|---|
-| `mcp-research` | rule-book (eager) | Ground every citation in an MCP query — never cite from memory. |
+| `grounded-citations` | rule-book (eager) | Every citation = Zotero BBT key + externalised source consultation; drop claims the source doesn't support. |
 | `empirical-integrity` | rule-book (eager) | Every number in prose must come from an inline expression reading `analysis/results/`. |
 | `academic-writing` | rule-book (eager) | Parallel-critic revision loop is the default revision protocol. |
 | `systematic-review` | procedure (explicit) | End-to-end SLR pipeline from search → screening → coding → export. |

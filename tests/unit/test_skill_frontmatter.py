@@ -9,7 +9,7 @@ REPO = Path(__file__).resolve().parents[2]
 SKILLS_DIR = REPO / "skills"
 
 EXPECTED_SKILLS = {
-    "mcp-research",
+    "grounded-citations",
     "empirical-integrity",
     "academic-writing",
     "systematic-review",

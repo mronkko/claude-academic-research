@@ -168,7 +168,7 @@ the full report into the chat.
   (empirical-integrity violation).
 - You are skipping citation checks because "the authors are reputable".
 - You are verifying against training memory instead of an MCP fetch or
-  Zotero fulltext — the `mcp-research` rule applies.
+  Zotero fulltext — the `grounded-citations` rule applies.
 - The paper's abstract contradicts the manuscript claim, and you are
   softening the flag to MINOR because the contradiction is
   "interpretive". Direction reversals are MAJOR.

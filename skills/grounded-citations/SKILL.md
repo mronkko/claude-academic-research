@@ -1,15 +1,55 @@
 ---
-name: mcp-research
-description: Use when citing papers, editing .bib files, generating bibliographies, resolving DOIs, adding items to Zotero, or calling MCP research tools (OpenAlex, Semantic Scholar, Scopus, Zotero, paper-search). Enforces the rule that every citation must come from an MCP query in the current session — never from training memory.
+name: grounded-citations
+description: Use when inserting a new citation into academic prose, attributing a finding to a source, or summarising what a paper says. Trigger phrases: "cite this", "add a citation for X", "what does Smith (2019) say", "summarise this paper", "attribute this finding". Enforces that every citation is a BBT key from Zotero and that the paper's content has been externally consulted in this session (fresh MCP fetch or a Zotero child note) — never recalled from context. If the consulted source does not support the claim, drop the claim. Do NOT use for Zotero library housekeeping — use `zotero-operations`. Do NOT use for auditing an existing draft's citations — use `fact-check`.
 ---
 
-# MCP research tools
+# Grounded citations
 
 ## Core rule
 
-Never cite, summarise, or attribute findings to a paper that you have not
-retrieved via an MCP tool in this session. Do not rely on training-data
-memory for citations.
+Every citation Claude inserts into academic prose must satisfy **all four**
+of these requirements. They are conjunctive — failing any one means the
+citation may not be made.
+
+1. **In Zotero.** The paper is in the project's Zotero library. If not,
+   add it via `mcp__zotero__zotero_add_by_doi` (or
+   `mcp__zotero__zotero_add_by_url` when no DOI exists) before the
+   citation is written.
+2. **BBT key.** The `[@citekey]` in prose is the Better BibTeX key fetched
+   from Zotero via `mcp__zotero__zotero_get_item_metadata` with
+   `format="bibtex"`. Never hand-craft keys (`Smith2019`-style); never
+   fabricate; never write to Zotero's Extra field to pin a key.
+3. **Externalised consultation.** At citation time, the paper's content
+   is available either as a **fresh MCP response** (abstract, notes, or
+   full-text retrieved in the current turn or an adjacent recent turn) or
+   as a **Zotero child note** read via `mcp__zotero__zotero_get_notes`.
+   Context-window recall alone is **not** sufficient: remembering an
+   abstract read 500K tokens ago is not grounding — either re-fetch it
+   or read the note.
+4. **Claim support.** The consulted content visibly supports the
+   attributed claim. If nothing you have consulted supports the claim,
+   **drop the claim**. Do not paper over; do not flag for later; do not
+   keep a speculative citation. Remove it from prose, or replace the
+   attribution with a source that does support the claim.
+
+## What counts as externalised consultation
+
+Ranked by strength:
+
+- **Zotero full-text** via `mcp__zotero__zotero_get_item_fulltext` — the
+  paper's own words, strongest grounding.
+- **Zotero child notes** via `mcp__zotero__zotero_get_notes` — durable,
+  survives context compaction. Preferred when re-citing a paper multiple
+  times across a long session.
+- **Fresh abstract** via `mcp__openalex__get_work`,
+  `mcp__semantic-scholar__get-paper-abstract`, or
+  `mcp__zotero__zotero_get_item_metadata` — minimum acceptable.
+
+**Recommended pattern** for papers cited repeatedly: the first time
+Claude reads the paper, write a Zotero child note summarising the
+relevant passage via `mcp__zotero__zotero_create_note`. That note
+becomes the durable consultation artifact for every subsequent citation
+— no re-fetch needed, no context-recall gamble.
 
 ## Available search APIs
 
@@ -21,94 +61,24 @@ memory for citations.
 | Web of Science | — (not yet implemented) | — | Citation database, journal impact factors; institutional access available |
 | Zotero | `mcp__zotero__*` | — | Reference management, full-text retrieval |
 
-Scopus full-text (ScienceDirect) access works via the Elsevier API
-(`api.elsevier.com/content/article/doi/{doi}`) with just the API key —
-no InstToken required. PDF and XML full text are available for all
-Elsevier journals (DOI prefix `10.1016/` etc.). Use
-`pybliometrics.sciencedirect.ArticleRetrieval` for structured access or
-request `Accept: application/pdf` directly.
-
-## Literature search workflow
-
-1. Start with `mcp__openalex__find_seminal_papers` to anchor the review
-   with highly-cited foundational works.
-2. Use `mcp__openalex__search_works` for keyword search. Use Boolean
-   operators and year filters to narrow results.
-3. Expand using:
-   - `mcp__openalex__get_work_citations` — forward tracing (who cited this paper)
-   - `mcp__openalex__get_work_references` — backward tracing (what this paper cites)
-4. Use `mcp__openalex__get_related_works` when keyword search misses
-   synonyms or related constructs.
-5. Use `mcp__semantic-scholar__get-paper-abstract` to cross-check abstracts
-   of important papers before attributing findings to them.
-6. Use `mcp__scopus__search_scopus` for supplementary searches, especially
-   for AJG/ABS journal coverage.
-
-## Adding to Zotero
-
-- Add every paper to Zotero immediately when found — do not batch or defer.
-- Use `mcp__zotero__zotero_add_by_doi` for papers with DOIs (preferred).
-- Use `mcp__zotero__zotero_add_by_url` only when no DOI exists.
-- After adding, retrieve the BBT (Better BibTeX) citation key using
-  `mcp__zotero__zotero_get_item_metadata` with `format="bibtex"`. The key
-  is the first argument of the BibTeX entry.
-- Use that exact key in manuscript citations. Never hand-craft keys like
-  `Smith2019`.
-
-## Citation keys
-
-- BBT keys are auto-generated from author/year/title (e.g.,
-  `brownUsingDailyStock1985a`).
-- If a key appears in the manuscript but the bibliography generation script
-  reports it as "not found": search Zotero by author/title, get the correct
-  BBT key, update the manuscript. Do not add a duplicate item.
-- Generate the project's bibliography with
-  `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py <project_dir>`.
-- Never write to the Extra field to override or pin citation keys.
-
-## Verifying claims against sources
-
-- Before attributing a specific finding to a paper, confirm it by reading
-  the abstract via `mcp__openalex__get_work` or
-  `mcp__semantic-scholar__get-paper-abstract`.
-- If the abstract does not support the claim, do not make the citation.
-  Remove the claim or find a source that does support it.
-- For papers where full text is in Zotero, use
-  `mcp__zotero__zotero_get_item_fulltext` to verify specific statistics or
-  quotations.
-- Create notes in Zotero for key papers using
-  `mcp__zotero__zotero_create_note` to record verified claims.
-
-## Bulk operations (systematic reviews)
-
-The `systematic-review` skill drives the full SLR pipeline. The reusable
-scripts it invokes:
-
-- **PDF attachment**:
-  `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py` —
-  multi-source cascade (Elsevier, Springer, Crossref TDM, PMC, OpenAlex
-  Content, Unpaywall, OpenAlex OA). `--sources wiley` adds the Wiley TDM
-  route; `--sources browser` drives Playwright handlers for Cloudflare-
-  gated publishers. Parallel downloads, serial Zotero uploads.
-- **Abstract retrieval**:
-  `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_abstracts.py` —
-  6-source cascade (Crossref, Semantic Scholar, Scopus, WoS, ScienceDirect,
-  OpenAlex GROBID).
-- **Bibliography**:
-  `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py <project_dir>`
-  — Scan manuscript for citation keys, generate `references.bib` via BBT.
-
-All scripts read API keys from environment variables (`ZOTERO_API_KEY`,
-`ZOTERO_GROUP`, etc.). See the `systematic-review` skill for the full env
-var list and usage patterns. A project CLAUDE.md template for systematic
-reviews lives at `${CLAUDE_PLUGIN_ROOT}/templates/sr_claude_md.md`.
+Procedures for *adding papers to Zotero*, *fixing BBT keys*, and
+*generating `references.bib`* live in the `zotero-operations` skill and
+in `scripts/pipelines/generate_bib.py`. Bulk citation workflows for
+systematic reviews live in `systematic-review`. Auditing citations in an
+existing draft is `fact-check`'s job.
 
 ## Red flags
 
-- You are about to cite a paper without having queried OpenAlex or
-  Semantic Scholar for it.
-- A DOI search returns no result for a paper you "know" exists — do not cite it.
+- You are about to cite a paper that is not yet in Zotero — add it first.
+- You are hand-crafting a citation key (`Smith2019`) instead of fetching
+  the BBT key from Zotero.
+- You are citing from context-window recall when the abstract was read
+  many turns ago — re-fetch the abstract or read the Zotero note.
+- The consulted content does not actually support the claim and you are
+  keeping the claim anyway — **drop the claim**, don't paper over.
+- You are citing a paper based only on a title match in a search result,
+  without having read its abstract.
 - OpenAlex and Semantic Scholar return conflicting metadata — resolve
   before citing.
-- A paper's abstract contradicts what the manuscript claims the paper
-  found — fix the claim.
+- A DOI search returns no result for a paper you "know" exists — do not
+  cite it.
