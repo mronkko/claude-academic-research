@@ -12,6 +12,7 @@ EXPECTED_SKILLS = {
     "grounded-citations",
     "empirical-integrity",
     "manuscript-revision",
+    "academic-style",
     "systematic-review",
     "zotero-operations",
     "fact-check",

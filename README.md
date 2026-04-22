@@ -25,6 +25,7 @@ Eight skills:
 | `grounded-citations` | rule-book (eager) | Every citation = Zotero BBT key + externalised source consultation; drop claims the source doesn't support. |
 | `empirical-integrity` | rule-book (eager) | Every number in prose must come from an inline expression reading `analysis/results/`. |
 | `manuscript-revision` | rule-book (eager) | Parallel-critic revision loop is the default revision protocol — delegates to `/critic-loop`. |
+| `academic-style` | rule-book (eager) | House-style conventions at drafting time — APA citations, voice, tense, hedging, synthesis-over-enumeration, terminology. |
 | `systematic-review` | procedure (explicit) | End-to-end SLR pipeline from search → screening → coding → export. |
 | `zotero-operations` | procedure (explicit) | Import, dedup, enrich, attach PDFs, maintain BBT keys. |
 | `fact-check` | procedure (explicit) | Verify citations and quantitative claims against sources. |
