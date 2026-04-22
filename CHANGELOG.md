@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-04-22
+
+### Move legacy orchestrators under `legacy/` subdirectory
+
+The four pre-v0.3.0 orchestrators that v0.3.0 deliberately retained
+as a rollback path are now under `scripts/pipelines/legacy/`:
+
+- `legacy/attach_pdfs.py`
+- `legacy/fetch_abstracts.py`
+- `legacy/fetch_pdfs_browser.py`
+- `legacy/fetch_pdfs_wiley_tdm.py`
+
+Plus `legacy/README.md` documenting the deletion checklist for the
+next release.
+
+### Fixed
+
+- The moved scripts add `scripts/pipelines/` to `sys.path` at module
+  load so `import zotero_io` still resolves (zotero_io lives one
+  level up now). `fetch_pdfs_browser.py` also walks two levels up
+  for `SCRIPTS_ROOT` (for the `publishers.registry` import).
+- `enrich_pdfs.py --legacy-browser` subprocess path updated to
+  `legacy/fetch_pdfs_browser.py`.
+- `tests/unit/test_live_coverage.py` reads the source files from
+  their new `legacy/` path; the guard still enforces live-test
+  coverage for every `fetch_from_*` / `fetch_*_pdf` function in the
+  legacy cascade.
+- `tests/live/test_browser_publishers.py` loads the legacy fetcher
+  from its new path and adds the legacy dir to `sys.path` before
+  importing (so the sibling `import attach_pdfs` resolves).
+- `audit_zotero_library.py` "next steps" output now suggests the
+  refactored `enrich_abstracts.py` / `enrich_pdfs.py` rather than
+  the legacy scripts.
+
 ## [0.3.0] — 2026-04-22
 
 ### Pipeline refactor: pyzotero-backed Zotero I/O, per-provider fetcher classes, library-aware browser flow

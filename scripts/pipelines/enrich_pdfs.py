@@ -114,14 +114,15 @@ def _load_done_dois(path: str) -> set[str]:
 
 
 def _run_browser_legacy(args: argparse.Namespace) -> int:
-    """Rollback path: delegate to the legacy `fetch_pdfs_browser.py`.
+    """Rollback path: delegate to the legacy `fetch_pdfs_browser.py`
+    under `legacy/` (moved there in v0.3.1).
 
     Opt-in via `--legacy-browser`. Kept as a fallback while the new
     in-process handlers prove themselves on production libraries.
     """
     cmd = [
         sys.executable,
-        str(SCRIPT_DIR / "fetch_pdfs_browser.py"),
+        str(SCRIPT_DIR / "legacy" / "fetch_pdfs_browser.py"),
         "--log-csv", args.log_csv,
         "--cache-dir", args.cache_dir,
     ]

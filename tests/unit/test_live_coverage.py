@@ -3,9 +3,9 @@
 Runs on every `pytest` invocation (no marker). If a new entry is
 added to `publishers.registry.DEFAULT_PUBLISHERS`, a new `KeySpec`
 added to `scripts/setup/wizard.py:KEYS`, or a new `fetch_from_*`
-function added to `scripts/pipelines/fetch_abstracts.py` without a
-matching live test being added at the same time, this test fails
-with an actionable message.
+function added to `scripts/pipelines/legacy/fetch_abstracts.py`
+without a matching live test being added at the same time, this
+test fails with an actionable message.
 
 The policy is documented in the project memory at
 `feedback_every_source_has_a_test.md`:
@@ -101,8 +101,17 @@ def test_every_keyspec_has_an_auth_test() -> None:
 
 
 def test_every_abstract_source_has_a_live_test() -> None:
-    """Each `fetch_from_*` function in fetch_abstracts.py has a matching test."""
-    fetch_source = _read(REPO / "scripts" / "pipelines" / "fetch_abstracts.py")
+    """Each `fetch_from_*` function in legacy/fetch_abstracts.py has a matching test.
+
+    The legacy script moved to `scripts/pipelines/legacy/` in v0.3.1.
+    When the refactored `fetchers/*.py` classes become the coverage
+    source of truth, this function (and `test_every_pdf_source_...`
+    below) should walk them instead — then the legacy/ directory can
+    be deleted.
+    """
+    fetch_source = _read(
+        REPO / "scripts" / "pipelines" / "legacy" / "fetch_abstracts.py"
+    )
     sources = set(re.findall(r"^def (fetch_from_\w+)\s*\(", fetch_source, re.MULTILINE))
 
     abstract_tests = _read(REPO / "tests" / "live" / "test_abstract_endpoints.py")
@@ -140,8 +149,14 @@ def test_every_abstract_source_has_a_live_test() -> None:
 
 
 def test_every_pdf_source_has_a_live_test() -> None:
-    """Each `fetch_*_pdf` function in attach_pdfs.py has a matching test."""
-    attach_source = _read(REPO / "scripts" / "pipelines" / "attach_pdfs.py")
+    """Each `fetch_*_pdf` function in legacy/attach_pdfs.py has a matching test.
+
+    See note in `test_every_abstract_source_has_a_live_test` about the
+    migration path; this function is the PDF-cascade counterpart.
+    """
+    attach_source = _read(
+        REPO / "scripts" / "pipelines" / "legacy" / "attach_pdfs.py"
+    )
     sources = set(re.findall(r"^def (fetch_\w+_pdf)\s*\(", attach_source, re.MULTILINE))
 
     pdf_tests = _read(REPO / "tests" / "live" / "test_pdf_endpoints.py")

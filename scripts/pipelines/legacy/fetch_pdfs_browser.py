@@ -55,13 +55,16 @@ except ImportError:
              "Run: pip3 install --break-system-packages playwright "
              "&& python3 -m playwright install chromium")
 
-# Sibling reusable script for Zotero upload helpers
+# Sibling reusable script for Zotero upload helpers. Both this file
+# and `attach_pdfs.py` live under `scripts/pipelines/legacy/` as of
+# v0.3.1; the sibling import still works because they share SCRIPT_DIR.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 import attach_pdfs  # noqa: E402
 
-# Scripts root (for cross-package imports)
-SCRIPTS_ROOT = os.path.dirname(SCRIPT_DIR)
+# Scripts root is TWO levels up now (legacy → pipelines → scripts), so
+# `from publishers.registry import ...` still resolves.
+SCRIPTS_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 if SCRIPTS_ROOT not in sys.path:
     sys.path.insert(0, SCRIPTS_ROOT)
 from publishers.registry import DEFAULT_PUBLISHERS  # noqa: E402

@@ -9,7 +9,7 @@
 
 Prints a one-line summary to stdout and writes a JSON file listing the
 actionable item keys. Intended to drive subsequent pipeline stages
-(fetch_abstracts.py, attach_pdfs.py) via their --filter-keys-file arg.
+(enrich_abstracts.py, enrich_pdfs.py) via their --filter-keys-file arg.
 
 Usage:
     audit_zotero_library.py --group 6015547
@@ -180,10 +180,10 @@ def main() -> int:
     print()
     print("Next steps — feed the .keys files directly into pipeline stages:")
     if report["missing_abstract_count"]:
-        print(f"  uv run {SCRIPT_DIR}/fetch_abstracts.py "
+        print(f"  uv run {SCRIPT_DIR}/enrich_abstracts.py "
               f"--filter-keys-file {keys_files['missing_abstract']}")
     if report["missing_pdf_count"]:
-        print(f"  uv run {SCRIPT_DIR}/attach_pdfs.py "
+        print(f"  uv run {SCRIPT_DIR}/enrich_pdfs.py "
               f"--filter-keys-file {keys_files['missing_pdf']}")
     if report["empty_stub_count"]:
         print(f"  # {report['empty_stub_count']} empty stubs to delete; see "

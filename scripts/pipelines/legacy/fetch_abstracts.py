@@ -105,7 +105,15 @@ def get_json(url: str, headers: dict = None, retries: int = 3) -> dict | None:
 # Zotero I/O is delegated to zotero_io.ZoteroClient (wraps pyzotero). The
 # custom paged GET and manual PATCH with If-Unmodified-Since-Version that
 # used to live here are gone — pyzotero handles both internally.
-import zotero_io
+#
+# `zotero_io` lives one directory up (../zotero_io.py) since this file
+# moved into scripts/pipelines/legacy/ in v0.3.1.
+_LEGACY_DIR = os.path.dirname(os.path.abspath(__file__))
+_PIPELINES_DIR = os.path.dirname(_LEGACY_DIR)
+if _PIPELINES_DIR not in sys.path:
+    sys.path.insert(0, _PIPELINES_DIR)
+
+import zotero_io  # noqa: E402
 
 _zot_client: zotero_io.ZoteroClient | None = None
 

@@ -24,14 +24,20 @@ from tests.live.conftest import KNOWN_DOIS
 pytestmark = pytest.mark.live_browser
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-FETCHER_PATH = REPO_ROOT / "scripts" / "pipelines" / "fetch_pdfs_browser.py"
+# Legacy fetcher moved to scripts/pipelines/legacy/ in v0.3.1.
+FETCHER_PATH = (
+    REPO_ROOT / "scripts" / "pipelines" / "legacy" / "fetch_pdfs_browser.py"
+)
 
 
 def _fetcher():
-    """Load fetch_pdfs_browser.py by path; its sibling imports need sys.path."""
+    """Load the legacy fetch_pdfs_browser.py by path; its sibling
+    imports (attach_pdfs, publishers.registry) need sys.path set to
+    both `scripts/` and `scripts/pipelines/legacy/` before loading."""
     scripts_dir = str(REPO_ROOT / "scripts")
+    legacy_dir = str(REPO_ROOT / "scripts" / "pipelines" / "legacy")
     pipelines_dir = str(REPO_ROOT / "scripts" / "pipelines")
-    for p in (scripts_dir, pipelines_dir):
+    for p in (scripts_dir, pipelines_dir, legacy_dir):
         if p not in sys.path:
             sys.path.insert(0, p)
     spec = importlib.util.spec_from_file_location(

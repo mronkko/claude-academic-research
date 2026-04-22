@@ -56,7 +56,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from http.cookiejar import Cookie
 
-import zotero_io
+# `zotero_io` lives one directory up (../zotero_io.py) since this file
+# moved into scripts/pipelines/legacy/ in v0.3.1. Put the parent on
+# sys.path before importing so the legacy script keeps running.
+_LEGACY_DIR = os.path.dirname(os.path.abspath(__file__))
+_PIPELINES_DIR = os.path.dirname(_LEGACY_DIR)
+if _PIPELINES_DIR not in sys.path:
+    sys.path.insert(0, _PIPELINES_DIR)
+
+import zotero_io  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Configuration (from environment variables)
