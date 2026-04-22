@@ -18,11 +18,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
 from fetchers.sciencedirect import ScienceDirectSource
 from fetchers.springer import SpringerSource
 from fetchers.wiley import WileySource
-
 
 # ---------------------------------------------------------------------------
 # direct_access_domains declarations (used by Pass 2 routing)

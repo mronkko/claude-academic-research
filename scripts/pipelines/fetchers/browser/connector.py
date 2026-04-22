@@ -562,10 +562,10 @@ class ZoteroConnectorHandler(PublisherHandler):
             # merge technically succeeded, but there's nothing to
             # attach to the keeper.
             print(
-                f"  └─ PARTIAL: Connector saved but no PDF found.\n"
-                f"         Translator produced metadata only for this\n"
-                f"         page. Try a different SFX target or save\n"
-                f"         the PDF manually.",
+                "  └─ PARTIAL: Connector saved but no PDF found.\n"
+                "         Translator produced metadata only for this\n"
+                "         page. Try a different SFX target or save\n"
+                "         the PDF manually.",
                 flush=True,
             )
             counter.failed += 1
@@ -590,7 +590,7 @@ class ZoteroConnectorHandler(PublisherHandler):
 
 async def wait_for_service_worker(
     ctx: BrowserContext, *, timeout_s: float = 15,
-) -> "Worker | None":
+) -> Worker | None:
     """Poll `ctx.service_workers` until at least one worker appears.
 
     Extensions boot lazily — the service worker may not exist until

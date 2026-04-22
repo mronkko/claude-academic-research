@@ -20,7 +20,6 @@ from fetchers.browser.connector import (
     resolve_connector_extension_path,
 )
 
-
 # ---------------------------------------------------------------------------
 # resolve_connector_extension_path
 # ---------------------------------------------------------------------------

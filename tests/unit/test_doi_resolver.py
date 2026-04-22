@@ -9,14 +9,12 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 from fetchers.doi_resolver import (
     DoiResolution,
     DoiResolverCache,
     _extract_resolution,
     resolve_doi,
 )
-
 
 # ---------------------------------------------------------------------------
 # _extract_resolution — pure function

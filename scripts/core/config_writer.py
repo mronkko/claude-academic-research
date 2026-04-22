@@ -21,7 +21,6 @@ Design notes:
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from core.config_loader import CONFIG_PATH, load_config
 

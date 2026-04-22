@@ -98,7 +98,7 @@ def _extract_resolution(msg: dict) -> DoiResolution:
 def resolve_doi(
     doi: str,
     *,
-    crossref: "Crossref",
+    crossref: Crossref,
     cache: DoiResolverCache | None = None,
 ) -> DoiResolution | None:
     """Resolve one DOI to its Crossref-registered primary URL.
