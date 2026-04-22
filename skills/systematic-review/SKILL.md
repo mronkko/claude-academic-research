@@ -66,11 +66,11 @@ Principles:
 | `ZOTERO_API_KEY` | All scripts | Zotero API authentication (required) |
 | `ZOTERO_GROUP` | All scripts | Zotero group library ID (per-project, set in the project's own CLAUDE.md or shell) |
 | `ANTHROPIC_API_KEY` | Screening scripts | Claude API (required for LLM screening) |
-| `ELSEVIER_API_KEY` | `attach_pdfs.py` | Elsevier/ScienceDirect full-text retrieval |
+| `ELSEVIER_API_KEY` | `enrich_pdfs.py`, `enrich_abstracts.py` | Elsevier/ScienceDirect full-text retrieval |
 | `SCOPUS_API_KEY` | Search scripts | Scopus API (often same as `ELSEVIER_API_KEY`; some institutions issue separately) |
-| `WILEY_TDM_TOKEN` | `fetch_pdfs_wiley_tdm.py` | Wiley TDM UUID token |
-| `OPENALEX_API_KEY` | PDF + abstract scripts | OpenAlex Content API ($0.01/download, paid) |
-| `SEMANTIC_SCHOLAR_API_KEY` | `fetch_abstracts.py` | Semantic Scholar (higher rate limit with key) |
+| `WILEY_TDM_TOKEN` | `enrich_pdfs.py --sources wiley` | Wiley TDM UUID token |
+| `OPENALEX_API_KEY` | `enrich_pdfs.py`, `enrich_abstracts.py` | OpenAlex Content API ($0.01/download, paid) |
+| `SEMANTIC_SCHOLAR_API_KEY` | `enrich_abstracts.py` | Semantic Scholar (higher rate limit with key) |
 | `CROSSREF_MAILTO` | All scripts | Crossref polite pool (any email) |
 | `WOS_API_KEY_EXTENDED` | Search scripts | WoS Expanded (full Boolean, `IS=` works) — **prefer this** |
 | `WOS_API_KEY` | Search scripts | WoS Starter (field-limited, no `IS=`) — piloting only |
@@ -95,8 +95,10 @@ venv automatically.
 | Import deduplicated search CSV into Zotero | `import_to_zotero.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/import_to_zotero.py --group <id> --input <search.csv> [--collection <key>]` |
 | Abstract screening (Claude Haiku on title+abstract) | `abstract_screen.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/abstract_screen.py --group <id> --collection <key> --config ./screening_config.py` |
 | Full-text screening + structured coding (Claude Sonnet) | `fulltext_code.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs` |
-| Fetch missing abstracts | `fetch_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_abstracts.py --filter-keys-file <keys>` |
-| Attach missing PDFs | `attach_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/attach_pdfs.py --filter-keys-file <keys>` |
+| Fetch missing abstracts (multi-source cascade) | `enrich_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_abstracts.py --filter-keys-file <keys>` |
+| Attach missing PDFs (multi-source cascade) | `enrich_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --filter-keys-file <keys>` |
+| Attach Wiley PDFs only (TDM token) | `enrich_pdfs.py --sources wiley` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --sources wiley --filter-keys-file <keys>` |
+| Attach Cloudflare-gated PDFs (Sage, APA, T&F, Emerald, …) | `enrich_pdfs.py --sources browser` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --sources browser --filter-keys-file <keys>` |
 | Audit library (missing abstracts / PDFs / stubs) | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group <id>` |
 | Export includes-only coded view | `export_coded_includes.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/export_coded_includes.py --log-csv <screening.csv> --out <coded.csv>` |
 | Generate `references.bib` from manuscript keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py <project_dir>` |
@@ -171,9 +173,8 @@ OpenAlex Content → Unpaywall → OpenAlex OA metadata.
   before caching. Some downloaders save HTML-with-200 or corrupted PDFs.
 - **Cloudflare**: HTTP clients cannot solve the JS challenge. For
   CF-gated publishers (Sage, OUP, T&F, Emerald), use
-  `${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_pdfs_browser.py`
-  (Playwright; user passes CF once per publisher, script downloads the
-  rest in the authenticated session).
+  `enrich_pdfs.py --sources browser` (Playwright; user passes CF once
+  per publisher, script downloads the rest in the authenticated session).
 - Disable Chromium's built-in PDF viewer via a `user_data_dir` with
   `plugins.always_open_pdf_externally=true` in Preferences — otherwise
   PDFs open inline and neither `expect_download` nor `expect_response`

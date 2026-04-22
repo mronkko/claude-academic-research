@@ -53,7 +53,7 @@ scripts/
   core/                    # llm, http, pdf, zotero primitives
   sources/                 # abstract/metadata sources (Crossref, Semantic Scholar, Scopus, ...)
   publishers/              # per-publisher PDF retrieval (Wiley, Elsevier, ...)
-  pipelines/               # attach_pdfs, fetch_abstracts, generate_bib, ...
+  pipelines/               # enrich_pdfs, enrich_abstracts, generate_bib, search, ...
   setup/                   # first-run configuration helpers
 tests/unit/                # pytest + responses mocks
 .github/workflows/ci.yml   # pytest + ruff on push/PR

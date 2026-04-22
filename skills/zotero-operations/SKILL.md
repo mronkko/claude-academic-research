@@ -39,10 +39,10 @@ exact invocation.
 | User intent | Script | Invocation |
 |---|---|---|
 | Audit a library for items missing abstracts / PDFs / empty stubs | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group <id>` |
-| Add missing abstracts to items | `fetch_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_abstracts.py --filter-keys-file /tmp/zotero_audit.missing_abstract.keys` |
-| Attach missing PDFs (fast HTTP cascade) | `attach_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/attach_pdfs.py --filter-keys-file /tmp/zotero_audit.missing_pdf.keys` |
-| Attach PDFs from Wiley journals | `fetch_pdfs_wiley_tdm.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_pdfs_wiley_tdm.py` |
-| Attach PDFs from Cloudflare-gated publishers (Sage, APA, T&F, Emerald, …) | `fetch_pdfs_browser.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_pdfs_browser.py` |
+| Add missing abstracts to items | `enrich_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_abstracts.py --filter-keys-file /tmp/zotero_audit.missing_abstract.keys` |
+| Attach missing PDFs (fast HTTP cascade) | `enrich_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --filter-keys-file /tmp/zotero_audit.missing_pdf.keys` |
+| Attach PDFs from Wiley journals (TDM token route) | `enrich_pdfs.py --sources wiley` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --sources wiley --filter-keys-file /tmp/zotero_audit.missing_pdf.keys` |
+| Attach PDFs from Cloudflare-gated publishers (Sage, APA, T&F, Emerald, …) | `enrich_pdfs.py --sources browser` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --sources browser --filter-keys-file /tmp/zotero_audit.missing_pdf.keys` |
 | Generate `references.bib` from a manuscript's citation keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py <project_dir>` |
 
 The audit script writes both a JSON report and three `.keys` files
@@ -61,16 +61,17 @@ Some pipeline stages do things the user may find startling if
 unannounced. **Always tell the user what is about to happen before
 running these stages:**
 
-- `fetch_pdfs_browser.py` — opens a visible Chromium window on their
-  desktop; they may need to solve a Cloudflare challenge or sign in
-  via institutional SSO. Tell them *before* launching:
+- `enrich_pdfs.py --sources browser` — opens a visible Chromium window
+  on their desktop; they may need to solve a Cloudflare challenge or
+  sign in via institutional SSO. Tell them *before* launching:
   *"Next step: browser-based PDF fetcher. A Chromium window will
   open on your desktop. For each publisher you may need to click
   through a Cloudflare challenge once. Ready?"* and wait for
   acknowledgement.
-- `attach_pdfs.py` on a large library — can take 5–15 minutes with
-  multi-source cascade. Warn if > 20 items.
-- `fetch_pdfs_wiley_tdm.py` — silent HTTP, no warning needed.
+- `enrich_pdfs.py` on a large library — can take 5–15 minutes with
+  the default multi-source cascade. Warn if > 20 items.
+- `enrich_pdfs.py --sources wiley` — silent HTTP via the Wiley TDM
+  token, no warning needed.
 - First run of any `uv run` command installs Python dependencies
   (~1–20 s). Mention it if noticeable.
 

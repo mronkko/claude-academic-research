@@ -85,12 +85,15 @@ The `systematic-review` skill drives the full SLR pipeline. The reusable
 scripts it invokes:
 
 - **PDF attachment**:
-  `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/attach_pdfs.py` — 7-source
-  cascade (Elsevier, Springer, Crossref TDM, PMC, OpenAlex Content,
-  Unpaywall, OpenAlex OA). Parallel downloads, serial Zotero uploads.
+  `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py` —
+  multi-source cascade (Elsevier, Springer, Crossref TDM, PMC, OpenAlex
+  Content, Unpaywall, OpenAlex OA). `--sources wiley` adds the Wiley TDM
+  route; `--sources browser` drives Playwright handlers for Cloudflare-
+  gated publishers. Parallel downloads, serial Zotero uploads.
 - **Abstract retrieval**:
-  `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fetch_abstracts.py` —
-  6-source cascade (Crossref, Semantic Scholar, Scopus, ScienceDirect, OpenAlex GROBID).
+  `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_abstracts.py` —
+  6-source cascade (Crossref, Semantic Scholar, Scopus, WoS, ScienceDirect,
+  OpenAlex GROBID).
 - **Bibliography**:
   `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py <project_dir>`
   — Scan manuscript for citation keys, generate `references.bib` via BBT.
