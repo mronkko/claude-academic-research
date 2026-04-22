@@ -94,7 +94,7 @@ def is_cached(path: Path) -> bool:
 # ---------------------------------------------------------------------------
 
 
-async def try_click(page: "Page", *selectors: str, timeout: int = 8000) -> bool:
+async def try_click(page: Page, *selectors: str, timeout: int = 8000) -> bool:
     """Click the first selector that resolves to a visible element.
 
     Returns True on the first successful click, False if every selector
@@ -134,7 +134,7 @@ def _write_chromium_prefs(user_data_dir: Path) -> None:
     prefs_file.write_text(json.dumps(prefs))
 
 
-async def launch_context(playwright, cache_dir: str | Path) -> "BrowserContext":
+async def launch_context(playwright, cache_dir: str | Path) -> BrowserContext:
     """Persistent Chromium context with the PDF-download pref set.
 
     The profile lives in `<cache_dir>/.chrome-profile` so Cloudflare
@@ -273,7 +273,7 @@ class PublisherHandler(ABC):
         tmpl = self.setup_url_template or self.url_template
         return tmpl.format(doi=doi) if tmpl else ""
 
-    async def setup(self, page: "Page", first_doi: str) -> bool:
+    async def setup(self, page: Page, first_doi: str) -> bool:
         """Open the first URL and block until the user signals ready.
 
         Returns True to proceed with downloads for this publisher, or
@@ -341,8 +341,8 @@ class PublisherHandler(ABC):
     @abstractmethod
     async def download(
         self,
-        page: "Page",
-        ctx: "BrowserContext",
+        page: Page,
+        ctx: BrowserContext,
         item: dict,
         cache_dir: str | Path,
         *,

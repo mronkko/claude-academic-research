@@ -10,7 +10,7 @@ existing `scripts/sources/` package (predatory-journal data).
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from .base import AbstractFetcher, PdfFetcher, Source
 from .browser import BrowserSource
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 
 def abstract_sources(
-    http: "requests.Session | None" = None,
+    http: requests.Session | None = None,
     config: Any = None,
 ) -> list[AbstractFetcher]:
     """Priority-ordered abstract sources.
@@ -51,7 +51,7 @@ def abstract_sources(
 
 
 def pdf_sources(
-    http: "requests.Session | None" = None,
+    http: requests.Session | None = None,
     config: Any = None,
     names: list[str] | None = None,
 ) -> list[PdfFetcher]:

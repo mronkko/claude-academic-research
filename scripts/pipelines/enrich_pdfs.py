@@ -59,11 +59,10 @@ for _p in (str(SCRIPT_DIR), str(SCRIPTS_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from core.config_loader import get, require  # noqa: E402
-
 import fetchers  # noqa: E402
 import http_client  # noqa: E402
 import zotero_io  # noqa: E402
+from core.config_loader import get, require  # noqa: E402
 
 DEFAULT_LOG_CSV = os.path.join("output", "pdf_attach_log.csv")
 DEFAULT_CACHE_DIR = os.path.join("output", "pdf_cache")
@@ -306,14 +305,14 @@ def _run_browser_in_process(
     # resolver, drop items the library has no full-text route for —
     # saves the Chromium window entirely when a publisher's bucket is
     # fully inaccessible.
-    from fetchers.library_resolver import (
-        has_fulltext_access,
-        load_from_config,
-    )
     # Separate requests session for SFX — no Crossref mailto needed,
     # and we don't want tenacity retries competing with SFX's own
     # shorter timeouts.
     import requests as _requests
+    from fetchers.library_resolver import (
+        has_fulltext_access,
+        load_from_config,
+    )
     resolver_session = _requests.Session()
     resolver_cfg = load_from_config(resolver_session, args.cache_dir)
     if resolver_cfg is not None:

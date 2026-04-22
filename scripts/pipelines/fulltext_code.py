@@ -68,7 +68,6 @@ except ImportError:
 
 import zotero_io  # noqa: E402
 
-
 # Soft cap on full-text chars sent to Sonnet (~180k tokens at 4 chars/token;
 # leaves headroom for prompt + response in Sonnet's 200k context).
 SOFT_FULLTEXT_CHAR_CAP = 720_000

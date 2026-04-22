@@ -18,13 +18,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import requests
 
 
-class Source(ABC):
+class Source(ABC):  # noqa: B024  # marker base; abstractmethods live on AbstractFetcher / PdfFetcher
     """Root base class. Subclasses MUST set `name` as a class attribute.
 
     `interactive = True` signals to the orchestrator that this source
@@ -38,7 +38,7 @@ class Source(ABC):
 
     def __init__(
         self,
-        http: "requests.Session | None" = None,
+        http: requests.Session | None = None,
         config: Any = None,
     ) -> None:
         self.http = http

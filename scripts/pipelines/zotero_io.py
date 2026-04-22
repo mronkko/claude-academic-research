@@ -23,10 +23,9 @@ from __future__ import annotations
 
 import logging
 import sys
+import warnings
 from collections import defaultdict
 from pathlib import Path
-
-import warnings
 
 # pyzotero ≤1.11 uses a deprecated `whenever.ZonedDateTime.py_datetime()`
 # API that spams WheneverDeprecationWarning on every write. The warning
@@ -166,7 +165,7 @@ class ZoteroClient:
         group_id: str | None = None,
         *,
         prefer_local: bool = True,
-    ) -> "ZoteroClient":
+    ) -> ZoteroClient:
         """Instantiate from ~/.config/academic-research/config.toml.
 
         `group_id` is per-project (set by the caller from a --group CLI
@@ -178,8 +177,9 @@ class ZoteroClient:
         Otherwise raises a GroupSelectionRequired exception carrying the
         list of groups so orchestrators can print an actionable error.
         """
-        from core.config_loader import get, require
         import os
+
+        from core.config_loader import get, require
         api_key = require("zotero", "api_key", env="ZOTERO_API_KEY")
         if not group_id:
             group_id = os.environ.get("ZOTERO_GROUP", "").strip()
@@ -210,7 +210,7 @@ class ZoteroClient:
         *,
         api_key: str | None = None,
         prefer_local: bool = True,
-    ) -> "ZoteroClient":
+    ) -> ZoteroClient:
         """Alternate constructor for a personal (user) library.
 
         Used by audit_zotero_library.py when auditing the user's own

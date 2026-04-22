@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import requests
-
 import http_client
+import requests
 
 
 def test_build_session_returns_requests_session() -> None:

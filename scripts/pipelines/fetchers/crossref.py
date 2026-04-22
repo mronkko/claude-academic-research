@@ -41,10 +41,10 @@ class CrossrefSource(AbstractFetcher, PdfFetcher):
 
     def __init__(self, http, config=None):
         super().__init__(http, config)
-        self._cr: "habanero.Crossref | None" = None
+        self._cr: habanero.Crossref | None = None
 
     @property
-    def cr(self) -> "habanero.Crossref":
+    def cr(self) -> habanero.Crossref:
         if self._cr is None:
             import habanero
             mailto = getattr(self.config, "crossref_mailto", None) or os.environ.get(

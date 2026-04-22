@@ -13,7 +13,6 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-
 from fetchers.browser import (
     Counter,
     PageNavigationHandler,
@@ -25,7 +24,6 @@ from fetchers.browser import (
     progress_tag,
     resolve_by_doi,
 )
-
 
 # ---------------------------------------------------------------------------
 # Small helpers

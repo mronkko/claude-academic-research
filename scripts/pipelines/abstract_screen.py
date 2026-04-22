@@ -58,7 +58,6 @@ except ImportError:
 
 import zotero_io  # noqa: E402
 
-
 LOG_FIELDS = [
     "timestamp", "item_key", "doi", "title", "source", "query",
     "decision", "reason", "model", "prompt_version",

@@ -9,7 +9,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-
 from fetchers import WosSource
 from fetchers._title_match import matches, normalise, strip_html
 
@@ -268,7 +267,8 @@ def test_wos_concatenates_list_paragraphs() -> None:
 
 def test_wos_non_200_returns_none() -> None:
     sess = MagicMock()
-    bad = MagicMock(); bad.status_code = 503
+    bad = MagicMock()
+    bad.status_code = 503
     sess.get.return_value = bad
     src = WosSource(http=sess, config=_Config(extended="KEY"))
     assert src.fetch_abstract("10.5465/amd.2015.0052") is None

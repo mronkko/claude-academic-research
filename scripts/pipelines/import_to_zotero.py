@@ -59,7 +59,6 @@ except ImportError:
 
 import zotero_io  # noqa: E402
 
-
 BATCH_SIZE = 50  # Zotero write API max
 
 

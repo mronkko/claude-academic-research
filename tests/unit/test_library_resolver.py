@@ -17,7 +17,6 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-
 from fetchers.library_resolver import (
     LibraryResolverConfig,
     SfxCache,
@@ -370,8 +369,11 @@ def test_required_domains_cache_is_keyed_separately(tmp_path: Path) -> None:
     xml = _synthetic_sfx_xml([
         "https://onlinelibrary.wiley.com/doi/x",
     ])
-    fake_resp = MagicMock(); fake_resp.status_code = 200; fake_resp.text = xml
-    session = MagicMock(); session.get.return_value = fake_resp
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.text = xml
+    session = MagicMock()
+    session.get.return_value = fake_resp
     cfg = LibraryResolverConfig(
         openurl_base="https://example.org/sfx",
         session=session,
@@ -437,8 +439,11 @@ def test_has_fulltext_access_uses_cache_on_hit(tmp_path: Path) -> None:
 def test_has_fulltext_access_writes_cache_on_miss(tmp_path: Path) -> None:
     c = SfxCache(tmp_path)
     xml = _load_fixture("no_fulltext.xml")
-    fake_resp = MagicMock(); fake_resp.status_code = 200; fake_resp.text = xml
-    session = MagicMock(); session.get.return_value = fake_resp
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.text = xml
+    session = MagicMock()
+    session.get.return_value = fake_resp
     cfg = LibraryResolverConfig(
         openurl_base="https://example.org/sfx",
         session=session,

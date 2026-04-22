@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -118,7 +117,7 @@ class LibraryResolverConfig:
     """
 
     openurl_base: str
-    session: "requests.Session"
+    session: requests.Session
     cache: SfxCache | None = None
     timeout_s: int = _DEFAULT_TIMEOUT_S
     # Source identifier included in the OpenURL request. Helps libraries
@@ -308,7 +307,7 @@ def _cache_key(doi: str, required_domains: tuple[str, ...]) -> str:
 
 
 def load_from_config(
-    session: "requests.Session",
+    session: requests.Session,
     cache_dir: str | Path | None = None,
 ) -> LibraryResolverConfig | None:
     """Build a resolver config from `[library] openurl_base` in config.toml.

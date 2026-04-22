@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
-
 import fetchers
+import pytest
 from fetchers.base import AbstractFetcher, PdfFetcher
 
 

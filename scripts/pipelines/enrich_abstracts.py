@@ -43,11 +43,10 @@ for _p in (str(SCRIPT_DIR), str(SCRIPTS_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from core.config_loader import get, require  # noqa: E402
-
 import fetchers  # noqa: E402
 import http_client  # noqa: E402
 import zotero_io  # noqa: E402
+from core.config_loader import get, require  # noqa: E402
 
 DEFAULT_LOG_CSV = os.path.join("output", "abstract_fetch_log.csv")
 DEFAULT_CACHE_DIR = os.path.join("output", "fulltext_cache")
