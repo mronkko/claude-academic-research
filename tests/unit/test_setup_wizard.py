@@ -487,3 +487,59 @@ def test_zotero_local_help_mentions_settings_path(capsys) -> None:
     assert "Advanced" in out
     assert "Allow other applications" in out
     assert "zotero.org" in out   # link to download Zotero
+
+
+# ---------------------------------------------------------------------------
+# Better BibTeX probe
+# ---------------------------------------------------------------------------
+
+
+def test_zotero_bbt_probe_ok_on_200(monkeypatch) -> None:
+    """HTTP 200 from /better-bibtex/json-rpc → ok status."""
+    mod = _load()
+    monkeypatch.setattr(mod, "_http_json", lambda *a, **kw: (200, {}, ""))
+    status, msg = mod._check_zotero_bbt()
+    assert status == mod.ZOTERO_BBT_STATUS_OK
+    assert "Better BibTeX" in msg
+
+
+def test_zotero_bbt_probe_ok_on_method_not_allowed(monkeypatch) -> None:
+    """405/400 on GET just means the endpoint exists but expects POST —
+    that's still a BBT-is-installed signal."""
+    mod = _load()
+    monkeypatch.setattr(mod, "_http_json", lambda *a, **kw: (405, None, "405 Method Not Allowed"))
+    status, _ = mod._check_zotero_bbt()
+    assert status == mod.ZOTERO_BBT_STATUS_OK
+
+
+def test_zotero_bbt_probe_missing_on_404(monkeypatch) -> None:
+    """Zotero running but BBT not installed → 404 on /better-bibtex/*."""
+    mod = _load()
+    monkeypatch.setattr(mod, "_http_json", lambda *a, **kw: (404, None, "404 Not Found"))
+    status, msg = mod._check_zotero_bbt()
+    assert status == mod.ZOTERO_BBT_STATUS_MISSING
+    assert "Better BibTeX" in msg
+
+
+def test_zotero_bbt_probe_unreachable_on_connection_failure(monkeypatch) -> None:
+    """Status 0 from _http_json = Zotero not reachable at all."""
+    mod = _load()
+    monkeypatch.setattr(
+        mod, "_http_json",
+        lambda *a, **kw: (0, None, "Connection refused"),
+    )
+    status, msg = mod._check_zotero_bbt()
+    assert status == mod.ZOTERO_BBT_STATUS_UNREACHABLE
+    assert "refused" in msg.lower()
+
+
+def test_zotero_bbt_help_mentions_xpi_install_path(capsys) -> None:
+    """The help text must tell the user where to get the .xpi and how to
+    install it in Zotero."""
+    mod = _load()
+    mod._print_zotero_bbt_help()
+    out = capsys.readouterr().out
+    assert ".xpi" in out
+    assert "Tools" in out and "Add-ons" in out   # install path in Zotero
+    assert "retorquere/zotero-better-bibtex" in out  # release URL
+    assert "grounded-citations" in out           # *why* it matters

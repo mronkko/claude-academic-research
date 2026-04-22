@@ -884,6 +884,11 @@ ZOTERO_LOCAL_STATUS_OK = "ok"
 ZOTERO_LOCAL_STATUS_NOT_RUNNING = "not_running"
 ZOTERO_LOCAL_STATUS_SERVER_DISABLED = "server_disabled"
 
+ZOTERO_BBT_URL = "http://localhost:23119/better-bibtex/json-rpc"
+ZOTERO_BBT_STATUS_OK = "ok"
+ZOTERO_BBT_STATUS_MISSING = "missing"
+ZOTERO_BBT_STATUS_UNREACHABLE = "unreachable"
+
 
 def _check_zotero_local(timeout: int = 3) -> tuple[str, str]:
     """Probe the local Zotero HTTP API at localhost:23119/api/.
@@ -927,6 +932,54 @@ def _print_zotero_local_help() -> None:
     print("     tick 'Allow other applications on this computer to communicate")
     print("     with Zotero'.")
     print("  3. Leave Zotero running; re-run this wizard to confirm.")
+
+
+def _check_zotero_bbt(timeout: int = 3) -> tuple[str, str]:
+    """Probe the Better BibTeX JSON-RPC endpoint.
+
+    BBT is a Zotero plugin — separate from Zotero itself — that pipeline
+    scripts (`generate_bib.py`) and the `grounded-citations` rule both
+    depend on for citation keys. A missing BBT breaks both.
+
+    Behaviour on a bare GET against the JSON-RPC URL:
+      - 4xx other than 404 (e.g. 400, 405): endpoint exists, BBT is
+        installed — the server rejected our GET because the endpoint
+        expects POST, but that's fine, we only wanted to know it exists.
+      - 404: Zotero is up but BBT is not installed.
+      - status 0 (connection failure): Zotero itself is unreachable —
+        `_check_zotero_local` already surfaces the actionable message.
+
+    Returns (status, message) mirroring `_check_zotero_local`.
+    """
+    status, _, err = _http_json(ZOTERO_BBT_URL, timeout=timeout)
+    if status == 0:
+        return ZOTERO_BBT_STATUS_UNREACHABLE, err or "Zotero not reachable"
+    if status == 404:
+        return ZOTERO_BBT_STATUS_MISSING, "Better BibTeX plugin not installed"
+    return ZOTERO_BBT_STATUS_OK, "Better BibTeX JSON-RPC reachable"
+
+
+def _print_zotero_bbt_help() -> None:
+    """Print the actionable message when Better BibTeX is missing.
+
+    BBT is an XPI plugin that users install into Zotero; it's not
+    bundled with Zotero itself. The `grounded-citations` rule requires
+    BBT keys, and `generate_bib.py` exports `references.bib` via BBT's
+    JSON-RPC.
+    """
+    print("  *** WARNING: Better BibTeX is not installed in Zotero ***")
+    print("  The grounded-citations rule needs BBT citation keys, and")
+    print("  generate_bib.py exports references.bib via BBT's JSON-RPC.")
+    print("  Without BBT, neither works.")
+    print()
+    print("  To fix:")
+    print("  1. Download the latest BBT .xpi from:")
+    print("     https://github.com/retorquere/zotero-better-bibtex/releases/latest")
+    print("     (under 'Assets', grab the .xpi file — not the source tarballs).")
+    print("  2. In Zotero: Tools → Add-ons → gear icon →")
+    print("     'Install Add-on From File…' → pick the .xpi.")
+    print("  3. Restart Zotero.")
+    print("  4. Re-run this wizard to confirm.")
 
 
 def _check_mcp_servers() -> dict[str, str]:
@@ -1177,6 +1230,15 @@ def main() -> int:
     # Local Zotero API probe. Pipeline scripts default to local reads for
     # speed; failing here doesn't block setup but surfaces a clear warning.
     zotero_local_status, zotero_local_message = _check_zotero_local()
+    # Better BibTeX is a separate plugin — skip the probe if Zotero itself
+    # isn't up, since that would just duplicate the Zotero-local warning.
+    if zotero_local_status == ZOTERO_LOCAL_STATUS_OK:
+        zotero_bbt_status, zotero_bbt_message = _check_zotero_bbt()
+    else:
+        zotero_bbt_status, zotero_bbt_message = (
+            ZOTERO_BBT_STATUS_UNREACHABLE,
+            "skipped — Zotero local API not reachable",
+        )
 
     current_mcp = _check_mcp_servers()
     if interactive:
@@ -1196,11 +1258,16 @@ def main() -> int:
     print(f"    Settings: {SETTINGS_PATH} (+{allow_added} allow, +{deny_added} deny)")
     glyph = "✓" if zotero_local_status == ZOTERO_LOCAL_STATUS_OK else "✗"
     print(f"    Zotero local API: {glyph} {zotero_local_message}")
+    bbt_glyph = "✓" if zotero_bbt_status == ZOTERO_BBT_STATUS_OK else "✗"
+    print(f"    Better BibTeX:    {bbt_glyph} {zotero_bbt_message}")
     zotero_missing, all_search_dbs_missing = _print_mcp_summary(current_mcp)
 
     if zotero_local_status != ZOTERO_LOCAL_STATUS_OK:
         print()
         _print_zotero_local_help()
+    elif zotero_bbt_status == ZOTERO_BBT_STATUS_MISSING:
+        print()
+        _print_zotero_bbt_help()
 
     if zotero_missing:
         print()
