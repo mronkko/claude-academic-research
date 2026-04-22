@@ -190,6 +190,87 @@ def test_resolve_by_doi_uses_first_match_on_collision() -> None:
 
 
 # ---------------------------------------------------------------------------
+# resolve_by_host — URL-based routing (v0.4.0, after Crossref DOI resolve)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_by_host_matches_direct_access_domain() -> None:
+    """A DOI resolved via Crossref to `journals.sagepub.com` must
+    route to the Sage handler even when its DOI prefix (`10.1111/`)
+    would normally send it to Wiley. That's the whole point."""
+    from fetchers.browser import resolve_by_host
+
+    class WileyH(RequestHandler):
+        name = "wiley"
+        doi_prefixes = ("10.1002/", "10.1111/")
+        direct_access_domains = ("onlinelibrary.wiley.com",)
+        url_template = "https://onlinelibrary.wiley.com/doi/{doi}"
+
+    class SageH(RequestHandler):
+        name = "sage"
+        doi_prefixes = ("10.1177/",)
+        direct_access_domains = ("journals.sagepub.com",)
+        url_template = "https://journals.sagepub.com/doi/{doi}"
+
+    handlers: list[PublisherHandler] = [WileyH(), SageH()]
+    got = resolve_by_host("journals.sagepub.com", handlers)
+    assert got is not None and got.name == "sage"
+
+
+def test_resolve_by_host_suffix_match() -> None:
+    """Handlers declare `wiley.com`; URLs arrive with
+    `onlinelibrary.wiley.com` — the suffix match fires."""
+    from fetchers.browser import resolve_by_host
+
+    class WileyH(RequestHandler):
+        name = "wiley"
+        doi_prefixes = ("10.1002/",)
+        direct_access_domains = ("wiley.com",)
+        url_template = "https://onlinelibrary.wiley.com/doi/{doi}"
+
+    got = resolve_by_host("onlinelibrary.wiley.com", [WileyH()])
+    assert got is not None and got.name == "wiley"
+
+
+def test_resolve_by_host_returns_none_when_nothing_matches() -> None:
+    """URL with a host no handler claims — caller should route to the
+    Connector upfront bucket."""
+    from fetchers.browser import resolve_by_host
+
+    class WileyH(RequestHandler):
+        name = "wiley"
+        doi_prefixes = ("10.1002/",)
+        direct_access_domains = ("wiley.com",)
+        url_template = "https://wiley/{doi}"
+
+    assert resolve_by_host(
+        "unknown-platform.example", [WileyH()],
+    ) is None
+
+
+def test_resolve_by_host_returns_none_on_empty_host() -> None:
+    from fetchers.browser import resolve_by_host
+    assert resolve_by_host("", []) is None
+
+
+def test_resolve_by_host_ignores_handlers_without_domains() -> None:
+    """The Connector handler has empty `direct_access_domains` — it's
+    a catch-all routed to explicitly, never via host matching.
+    resolve_by_host must skip it."""
+    from fetchers.browser import ZoteroConnectorHandler, resolve_by_host
+
+    class WileyH(RequestHandler):
+        name = "wiley"
+        doi_prefixes = ("10.1002/",)
+        direct_access_domains = ("wiley.com",)
+        url_template = "https://wiley/{doi}"
+
+    handlers: list[PublisherHandler] = [ZoteroConnectorHandler(), WileyH()]
+    got = resolve_by_host("onlinelibrary.wiley.com", handlers)
+    assert got is not None and got.name == "wiley"
+
+
+# ---------------------------------------------------------------------------
 # RequestHandler.download (mock ctx.request; no real network)
 # ---------------------------------------------------------------------------
 

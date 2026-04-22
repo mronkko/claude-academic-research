@@ -5,6 +5,149 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — unreleased
+
+### Two-pass PDF retrieval: API cascade first, browser + Connector on residuals
+
+The browser-mode pipeline is now explicitly a second pass. Pass 1
+(the API cascade — Elsevier / Springer / Wiley TDM / Crossref TDM /
+PMC / OpenAlex / Unpaywall) stays unchanged: fast, non-interactive,
+no per-item DOI resolution. Pass 2 (new in v0.4.0) only processes
+items Pass 1 couldn't attach, so DOI resolution costs scale with the
+*residual* count rather than total library size.
+
+Pass 2 routing:
+
+1. Resolve the DOI via Crossref (habanero) — cached on disk in
+   `<cache-dir>/doi_resolver_cache.json`. Catches prefix-drift
+   cases like ETAP's `10.1111/etap.*` DOIs that now live on
+   `journals.sagepub.com`.
+2. If the resolved host matches an API source Pass 1 would have
+   skipped by DOI prefix (Wiley TDM / Elsevier / Springer), retry
+   that source once with `bypass_prefix_filter=True`. Catches
+   journals that migrated onto one of the big TDM-capable
+   publishers without changing their DOI prefix.
+3. Otherwise pick the correct browser handler by matching the
+   resolved URL host against each handler's `direct_access_domains`.
+4. Fall through to the Zotero Connector (via SFX target) when no
+   browser handler matches or the matched handler hits Case 2 /
+   fails / is in `[library] no_access`.
+
+New `--all` flag on `enrich_pdfs.py` runs both passes in one
+invocation: Pass 1 → re-query `zot.pdf_map()` → Pass 2 on what's
+left. Equivalent to running the two commands back-to-back, but in
+one process. Mutually exclusive with `--sources`.
+
+### Zotero Connector fallback for library-routed PDFs
+
+When the library's SFX resolver offers a full-text route via a
+third-party platform we don't have a bespoke handler for (EBSCOhost,
+JSTOR, ProQuest, Project MUSE, …), the browser pipeline now delegates
+to the Zotero Connector Chrome extension. One generic handler
+(`scripts/pipelines/fetchers/browser/connector.py`) covers whatever
+Zotero's community-maintained translators cover — no more
+one-handler-per-platform maintenance tax.
+
+**Three-pass routing model.**
+
+For every DOI the browser pipeline now runs two SFX queries (default
+date-filtered + `sfx.ignore_date_threshold=1`) and classifies each
+item into one of three cases:
+
+- **Case 3** — library covers this DOI on the direct publisher's
+  domain: run the direct handler (Wiley, AoM, Sage, …).
+- **Case 2** — library has the publisher but this DOI's year is out
+  of coverage: skip the direct handler (it would paywall); route to
+  the Connector via a Query-B target if one exists.
+- **Case 1** — library has no relationship with this publisher at
+  all: try the direct handler anyway (user might be an individual
+  member, e.g. AoM); on failure, fall through to the Connector.
+
+Items with no direct handler (MIS Quarterly, INFORMS without AoM-like
+user subscriptions, …) go straight to the Connector upfront bucket.
+
+**Learn-from-runtime failure prompt** replaces wizard enumeration of
+publisher access. On the first per-item failure in a run the user
+sees a three-way choice:
+
+- `k` — keep trying the direct handler (failures still retry via
+  the Connector at end of run);
+- `s` — skip remaining direct attempts this run (default on Enter);
+- `A` — always skip: appends the publisher to `[library] no_access`
+  in `~/.config/academic-research/config.toml` so future runs jump
+  straight to the Connector.
+
+Non-TTY runs (CI / piped stdin) take `skip` automatically or obey
+the new `--on-first-failure` flag.
+
+**Dedup via vendored zotero-mcp algorithm.** The Connector saves as
+a new Zotero item (it doesn't know about the existing DOI item).
+`ZoteroClient.merge_duplicate_item` — ported ~60 LOC from
+`zotero-mcp` (MIT-licensed, attribution in module docstring) — moves
+children into the keeper, unions tags and collections, skips
+duplicate attachments by `(contentType, filename, md5, url)`, and
+trashes the duplicate parent via `PATCH {"deleted": 1}` (recoverable
+from Zotero's Trash, not a permanent delete).
+
+**Setup wizard additions.**
+
+- Detects the Zotero Connector extension at the macOS / Linux /
+  Windows Chrome default-profile paths and offers to use it. Install
+  hint printed when the extension is absent.
+- Shows the current `[library] no_access` list and lets the user
+  remove entries (the "undo" path for the runtime "Always skip"
+  answer).
+
+### New
+
+- `scripts/pipelines/fetchers/doi_resolver.py` — `resolve_doi(doi, *, crossref, cache)` via habanero.Crossref plus an on-disk `DoiResolverCache`. Called only in Pass 2; never in the API cascade.
+- `scripts/pipelines/fetchers/browser/connector.py` — `ZoteroConnectorHandler`
+  (Playwright + extension service-worker-eval path, per the POC in
+  `temp/open_zotero_browser.py`).
+- `scripts/core/config_writer.py` — safe `append_to_list` /
+  `remove_from_list` helpers. Used by the failure-prompt "Always
+  skip" path and by the wizard's `no_access` editor; preserves mode
+  `0600` and the wizard's manual TOML format.
+- `ZoteroClient.merge_duplicate_item(target_key, duplicate_key)`.
+- `fetchers.library_resolver.sfx_lookup_dual()` and
+  `first_fulltext_target_preferred()` with a `SFX_PLATFORM_PRIORITY`
+  ranking (EBSCOhost > publisher-direct > JSTOR > ProQuest).
+- `PublisherHandler.attaches_directly: bool` — when True, the
+  driver calls `download_and_attach(page, ctx, service_worker,
+  item, zot, …)` instead of the standard `download()` +
+  `zot.attach_pdf()` pipeline.
+- `enrich_pdfs.py --sources connector` — Connector-only mode for
+  targeted validation runs.
+- `enrich_pdfs.py --all` — runs Pass 1 (API cascade) then Pass 2
+  (browser + Connector) on residuals in one invocation.
+- `enrich_pdfs.py --on-first-failure=keep|skip|always_skip` —
+  non-interactive answer for the failure prompt.
+- `PdfFetcher.direct_access_domains` class attribute + `bypass_prefix_filter`
+  kwarg on `fetch_pdf`. Wiley TDM / Elsevier / Springer declare their
+  hosts; Pass 2 uses the flag to invoke them on DOIs whose prefix
+  Pass 1 skipped.
+- `resolve_by_host(host, handlers)` helper in `fetchers.browser`
+  mirroring `resolve_by_doi` but matching on `direct_access_domains`.
+- `[zotero_connector] extension_dir` config key; override via
+  `ZOTERO_CONNECTOR_DIR` env var.
+- `[library] no_access` TOML list config key; wizard-editable at
+  setup time, runtime-appendable via the failure prompt.
+
+### Changed
+
+- `fetchers.library_resolver.SfxCache` value shape is now
+  `{"urls": [target URLs]}` — raw target list is stored once per
+  `(doi, ignore_date_threshold)` and filtered per-caller. Legacy
+  `{has_access, targets}` entries from v0.3.x are treated as a
+  cache miss and re-queried on the next run (one-time cost).
+- `setup/wizard.py:_write_config` now emits TOML list values
+  (`no_access = ["aom", "apa"]`) in addition to quoted strings.
+  Existing runs are unaffected — the format for scalar keys is
+  unchanged.
+- `launch_context()` gains an `extensions=[...]` keyword argument
+  that maps to Chromium's `--load-extension` + isolates the
+  Connector profile from the direct-handler profile.
+
 ## [0.3.1] — 2026-04-22
 
 ### Move legacy orchestrators under `legacy/` subdirectory

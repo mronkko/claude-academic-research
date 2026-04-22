@@ -30,6 +30,12 @@ from .base import (
     launch_context,
     progress_tag,
 )
+from .connector import (
+    ZoteroConnectorHandler,
+    ping_zotero_desktop,
+    resolve_connector_extension_path,
+    wait_for_service_worker,
+)
 from .emerald import EmeraldHandler
 from .informs import InformsHandler
 from .oup import OupHandler
@@ -53,8 +59,10 @@ class BrowserSource(PdfFetcher):
     name = "browser"
     interactive = True
 
-    def fetch_pdf(self, doi: str, *, cache_dir) -> tuple[Path, str] | None:
-        del doi, cache_dir
+    def fetch_pdf(
+        self, doi: str, *, cache_dir, bypass_prefix_filter: bool = False,
+    ) -> tuple[Path, str] | None:
+        del doi, cache_dir, bypass_prefix_filter
         raise NotImplementedError(
             "BrowserSource is interactive and session-per-publisher. "
             "Use enrich_pdfs.py --sources browser, which drives the "
@@ -100,6 +108,32 @@ def resolve_by_doi(
     return None
 
 
+def resolve_by_host(
+    host: str,
+    handlers: list[PublisherHandler] | None = None,
+) -> PublisherHandler | None:
+    """First handler whose ``direct_access_domains`` matches ``host``.
+
+    Used by the browser pipeline's Pass 1 classification: the DOI is
+    first resolved to its Crossref-registered URL, and the URL's host
+    drives handler selection. Catches the case where a DOI's prefix
+    is misleading (journal migrated publishers).
+
+    Matching is suffix-based via the shared library_resolver helper,
+    so ``onlinelibrary.wiley.com`` matches a handler whose domains
+    include ``wiley.com``.
+    """
+    if not host:
+        return None
+    from fetchers.library_resolver import _target_matches_domains
+    for h in handlers if handlers is not None else all_handlers():
+        if not h.direct_access_domains:
+            continue
+        if _target_matches_domains(f"https://{host}/", h.direct_access_domains):
+            return h
+    return None
+
+
 __all__ = [
     "AaaHandler",
     "AomHandler",
@@ -115,10 +149,15 @@ __all__ = [
     "SageHandler",
     "TandfHandler",
     "WileyHandler",
+    "ZoteroConnectorHandler",
     "all_handlers",
     "cache_path_for",
     "is_cached",
     "launch_context",
+    "ping_zotero_desktop",
     "progress_tag",
     "resolve_by_doi",
+    "resolve_by_host",
+    "resolve_connector_extension_path",
+    "wait_for_service_worker",
 ]

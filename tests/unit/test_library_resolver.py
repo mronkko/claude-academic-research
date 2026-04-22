@@ -18,15 +18,19 @@ from unittest.mock import MagicMock
 
 import pytest
 from fetchers.library_resolver import (
+    SFX_PLATFORM_PRIORITY,
     LibraryResolverConfig,
     SfxCache,
+    SfxDualResult,
     _build_query_url,
     _count_fulltext_targets,
     _effective_host,
     _fulltext_target_urls,
     _target_matches_domains,
+    first_fulltext_target_preferred,
     has_fulltext_access,
     load_from_config,
+    sfx_lookup_dual,
 )
 
 # ---------------------------------------------------------------------------
@@ -361,10 +365,12 @@ def test_has_fulltext_access_without_required_domains_allows_indirect_routes() -
     assert has_fulltext_access("10.1/x", cfg, required_domains=()) is True
 
 
-def test_required_domains_cache_is_keyed_separately(tmp_path: Path) -> None:
-    """Different handlers for the same DOI can legitimately get
-    different answers (one handler's domain matches, another's
-    doesn't). Cache keys must incorporate the domain filter."""
+def test_required_domains_filter_uses_single_cached_url_list(tmp_path: Path) -> None:
+    """v0.4.0: the cache stores the raw SFX target URL list per DOI,
+    not a pre-filtered access bool. Different handlers for the same
+    DOI reach different conclusions by filtering the same cached
+    list — only ONE network call per DOI, regardless of how many
+    handlers query it."""
     c = SfxCache(tmp_path)
     xml = _synthetic_sfx_xml([
         "https://onlinelibrary.wiley.com/doi/x",
@@ -384,12 +390,260 @@ def test_required_domains_cache_is_keyed_separately(tmp_path: Path) -> None:
     assert has_fulltext_access(
         "10.1/x", cfg, required_domains=("wiley.com",),
     ) is True
-    # INFORMS handler sees the same SFX response but for its required
-    # domain there's no match → access False. Cache must not return
-    # Wiley's True answer here.
+    # INFORMS handler applies a different filter to the same cached
+    # URL list → access False. No extra network call.
     assert has_fulltext_access(
         "10.1/x", cfg, required_domains=("informs.org",),
     ) is False
+    # Confirm we reached the network exactly once.
+    assert session.get.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# _build_query_url — ignore_date_threshold parameter (v0.4.0)
+# ---------------------------------------------------------------------------
+
+
+def test_build_query_url_omits_ignore_date_flag_by_default() -> None:
+    cfg = LibraryResolverConfig(
+        openurl_base="https://example.org/sfx",
+        session=MagicMock(),
+    )
+    url = _build_query_url("10.1/x", cfg)
+    assert "sfx.ignore_date_threshold" not in url
+
+
+def test_build_query_url_adds_ignore_date_flag_when_requested() -> None:
+    cfg = LibraryResolverConfig(
+        openurl_base="https://example.org/sfx",
+        session=MagicMock(),
+    )
+    url = _build_query_url("10.1/x", cfg, ignore_date_threshold=True)
+    assert "sfx.ignore_date_threshold=1" in url
+
+
+# ---------------------------------------------------------------------------
+# sfx_lookup_dual — the two SFX queries that classify Case 1 / 2 / 3
+# ---------------------------------------------------------------------------
+
+
+def _dual_session(*, in_range_urls: list[str], any_urls: list[str]):
+    """Mock session whose `.get` returns `in_range_urls` for the
+    default query and `any_urls` when `sfx.ignore_date_threshold=1`
+    is present. Returns (session, calls) so tests can inspect the
+    request history."""
+    calls: list[str] = []
+
+    def fake_get(url, **_kw):
+        calls.append(url)
+        resp = MagicMock()
+        resp.status_code = 200
+        if "sfx.ignore_date_threshold=1" in url:
+            resp.text = _synthetic_sfx_xml(any_urls)
+        else:
+            resp.text = _synthetic_sfx_xml(in_range_urls)
+        return resp
+
+    sess = MagicMock()
+    sess.get.side_effect = fake_get
+    return sess, calls
+
+
+def test_sfx_lookup_dual_returns_both_lists_case_3(tmp_path: Path) -> None:
+    """Case 3 (Wiley 2015 at JYU): library covers this DOI. Both
+    queries return the Wiley target."""
+    sess, calls = _dual_session(
+        in_range_urls=[
+            "http://ezproxy.jyu.fi/login?url=https://onlinelibrary.wiley.com/x",
+        ],
+        any_urls=[
+            "http://ezproxy.jyu.fi/login?url=https://onlinelibrary.wiley.com/x",
+        ],
+    )
+    cfg = LibraryResolverConfig(
+        openurl_base="https://example.org/sfx",
+        session=sess, cache=SfxCache(tmp_path),
+    )
+    result = sfx_lookup_dual("10.1002/wiley2015", cfg)
+    assert result.query_ok
+    assert len(result.in_range) == 1
+    assert len(result.any_range) == 1
+    # Two separate HTTP calls — one per query — then cached.
+    assert len(calls) == 2
+
+
+def test_sfx_lookup_dual_case_2_wiley_out_of_coverage(tmp_path: Path) -> None:
+    """Case 2 (Wiley 1993): library knows about Wiley for this journal
+    but this year is out of range. Query A lists Wiley, Query B is
+    empty."""
+    sess, _ = _dual_session(
+        in_range_urls=[],
+        any_urls=[
+            "http://ezproxy.jyu.fi/login?url=https://onlinelibrary.wiley.com/x",
+            "http://ezproxy.jyu.fi/login?url=https://openurl.ebsco.com/x",
+        ],
+    )
+    cfg = LibraryResolverConfig(
+        openurl_base="https://example.org/sfx",
+        session=sess, cache=SfxCache(tmp_path),
+    )
+    result = sfx_lookup_dual("10.1002/wiley1993", cfg)
+    assert result.query_ok
+    assert result.in_range == []
+    assert len(result.any_range) == 2
+    # The case-2 detector used by enrich_pdfs.py:
+    wiley_in_any = any(
+        _target_matches_domains(u, ("wiley.com",)) for u in result.any_range
+    )
+    wiley_in_range = any(
+        _target_matches_domains(u, ("wiley.com",)) for u in result.in_range
+    )
+    assert wiley_in_any and not wiley_in_range
+
+
+def test_sfx_lookup_dual_case_1_aom_no_sfx_relationship(tmp_path: Path) -> None:
+    """Case 1 (AoM at JYU): library has no AoM relationship at all —
+    both queries are empty. Direct handler should still be tried
+    (user might be a member)."""
+    sess, _ = _dual_session(in_range_urls=[], any_urls=[])
+    cfg = LibraryResolverConfig(
+        openurl_base="https://example.org/sfx",
+        session=sess, cache=SfxCache(tmp_path),
+    )
+    result = sfx_lookup_dual("10.5465/amj.x", cfg)
+    assert result.query_ok
+    assert result.in_range == []
+    assert result.any_range == []
+
+
+def test_sfx_lookup_dual_caches_both_queries_separately(tmp_path: Path) -> None:
+    """The two SFX queries get independent cache slots; a second call
+    on the same DOI makes zero network calls."""
+    cache = SfxCache(tmp_path)
+    sess, calls = _dual_session(
+        in_range_urls=["https://onlinelibrary.wiley.com/x"],
+        any_urls=["https://onlinelibrary.wiley.com/x"],
+    )
+    cfg = LibraryResolverConfig(
+        openurl_base="https://example.org/sfx",
+        session=sess, cache=cache,
+    )
+    sfx_lookup_dual("10.1002/x", cfg)
+    assert len(calls) == 2
+
+    # Second call: everything from cache.
+    sess2, calls2 = _dual_session(
+        in_range_urls=[],                # if hit, would produce []
+        any_urls=[],
+    )
+    cfg2 = LibraryResolverConfig(
+        openurl_base="https://example.org/sfx",
+        session=sess2, cache=SfxCache(tmp_path),
+    )
+    res = sfx_lookup_dual("10.1002/x", cfg2)
+    assert calls2 == []
+    assert res.in_range and res.any_range   # Still the cached URLs.
+
+
+def test_sfx_lookup_dual_returns_query_ok_false_when_sfx_fails() -> None:
+    session = MagicMock()
+    session.get.side_effect = RuntimeError("network down")
+    cfg = LibraryResolverConfig(
+        openurl_base="https://example.org/sfx",
+        session=session,
+    )
+    result = sfx_lookup_dual("10.1/x", cfg)
+    assert result.query_ok is False
+    assert result.in_range == []
+    assert result.any_range == []
+
+
+def test_sfx_lookup_dual_returns_empty_result_when_unset() -> None:
+    cfg = LibraryResolverConfig(openurl_base="", session=MagicMock())
+    result = sfx_lookup_dual("10.1/x", cfg)
+    assert not result.query_ok
+
+
+# ---------------------------------------------------------------------------
+# first_fulltext_target_preferred — platform priority ranking
+# ---------------------------------------------------------------------------
+
+
+def test_first_fulltext_target_preferred_picks_ebsco_over_jstor() -> None:
+    """When SFX offers EBSCOhost + JSTOR + ProQuest routes, the handler
+    should pick EBSCOhost per SFX_PLATFORM_PRIORITY."""
+    xml = _synthetic_sfx_xml([
+        "https://www.jstor.org/stable/x",
+        "http://ezproxy.jyu.fi/login?url=https://openurl.ebscohost.com/x",
+        "https://search.proquest.com/docview/x",
+    ])
+    cfg = _cfg_with_response(xml)
+    target = first_fulltext_target_preferred("10.1/x", cfg)
+    assert target is not None
+    assert "ebscohost.com" in target
+
+
+def test_first_fulltext_target_preferred_falls_back_when_nothing_ranked() -> None:
+    """When no target matches any entry in the priority list, the
+    function still returns a target (SFX's response order decides)."""
+    xml = _synthetic_sfx_xml([
+        "https://unknown-platform.example/a",
+        "https://another-unknown.example/b",
+    ])
+    cfg = _cfg_with_response(xml)
+    target = first_fulltext_target_preferred("10.1/x", cfg)
+    assert target == "https://unknown-platform.example/a"
+
+
+def test_first_fulltext_target_preferred_returns_none_with_no_targets() -> None:
+    xml = _synthetic_sfx_xml([])
+    cfg = _cfg_with_response(xml)
+    assert first_fulltext_target_preferred("10.1/x", cfg) is None
+
+
+def test_first_fulltext_target_preferred_unset_returns_none() -> None:
+    cfg = LibraryResolverConfig(openurl_base="", session=MagicMock())
+    assert first_fulltext_target_preferred("10.1/x", cfg) is None
+
+
+def test_first_fulltext_target_preferred_filters_by_required_domains() -> None:
+    """required_domains restricts the candidates: no matching target →
+    None even when other full-text routes exist."""
+    xml = _synthetic_sfx_xml([
+        "https://www.jstor.org/stable/x",
+    ])
+    cfg = _cfg_with_response(xml)
+    assert first_fulltext_target_preferred(
+        "10.1/x", cfg, required_domains=("pubsonline.informs.org",),
+    ) is None
+
+
+def test_first_fulltext_target_preferred_stable_tie_break() -> None:
+    """Two targets at the same priority rank return the first one
+    SFX listed (list order preserved)."""
+    xml = _synthetic_sfx_xml([
+        "https://onlinelibrary.wiley.com/doi/a",
+        "https://onlinelibrary.wiley.com/doi/b",
+    ])
+    cfg = _cfg_with_response(xml)
+    target = first_fulltext_target_preferred("10.1/x", cfg)
+    # Both rank equally (both "onlinelibrary.wiley.com" → same index).
+    # `min` with stable key preserves original order.
+    assert target == "https://onlinelibrary.wiley.com/doi/a"
+
+
+def test_sfx_platform_priority_is_non_empty() -> None:
+    assert isinstance(SFX_PLATFORM_PRIORITY, tuple)
+    assert len(SFX_PLATFORM_PRIORITY) > 0
+    # EBSCOhost is the current top-ranked platform.
+    assert SFX_PLATFORM_PRIORITY[0] == "ebscohost.com"
+
+
+def test_sfx_dual_result_dataclass_fields() -> None:
+    r = SfxDualResult(in_range=["a"], any_range=["a", "b"])
+    assert r.in_range == ["a"]
+    assert r.any_range == ["a", "b"]
+    assert r.query_ok is True
 
 
 # ---------------------------------------------------------------------------
@@ -422,9 +676,13 @@ def test_sfx_cache_recovers_from_corrupt_json(tmp_path: Path) -> None:
 
 
 def test_has_fulltext_access_uses_cache_on_hit(tmp_path: Path) -> None:
-    """A cached 'no access' answer must not hit the network a second time."""
+    """A cached 'no access' answer must not hit the network a second time.
+
+    v0.4.0 cache shape is `{"urls": [...]}` — the empty list encodes
+    "SFX returned no full-text targets".
+    """
     c = SfxCache(tmp_path)
-    c.put("10.1/already_checked", {"has_access": False, "targets": 0})
+    c.put("10.1/already_checked", {"urls": []})
 
     session = MagicMock()
     session.get.side_effect = AssertionError("must not hit network")
@@ -450,9 +708,37 @@ def test_has_fulltext_access_writes_cache_on_miss(tmp_path: Path) -> None:
         cache=c,
     )
     assert has_fulltext_access("10.1/new", cfg) is False
-    # Confirm the cache file now has an entry.
+    # Cache now has the URL list for this DOI. No full-text targets →
+    # empty list; the has_access bool is derived, not stored.
     c2 = SfxCache(tmp_path)
-    assert c2.get("10.1/new") == {"has_access": False, "targets": 0}
+    assert c2.get("10.1/new") == {"urls": []}
+
+
+def test_legacy_cache_entry_without_urls_is_re_queried(tmp_path: Path) -> None:
+    """A v0.3.x cache entry (shape `{has_access, targets}` without a
+    `urls` key) is treated as a miss so v0.4.0 callers can derive the
+    filtered access bool from the full URL list."""
+    c = SfxCache(tmp_path)
+    c.put("10.1/legacy", {"has_access": True, "targets": 1})
+
+    xml = _synthetic_sfx_xml([
+        "http://ezproxy.jyu.fi/login?url=https://onlinelibrary.wiley.com/x",
+    ])
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.text = xml
+    session = MagicMock()
+    session.get.return_value = fake_resp
+    cfg = LibraryResolverConfig(
+        openurl_base="https://example.org/sfx",
+        session=session,
+        cache=c,
+    )
+    assert has_fulltext_access("10.1/legacy", cfg,
+                                required_domains=("wiley.com",)) is True
+    # After the re-query the cache is upgraded to the new shape.
+    reloaded = SfxCache(tmp_path).get("10.1/legacy")
+    assert reloaded is not None and "urls" in reloaded
 
 
 # ---------------------------------------------------------------------------

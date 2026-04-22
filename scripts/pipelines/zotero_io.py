@@ -17,10 +17,21 @@ Design notes:
       re-PATCH.
     - No module-level ZOTERO_API_KEY read. Callers instantiate via
       `ZoteroClient.from_config()`, which goes through `core.config_loader`.
+
+Attribution:
+    `merge_duplicate_item` is a port of the `merge_duplicates` function
+    from zotero-mcp (MIT-licensed) at
+    `src/zotero_mcp/tools/write.py` — specifically the execute path
+    (tag union, collection union, child re-parenting with attachment-
+    signature dedup, and trash-via-PATCH). Adapted to our single-keeper
+    single-duplicate signature, our logger in place of FastMCP's
+    `Context`, and to raise on failure rather than return a diagnostic
+    string.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import warnings
@@ -301,6 +312,69 @@ class ZoteroClient:
         """Fetch a single item's current payload (used for version refresh)."""
         return self.cloud.item(item_key)
 
+    def selected_local_library(self) -> dict | None:
+        """Return the library currently highlighted in Zotero Desktop's
+        left pane (i.e. where Connector saves would land).
+
+        Queries Zotero Desktop's `/connector/getSelectedCollection`
+        endpoint — separate from the `/api/*` surface that pyzotero
+        wraps, so we call it over plain HTTP. Response shape:
+            {
+              "libraryID":   <local numeric ID>,
+              "libraryName": "<human-readable name>",
+              "libraryEditable": true,
+              ...                       # more fields when a collection is selected
+            }
+        Returns None on any error (Desktop not running, endpoint
+        missing on old Zotero, parse failure). Callers must tolerate
+        None.
+        """
+        import json as _json
+        import urllib.request
+        url = "http://127.0.0.1:23119/connector/getSelectedCollection"
+        req = urllib.request.Request(
+            url, method="POST", data=b"{}",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                if resp.status != 200:
+                    return None
+                return _json.loads(resp.read())
+        except Exception:
+            return None
+
+    def group_name(self) -> str | None:
+        """Fetch the group's display name from the Zotero cloud.
+
+        Used by the Connector pre-flight to compare against Zotero
+        Desktop's currently-selected library name — lets us tell the
+        user "matches" vs "mismatch" definitively rather than
+        hedging with "is this the right library?". Returns None on
+        any error; callers must tolerate the None case.
+
+        Only applicable when `library_type == 'group'`; user libraries
+        don't have a group endpoint.
+        """
+        if self.library_type != "group":
+            return None
+        import json as _json
+        import urllib.request
+        url = f"https://api.zotero.org/groups/{self.group_id}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Zotero-API-Key": self.api_key,
+                "Zotero-API-Version": "3",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = _json.loads(resp.read())
+        except Exception:
+            return None
+        return (data or {}).get("data", {}).get("name")
+
     # -----------------------------------------------------------------
     # Writes (cloud client; pyzotero handles the 3-step S3 upload and
     # If-Unmodified-Since-Version headers).
@@ -390,3 +464,158 @@ class ZoteroClient:
         return bool(
             self.cloud.delete_item(current, last_modified=current["version"])
         )
+
+    # -----------------------------------------------------------------
+    # Duplicate merge — see module attribution. Ported from
+    # zotero-mcp's merge_duplicates (MIT-licensed).
+    # -----------------------------------------------------------------
+
+    def merge_duplicate_item(
+        self,
+        target_key: str,
+        duplicate_key: str,
+    ) -> dict[str, int | list[str]]:
+        """Merge `duplicate_key` into `target_key` and trash the duplicate.
+
+        Keeps the target item intact (preserves its Zotero item_key,
+        Better BibTeX citation key, hand-curated metadata). From the
+        duplicate:
+          - Tags and collections are unioned into the target.
+          - Each child (attachment / note / annotation) is re-parented
+            to the target, EXCEPT attachments whose
+            (contentType, filename, md5, url) signature already exists
+            on the target — those are dropped to avoid duplicate PDFs.
+          - Finally the duplicate is trashed via
+            `PATCH {"deleted": 1}` (recoverable from Zotero's Trash),
+            NOT pyzotero's permanent `delete_item`.
+
+        Returns a stats dict with counts plus the key lists for logs:
+            {
+              "moved":        int,
+              "skipped_dupe_attachments": int,
+              "tags_added":   int,
+              "collections_added": int,
+              "trashed":      [target_key] on success, [] on failure,
+            }
+
+        Safety guard: refuses to merge when the two items carry
+        different non-empty DOIs, since a mismatched merge permanently
+        entangles two separate papers' metadata. Raises ValueError.
+        """
+        target = self.get_item(target_key)
+        duplicate = self.get_item(duplicate_key)
+
+        target_data = target.get("data", {})
+        dup_data = duplicate.get("data", {})
+        target_doi = (target_data.get("DOI") or "").strip().lower()
+        dup_doi = (dup_data.get("DOI") or "").strip().lower()
+        if target_doi and dup_doi and target_doi != dup_doi:
+            raise ValueError(
+                f"Refusing to merge: target DOI {target_doi!r} != "
+                f"duplicate DOI {dup_doi!r}",
+            )
+
+        target_children = self.cloud.children(target_key)
+        dup_children = self.cloud.children(duplicate_key)
+
+        # Step 1: tag union.
+        existing_tags = {t.get("tag", "")
+                         for t in target_data.get("tags", [])}
+        dup_tags = {t.get("tag", "")
+                    for t in dup_data.get("tags", [])}
+        new_tags = (dup_tags - existing_tags) - {""}
+        if new_tags:
+            target_data["tags"] = [
+                {"tag": t} for t in sorted(existing_tags | new_tags)
+            ]
+            self.cloud.update_item(target)
+            target = self.get_item(target_key)          # refresh version
+
+        # Step 2: collection union.
+        existing_collections = set(target.get("data", {}).get("collections", []))
+        dup_collections = set(dup_data.get("collections", []))
+        new_collections = dup_collections - existing_collections
+        for coll_key in new_collections:
+            self.cloud.addto_collection(coll_key, target)
+            target = self.get_item(target_key)          # refresh version
+
+        # Step 3: re-parent children, skipping duplicate attachments.
+        keeper_sigs = {
+            (
+                c.get("data", {}).get("contentType", ""),
+                c.get("data", {}).get("filename", ""),
+                c.get("data", {}).get("md5", ""),
+                c.get("data", {}).get("url", ""),
+            )
+            for c in target_children
+            if c.get("data", {}).get("itemType") == "attachment"
+        }
+        moved: list[str] = []
+        skipped_dupes: list[str] = []
+        for child in dup_children:
+            child_key = child.get("key", "")
+            fresh = self.cloud.item(child_key)
+            fd = fresh.get("data", {})
+            if fd.get("itemType") == "attachment":
+                sig = (
+                    fd.get("contentType", ""),
+                    fd.get("filename", ""),
+                    fd.get("md5", ""),
+                    fd.get("url", ""),
+                )
+                if sig in keeper_sigs:
+                    skipped_dupes.append(child_key)
+                    continue
+            fd["parentItem"] = target_key
+            self.cloud.update_item(fresh)
+            moved.append(child_key)
+
+        # Step 4: trash the duplicate with PATCH {"deleted": 1}.
+        # pyzotero's `delete_item` permanently destroys; we want
+        # Zotero's Trash (recoverable in the UI).
+        trashed: list[str] = []
+        try:
+            from pyzotero.zotero import build_url
+            latest = self.get_item(duplicate_key)
+            url = build_url(
+                self.cloud.endpoint,
+                f"/{self.cloud.library_type}/{self.cloud.library_id}"
+                f"/items/{duplicate_key}",
+            )
+            headers = {
+                "If-Unmodified-Since-Version": str(latest["version"]),
+                "Zotero-API-Key": self.api_key,
+                "Zotero-API-Version": "3",
+                "Content-Type": "application/json",
+            }
+            # pyzotero's httpx client is lazily typed as Optional but
+            # is always created in Zotero.__init__; access it once we've
+            # issued a read against the same instance.
+            http = self.cloud.client
+            if http is None:
+                raise RuntimeError("pyzotero client is not initialised")
+            resp = http.patch(
+                url=url,
+                headers=headers,
+                content=json.dumps({"deleted": 1}),
+            )
+            if resp.status_code in (200, 204):
+                trashed.append(duplicate_key)
+            else:
+                logger.warning(
+                    "merge_duplicate_item: trash PATCH returned HTTP %d for %s",
+                    resp.status_code, duplicate_key,
+                )
+        except Exception as e:
+            logger.warning(
+                "merge_duplicate_item: trash PATCH failed for %s: %s",
+                duplicate_key, e,
+            )
+
+        return {
+            "moved": len(moved),
+            "skipped_dupe_attachments": len(skipped_dupes),
+            "tags_added": len(new_tags),
+            "collections_added": len(new_collections),
+            "trashed": trashed,
+        }

@@ -31,7 +31,10 @@ class UnpaywallSource(PdfFetcher):
             or os.environ.get("CROSSREF_MAILTO", "")
         )
 
-    def fetch_pdf(self, doi: str, *, cache_dir) -> tuple[Path, str] | None:
+    def fetch_pdf(
+        self, doi: str, *, cache_dir, bypass_prefix_filter: bool = False,
+    ) -> tuple[Path, str] | None:
+        del bypass_prefix_filter          # not prefix-filtered
         mailto = self._mailto()
         if not mailto:
             return None

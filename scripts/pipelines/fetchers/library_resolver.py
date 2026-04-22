@@ -41,6 +41,34 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+# Default priority order for full-text platforms when SFX offers
+# several routes for one DOI. Higher-ranked (earlier) entries win.
+#
+# Ranking rationale:
+#   - EBSCOhost: cleanest PDFs in our testing.
+#   - Publisher-direct (Elsevier/Wiley/Springer/Sage/T&F/OUP): also
+#     clean. When offered alongside EBSCOhost, platform choice rarely
+#     matters — prefer EBSCOhost for the UI the Zotero Connector
+#     translator handles most consistently.
+#   - JSTOR: adds a JSTOR-branded cover page.
+#   - ProQuest: sometimes serves a scanned-image PDF where another
+#     route has a digitally-typeset original. Last resort.
+#
+# Users can override via `[library] sfx_platform_priority` in config.
+SFX_PLATFORM_PRIORITY: tuple[str, ...] = (
+    "ebscohost.com",
+    "ebsco.com",
+    "sciencedirect.com",
+    "onlinelibrary.wiley.com",
+    "link.springer.com",
+    "journals.sagepub.com",
+    "tandfonline.com",
+    "academic.oup.com",
+    "jstor.org",
+    "proquest.com",
+)
+
 # OpenURL 1.0 query parameters we send to every SFX request. The DOI
 # goes in `rft_id=info:doi/<DOI>`. `sfx.response_type=multi_obj_xml`
 # makes SFX emit the XML shape we parse below.
@@ -130,10 +158,25 @@ class LibraryResolverConfig:
 # ---------------------------------------------------------------------------
 
 
-def _build_query_url(doi: str, cfg: LibraryResolverConfig) -> str:
+def _build_query_url(
+    doi: str,
+    cfg: LibraryResolverConfig,
+    *,
+    ignore_date_threshold: bool = False,
+) -> str:
+    """Build the OpenURL query URL for `doi`.
+
+    When `ignore_date_threshold=True`, appends `sfx.ignore_date_threshold=1`
+    so SFX returns every publisher it knows for the journal, not only
+    those whose coverage includes this DOI's year. Used by the dual
+    query that distinguishes "library has no Wiley at all" from
+    "library has Wiley but not this year".
+    """
     params = dict(_OPENURL_STATIC_PARAMS)
     params["rft_id"] = f"info:doi/{doi}"
     params["sfx.sid"] = cfg.sid
+    if ignore_date_threshold:
+        params["sfx.ignore_date_threshold"] = "1"
     return f"{cfg.openurl_base}?{urlencode(params)}"
 
 
@@ -224,6 +267,51 @@ def _target_matches_domains(target_url: str, domains: tuple[str, ...]) -> bool:
     return False
 
 
+def _query_target_urls(
+    doi: str,
+    cfg: LibraryResolverConfig,
+    *,
+    ignore_date_threshold: bool = False,
+) -> list[str] | None:
+    """Run one SFX query for `doi` and return the full-text target URL list.
+
+    Returns the URL list on success (possibly empty), or None on
+    transport / non-200 / parse failure. Callers distinguish the
+    unknown case (None → fail-open) from the known-empty case ([]).
+
+    Results are cached per `(doi, ignore_date_threshold)`. The cache
+    value shape is `{"urls": [list of strings]}` — derived quantities
+    (has_access bool, preferred target) are computed by the callers so
+    the same cached payload can serve handlers with different
+    direct-access domains.
+    """
+    if cfg.cache is not None:
+        cached = cfg.cache.get(_cache_key(doi, ignore_date_threshold))
+        if cached is not None and "urls" in cached:
+            return list(cached["urls"])
+
+    url = _build_query_url(
+        doi, cfg, ignore_date_threshold=ignore_date_threshold,
+    )
+    try:
+        resp = cfg.session.get(url, timeout=cfg.timeout_s)
+    except Exception as e:
+        logger.debug("SFX request failed for %s: %s", doi, e)
+        return None
+
+    if resp.status_code != 200:
+        logger.debug("SFX returned HTTP %d for %s", resp.status_code, doi)
+        return None
+
+    urls = _fulltext_target_urls(resp.text)
+    if urls is None:
+        return None
+
+    if cfg.cache is not None:
+        cfg.cache.put(_cache_key(doi, ignore_date_threshold), {"urls": urls})
+    return urls
+
+
 def has_fulltext_access(
     doi: str,
     cfg: LibraryResolverConfig,
@@ -251,53 +339,144 @@ def has_fulltext_access(
     if not cfg.openurl_base:
         return True
 
-    cache_key = _cache_key(doi, required_domains)
-    if cfg.cache is not None:
-        cached = cfg.cache.get(cache_key)
-        if cached is not None:
-            return bool(cached.get("has_access", True))
-
-    url = _build_query_url(doi, cfg)
-    try:
-        resp = cfg.session.get(url, timeout=cfg.timeout_s)
-    except Exception as e:
-        logger.debug("SFX request failed for %s: %s", doi, e)
-        return True
-
-    if resp.status_code != 200:
-        logger.debug("SFX returned HTTP %d for %s", resp.status_code, doi)
-        return True
-
-    target_urls = _fulltext_target_urls(resp.text)
-    if target_urls is None:
-        # Parse failure → unknown → fail-open.
+    urls = _query_target_urls(doi, cfg)
+    if urls is None:
+        # Query failed → unknown → fail-open.
         return True
 
     if required_domains:
-        matching = [u for u in target_urls
-                    if _target_matches_domains(u, required_domains)]
-        has_access = bool(matching)
-        target_count = len(matching)
-    else:
-        has_access = bool(target_urls)
-        target_count = len(target_urls)
-
-    if cfg.cache is not None:
-        cfg.cache.put(cache_key, {
-            "has_access": has_access,
-            "targets": target_count,
-        })
-    return has_access
+        return any(
+            _target_matches_domains(u, required_domains) for u in urls
+        )
+    return bool(urls)
 
 
-def _cache_key(doi: str, required_domains: tuple[str, ...]) -> str:
-    """Cache key combining DOI and the domain filter, so the same DOI
-    can have separate cached answers when queried with different
-    required_domains (one per handler)."""
-    if not required_domains:
-        return doi
-    domains = "|".join(sorted(d.lower() for d in required_domains))
-    return f"{doi}::{domains}"
+# ---------------------------------------------------------------------------
+# Dual query — the two SFX lookups that distinguish the three routing
+# cases (library has no relationship | library has publisher but year
+# out of range | library covers this DOI now). Callers diff `in_range`
+# against `any_range` to classify.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SfxDualResult:
+    """Result of two SFX queries per DOI.
+
+    - `in_range`: target URLs returned by the default (date-filtered)
+      query — publishers whose coverage range actually includes this
+      DOI. These are the routes the library can unlock right now.
+    - `any_range`: target URLs returned with `sfx.ignore_date_threshold=1`
+      — every publisher SFX knows has this journal, regardless of
+      whether coverage reaches this DOI's year. Always a superset of
+      `in_range`.
+    - `query_ok`: False if either SFX call failed. Callers may still
+      see partial data but should lean toward fail-open.
+    """
+
+    in_range: list[str]
+    any_range: list[str]
+    query_ok: bool = True
+
+
+def sfx_lookup_dual(
+    doi: str, cfg: LibraryResolverConfig,
+) -> SfxDualResult:
+    """Run both SFX queries (date-filtered + ignore-date) and return
+    the target URL lists together.
+
+    Each call is cached independently per `(doi, ignore_date_threshold)`
+    — expected to be a cache hit on every run after the first per-DOI
+    pair. On the first run, cost is ~2 × 1s per DOI.
+    """
+    if not cfg.openurl_base:
+        return SfxDualResult(in_range=[], any_range=[], query_ok=False)
+
+    in_range = _query_target_urls(doi, cfg, ignore_date_threshold=False)
+    any_range = _query_target_urls(doi, cfg, ignore_date_threshold=True)
+    query_ok = in_range is not None and any_range is not None
+    return SfxDualResult(
+        in_range=in_range or [],
+        any_range=any_range or [],
+        query_ok=query_ok,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Preferred target selection — when SFX offers several full-text
+# routes, pick the one whose platform we've found most reliable for
+# automated saves.
+# ---------------------------------------------------------------------------
+
+
+def _platform_rank(url: str, priority: tuple[str, ...]) -> int:
+    """Rank for `url`: index into `priority` (lower = better). URLs whose
+    effective host doesn't match any priority entry return len(priority)
+    — they lose the tie-break to any ranked platform but still beat
+    "no target at all"."""
+    host = _effective_host(url)
+    if not host:
+        return len(priority)
+    for i, dom in enumerate(priority):
+        dom = dom.lower()
+        if host == dom or host.endswith("." + dom):
+            return i
+    return len(priority)
+
+
+def first_fulltext_target_preferred(
+    doi: str,
+    cfg: LibraryResolverConfig,
+    *,
+    priority: tuple[str, ...] = SFX_PLATFORM_PRIORITY,
+    in_range_only: bool = True,
+    required_domains: tuple[str, ...] = (),
+) -> str | None:
+    """Return one SFX full-text target URL for `doi`, picking the
+    highest-priority platform.
+
+    - `in_range_only=True` (default): use the date-filtered query —
+      platforms that can actually unlock this DOI. Set False to use
+      the ignore-date query (informs the Case-2 skip decision, rarely
+      the right choice for handing a URL to a downloader).
+    - `required_domains`: when non-empty, restrict candidates to
+      targets whose effective host matches one of these domains.
+      Empty means "any platform".
+
+    Ranking uses `priority` (default `SFX_PLATFORM_PRIORITY`). Ties
+    broken by SFX's response order (stable — first in list wins).
+    Returns None when no target matches.
+    """
+    if not cfg.openurl_base:
+        return None
+
+    urls = _query_target_urls(
+        doi, cfg, ignore_date_threshold=not in_range_only,
+    )
+    if not urls:
+        return None
+
+    if required_domains:
+        urls = [u for u in urls if _target_matches_domains(u, required_domains)]
+        if not urls:
+            return None
+
+    # Stable sort: same rank keeps SFX's response order.
+    return min(urls, key=lambda u: _platform_rank(u, priority))
+
+
+def _cache_key(doi: str, ignore_date_threshold: bool = False) -> str:
+    """Cache key combining DOI and the ignore-date-threshold flag.
+
+    When `ignore_date_threshold=False` (the default date-filtered
+    query) the key is just `doi`, so existing cache entries written
+    by v0.3.x keep the same key and earlier tests' `c.put("10.1/x", …)`
+    calls still collide with the canonical Query-B key — the test
+    shape doesn't change.
+    """
+    if ignore_date_threshold:
+        return f"{doi}::any"
+    return doi
 
 
 # ---------------------------------------------------------------------------

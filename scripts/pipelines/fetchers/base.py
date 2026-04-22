@@ -60,7 +60,20 @@ class AbstractFetcher(Source, ABC):
 
 
 class PdfFetcher(Source, ABC):
-    """A source that can fetch a PDF and write it to `cache_dir`."""
+    """A source that can fetch a PDF and write it to `cache_dir`.
+
+    Subclasses that prefix-filter (Wiley, ScienceDirect, Springer)
+    may declare `direct_access_domains` so the Pass 2 routing layer
+    in the browser pipeline can decide whether to invoke this source
+    for a DOI whose prefix doesn't match but whose Crossref-resolved
+    URL lives on one of this publisher's hosts. In that case the
+    driver passes `bypass_prefix_filter=True`.
+    """
+
+    # Hostnames (suffix-match) that identify PDFs this source can
+    # retrieve. Empty tuple = the source handles any DOI (no
+    # prefix filtering) and is excluded from Pass 2 API retry.
+    direct_access_domains: tuple[str, ...] = ()
 
     @abstractmethod
     def fetch_pdf(
@@ -68,10 +81,17 @@ class PdfFetcher(Source, ABC):
         doi: str,
         *,
         cache_dir: str | Path,
+        bypass_prefix_filter: bool = False,
     ) -> tuple[Path, str] | None:
         """Return (pdf_path_on_disk, source_url) or None.
 
         The path must be inside `cache_dir`. Returning a path (not
         bytes) lets the orchestrator hand the file straight to
         `ZoteroClient.attach_pdf`, which pyzotero expects as a path.
+
+        `bypass_prefix_filter=True` tells sources that prefix-filter
+        (Wiley, Elsevier, Springer) to attempt the download even when
+        the DOI's prefix doesn't match their own list — used by Pass 2
+        when Crossref resolution reveals a migrated journal. Sources
+        that don't prefix-filter ignore the flag.
         """

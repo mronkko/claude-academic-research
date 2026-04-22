@@ -30,9 +30,13 @@ def _cache_pdf_path(cache_dir: str | Path, doi: str) -> Path:
 
 class SpringerSource(PdfFetcher):
     name = "springer"
+    direct_access_domains = ("link.springer.com", "springer.com")
 
-    def fetch_pdf(self, doi: str, *, cache_dir) -> tuple[Path, str] | None:
-        if not any(doi.startswith(p) for p in _SPRINGER_PREFIXES):
+    def fetch_pdf(
+        self, doi: str, *, cache_dir, bypass_prefix_filter: bool = False,
+    ) -> tuple[Path, str] | None:
+        if (not bypass_prefix_filter
+                and not any(doi.startswith(p) for p in _SPRINGER_PREFIXES)):
             return None
         path = _cache_pdf_path(cache_dir, doi)
         if path.exists():

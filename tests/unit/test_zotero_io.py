@@ -332,3 +332,212 @@ def test_read_client_uses_cloud_when_prefer_local_false() -> None:
         api_key="k", group_id="1", prefer_local=False,
     )
     assert zc._read_client() is zc.cloud
+
+
+# ---------------------------------------------------------------------------
+# merge_duplicate_item — the Connector dedup path. Ported from
+# zotero-mcp's merge_duplicates; tests assert the parts that matter
+# for v0.4.0 routing (no permanent delete; attachment sig dedup;
+# DOI mismatch guard).
+# ---------------------------------------------------------------------------
+
+
+class _PatchResponse:
+    def __init__(self, status_code: int = 204) -> None:
+        self.status_code = status_code
+
+
+def _mock_cloud() -> MagicMock:
+    """Fake cloud pyzotero client with minimal surface for merge."""
+    m = MagicMock()
+    m.endpoint = "https://api.zotero.org"
+    m.library_type = "groups"
+    m.library_id = "12345"
+    patch_mock = MagicMock()
+    patch_mock.patch.return_value = _PatchResponse(status_code=204)
+    m.client = patch_mock
+    return m
+
+
+def _fake_item(key: str, *, doi: str = "", tags=None, collections=None,
+               version: int = 1, extra: dict | None = None) -> dict:
+    data: dict = {
+        "DOI": doi,
+        "tags": [{"tag": t} for t in (tags or [])],
+        "collections": list(collections or []),
+    }
+    if extra:
+        data.update(extra)
+    return {"key": key, "version": version, "data": data}
+
+
+def _fake_attachment(key: str, *, parent: str,
+                     filename: str = "", md5: str = "",
+                     content_type: str = "application/pdf",
+                     url: str = "") -> dict:
+    return {
+        "key": key,
+        "version": 1,
+        "data": {
+            "itemType": "attachment",
+            "parentItem": parent,
+            "contentType": content_type,
+            "filename": filename,
+            "md5": md5,
+            "url": url,
+        },
+    }
+
+
+def test_merge_duplicate_item_refuses_mismatched_dois(monkeypatch) -> None:
+    """Safety guard: two non-empty DOIs that don't match → ValueError.
+    Prevents merging two genuinely different papers by accident."""
+    zc = _client()
+    monkeypatch.setattr(type(zc), "cloud", _mock_cloud(),
+                        raising=False)
+    zc.cloud.item.side_effect = [
+        _fake_item("KEEPER", doi="10.1/x"),
+        _fake_item("DUPE",   doi="10.1/y"),    # different!
+    ]
+
+    with pytest.raises(ValueError, match="Refusing to merge"):
+        zc.merge_duplicate_item("KEEPER", "DUPE")
+
+
+def test_merge_duplicate_item_allows_when_one_doi_missing(monkeypatch) -> None:
+    """Connector-created duplicates often arrive without a DOI in
+    their data field; an empty DOI on one side is not a mismatch."""
+    zc = _client()
+    cloud = _mock_cloud()
+    cloud.item.side_effect = [
+        _fake_item("KEEPER", doi="10.1/x"),
+        _fake_item("DUPE",   doi=""),
+        # after mutation, merge re-fetches the duplicate for the trash
+        # PATCH — return the same keyed shape.
+        _fake_item("DUPE",   doi=""),
+    ]
+    cloud.children.side_effect = [[], []]      # no children either side
+    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+
+    stats = zc.merge_duplicate_item("KEEPER", "DUPE")
+    assert stats["trashed"] == ["DUPE"]
+
+
+def test_merge_duplicate_item_moves_children_and_unions_tags(monkeypatch) -> None:
+    zc = _client()
+    cloud = _mock_cloud()
+    dup_pdf = _fake_attachment(
+        "PDF-NEW", parent="DUPE",
+        filename="fresh.pdf", md5="aaaa",
+    )
+    cloud.item.side_effect = [
+        _fake_item("KEEPER", doi="10.1/x",
+                   tags=["framing"], collections=["C1"]),
+        _fake_item("DUPE", doi="10.1/x",
+                   tags=["framing", "institutional"],
+                   collections=["C1", "C2"]),
+        # re-fetch after tag update
+        _fake_item("KEEPER", doi="10.1/x",
+                   tags=["framing", "institutional"],
+                   collections=["C1"], version=2),
+        # re-fetch after addto_collection
+        _fake_item("KEEPER", doi="10.1/x",
+                   tags=["framing", "institutional"],
+                   collections=["C1", "C2"], version=3),
+        # fresh lookup of the child before re-parent
+        dup_pdf,
+        # latest duplicate before the trash PATCH
+        _fake_item("DUPE", doi="10.1/x",
+                   tags=["framing", "institutional"],
+                   collections=["C1", "C2"]),
+    ]
+    cloud.children.side_effect = [[], [dup_pdf]]
+    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+
+    stats = zc.merge_duplicate_item("KEEPER", "DUPE")
+
+    assert stats["moved"] == 1
+    assert stats["tags_added"] == 1       # "institutional" was new
+    assert stats["collections_added"] == 1
+    assert stats["trashed"] == ["DUPE"]
+    # Child was re-parented to the keeper.
+    assert dup_pdf["data"]["parentItem"] == "KEEPER"
+    cloud.addto_collection.assert_called_once()
+
+
+def test_merge_duplicate_item_skips_duplicate_attachments(monkeypatch) -> None:
+    """A duplicate attachment with the same (contentType, filename,
+    md5, url) signature is NOT re-parented — prevents twin PDFs."""
+    zc = _client()
+    cloud = _mock_cloud()
+    keeper_pdf = _fake_attachment(
+        "PDF-KEEPER", parent="KEEPER",
+        filename="paper.pdf", md5="deadbeef",
+    )
+    dup_pdf = _fake_attachment(
+        "PDF-DUPE", parent="DUPE",
+        filename="paper.pdf", md5="deadbeef",
+    )
+    cloud.item.side_effect = [
+        _fake_item("KEEPER", doi="10.1/x"),
+        _fake_item("DUPE",   doi="10.1/x"),
+        dup_pdf,                         # fresh child before re-parent
+        _fake_item("DUPE",   doi="10.1/x"),   # latest before trash
+    ]
+    cloud.children.side_effect = [[keeper_pdf], [dup_pdf]]
+    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+
+    stats = zc.merge_duplicate_item("KEEPER", "DUPE")
+
+    assert stats["moved"] == 0
+    assert stats["skipped_dupe_attachments"] == 1
+
+
+def test_merge_duplicate_item_trashes_via_patch_not_delete(monkeypatch) -> None:
+    """Confirms the duplicate parent is TRASHED (PATCH {"deleted": 1}),
+    not permanently deleted. Matters: Zotero's Trash lets the user
+    recover, pyzotero's delete_item() does not."""
+    zc = _client()
+    cloud = _mock_cloud()
+    cloud.item.side_effect = [
+        _fake_item("KEEPER", doi="10.1/x"),
+        _fake_item("DUPE",   doi="10.1/x"),
+        _fake_item("DUPE",   doi="10.1/x"),     # latest before trash
+    ]
+    cloud.children.side_effect = [[], []]
+    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+
+    zc.merge_duplicate_item("KEEPER", "DUPE")
+
+    # pyzotero.delete_item MUST NOT be used.
+    assert not cloud.delete_item.called
+    # The PATCH call body must include {"deleted": 1}.
+    cloud.client.patch.assert_called_once()
+    _args, kwargs = cloud.client.patch.call_args
+    import json as _json
+    body = _json.loads(kwargs["content"])
+    assert body == {"deleted": 1}
+    assert kwargs["headers"]["If-Unmodified-Since-Version"] == "1"
+
+
+def test_merge_duplicate_item_reports_trash_failure(monkeypatch, caplog) -> None:
+    """A non-204 PATCH response produces an empty `trashed` list — the
+    caller can detect the failure without a raised exception (the
+    merge itself succeeded, only the cleanup step didn't)."""
+    zc = _client()
+    cloud = _mock_cloud()
+    cloud.client.patch.return_value = _PatchResponse(status_code=412)
+    cloud.item.side_effect = [
+        _fake_item("KEEPER", doi="10.1/x"),
+        _fake_item("DUPE",   doi="10.1/x"),
+        _fake_item("DUPE",   doi="10.1/x"),
+    ]
+    cloud.children.side_effect = [[], []]
+    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+
+    caplog.set_level("WARNING")
+    stats = zc.merge_duplicate_item("KEEPER", "DUPE")
+
+    assert stats["trashed"] == []
+    assert any("trash PATCH returned HTTP 412" in r.message
+               for r in caplog.records)

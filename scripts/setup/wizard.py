@@ -537,6 +537,159 @@ def _prompt_key(spec: KeySpec, existing: str | None, interactive: bool,
     return value, extras
 
 
+# ---------------------------------------------------------------------------
+# Zotero Connector detection (v0.4.0).
+#
+# The Connector fallback handler (fetchers/browser/connector.py) needs
+# the unpacked Zotero Connector extension on disk. We probe the
+# per-OS Chrome default-profile location; if nothing is found, the
+# wizard prints an install hint and leaves `[zotero_connector]` unset.
+# The browser-mode pipeline surfaces a matching error on first use.
+# ---------------------------------------------------------------------------
+
+_CONNECTOR_EXT_ID = "ekhagklcjbdpajgpjgmbionohlpdbjgc"
+
+
+def _connector_probe_paths() -> list[Path]:
+    home = Path.home()
+    paths = [
+        home / "Library" / "Application Support" / "Google" / "Chrome"
+        / "Default" / "Extensions" / _CONNECTOR_EXT_ID,
+        home / ".config" / "google-chrome" / "Default"
+        / "Extensions" / _CONNECTOR_EXT_ID,
+    ]
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        paths.append(
+            Path(local_appdata) / "Google" / "Chrome" / "User Data"
+            / "Default" / "Extensions" / _CONNECTOR_EXT_ID,
+        )
+    return paths
+
+
+def _resolve_connector_path(base: Path) -> Path | None:
+    """Highest-versioned subdir under the extension base (or the base
+    itself when it already contains `manifest.json`)."""
+    if not base.exists():
+        return None
+    if (base / "manifest.json").exists():
+        return base
+    try:
+        subs = [d for d in base.iterdir() if d.is_dir()]
+    except OSError:
+        return None
+    if not subs:
+        return None
+    subs.sort(key=lambda p: p.name)
+    return subs[-1]
+
+
+def _detect_and_prompt_connector(
+    interactive: bool,
+    existing: dict,
+) -> dict[str, object]:
+    """Return `{extension_dir: "..."}` to merge into values, or `{}`.
+
+    Picks up an existing `[zotero_connector] extension_dir` from the
+    config and offers it first. When detecting freshly, probes the
+    platform defaults and asks the user to confirm.
+    """
+    existing_dir = (existing.get("zotero_connector", {}) or {}).get(
+        "extension_dir", ""
+    )
+    if existing_dir and (Path(existing_dir) / "manifest.json").exists():
+        return {"extension_dir": existing_dir}
+
+    detected = None
+    for base in _connector_probe_paths():
+        detected = _resolve_connector_path(base)
+        if detected is not None:
+            break
+
+    if detected is None:
+        if interactive:
+            print("\n  Zotero Connector (optional fallback for library-only PDFs):")
+            print(
+                "  The Zotero Connector Chrome extension was not detected.\n"
+                "  Install it from:\n"
+                "    https://www.zotero.org/download/connectors/\n"
+                "  (use Google Chrome, not Chrome for Testing). Re-run this\n"
+                "  wizard afterwards so the plugin can locate the extension.",
+            )
+        return {}
+
+    if not interactive:
+        return {"extension_dir": str(detected)}
+
+    print("\n  Zotero Connector (for library-routed PDFs via EBSCO/JSTOR/…):")
+    print(f"    Detected extension at: {detected}")
+    answer = input("    Use this? [Y/n] ").strip().lower()
+    if answer in ("", "y", "yes"):
+        return {"extension_dir": str(detected)}
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# [library] no_access editor (v0.4.0).
+#
+# The runtime failure prompt appends publisher names to this list.
+# The wizard is the undo path: it shows the current list and lets
+# the user delete entries. The wizard does NOT ask "can you access X
+# directly?" because the user can't reliably answer — access is
+# usually library-mediated, not a personal subscription.
+# ---------------------------------------------------------------------------
+
+
+def _offer_no_access_editor(
+    interactive: bool,
+    existing: dict,
+) -> list[str]:
+    """Return the updated `[library] no_access` list.
+
+    Only mutates on explicit user request. Unchanged when the user
+    just presses Enter, or on non-interactive runs.
+    """
+    current_raw = (existing.get("library", {}) or {}).get("no_access", [])
+    if isinstance(current_raw, list):
+        current = [str(s).strip() for s in current_raw if s]
+    elif isinstance(current_raw, str):
+        current = [s.strip() for s in current_raw.split(",") if s.strip()]
+    else:
+        current = []
+
+    if not interactive:
+        return current
+
+    print("\n  Publishers currently set to skip direct-access attempts:")
+    if not current:
+        print("    (none — direct handlers are tried for every publisher.")
+        print("     If one consistently fails during a run, the pipeline")
+        print("     will prompt you to opt out.)")
+        return current
+
+    for i, name in enumerate(current, 1):
+        print(f"    {i}. {name}")
+    print(
+        "  Remove any from this list? Enter numbers separated by spaces,\n"
+        "  or press Enter to keep all.",
+    )
+    raw = input("    > ").strip()
+    if not raw:
+        return current
+
+    try:
+        indices = {int(tok) for tok in raw.split() if tok}
+    except ValueError:
+        print("    (could not parse — leaving the list unchanged.)")
+        return current
+
+    keep = [name for i, name in enumerate(current, 1) if i not in indices]
+    removed = [name for i, name in enumerate(current, 1) if i in indices]
+    if removed:
+        print(f"    Removed: {', '.join(removed)}")
+    return keep
+
+
 def _load_existing_config() -> dict[str, dict[str, str]]:
     if not CONFIG_PATH.exists():
         return {}
@@ -549,9 +702,11 @@ def _load_existing_config() -> dict[str, dict[str, str]]:
         return {}
 
 
-def _collect_keys(interactive: bool, verify: bool) -> dict[str, dict[str, str]]:
+def _collect_keys(
+    interactive: bool, verify: bool,
+) -> dict[str, dict[str, object]]:
     existing = _load_existing_config()
-    values: dict[str, dict[str, str]] = {}
+    values: dict[str, dict[str, object]] = {}
 
     missing_required: list[str] = []
     for spec in KEYS:
@@ -580,7 +735,21 @@ def _collect_keys(interactive: bool, verify: bool) -> dict[str, dict[str, str]]:
 # ---------------------------------------------------------------------------
 
 
-def _write_config(values: dict[str, dict[str, str]]) -> None:
+def _escape_toml(s: str) -> str:
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _render_toml_value(val: object) -> str:
+    """Render one TOML value. Strings and lists-of-strings only — the
+    two shapes the plugin writes. Added for v0.4.0's
+    `[library] no_access` list support."""
+    if isinstance(val, list):
+        inner = ", ".join(f'"{_escape_toml(str(v))}"' for v in val)
+        return f"[{inner}]"
+    return f'"{_escape_toml(str(val))}"'
+
+
+def _write_config(values: dict[str, dict]) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     os.chmod(CONFIG_DIR, 0o700)
 
@@ -592,8 +761,7 @@ def _write_config(values: dict[str, dict[str, str]]) -> None:
     for section, items in values.items():
         lines.append(f"[{section}]")
         for key, val in items.items():
-            escaped = val.replace("\\", "\\\\").replace('"', '\\"')
-            lines.append(f'{key} = "{escaped}"')
+            lines.append(f"{key} = {_render_toml_value(val)}")
         lines.append("")
 
     CONFIG_PATH.write_text("\n".join(lines), encoding="utf-8")
@@ -991,6 +1159,18 @@ def main() -> int:
             print()
 
     values = _collect_keys(interactive, verify)
+
+    # Preserve (or extend) non-key sections across re-runs.
+    existing_cfg = _load_existing_config()
+
+    connector_entry = _detect_and_prompt_connector(interactive, existing_cfg)
+    if connector_entry:
+        values["zotero_connector"] = connector_entry
+
+    updated_no_access = _offer_no_access_editor(interactive, existing_cfg)
+    if updated_no_access:
+        values.setdefault("library", {})["no_access"] = updated_no_access
+
     _write_config(values)
     allow_added, deny_added = _patch_settings()
 

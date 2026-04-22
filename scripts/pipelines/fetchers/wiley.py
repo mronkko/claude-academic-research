@@ -19,6 +19,7 @@ _WILEY_PREFIXES = ("10.1002/", "10.1111/", "10.1046/")
 
 class WileySource(PdfFetcher):
     name = "wiley"
+    direct_access_domains = ("onlinelibrary.wiley.com", "wiley.com")
 
     def _token(self) -> str:
         return (
@@ -26,8 +27,11 @@ class WileySource(PdfFetcher):
             or os.environ.get("WILEY_TDM_TOKEN", "")
         )
 
-    def fetch_pdf(self, doi: str, *, cache_dir) -> tuple[Path, str] | None:
-        if not any(doi.startswith(p) for p in _WILEY_PREFIXES):
+    def fetch_pdf(
+        self, doi: str, *, cache_dir, bypass_prefix_filter: bool = False,
+    ) -> tuple[Path, str] | None:
+        if (not bypass_prefix_filter
+                and not any(doi.startswith(p) for p in _WILEY_PREFIXES)):
             return None
         token = self._token()
         if not token:

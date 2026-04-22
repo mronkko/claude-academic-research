@@ -134,22 +134,45 @@ def _write_chromium_prefs(user_data_dir: Path) -> None:
     prefs_file.write_text(json.dumps(prefs))
 
 
-async def launch_context(playwright, cache_dir: str | Path) -> BrowserContext:
+async def launch_context(
+    playwright,
+    cache_dir: str | Path,
+    *,
+    extensions: list[str | Path] | None = None,
+) -> BrowserContext:
     """Persistent Chromium context with the PDF-download pref set.
 
     The profile lives in `<cache_dir>/.chrome-profile` so Cloudflare
     cookies and institutional SSO state survive between publisher runs
     in the same session.
+
+    When `extensions` is given, each path is passed to Chromium via
+    `--load-extension` (and `--disable-extensions-except`) so that only
+    those extensions are active. Used by the Zotero Connector handler
+    to load the user's Connector extension while still running
+    headfully so they can solve Cloudflare challenges.
     """
     user_data_dir = Path(cache_dir) / ".chrome-profile"
+    if extensions:
+        # Isolate the Connector profile from the publisher-direct
+        # profile — extensions loaded here would otherwise show up in
+        # every subsequent browser run.
+        user_data_dir = Path(cache_dir) / ".chrome-profile-connector"
     user_data_dir.mkdir(parents=True, exist_ok=True)
     _write_chromium_prefs(user_data_dir)
+    args = ["--disable-blink-features=AutomationControlled"]
+    if extensions:
+        paths = ",".join(str(p) for p in extensions)
+        args.extend([
+            f"--disable-extensions-except={paths}",
+            f"--load-extension={paths}",
+        ])
     return await playwright.chromium.launch_persistent_context(
         user_data_dir=str(user_data_dir),
         headless=False,
         accept_downloads=True,
         viewport={"width": 1200, "height": 900},
-        args=["--disable-blink-features=AutomationControlled"],
+        args=args,
     )
 
 
@@ -229,6 +252,13 @@ class PublisherHandler(ABC):
     direct_access_domains: tuple[str, ...] = ()
     concurrency: int = 1
     delay_s: float = 1.0
+    # When True, the handler does not produce a local PDF file — it
+    # attaches directly to Zotero via its own code path (the Zotero
+    # Connector translator). The driver calls
+    # `handler.download_and_attach(...)` instead of the standard
+    # `download()` + `zot.attach_pdf()` pipeline. All existing handlers
+    # leave this False (they return a local path).
+    attaches_directly: bool = False
 
     # Intermediate base classes (`RequestHandler`, `PageNavigationHandler`)
     # set this to True so `__init_subclass__` skips the name/prefix
@@ -273,20 +303,28 @@ class PublisherHandler(ABC):
         tmpl = self.setup_url_template or self.url_template
         return tmpl.format(doi=doi) if tmpl else ""
 
-    async def setup(self, page: Page, first_doi: str) -> bool:
+    async def setup(self, page: Page, first_doi: str) -> str:
         """Open the first URL and block until the user signals ready.
 
-        Returns True to proceed with downloads for this publisher, or
-        False to skip all items (all items logged as `skipped_no_access`
-        by the driver). The y/n prompt at the end of the banner exists
-        so the user — who is the only reliable authority on whether the
-        PDF is actually reachable from their session — can bail out
-        early instead of waiting for N × 30s of download timeouts.
+        Returns one of:
+          - ``"proceed"`` — run downloads for this publisher.
+          - ``"skip"`` — skip every item this run (no config change).
+          - ``"always_skip"`` — skip every item this run AND persist
+            the publisher to `[library] no_access`, so future runs
+            jump straight to the Connector fallback without asking.
 
-        The user may need to solve a Cloudflare challenge, dismiss a
-        cookie banner, or complete institutional SSO.  After this
-        returns True, the session is expected to be authenticated for
-        every subsequent `download()` call.
+        Legacy bool returns from subclasses are accepted:
+        ``True`` → "proceed", ``False`` → "skip".
+
+        The prompt at the end of the banner exists so the user — the
+        only reliable authority on whether the PDF is actually
+        reachable from their session — can bail out early instead of
+        waiting for N × 30s of download timeouts. The "Always skip"
+        answer is for the case where the landing page makes it
+        obvious there's no access (e.g. INFORMS's "Purchase $30"
+        page with no Download PDF button) — the user knows now and
+        shouldn't need to sit through a failed download to persist
+        it.
         """
         url = self._setup_url_for(first_doi)
         if url:
@@ -301,12 +339,20 @@ class PublisherHandler(ABC):
 
         answer = await asyncio.to_thread(
             _read_user_line,
-            "\n>>> Can you see/reach the PDF from this page? "
-            "[Y]es = proceed, [n]o = skip this publisher: ",
+            "\n>>> Can you see/reach the PDF from this page?\n"
+            "    [Y]es        — proceed with downloads\n"
+            "    [n]o         — skip this publisher this run\n"
+            "    [A]lways-skip — skip AND persist to config.toml so "
+            "future runs\n"
+            "                   jump straight to the Connector fallback\n"
+            "> ",
         )
-        if answer.lower() in ("n", "no", "s", "skip"):
-            return False
-        return True
+        a = answer.strip()
+        if a == "A" or a.lower() in ("always", "always_skip", "always-skip"):
+            return "always_skip"
+        if a.lower() in ("n", "no", "s", "skip"):
+            return "skip"
+        return "proceed"
 
     def _print_setup_banner(self) -> None:
         display = self.display_name or self.name
@@ -355,6 +401,18 @@ class PublisherHandler(ABC):
         Returns (path, source_url) on success, None on failure. The
         driver handles retries/uploads/logging around this call.
         """
+
+
+def normalise_setup_result(result: bool | str) -> str:
+    """Back-compat shim for handlers whose setup() returns bool.
+
+    True  → "proceed"
+    False → "skip"
+    str   → passed through (must be one of the three documented values).
+    """
+    if isinstance(result, bool):
+        return "proceed" if result else "skip"
+    return result
 
 
 # ---------------------------------------------------------------------------

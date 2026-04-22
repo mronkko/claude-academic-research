@@ -53,7 +53,10 @@ def _solve_pow(challenge: str, difficulty: int) -> int:
 class PmcSource(PdfFetcher):
     name = "pubmed_central"
 
-    def fetch_pdf(self, doi: str, *, cache_dir) -> tuple[Path, str] | None:
+    def fetch_pdf(
+        self, doi: str, *, cache_dir, bypass_prefix_filter: bool = False,
+    ) -> tuple[Path, str] | None:
+        del bypass_prefix_filter          # not prefix-filtered
         path = _cache_pdf_path(cache_dir, doi)
         if path.exists():
             return path, f"cache://{path}"

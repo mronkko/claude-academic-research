@@ -39,6 +39,7 @@ class ScienceDirectSource(AbstractFetcher, PdfFetcher):
     PDF via https://api.elsevier.com/content/article/doi/{doi}."""
 
     name = "sciencedirect"
+    direct_access_domains = ("sciencedirect.com", "elsevier.com")
 
     def _api_key(self) -> str:
         return (
@@ -79,8 +80,11 @@ class ScienceDirectSource(AbstractFetcher, PdfFetcher):
                     return text
         return None
 
-    def fetch_pdf(self, doi: str, *, cache_dir) -> tuple[Path, str] | None:
-        if not any(doi.startswith(p) for p in _ELSEVIER_PREFIXES):
+    def fetch_pdf(
+        self, doi: str, *, cache_dir, bypass_prefix_filter: bool = False,
+    ) -> tuple[Path, str] | None:
+        if (not bypass_prefix_filter
+                and not any(doi.startswith(p) for p in _ELSEVIER_PREFIXES)):
             return None
         key = self._api_key()
         if not key:
