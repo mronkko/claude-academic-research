@@ -50,12 +50,13 @@ from core.config_loader import require  # noqa: E402
 
 try:
     import anthropic
-    from pyzotero import zotero
 except ImportError:
     sys.exit(
         "ERROR: dependencies not available. Run via `uv run`; the PEP 723 "
         "block at the top declares anthropic + pyzotero."
     )
+
+import zotero_io  # noqa: E402
 
 
 LOG_FIELDS = [
@@ -158,10 +159,8 @@ def main() -> int:
 
     print(f"Fetching items from Zotero (group={args.group}, "
           f"collection={args.collection})...", flush=True)
-    local = zotero.Zotero(args.group, "group", api_key or "dummy", local=True)
-    coll_items = local.everything(
-        local.collection_items(args.collection, itemType="journalArticle")
-    )
+    zot = zotero_io.ZoteroClient(api_key=api_key or "dummy", group_id=args.group)
+    coll_items = zot.collection_items(args.collection, item_type="journalArticle")
     print(f"  {len(coll_items)} items in collection", flush=True)
 
     already = _load_already_screened(output_path)

@@ -61,6 +61,19 @@ KNOWN_DOIS: dict[str, str] = {
     "sciencedirect_abstract": "10.1016/j.jbusvent.2006.10.003",
     "openalex_grobid": "10.1016/j.jbusvent.2006.10.003",
 
+    # Web of Science abstract endpoints.
+    # - wos_abstract: DOI that WoS indexes AND for which the publisher
+    #   deposited the abstract content (AMD 2015 Priming Affect — verified
+    #   2,124-char abstract in WoS).
+    # - wos_title_fallback_doi + _title: DOI where WoS indexes the paper
+    #   under a *different* DOI alias. AoM Annals pre-2014 was published
+    #   by Routledge/T&F (10.1080/...); the AoM re-issued DOI (10.5465/...)
+    #   is what most libraries carry but WoS kept the original prefix.
+    #   WosSource must recover this via the title-search fallback.
+    "wos_abstract": "10.5465/amd.2015.0052",
+    "wos_title_fallback_doi": "10.5465/19416520.2014.875669",
+    "wos_title_fallback_title": "Putting Framing in Perspective: A Review of Framing and Frame Analysis",
+
     # Browser-based publishers (CF-gated; require institutional access)
     "sage":     "10.1177/1042258717725967",           # ETP 2018
     "emerald":  "10.1108/IJEBR-08-2019-0513",         # IJEBR 2020

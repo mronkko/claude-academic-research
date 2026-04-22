@@ -1,6 +1,6 @@
 [project]
 name = "claude-academic-research"
-version = "0.1.0"
+version = "0.3.0"
 description = "Dev/test tooling for the claude-academic-research Claude Code plugin. Runtime scripts use uv + PEP 723 inline deps and do not depend on this pyproject."
 requires-python = ">=3.11"
 license = { text = "MIT" }

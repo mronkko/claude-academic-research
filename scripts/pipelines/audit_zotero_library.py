@@ -89,7 +89,7 @@ def _classify(items: list[dict], attachments_by_parent: dict[str, list[dict]]) -
 
 def main() -> int:
     try:
-        from pyzotero.zotero import Zotero
+        import zotero_io
     except ImportError:
         sys.exit(
             "ERROR: pyzotero not installed. Run via `uv run` — the PEP 723 "
@@ -128,14 +128,19 @@ def main() -> int:
     use_local = not args.remote
     print(f"Connecting to Zotero ({'local' if use_local else 'remote'}, "
           f"{library_type}={library_id})...", flush=True)
-    zot = Zotero(library_id, library_type, api_key, local=use_local)
+    zot = zotero_io.ZoteroClient(
+        api_key=api_key,
+        group_id=library_id,
+        library_type=library_type,
+        prefer_local=use_local,
+    )
 
     print("Fetching top-level items...", end=" ", flush=True)
-    items = zot.everything(zot.top())
+    items = zot.top_items()
     print(f"{len(items)} fetched.", flush=True)
 
     print("Fetching attachments...", end=" ", flush=True)
-    attachments = zot.everything(zot.items(itemType="attachment"))
+    attachments = zot.all_attachments()
     print(f"{len(attachments)} fetched.", flush=True)
 
     by_parent: dict[str, list[dict]] = {}

@@ -142,6 +142,88 @@ def test_sciencedirect_abstract() -> None:
     )
 
 
+def test_wos_abstract_direct_doi() -> None:
+    """WoS Expanded returns an abstract for a DOI it indexes directly.
+
+    Exercises the primary path of `WosSource.fetch_abstract`: query by
+    DOI, read `abstracts.abstract.abstract_text.p` from the returned
+    record.
+    """
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "pipelines"))
+
+    key = require_config("wos", "expanded_key", env="WOS_API_KEY_EXTENDED")
+    doi = KNOWN_DOIS["wos_abstract"]
+
+    import http_client
+    from fetchers.wos import WosSource
+
+    class _C:
+        wos_api_key_extended = key
+        wos_api_key = ""
+
+    session = http_client.build_session(mailto="live-tests@example.com")
+    src = WosSource(http=session, config=_C())
+    abstract = src.fetch_abstract(doi)
+    if abstract is None:
+        pytest.skip(
+            f"WoS returned no abstract for DOI {doi}. Possibly the WoS "
+            f"index dropped this paper — update KNOWN_DOIS['wos_abstract']."
+        )
+    assert len(abstract) > 60, (
+        f"WoS abstract for {doi} is suspiciously short ({len(abstract)} chars)"
+    )
+
+
+def test_wos_title_fallback_on_doi_alias() -> None:
+    """WoS indexes the paper under a different DOI prefix than the one
+    in the Zotero library.
+
+    AoM Annals pre-2014 was published by Routledge/T&F (10.1080/...);
+    AoM re-issued with its own prefix (10.5465/...) after the publisher
+    transfer. Libraries carry the 10.5465/... DOI; WoS kept the original.
+    DOI lookup misses — the title-search fallback must recover it.
+
+    Regression guard for the title-fallback path added in WosSource.
+    """
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "pipelines"))
+
+    key = require_config("wos", "expanded_key", env="WOS_API_KEY_EXTENDED")
+    doi = KNOWN_DOIS["wos_title_fallback_doi"]
+    title = KNOWN_DOIS["wos_title_fallback_title"]
+
+    import http_client
+    from fetchers.wos import WosSource
+
+    class _C:
+        wos_api_key_extended = key
+        wos_api_key = ""
+
+    session = http_client.build_session(mailto="live-tests@example.com")
+    src = WosSource(http=session, config=_C())
+
+    # Sanity: DOI-only lookup must miss, proving the test is really
+    # exercising the fallback. If WoS later indexes this DOI directly,
+    # update KNOWN_DOIS['wos_title_fallback_doi'].
+    doi_only = src.fetch_abstract(doi)
+    assert doi_only is None, (
+        f"DOI {doi} unexpectedly hit WoS directly. WoS may have re-indexed; "
+        f"pick a different alias-only DOI for the fallback regression test."
+    )
+
+    abstract = src.fetch_abstract(doi, title=title)
+    assert abstract is not None, (
+        f"WoS title fallback failed for title={title!r}. Title normaliser "
+        f"may have regressed, or the paper is no longer in WoS."
+    )
+    assert len(abstract) > 60, (
+        f"WoS title-fallback abstract is too short ({len(abstract)} chars)"
+    )
+
+
 def test_openalex_grobid_abstract() -> None:
     """OpenAlex GROBID TEI XML has an <abstract> element for many works."""
     doi = KNOWN_DOIS["openalex_grobid"]

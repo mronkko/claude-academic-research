@@ -5,6 +5,137 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-04-22
+
+### Pipeline refactor: pyzotero-backed Zotero I/O, per-provider fetcher classes, library-aware browser flow
+
+Multi-week refactor of the `scripts/pipelines/` tree. The
+pre-refactor structure mixed Zotero upload logic, custom HTTP
+retry, and per-publisher download flows inside four monolithic
+scripts (`attach_pdfs.py`, `fetch_abstracts.py`, `fetch_pdfs_wiley_tdm.py`,
+`fetch_pdfs_browser.py`). This release replaces that with:
+
+**New modules.**
+
+- `scripts/pipelines/zotero_io.py` — `ZoteroClient` wrapping
+  `pyzotero`. Every script that touches Zotero now routes through it.
+  Deletes ~110 lines of custom 3-step S3 upload + manual
+  `If-Unmodified-Since-Version` PATCH code; `pyzotero.attachment_simple()`
+  and `pyzotero.update_item()` already did this. `@retry` on
+  `update_abstract()` re-fetches the item's latest version on HTTP 412
+  and re-applies — covers the previously-unhandled version-conflict case.
+- `scripts/pipelines/http_client.py` — shared `requests.Session` with
+  `urllib3.Retry` (429 / 5xx, exponential backoff) and `tenacity`
+  wrappers on `get_json` / `get_bytes`. Replaces hand-rolled `urllib`
+  wrappers and ad-hoc `time.sleep(30) + recursion` retries.
+- `scripts/pipelines/fetchers/` — one class per provider implementing
+  the `AbstractFetcher` / `PdfFetcher` ABC pair. A provider that
+  serves both capabilities (Crossref, OpenAlex, ScienceDirect)
+  inherits both. Nine abstract-fetchers and eleven PDF-fetchers total,
+  each in its own file with live tests.
+- `scripts/pipelines/fetchers/wos.py` — new abstract fetcher using the
+  WoS Expanded API with a title-search fallback for DOI aliases
+  (e.g. AoM Annals `10.5465/…` that WoS indexes under its original
+  Routledge/T&F `10.1080/…` prefix). Recovers 2 of 7 abstracts that the
+  prior cascade couldn't find on a test library.
+
+**New `fetchers/browser/` sub-package.**
+
+- Nine `PublisherHandler` subclasses (aaa, aom, apa, emerald, informs,
+  oup, sage, tandf, wiley) with two intermediate bases
+  (`RequestHandler` for sessions that `ctx.request.get()` can use;
+  `PageNavigationHandler` for publishers whose Cloudflare rejects
+  non-browser requests). Three custom flows ported from the
+  SLR-motivation project's working code: INFORMS's epdf→pdfdirect
+  rewrite, OUP's JS-extracted PDF href, APA PsycNET's multi-step
+  click-through.
+- `setup_url_template` per handler — landing-page URL opened during
+  the browser-setup phase, distinct from the download URL. Fixes an
+  observed bug where opening a `?download=true` PDF URL triggered
+  Chromium to auto-download to the profile's download dir and stranded
+  the user at `about:blank` before they could solve Cloudflare.
+- SFX / OpenURL pre-flight (`library_resolver.py`). When
+  `[library] openurl_base` is set in `config.toml`, each DOI is
+  checked against the library's link resolver before the browser
+  handler runs. Targets are filtered by the handler's
+  `direct_access_domains` — a JSTOR / EBSCOhost / ProQuest route
+  reported by SFX doesn't count as accessible if our handler only
+  knows the direct-publisher URL. Eliminates ~30s-per-item timeouts
+  on inaccessible DOIs and surfaces the skip in the CSV log.
+- On-disk SFX cache keyed by `(doi, handler-domain-set)` so
+  re-running is instant and two handlers querying the same DOI with
+  different domain filters don't collide.
+
+**New orchestrators.**
+
+- `scripts/pipelines/enrich_abstracts.py` — replaces
+  `fetch_abstracts.py`. Drives the abstract-fetcher cascade
+  (Crossref → Semantic Scholar → Scopus → WoS → ScienceDirect →
+  OpenAlex GROBID) through a `ThreadPoolExecutor`.
+- `scripts/pipelines/enrich_pdfs.py` — replaces `attach_pdfs.py`
+  plus the two `fetch_pdfs_*.py` fallbacks. Automated cascade by
+  default; `--sources wiley` routes to the Wiley TDM handler;
+  `--sources browser` drives the per-publisher browser handlers
+  in-process (no more subprocess shell-out). `--legacy-browser`
+  keeps the old subprocess path available for rollback.
+
+**Setup-wizard improvements.**
+
+- Per-tier MCP-server check with install / homepage hints for each
+  expected server (zotero, openalex, semantic-scholar, scopus,
+  paper-search). Wizard offers to run `claude mcp add` after
+  confirming the binary's available on PATH.
+- Local-Zotero probe against `http://localhost:23119/api/` — prints
+  actionable instructions if Zotero desktop isn't running or the
+  Better BibTeX local HTTP server isn't enabled.
+
+**UX in browser flow.**
+
+- Setup banner now says "Google Chrome for Testing" (the actual window
+  title Playwright produces on macOS); removed the undefined
+  "Playwright" jargon in favour of "a separate automated browser used
+  only by this script".
+- Per-publisher `setup_hint` explaining what institutional access /
+  sign-in is needed (AoM's two-gate login, Wiley's Shibboleth flow,
+  etc.).
+- Yes/no prompt at the end of the setup banner: `y` to proceed, `n`
+  to skip the publisher entirely (all items logged as
+  `skipped_no_access`, no 30s download timeouts).
+- pyzotero's `WheneverDeprecationWarning` silenced at the `zotero_io`
+  import level — library-internal, benign, was burying real output.
+
+**Migrated scripts.** Every Zotero-touching script (`abstract_screen`,
+`audit_zotero_library`, `fulltext_code`, `import_to_zotero`, plus
+the legacy `attach_pdfs`/`fetch_abstracts`/`fetch_pdfs_*`) now uses
+`ZoteroClient`. The legacy top-level scripts remain on disk during
+this release cycle as a rollback path; next release deletes them
+once the new orchestrators have proven themselves on production
+libraries.
+
+**Fixed.**
+
+- `ZoteroClient.attach_pdf`: pyzotero's `attachment_simple()` returns
+  `{"success": [...], "failure": [...], "unchanged": [...]}` where all
+  three are lists of item dicts, not dicts keyed by integer index.
+  The first version of the wrapper matched the wrong shape (tests
+  mocked the wrong shape too), and crashed on real uploads with
+  `'list' object has no attribute 'values'`. Fixed both the wrapper
+  and the tests.
+- DOI-alias handling in WoS title fallback: a 100-char-truncated
+  quoted WoS query silently returned 0 hits (quoted phrase searches
+  require exact match). Switched to unquoted `TI=(…)` keyword-AND
+  search with a Python-side title normaliser for precision.
+- `enrich_pdfs.py --sources browser` opened the PDF URL directly,
+  triggering Chromium to auto-download and strand the user at
+  about:blank. Every handler with `?download=true` in its URL
+  template now has a distinct `setup_url_template` pointing at the
+  article landing page.
+
+**New tests.** 219 unit tests pass (from 72 pre-refactor). Coverage
+added for the Zotero wrapper, HTTP client, fetcher ABCs, each
+provider fetcher, the browser handlers (registry + URL
+regressions), and the SFX resolver (parser, domain filter, cache).
+
 ## [0.2.4] — 2026-04-19
 
 ### test_suite.py template: realign with refactored screening pipeline

@@ -360,7 +360,7 @@ def test_offer_register_mcp_skips_when_already_connected(monkeypatch) -> None:
         mod.EXPECTED_MCP, current, interactive=True,
     )
     assert registered == 0
-    assert called is False
+    assert not called
 
 
 def test_offer_register_mcp_respects_non_interactive(monkeypatch) -> None:
@@ -384,7 +384,7 @@ def test_offer_register_mcp_respects_non_interactive(monkeypatch) -> None:
         mod.EXPECTED_MCP, {}, interactive=False,
     )
     assert registered == 0
-    assert called is False
+    assert not called
     # Map is returned unchanged.
     assert updated == {}
 
@@ -442,3 +442,48 @@ def test_format_register_command_is_copy_pasteable() -> None:
     zotero = next(s for s in mod.EXPECTED_MCP if s.name == "zotero")
     cmd = mod._format_register_command(zotero)
     assert cmd == "claude mcp add -s user zotero -- zotero-mcp"
+
+
+# ---------------------------------------------------------------------------
+# Zotero local API probe
+# ---------------------------------------------------------------------------
+
+
+def test_zotero_local_probe_ok(monkeypatch) -> None:
+    """HTTP 200 from localhost:23119/api/ → ok status."""
+    mod = _load()
+    monkeypatch.setattr(mod, "_http_json", lambda *a, **kw: (200, {}, ""))
+    status, msg = mod._check_zotero_local()
+    assert status == mod.ZOTERO_LOCAL_STATUS_OK
+    assert "localhost:23119" in msg
+
+
+def test_zotero_local_probe_not_running(monkeypatch) -> None:
+    """Connection refused → not_running status."""
+    mod = _load()
+    monkeypatch.setattr(
+        mod, "_http_json",
+        lambda *a, **kw: (0, None, "Connection refused"),
+    )
+    status, msg = mod._check_zotero_local()
+    assert status == mod.ZOTERO_LOCAL_STATUS_NOT_RUNNING
+    assert "refused" in msg.lower()
+
+
+def test_zotero_local_probe_http_error(monkeypatch) -> None:
+    """Non-200 HTTP (e.g. some proxy is serving a page at :23119) → not_running."""
+    mod = _load()
+    monkeypatch.setattr(mod, "_http_json", lambda *a, **kw: (404, None, "404 Not Found"))
+    status, _ = mod._check_zotero_local()
+    assert status == mod.ZOTERO_LOCAL_STATUS_NOT_RUNNING
+
+
+def test_zotero_local_help_mentions_settings_path(capsys) -> None:
+    """The help text must tell the user exactly where to flip the toggle."""
+    mod = _load()
+    mod._print_zotero_local_help()
+    out = capsys.readouterr().out
+    assert "Settings" in out or "Preferences" in out
+    assert "Advanced" in out
+    assert "Allow other applications" in out
+    assert "zotero.org" in out   # link to download Zotero

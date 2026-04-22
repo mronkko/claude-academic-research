@@ -60,12 +60,13 @@ from core.llm import (  # noqa: E402
 
 try:
     import anthropic
-    from pyzotero import zotero
 except ImportError:
     sys.exit(
         "ERROR: dependencies not available. Run via `uv run`; the PEP 723 "
         "block at the top declares anthropic + pyzotero + pdfplumber + pypdf."
     )
+
+import zotero_io  # noqa: E402
 
 
 # Soft cap on full-text chars sent to Sonnet (~180k tokens at 4 chars/token;
@@ -298,11 +299,9 @@ def main() -> int:
 
     print(f"Fetching items from Zotero (group={args.group}, "
           f"collection={args.collection})...", flush=True)
-    local = zotero.Zotero(args.group, "group", api_key or "dummy", local=True)
-    items = local.everything(
-        local.collection_items(args.collection, itemType="journalArticle")
-    )
-    attachments = local.everything(local.items(itemType="attachment"))
+    zot = zotero_io.ZoteroClient(api_key=api_key or "dummy", group_id=args.group)
+    items = zot.collection_items(args.collection, item_type="journalArticle")
+    attachments = zot.all_attachments()
     atts_by_parent: dict[str, list[dict]] = {}
     for a in attachments:
         p = a.get("data", {}).get("parentItem")

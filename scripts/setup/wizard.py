@@ -711,6 +711,56 @@ def _parse_mcp_list(stdout: str) -> dict[str, str]:
     return out
 
 
+ZOTERO_LOCAL_URL = "http://localhost:23119/api/"
+ZOTERO_LOCAL_STATUS_OK = "ok"
+ZOTERO_LOCAL_STATUS_NOT_RUNNING = "not_running"
+ZOTERO_LOCAL_STATUS_SERVER_DISABLED = "server_disabled"
+
+
+def _check_zotero_local(timeout: int = 3) -> tuple[str, str]:
+    """Probe the local Zotero HTTP API at localhost:23119/api/.
+
+    Returns (status, message) where status is one of:
+      - "ok"               : HTTP 200 — Zotero is running, local API on.
+      - "server_disabled"  : Connection refused — Zotero is running but
+                             hasn't opened the local server port.
+      - "not_running"      : Connection refused OR DNS/timeout — most
+                             likely Zotero desktop is not running at all.
+                             Without extra probes we can't always tell
+                             these two apart, so the message covers both.
+
+    The message is a one-line human summary suitable for the final
+    summary block.
+    """
+    status, _, err = _http_json(ZOTERO_LOCAL_URL, timeout=timeout)
+    if status == 200:
+        return ZOTERO_LOCAL_STATUS_OK, "reachable at localhost:23119"
+    # status=0 from _http_json means the connection itself failed
+    # (refused, timeout, DNS). We can't distinguish "Zotero not running"
+    # from "Zotero running but local server off" without a second probe,
+    # so we merge them into a single actionable status.
+    return ZOTERO_LOCAL_STATUS_NOT_RUNNING, err or f"HTTP {status}"
+
+
+def _print_zotero_local_help() -> None:
+    """Print the actionable message when the local Zotero API is unreachable.
+
+    Pipeline scripts that call ZoteroClient with prefer_local=True (the
+    default) need this endpoint. Without it, every read falls back to
+    api.zotero.org — slow and rate-limited for large libraries.
+    """
+    print("  *** WARNING: local Zotero API is not reachable ***")
+    print("  Pipeline scripts default to local reads (fast, no rate limit).")
+    print("  Without it, reads fall back to api.zotero.org — much slower.")
+    print()
+    print("  To fix:")
+    print("  1. Open Zotero desktop (download: https://www.zotero.org/download/).")
+    print("  2. Zotero → Settings → Advanced → General:")
+    print("     tick 'Allow other applications on this computer to communicate")
+    print("     with Zotero'.")
+    print("  3. Leave Zotero running; re-run this wizard to confirm.")
+
+
 def _check_mcp_servers() -> dict[str, str]:
     """Run `claude mcp list` and return {name: status}.
 
@@ -944,6 +994,10 @@ def main() -> int:
     _write_config(values)
     allow_added, deny_added = _patch_settings()
 
+    # Local Zotero API probe. Pipeline scripts default to local reads for
+    # speed; failing here doesn't block setup but surfaces a clear warning.
+    zotero_local_status, zotero_local_message = _check_zotero_local()
+
     current_mcp = _check_mcp_servers()
     if interactive:
         print()
@@ -960,7 +1014,13 @@ def main() -> int:
     print("  Setup complete.")
     print(f"    Config:   {CONFIG_PATH} (mode 0600)")
     print(f"    Settings: {SETTINGS_PATH} (+{allow_added} allow, +{deny_added} deny)")
+    glyph = "✓" if zotero_local_status == ZOTERO_LOCAL_STATUS_OK else "✗"
+    print(f"    Zotero local API: {glyph} {zotero_local_message}")
     zotero_missing, all_search_dbs_missing = _print_mcp_summary(current_mcp)
+
+    if zotero_local_status != ZOTERO_LOCAL_STATUS_OK:
+        print()
+        _print_zotero_local_help()
 
     if zotero_missing:
         print()

@@ -81,10 +81,11 @@ def load_missing_wiley(log_csv: str) -> list[str]:
 
 def get_doi_to_key() -> dict[str, str]:
     """Map {doi_lower: zotero_item_key} via the local Zotero client."""
-    from pyzotero import zotero
-    z = zotero.Zotero(attach_pdfs.ZOTERO_GROUP, "group",
-                      attach_pdfs.ZOTERO_API_KEY, local=True)
-    items = z.everything(z.items(itemType="journalArticle"))
+    import zotero_io
+    zot = zotero_io.ZoteroClient(
+        api_key=attach_pdfs.ZOTERO_API_KEY, group_id=attach_pdfs.ZOTERO_GROUP,
+    )
+    items = zot.journal_articles()
     return {(it["data"].get("DOI") or "").strip().lower(): it["key"]
             for it in items
             if (it["data"].get("DOI") or "").strip()}
@@ -171,18 +172,14 @@ def main():
             print(f"  [{doi}] download path missing — skipping", flush=True)
             upload_failed += 1; continue
         with open(str(pdf_path), "rb") as f:
-            pdf_bytes = f.read()
-        if pdf_bytes[:5] != b"%PDF-":
+            header = f.read(5)
+        if header != b"%PDF-":
             print(f"  [{doi}] not a valid PDF — skipping", flush=True)
             upload_failed += 1; continue
-        filename = doi.replace("/", "_") + ".pdf"
-        att_key = attach_pdfs.create_attachment_item(key, filename)
-        if not att_key:
-            print(f"  [{doi}] create attachment FAILED", flush=True)
-            upload_failed += 1; continue
-        if attach_pdfs.upload_pdf(att_key, pdf_bytes, filename):
+        if attach_pdfs.attach_pdf_from_cache(key, str(pdf_path)):
+            size_kb = os.path.getsize(str(pdf_path)) // 1024
             uploaded += 1
-            print(f"  [{doi}] uploaded ({len(pdf_bytes)//1024}KB)", flush=True)
+            print(f"  [{doi}] uploaded ({size_kb}KB)", flush=True)
             log_rows.append(["wiley_tdm", key, doi, "", "attached"])
         else:
             upload_failed += 1

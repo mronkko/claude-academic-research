@@ -51,12 +51,13 @@ from core.config_loader import require  # noqa: E402
 
 try:
     import requests
-    from pyzotero import zotero
 except ImportError:
     sys.exit(
         "ERROR: dependencies not available. Run via `uv run`; the PEP 723 "
         "block at the top declares pyzotero + requests."
     )
+
+import zotero_io  # noqa: E402
 
 
 BATCH_SIZE = 50  # Zotero write API max
@@ -122,8 +123,8 @@ def _fetch_existing_items(
     if dry_run:
         return {}, {}
     print("Fetching existing library items via local Zotero client...", flush=True)
-    local = zotero.Zotero(group, "group", api_key, local=True)
-    items = local.everything(local.items(itemType="journalArticle"))
+    zot = zotero_io.ZoteroClient(api_key=api_key, group_id=group)
+    items = zot.journal_articles()
 
     doi_map: dict[str, str] = {}
     title_map: dict[str, str] = {}
@@ -148,19 +149,17 @@ def _patch_existing_items(
     api_key: str,
     collection_key: str | None,
 ) -> None:
+    """Patch existing items to add missing abstracts and/or collection
+    membership. Uses ZoteroClient.update_item (pyzotero) — the custom
+    If-Unmodified-Since-Version requests.patch() that used to live here
+    is gone.
+    """
     if not to_add:
         return
     print(f"\nReading {len(to_add)} existing items from local Zotero...", flush=True)
-    local = zotero.Zotero(group, "group", api_key, local=True)
-    all_items = local.everything(local.items(itemType="journalArticle"))
+    zot = zotero_io.ZoteroClient(api_key=api_key, group_id=group)
+    all_items = zot.journal_articles()
     item_by_key = {it["key"]: it for it in all_items}
-
-    base_url = f"https://api.zotero.org/groups/{group}"
-    headers = {
-        "Zotero-API-Key": api_key,
-        "Zotero-API-Version": "3",
-        "Content-Type": "application/json",
-    }
 
     need_patch: list[tuple[str, int, dict]] = []
     abstract_patched = 0
@@ -186,12 +185,7 @@ def _patch_existing_items(
     for i, (item_key, version, patch) in enumerate(need_patch, 1):
         if i % 50 == 0 or i == len(need_patch):
             print(f"  [{i}/{len(need_patch)}] patching...", flush=True)
-        patch_headers = {**headers, "If-Unmodified-Since-Version": str(version)}
-        resp = requests.patch(
-            f"{base_url}/items/{item_key}",
-            headers=patch_headers, json=patch, timeout=30,
-        )
-        resp.raise_for_status()
+        zot.update_item({"key": item_key, "version": version, **patch})
         time.sleep(0.15)
 
 

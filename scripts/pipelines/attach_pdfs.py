@@ -52,12 +52,11 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from http.cookiejar import Cookie
 
-from pyzotero import zotero
+import zotero_io
 
 # ---------------------------------------------------------------------------
 # Configuration (from environment variables)
@@ -68,7 +67,6 @@ ELSEVIER_API_KEY = os.environ.get("ELSEVIER_API_KEY", "")
 OPENALEX_API_KEY = os.environ.get("OPENALEX_API_KEY", "")
 CROSSREF_MAILTO  = os.environ.get("CROSSREF_MAILTO", "")
 
-ZOTERO_BASE    = f"https://api.zotero.org/groups/{ZOTERO_GROUP}"
 ELSEVIER_BASE  = "https://api.elsevier.com/content/article/doi"
 
 # Defaults (overridable via CLI)
@@ -112,141 +110,54 @@ def http_post(url: str, data: bytes, headers: dict = None, timeout: int = 30) ->
 
 
 # ---------------------------------------------------------------------------
-# Zotero clients: local for reads, remote for writes
+# Zotero I/O — delegated to zotero_io.ZoteroClient, which wraps pyzotero.
+# The 3-step S3 upload that used to live here (~86 LOC) is now
+# pyzotero.Zotero.attachment_simple(), called through ZoteroClient.attach_pdf.
 # ---------------------------------------------------------------------------
-def make_local_client() -> zotero.Zotero:
-    return zotero.Zotero(ZOTERO_GROUP, "group", ZOTERO_API_KEY, local=True)
+_zot_client: zotero_io.ZoteroClient | None = None
 
 
-def make_remote_client() -> zotero.Zotero:
-    return zotero.Zotero(ZOTERO_GROUP, "group", ZOTERO_API_KEY)
+def _zot() -> zotero_io.ZoteroClient:
+    global _zot_client
+    if _zot_client is None:
+        _zot_client = zotero_io.ZoteroClient(
+            api_key=ZOTERO_API_KEY, group_id=ZOTERO_GROUP,
+        )
+    return _zot_client
 
 
-def get_all_items(local: zotero.Zotero) -> list[dict]:
-    return local.everything(local.items(itemType="journalArticle"))
+def get_all_items() -> list[dict]:
+    return _zot().journal_articles()
 
 
-def get_pdf_map(local: zotero.Zotero) -> dict[str, tuple[bool, list[str]]]:
+def get_pdf_map() -> dict[str, tuple[bool, list[str]]]:
     """Bulk-fetch all PDF attachments and group by parent.
 
     Returns {parent_key: (has_real_file, [stub_keys])}.
     """
-    all_att = local.everything(local.items(itemType="attachment"))
-    pdfs = [a for a in all_att
-            if a["data"].get("contentType") == "application/pdf"
-            and a["data"].get("parentItem")]
-
-    by_parent: dict[str, tuple[list, list]] = defaultdict(lambda: ([], []))
-    for pdf in pdfs:
-        parent = pdf["data"]["parentItem"]
-        if pdf["data"].get("md5"):
-            by_parent[parent][0].append(pdf)
-        else:
-            by_parent[parent][1].append(pdf)
-
-    return {k: (bool(real), [s["data"]["key"] for s in stubs])
-            for k, (real, stubs) in by_parent.items()}
+    return _zot().pdf_map()
 
 
 def delete_item(item_key: str) -> None:
     """Delete a Zotero item (used to remove empty stubs)."""
-    url = f"{ZOTERO_BASE}/items/{item_key}"
-    req = urllib.request.Request(url, method="DELETE", headers={
-        "Zotero-API-Key": ZOTERO_API_KEY,
-    })
     try:
-        with urllib.request.urlopen(req, timeout=20, context=_SSL):
-            pass
+        _zot().delete_item(item_key)
     except Exception:
         pass
 
 
-def create_attachment_item(parent_key: str, filename: str) -> str | None:
-    """Create a child attachment item and return its key."""
-    url = f"{ZOTERO_BASE}/items"
-    payload = json.dumps([{
-        "itemType": "attachment",
-        "parentItem": parent_key,
-        "linkMode": "imported_file",
-        "title": filename,
-        "contentType": "application/pdf",
-        "filename": filename,
-        "charset": "",
-    }]).encode()
-    status, body = http_post(url, data=payload, headers={
-        "Zotero-API-Key": ZOTERO_API_KEY,
-        "Content-Type": "application/json",
-    })
-    if status == 200:
-        data = json.loads(body)
-        successful = data.get("successful", {})
-        if "0" in successful:
-            return successful["0"]["key"]
-        failed = data.get("failed", {})
-        print(f"    Create attachment failed: {failed}", file=sys.stderr)
-        return None
-    if status == 429:
-        print("    Rate limited — sleeping 30s", file=sys.stderr)
-        time.sleep(30)
-        return create_attachment_item(parent_key, filename)  # retry once
-    print(f"    Create attachment failed: HTTP {status} — {body[:200]}", file=sys.stderr)
-    return None
+def attach_pdf_from_cache(parent_key: str, pdf_path: str) -> bool:
+    """Upload a cached PDF file to Zotero as a child attachment.
 
-
-def upload_pdf(attachment_key: str, pdf_bytes: bytes, filename: str) -> bool:
-    """Upload PDF bytes to Zotero storage (3-step: authorize → S3 upload → register)."""
-    md5 = hashlib.md5(pdf_bytes).hexdigest()
-    mtime = int(time.time() * 1000)
-    filesize = len(pdf_bytes)
-
-    # Step 1: authorize upload
-    auth_url = f"{ZOTERO_BASE}/items/{attachment_key}/file"
-    auth_body = urllib.parse.urlencode({
-        "md5": md5,
-        "filename": filename,
-        "filesize": filesize,
-        "mtime": mtime,
-    }).encode()
-    status, body = http_post(auth_url, data=auth_body, headers={
-        "Zotero-API-Key": ZOTERO_API_KEY,
-        "Content-Type": "application/x-www-form-urlencoded",
-        "If-None-Match": "*",
-    })
-    if status not in (200, 412):
-        print(f"    Auth failed: HTTP {status}", file=sys.stderr)
+    Thin wrapper over ZoteroClient.attach_pdf. Returns True on success
+    (including the "already attached" no-op case), False on failure.
+    """
+    try:
+        _zot().attach_pdf(parent_key, pdf_path)
+        return True
+    except Exception as e:
+        print(f"    attach_pdf failed: {e}", file=sys.stderr)
         return False
-
-    auth = json.loads(body)
-
-    if auth.get("exists") == 1:
-        return True  # already uploaded
-
-    # Step 2: upload to S3
-    upload_url = auth["url"]
-    s3_data = auth["prefix"].encode() + pdf_bytes + auth["suffix"].encode()
-    s3_status, _ = http_post(upload_url, data=s3_data, headers={
-        "Content-Type": auth["contentType"],
-    }, timeout=60)
-    if s3_status not in (200, 201, 204):
-        print(f"    S3 upload failed: HTTP {s3_status}", file=sys.stderr)
-        return False
-
-    # Step 3: register upload
-    reg_url = f"{ZOTERO_BASE}/items/{attachment_key}/file"
-    reg_status, reg_body = http_post(
-        reg_url,
-        data=f"upload={auth['uploadKey']}".encode(),
-        headers={
-            "Zotero-API-Key": ZOTERO_API_KEY,
-            "Content-Type": "application/x-www-form-urlencoded",
-            "If-None-Match": "*",
-        },
-    )
-    if reg_status not in (200, 204):
-        print(f"    Register failed: HTTP {reg_status} — {reg_body[:100]}", file=sys.stderr)
-        return False
-
-    return True
 
 
 # ---------------------------------------------------------------------------
@@ -618,10 +529,9 @@ def main():
 
     # Local Zotero for fast reads
     print("Connecting to local Zotero client...", flush=True)
-    local = make_local_client()
 
     print("Fetching Zotero items...", end=" ", flush=True)
-    all_items = get_all_items(local)
+    all_items = get_all_items()
     print(f"{len(all_items)} journal articles.", flush=True)
 
     # Optional: filter to items listed in --filter-keys-file
@@ -642,7 +552,7 @@ def main():
 
     # Bulk-fetch all PDF attachments via local API (fast)
     print("Checking for existing PDF attachments...", end=" ", flush=True)
-    pdf_map = get_pdf_map(local)
+    pdf_map = get_pdf_map()
 
     # Delete empty stubs and find items without real PDFs
     to_process = []
@@ -738,18 +648,15 @@ def main():
             attached += 1
             continue
 
-        filename = (doi or title[:50]).replace("/", "_").replace(":", "_") + ".pdf"
-        att_key = create_attachment_item(key, filename)
-        if not att_key:
-            print("→ create failed")
-            log_writer.writerow({"run_date": run_date, "item_key": key, "doi": doi,
-                                  "title": title, "status": "create_failed"})
-            failed += 1
-            time.sleep(0.5)
-            continue
+        # Source functions cache PDFs to disk at cache_path(doi); use that
+        # path so pyzotero.attachment_simple can read the file directly.
+        pdf_path = cache_path(doi)
+        if not os.path.exists(pdf_path):
+            # Fallback: source returned bytes without caching — write now.
+            with open(pdf_path, "wb") as _f:
+                _f.write(pdf)
 
-        ok = upload_pdf(att_key, pdf, filename)
-        if ok:
+        if attach_pdf_from_cache(key, pdf_path):
             print("→ attached")
             log_writer.writerow({"run_date": run_date, "item_key": key, "doi": doi,
                                   "title": title, "status": "attached"})

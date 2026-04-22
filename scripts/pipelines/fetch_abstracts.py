@@ -102,49 +102,38 @@ def get_json(url: str, headers: dict = None, retries: int = 3) -> dict | None:
     return None
 
 
+# Zotero I/O is delegated to zotero_io.ZoteroClient (wraps pyzotero). The
+# custom paged GET and manual PATCH with If-Unmodified-Since-Version that
+# used to live here are gone — pyzotero handles both internally.
+import zotero_io
+
+_zot_client: zotero_io.ZoteroClient | None = None
+
+
+def _zot() -> zotero_io.ZoteroClient:
+    global _zot_client
+    if _zot_client is None:
+        _zot_client = zotero_io.ZoteroClient(
+            api_key=ZOTERO_API_KEY, group_id=ZOTERO_GROUP,
+        )
+    return _zot_client
+
+
 def zotero_get_all_items() -> list[dict]:
     """Fetch all journal articles from the Zotero group."""
-    items = []
-    start = 0
-    limit = 100
-    while True:
-        url = (
-            f"{ZOTERO_BASE}/items"
-            f"?format=json&itemType=journalArticle&limit={limit}&start={start}"
-        )
-        req = urllib.request.Request(
-            url,
-            headers={"Zotero-API-Key": ZOTERO_API_KEY, "Accept": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=30, context=_SSL) as resp:
-            batch = json.loads(resp.read())
-        if not batch:
-            break
-        items.extend(batch)
-        if len(batch) < limit:
-            break
-        start += limit
-        time.sleep(0.2)
-    return items
+    return _zot().journal_articles()
 
 
 def zotero_update_abstract(item_key: str, version: int, abstract: str) -> bool:
-    """Patch a single Zotero item's abstractNote field."""
-    url = f"{ZOTERO_BASE}/items/{item_key}"
-    payload = json.dumps({"abstractNote": abstract}).encode()
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        method="PATCH",
-        headers={
-            "Zotero-API-Key": ZOTERO_API_KEY,
-            "Content-Type": "application/json",
-            "If-Unmodified-Since-Version": str(version),
-        },
-    )
+    """Patch a single Zotero item's abstractNote field.
+
+    `version` is ignored — ZoteroClient.update_abstract re-fetches the
+    current version itself, and tenacity retries on 412. The parameter
+    is kept for call-site compatibility with the legacy orchestrator.
+    """
+    del version
     try:
-        with urllib.request.urlopen(req, timeout=20, context=_SSL) as resp:
-            return resp.status == 204
+        return _zot().update_abstract(item_key, abstract)
     except Exception as e:
         print(f"    Zotero PATCH error ({item_key}): {e}", file=sys.stderr)
         return False

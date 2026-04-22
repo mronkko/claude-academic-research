@@ -144,9 +144,8 @@ def load_items(publishers: dict, log_csv: str, filter_keys_file: str | None):
       - Are in filter_keys_file (if provided)
     """
     print("Connecting to local Zotero client...", flush=True)
-    local = attach_pdfs.make_local_client()
     print("Fetching Zotero items...", end=" ", flush=True)
-    all_items = attach_pdfs.get_all_items(local)
+    all_items = attach_pdfs.get_all_items()
     print(f"{len(all_items)} journal articles.", flush=True)
 
     if filter_keys_file:
@@ -156,7 +155,7 @@ def load_items(publishers: dict, log_csv: str, filter_keys_file: str | None):
         print(f"  After --filter-keys-file: {len(all_items)} items", flush=True)
 
     print("Checking for existing PDF attachments...", end=" ", flush=True)
-    pdf_map = attach_pdfs.get_pdf_map(local)
+    pdf_map = attach_pdfs.get_pdf_map()
     print("map built.", flush=True)
 
     done_dois = load_done_dois(log_csv)
@@ -505,16 +504,11 @@ def upload_to_zotero(items, downloaded_dois, cache_dir, log_csv):
         it = by_doi.get(doi)
         if not it or not it["item_key"]:
             failed += 1; continue
-        with open(cache_path_for(cache_dir, doi), "rb") as f:
-            pdf_bytes = f.read()
-        filename = doi.replace("/", "_") + ".pdf"
-        att_key = attach_pdfs.create_attachment_item(it["item_key"], filename)
-        if not att_key:
-            print(f"  [{doi}] create attachment FAILED", flush=True)
-            failed += 1; continue
-        if attach_pdfs.upload_pdf(att_key, pdf_bytes, filename):
+        pdf_path = cache_path_for(cache_dir, doi)
+        if attach_pdfs.attach_pdf_from_cache(it["item_key"], pdf_path):
+            size_kb = os.path.getsize(pdf_path) // 1024
             uploaded += 1
-            print(f"  [{doi}] uploaded ({len(pdf_bytes)//1024}KB)", flush=True)
+            print(f"  [{doi}] uploaded ({size_kb}KB)", flush=True)
             os.makedirs(os.path.dirname(log_csv) or ".", exist_ok=True)
             with open(log_csv, "a", newline="") as f:
                 csv.writer(f).writerow(

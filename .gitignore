@@ -25,5 +25,16 @@ htmlcov/
 .coverage
 coverage.xml
 
+# Pipeline output (CSV logs, PDF/fulltext caches, Chromium profile).
+# Safe to delete any time; scripts regenerate on next run.
+output/
+
+# Runtime scratch dir (experimental Zotero profiles, ad-hoc notes).
+temp/
+
+# Vendored SFX / link-resolver fixtures — institution-specific responses
+# captured from live endpoints; not safe to ship in the public repo.
+tests/fixtures/sfx/
+
 # Local review / scratch notes
 REVIEW_NOTES.md
