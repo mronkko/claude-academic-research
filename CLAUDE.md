@@ -39,7 +39,7 @@ CI (`.github/workflows/ci.yml`) runs `ruff check scripts tests` then `pytest tes
 
 ### Pipeline scripts
 
-`scripts/pipelines/` hosts two pipeline-orchestrator entry points (`enrich_abstracts.py`, `enrich_pdfs.py`) plus search orchestrators (`search.py` + four `search_<db>.py` single-DB wrappers). They invoke:
+`scripts/pipelines/` contains the full systematic-review pipeline — one orchestrator script per stage, roughly in dependency order: `search.py` (plus four `search_<db>.py` single-DB wrappers for piloting) → `import_to_zotero.py` → enrichment (`enrich_abstracts.py`, `enrich_pdfs.py`, `enrich_dois.py`) → `abstract_screen.py` → `fulltext_code.py` → `audit_zotero_library.py` → `export_coded_includes.py` → `generate_bib.py`. The three `enrich_*` scripts replaced the pre-v0.3.0 `attach_pdfs.py` / `fetch_*.py` monolith (now under `legacy/`). All of these orchestrators invoke:
 
 - `scripts/pipelines/fetchers/` — per-provider classes implementing `AbstractFetcher` / `PdfFetcher` ABCs in `fetchers/base.py`. Crossref / OpenAlex / ScienceDirect inherit both. `fetchers/browser/` hosts Playwright handlers for Cloudflare-gated publishers and requires `library_resolver.py` for SFX/OpenURL pre-flight.
 - `scripts/pipelines/searchers/` — per-database ABC implementations (Scopus, WoS, OpenAlex, Semantic Scholar) with a similar base-class pattern.
