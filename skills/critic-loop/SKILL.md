@@ -29,9 +29,9 @@ If the result is `configured`, proceed.
 
 ---
 
-Execute the editing loop documented in the `academic-writing` skill. This
-skill is the *procedure*; that skill is the *doctrine*. Read it first if
-you have not recently.
+Execute the editing loop documented in the `manuscript-revision` skill.
+This skill is the *procedure*; that skill is the *doctrine*. Read it
+first if you have not recently.
 
 ## Argument parsing
 

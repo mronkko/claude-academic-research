@@ -11,7 +11,7 @@ SKILLS_DIR = REPO / "skills"
 EXPECTED_SKILLS = {
     "grounded-citations",
     "empirical-integrity",
-    "academic-writing",
+    "manuscript-revision",
     "systematic-review",
     "zotero-operations",
     "fact-check",

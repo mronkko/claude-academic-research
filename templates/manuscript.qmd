@@ -175,7 +175,7 @@ else:
 <!--
   For each theme, synthesise the findings across included papers.
   Do NOT walk one-paper-at-a-time — write thematic prose that cites
-  multiple papers per claim. See the academic-writing skill's
+  multiple papers per claim. See the manuscript-revision skill's
   "SYNTHESIS over enumeration" rule.
 -->
 
