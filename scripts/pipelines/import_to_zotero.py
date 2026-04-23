@@ -97,8 +97,29 @@ def _row_to_zotero_item(row: dict, collection_key: str | None) -> dict:
     }
     if collection_key:
         item["collections"] = [collection_key]
+    tags: list[dict] = []
     if row.get("query"):
-        item["tags"] = [{"tag": f"search:{row['query']}", "type": 1}]
+        tags.append({"tag": f"search:{row['query']}", "type": 1})
+
+    # Predatory-journal preflight: check the title / ISSN against the
+    # Beall's-list snapshot in `sources/predatory.py`. Flag (don't
+    # exclude) per the social-sciences convention in the
+    # systematic-review skill. The screener sees the flag and decides
+    # during full-text review.
+    try:
+        from sources.predatory import check_predatory
+    except ImportError:
+        check_predatory = None  # type: ignore[assignment]
+    if check_predatory is not None:
+        result = check_predatory(
+            journal=row.get("source") or None,
+            issn=row.get("issn") or None,
+        )
+        if result.is_predatory:
+            tags.append({"tag": "predatory:flag", "type": 1})
+
+    if tags:
+        item["tags"] = tags
     return item
 
 

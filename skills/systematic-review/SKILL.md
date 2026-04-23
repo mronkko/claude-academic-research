@@ -27,6 +27,38 @@ If the result is `configured`, proceed.
 
 ---
 
+## Bootstrap (first run in this project)
+
+Before running any pipeline stage, check that the project's regression
+tests are installed. An SR project needs all three test files because
+the pipeline spans citations, empirical numbers, and pipeline-integrity
+invariants:
+
+```bash
+python -c "from pathlib import Path; missing = [f for f in ('scripts/test_common.py', 'scripts/test_citations.py', 'scripts/test_empirical_integrity.py', 'scripts/test_systematic_review.py') if not Path(f).is_file()]; print('ok' if not missing else 'missing: ' + ', '.join(missing))"
+```
+
+If the output lists missing files, install them:
+
+```bash
+mkdir -p scripts
+cp "${CLAUDE_PLUGIN_ROOT}/templates/test_common.py" scripts/
+cp "${CLAUDE_PLUGIN_ROOT}/templates/test_citations.py" scripts/
+cp "${CLAUDE_PLUGIN_ROOT}/templates/test_empirical_integrity.py" scripts/
+cp "${CLAUDE_PLUGIN_ROOT}/templates/test_systematic_review.py" scripts/
+```
+
+Tell the user what was installed and flag that the top of each
+`test_*.py` has project-specific paths and (for
+`test_empirical_integrity.py`) a `FORBIDDEN_LITERALS` tuple they
+should review.
+
+If the project has no `CLAUDE.md` yet, suggest using
+`${CLAUDE_PLUGIN_ROOT}/templates/sr_claude_md.md` as a starting point —
+but don't write it without the user's say-so. CLAUDE.md is user-owned.
+
+---
+
 ## Core architecture
 
 Every systematic review runs through the same stages:
@@ -42,22 +74,38 @@ Principles:
 - **Scripted searches only.** Main searches run as Python scripts querying
   APIs directly (Scopus, WoS Expanded, OpenAlex). MCP tools may be used for
   piloting (keyword tests, volume estimates), never for the formal search.
-- **Zotero is the canonical manifest.** Scripts never delete items from
-  Zotero. See the `zotero-operations` skill for Zotero-specific patterns.
+- **Zotero is the ground truth.** Every screening decision, coding field,
+  and adjudication outcome lives on the Zotero item — as a tag (for
+  decisions and stage membership) or as a child note (for structured
+  coding fields). See *Zotero tag conventions* and *Child notes* below for
+  the vocabulary. Scripts never delete items from Zotero. See the
+  `zotero-operations` skill for lower-level Zotero patterns.
+- **CSV logs are run-history, not source of truth.** Screening and coding
+  scripts append a row per decision to `screening/*.csv` for provenance
+  and debugging (who decided what, when, with which model and prompt
+  version). But "what is the current decision on item X?" is answered
+  by Zotero, not the CSV. Adjudicator flips happen in Zotero directly;
+  re-runs read Zotero tags to decide what to skip.
 - **Fix the data, don't work around it.** When a script hits records
   missing a DOI / ISSN / abstract, pause and surface the items. Missing
   DOIs are usually a data-capture bug (search-API field not mapped, manual
   entry, non-journal item). Do not add silent title-match fallbacks until
   the user confirms the data is genuinely unfixable.
-- **Resumable stages.** Each stage writes an append-only CSV log. On
-  start, scripts read the log, build a "done" set, and skip processed
-  items. Every stage survives Ctrl+C.
+- **Resumable stages.** Every stage is Ctrl+C-safe and resume-idempotent.
+  On start, scripts read the project's Zotero collection, build a "done"
+  set from the stage tags (`abstract:include` / `abstract:exclude` /
+  `abstract:borderline` for abstract screening; `fulltext:include` /
+  `fulltext:exclude` for full-text coding), and skip items already
+  tagged. The CSV log is written in parallel for provenance but is not
+  consulted for resume decisions.
 - **Progress the user can follow.** Pipeline scripts use `flush=True` on
   every print; emit `[N/total]` counters; invoke via `| tee` to a log
   file. Never pipe to `/dev/null`.
-- **Filterable.** Every reusable script accepts `--filter-keys-file`
-  (one Zotero item key per line) so the next stage drives from the
-  previous stage's decision log.
+- **Filterable.** Every stage accepts some filter-keys mechanism —
+  `--filter-keys-file <path>` for enrichment / audit / export scripts,
+  `--only-keys <k1,k2,…>` for screening scripts. Either way, the next
+  stage drives from the previous stage's Zotero tag state (queried via
+  MCP or pyzotero); the file / CLI filter is a way to narrow further.
 
 ## Environment variables
 
@@ -79,11 +127,100 @@ The `/setup` skill writes these to `~/.config/academic-research/config.toml`
 (mode 0600) on first run. Environment variables take precedence over the
 file.
 
+## Zotero tag and note conventions
+
+Zotero is the ground truth for screening decisions, coding fields, and
+adjudication outcomes (see the *Core architecture* principles above).
+This section is the canonical catalogue of every tag and child note
+the pipeline reads or writes. Scripts and skills reference these
+conventions; the table below is the single source of truth.
+
+### Stage tags (set by screening scripts)
+
+Tell you where each item is in the pipeline. Mutually exclusive within
+each stage — an item has at most one `abstract:*` tag and at most one
+`fulltext:*` tag at any given time. Scripts apply these at decision
+time via the Zotero API and remove prior stage tags on flip.
+
+| Tag | Applied by | Meaning |
+|---|---|---|
+| `abstract:include` | `abstract_screen.py` | Passes title-abstract screening — proceeds to full-text |
+| `abstract:exclude` | `abstract_screen.py` | Excluded at title-abstract stage |
+| `abstract:borderline` | `abstract_screen.py` | Kept for full-text review (missing abstract, or LLM uncertain) |
+| `fulltext:include` | `fulltext_code.py` | Passes full-text screening; has `SLR Coding` child note |
+| `fulltext:exclude` | `fulltext_code.py` | Excluded at full-text stage |
+
+### Pre-screening tags
+
+Set before Claude-driven screening, typically by a preflight check
+against a predatory-journal list.
+
+| Tag | Applied by | Meaning |
+|---|---|---|
+| `predatory:flag` | Preflight journal check against Beall's list | **Warning, not exclusion.** Author decides during full-text review whether to keep each flagged paper. Transparent flagging is the rule. |
+
+### QA and adjudication tags
+
+Applied during the post-screening QA evaluator pass and the human
+adjudication loop (see *Post-screening QA* below).
+
+| Tag | Applied by | Meaning | Removed when |
+|---|---|---|---|
+| `qa-flag` | Main agent after any evaluator flags an item | Sentinel for filtering in Zotero | After human adjudication (replaced by `qa-adjudicated-*`) |
+| `qa-hard` | Main agent from a HARD evaluator flag | Clear violation of a named inclusion / exclusion criterion | After adjudication |
+| `qa-soft-include` | Main agent from an inclusion-validator SOFT flag | Borderline inclusion | After adjudication |
+| `qa-soft-exclude` | Main agent from an exclusion-validator SOFT flag | Borderline exclusion | After adjudication |
+| `qa-wrong-code` | Main agent from an exclusion-validator `WRONG_CODE` flag | Exclusion stands but the code is wrong | After the exclusion code is corrected on the item |
+| `qa-adjudicated-include` | Human after reviewing flag | Final decision: INCLUDE | Never (permanent adjudication record) |
+| `qa-adjudicated-exclude` | Human after reviewing flag | Final decision: EXCLUDE | Never |
+
+### Flip semantics under adjudication
+
+If the human adjudicator flips an automated decision, the Zotero tag
+set is updated atomically:
+
+- Remove the screener's `fulltext:*` tag → add the opposite one.
+- Remove the `qa-*` severity tag → add the matching `qa-adjudicated-*`.
+- Optionally append a row to `screening/fulltext_screening.csv` for
+  provenance (who flipped, when, why). The CSV is run-history; the
+  tag is the current state.
+
+### Child notes
+
+| Note title | Attached to | Written by | Purpose |
+|---|---|---|---|
+| `SLR Coding` | Every item with `fulltext:include` | `fulltext_code.py` after each coding decision | Structured coding fields (constructs, method, findings — see `screening_config.py:FULLTEXT_CODING_FIELDS`). The adjudicator reads this note directly in Zotero; the CSV row is parallel provenance. |
+
+A `SLR Coding` note is **created on first code**, **overwritten on
+re-code** (via `--full-recode`), and **never deleted automatically**.
+If the adjudicator edits a field inline in Zotero, the edit is
+authoritative — subsequent `fulltext_code.py` runs skip that item
+unless `--full-recode` is passed.
+
+### How scripts use these conventions
+
+- **Resume is tag-driven.** Each script queries Zotero for items
+  already carrying the stage tag it writes, and skips them. The CSV
+  log is not consulted for resume decisions. `--only-keys` / `--rerun`
+  / `--full-recode` flags are the escape hatches for re-processing
+  specific items.
+- **Filtering downstream stages.** `fulltext_code.py` processes items
+  tagged `abstract:include` OR `abstract:borderline`.
+  `export_coded_includes.py` reads items tagged `fulltext:include`
+  (adjudication flips propagate automatically because tags are
+  authoritative).
+- **Never hand-craft tags in a manuscript chunk or stats script.**
+  Tags come from Zotero; if a stat needs a count of `fulltext:include`
+  items, `manuscript_stats.py` queries Zotero, not the CSV.
+
 ## Pipeline scripts
 
 All scripts live under `${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/`. Invoke
 with `uv run`; first-run `uv` installs declared deps into an ephemeral
-venv automatically.
+venv automatically. Invocations below show the most common form; run
+each script with `--help` to see the full flag surface (every script
+has additional options for re-processing, parallelism, caching, and
+single-item debugging).
 
 | Stage | Script | Invocation |
 |---|---|---|
@@ -111,39 +248,78 @@ Additional templates shipped with the plugin:
 - **`${CLAUDE_PLUGIN_ROOT}/templates/screening_config.py`** — system
   prompts for abstract screening and full-text coding, plus the
   `FULLTEXT_CODING_FIELDS` list that drives the coding schema.
-- **`${CLAUDE_PLUGIN_ROOT}/templates/test_suite.py`** — `TestRunner`
-  plus 13 universal SR-invariant tests; uncomment 4 project-specific
-  slots (coding-field completeness, forbidden-literals, citekey
-  resolution, stats freshness).
-- **`${CLAUDE_PLUGIN_ROOT}/templates/stats.py`** — flat-dict builder
-  that reads every pipeline output and returns keys like
-  `screen.n_included`, `search.unique_dois`, etc. for inline lookup
-  in the manuscript.
-- **`${CLAUDE_PLUGIN_ROOT}/templates/tables.py`** — pandas-based
-  table functions (methods, regions, exclusion reasons, construct
-  families) for Quarto code chunks. Keeps prose readable. Copy into
-  the project's `manuscript/tables.py` so the `.qmd` can `from tables
-  import ...`.
+- **Test templates** (copy all three plus `test_common.py` into your
+  project's `scripts/` directory). One file per skill so failures map
+  back cleanly to the rule-book the regression violated:
+    - `${CLAUDE_PLUGIN_ROOT}/templates/test_systematic_review.py` —
+      this skill's 11 pipeline invariants (PRISMA arithmetic,
+      `search_run.json` integrity, decision-state whitelists,
+      `temperature=0`, `screening_config` round-trip, ghost handling).
+    - `${CLAUDE_PLUGIN_ROOT}/templates/test_citations.py` — `@citekey`
+      resolution, bare `Author (YYYY)` detection, BBT-key uniqueness.
+      Owned by the `grounded-citations` / `fact-check` skills.
+    - `${CLAUDE_PLUGIN_ROOT}/templates/test_empirical_integrity.py` —
+      forbidden-literal grep, label uniqueness, inline `s['…']` key
+      resolution against the live `build_stats()` dict, figure-file
+      existence, `manuscript_stats.json` ↔ `build_stats()` content
+      check. Owned by the `empirical-integrity` skill.
+    - `${CLAUDE_PLUGIN_ROOT}/templates/test_common.py` — shared
+      `TestRunner` infra the three test files import.
+- **`${CLAUDE_PLUGIN_ROOT}/templates/manuscript_stats.py`** —
+  flat-dict builder that reads every pipeline output and returns keys
+  like `screen.n_included`, `search.unique_dois`, etc. for inline
+  lookup in the manuscript. Copy into the project's
+  `analysis/manuscript_stats.py`; extend as the manuscript needs new
+  facts. Output: `analysis/results/manuscript_stats.json` (written by
+  the script's CLI mode; never hand-edited).
+- **`${CLAUDE_PLUGIN_ROOT}/templates/manuscript_tables.py`** —
+  pandas-based table functions (methods, regions, exclusion reasons,
+  construct families) for Quarto code chunks. Keeps prose readable.
+  Copy into the project's `manuscript/manuscript_tables.py` so the
+  `.qmd` can `from manuscript_tables import ...`.
 - **`${CLAUDE_PLUGIN_ROOT}/templates/manuscript.qmd`** — Quarto
   scaffold with setup chunk importing `build_stats()`, placeholder
-  sections, and example inline expressions showing every
-  methodology number wired to `s['key']` rather than hand-typed. Copy into the
-  project's `scripts/test_suite.py` and uncomment / customise the
-  project-specific sections (coding-field completeness, forbidden
-  methodology literals, manuscript citation resolution, stats.json
-  freshness). The template's universal tests — pipeline artefacts,
-  PRISMA arithmetic, decision-state whitelists, temperature=0 pinning,
-  BBT-key uniqueness, no-ghost-keys — run out of the box.
+  sections, and example inline expressions showing every methodology
+  number wired to `s['key']` rather than hand-typed.
 
 A project CLAUDE.md template for new SLR projects lives at
-`${CLAUDE_PLUGIN_ROOT}/templates/sr_claude_md.md`.
+`${CLAUDE_PLUGIN_ROOT}/templates/sr_claude_md.md`. A
+manuscript-only variant (no SLR-pipeline scaffolding, for research-report
+editing projects) lives at
+`${CLAUDE_PLUGIN_ROOT}/templates/manuscript_claude_md.md`.
 
 ## Key methodological rules
 
 ### Search
 
-- **Always use WoS Expanded (`WOS_API_KEY_EXTENDED`)** for the formal
-  search — Starter's `IS=` ISSN filter returns 0 results.
+**Pilot before the formal run.** Before committing to the formal search
+parameters, probe each candidate database with a handful of keyword
+combinations to surface volume estimates and construct-coverage gaps.
+Per the *Scripted searches only* principle above, MCP tools are
+acceptable for piloting (they are fast and session-scoped), and are
+the only way to probe Scopus / OpenAlex / Semantic Scholar without
+first spinning up the full scripted-search machinery. The formal run
+then uses the scripted searchers under `scripts/pipelines/`.
+
+**Source preference ordering.** Which databases to include depends on
+what the user's institution provides. Degrade gracefully rather than
+blocking on a missing subscription:
+
+| Preference | Source | Access | Notes |
+|---|---|---|---|
+| 1 (preferred) | **Web of Science Expanded** | Script only, via `WOS_API_KEY_EXTENDED`. No MCP. | Strongest field coverage for social-sciences SR. Use `WOS_API_KEY_EXTENDED`, not `WOS_API_KEY` — Starter's `IS=` ISSN filter returns 0 results and blocks journal-list filtering. |
+| 2 | **Scopus** | Script + MCP (`mcp__scopus__*`). Requires `ELSEVIER_API_KEY` or `SCOPUS_API_KEY`. | Strong alternative when WoS is unavailable. Covers the same journal set as WoS with different dedup patterns. |
+| 3 | **OpenAlex** | Script + MCP (`mcp__openalex__*`). Free, no subscription. | Open-access baseline; always usable. Weaker field-precision for niche social-sciences topics, but improves year over year. |
+| 4 | **Semantic Scholar** | Script + MCP (`mcp__semantic-scholar__*`). Free tier available. | Good for recent work and preprints; complementary to the above. |
+
+A formal SR typically combines **two or three** sources from this list
+— the exact mix depends on access. A user without WoS or Scopus can
+still run a defensible SR using OpenAlex + Semantic Scholar, provided
+the coverage gaps are disclosed in the methods section (pulled from
+`search_metadata.json` via the stats dictionary; never typed in prose).
+
+**Technical tips for search design:**
+
 - **Wildcard multi-word phrases for WoS.** Scopus stems phrases; WoS does
   not. `TS="growth aspiration"` misses plural "aspirations". Always
   write `TS=("growth aspir*" OR ...)`.
@@ -166,19 +342,60 @@ Cascade in order: Crossref → Semantic Scholar (DOI) → Semantic Scholar
 
 ### PDF retrieval
 
-Cascade: publisher TDM API (Elsevier, Wiley) → Crossref TDM → PMC →
-OpenAlex Content → Unpaywall → OpenAlex OA metadata.
+A four-phase cascade that `enrich_pdfs.py` runs automatically. Each
+phase handles a class of item the previous phase can't; nothing is
+ever silently dropped.
+
+**Phase 1 — API cascade (`enrich_pdfs.py` default mode).** Works for
+most open-access and publisher-TDM-enabled items:
+
+```
+publisher TDM API (Elsevier, Wiley)  →  Crossref TDM  →  PMC
+  →  OpenAlex Content  →  Unpaywall  →  OpenAlex OA metadata
+```
+
+Elsevier and Wiley TDM require `ELSEVIER_API_KEY` and
+`WILEY_TDM_TOKEN`. OpenAlex Content is paid ($0.01 per download, gated
+on `OPENALEX_API_KEY`).
+
+**Phase 2 — browser cascade for Cloudflare-gated publishers**
+(`enrich_pdfs.py --sources browser`). HTTP clients cannot solve the
+Cloudflare JS challenge, so for Sage, OUP, Taylor & Francis, Emerald,
+and similar CF-gated publishers, a Playwright-driven Chromium opens
+visibly. The user passes the Cloudflare challenge once per publisher;
+the authenticated session then captures subsequent downloads
+automatically. `--legacy-browser` is the rollback path to the pre-v0.3
+handler in `scripts/pipelines/legacy/fetch_pdfs_browser.py` — use only
+if the refactored browser cascade regresses.
+
+**Phase 3 — Zotero Connector + institutional SFX/OpenURL**
+(`enrich_pdfs.py` with Connector handlers). For items the browser
+cascade can't reach directly — typically paywalled content accessed via
+library proxy — the script launches Zotero Desktop's Connector
+extension and routes requests through the institution's SFX/OpenURL
+resolver (`scripts/pipelines/fetchers/library_resolver.py`). Requires:
+Zotero Desktop running locally, Zotero Connector installed in the
+Chromium profile, and the institution's OpenURL base URL configured.
+
+**Phase 4 — graceful failure.** Items that all three phases fail on
+are logged with a status code (`connector_zotero_unavailable`,
+`connector_save_failed`, `connector_sw_timeout`,
+`connector_extension_missing`, and others defined in `enrich_pdfs.py`)
+so the user can surface the residual list for manual retrieval.
+**Never silently drop items** — a paper with no attached PDF after all
+phases is a data-quality signal, not a failure to hide.
+
+**Cross-cutting tips** (apply at every phase):
 
 - **Always validate `%PDF` magic bytes** *and* parse-test the PDF
   before caching. Some downloaders save HTML-with-200 or corrupted PDFs.
-- **Cloudflare**: HTTP clients cannot solve the JS challenge. For
-  CF-gated publishers (Sage, OUP, T&F, Emerald), use
-  `enrich_pdfs.py --sources browser` (Playwright; user passes CF once
-  per publisher, script downloads the rest in the authenticated session).
-- Disable Chromium's built-in PDF viewer via a `user_data_dir` with
-  `plugins.always_open_pdf_externally=true` in Preferences — otherwise
-  PDFs open inline and neither `expect_download` nor `expect_response`
-  captures the bytes.
+- **Disable Chromium's built-in PDF viewer** via a `user_data_dir`
+  with `plugins.always_open_pdf_externally=true` in Preferences —
+  otherwise PDFs open inline and neither `expect_download` nor
+  `expect_response` captures the bytes.
+- **Pilot the browser phases on a small batch** before a full run —
+  Cloudflare challenges and Connector state are session-scoped; if
+  something's misconfigured you want to know after 10 items, not 500.
 
 ### Screening
 
@@ -255,45 +472,43 @@ default. Smaller corpora (< 40 includes) warrant 100 % review;
 larger corpora (> 200 includes) can drop to 10 % with a quality
 audit built in.
 
-#### Tag vocabulary
+#### Applying QA tags
 
-Evaluators (running as `Agent` calls in the main session) cannot
-tag Zotero directly — the main agent takes each flag they return and
-applies two tags via `mcp__zotero__zotero_add_tag` (or equivalent):
+Evaluators run as `Agent` calls in the main session — they cannot
+write to Zotero themselves. The main agent takes each flag the
+evaluators return and applies the appropriate `qa-*` tag via
+`mcp__zotero__zotero_update_item` (with an `add_tags` parameter) or
+`mcp__zotero__zotero_batch_update_tags` for the bulk case.
 
-| Tag | When to apply | When to remove |
-|---|---|---|
-| `qa-flag` | Any evaluator flagged this item (sentinel for filtering in Zotero). | After human adjudication (replaced with an `adjudicated` tag below). |
-| `qa-hard` | Evaluator severity was HARD — clear violation of a named inclusion / exclusion criterion. | After adjudication. |
-| `qa-soft-include` | Inclusion-validator SOFT concern — borderline inclusion. | After adjudication. |
-| `qa-soft-exclude` | Exclusion-validator SOFT concern — borderline exclusion. | After adjudication. |
-| `qa-wrong-code` | Exclusion stands, but the exclusion code is wrong. | After the code is corrected in the CSV log (append a new row with the right code). |
-| `qa-adjudicated-include` | Human decided to keep / flip to INCLUDE. | Never (permanent record of adjudication). |
-| `qa-adjudicated-exclude` | Human decided to keep / flip to EXCLUDE. | Never. |
-
-Existing `fulltext:include` / `fulltext:exclude` tags **stay in
-place** through adjudication. They are the screener's verdict; the
-`qa-*` tags are the reviewer's process trail.
+See *Zotero tag and note conventions* above for the full tag
+vocabulary — `qa-flag`, `qa-hard`, `qa-soft-include`,
+`qa-soft-exclude`, `qa-wrong-code`, and the two post-adjudication
+`qa-adjudicated-*` tags.
 
 #### Human adjudication loop
 
 The human opens Zotero, filters the collection by `qa-flag`, and for
 each flagged item:
 
-1. Reads the attached PDF and the `SLR Coding` child note (or its
-   equivalent in your project — the CSV row is also authoritative).
+1. Reads the attached PDF and the `SLR Coding` child note.
 2. Decides: **keep** the automated decision, or **flip** it.
-3. Removes the severity tag (`qa-hard` / `qa-soft-*` / `qa-wrong-code`)
-   and adds `qa-adjudicated-include` or `qa-adjudicated-exclude`.
-4. If flipping: **appends a new row** to
-   `screening/fulltext_screening.csv` with the reversed decision.
-   Last-row-wins semantics on `item_key` mean `export_coded_includes.py`
-   picks up the flip automatically; the earlier row remains as
-   history.
-5. If changing an exclusion code without flipping the decision: same
-   pattern — append a new row with the corrected code, remove
-   `qa-wrong-code`.
-6. Writes one line to `screening/qa_review.md` recording the decision
+3. Updates the Zotero tag set atomically:
+   - Removes the severity tag (`qa-hard` / `qa-soft-*` /
+     `qa-wrong-code`) and `qa-flag`; adds `qa-adjudicated-include` or
+     `qa-adjudicated-exclude`.
+   - **If flipping the decision**, also removes the screener's
+     `fulltext:*` tag and adds the opposite one. Tags are the
+     authoritative state — a flip that doesn't update the `fulltext:*`
+     tag leaves Zotero inconsistent with the adjudication.
+   - **If correcting an exclusion code without flipping**, updates
+     the coding field in the `SLR Coding` child note and removes
+     `qa-wrong-code`.
+4. Optionally appends a provenance row to
+   `screening/fulltext_screening.csv` (who flipped, when, why). The
+   CSV is run-history; the Zotero tag is the current state. Downstream
+   scripts (`export_coded_includes.py`, `manuscript_stats.py`,
+   `test_systematic_review.py`) read from Zotero, not from the CSV.
+5. Writes one line to `screening/qa_review.md` recording the decision
    (format below).
 
 #### `screening/qa_review.md` structure
@@ -342,12 +557,16 @@ patterns:
 - **Auto-extract script constants** into `search_metadata.json`. Never
   import scripts (side effects); parse with
   `re.search(r'CONSTANT\s*=\s*"([^"]+)"', source)`. Keywords, year
-  bounds, model names all live in the metadata file; the manuscript
-  reads them via inline expressions.
+  bounds, model names, prompt versions all live in the metadata file.
+  `analysis/manuscript_stats.py` then ingests `search_metadata.json` and exposes
+  each field under `s['search.*']` or `s['provenance.*']` in the
+  manuscript's stats dictionary — the manuscript never reads
+  `search_metadata.json` directly.
 - **Forbidden methodology literals.** The project's test suite must
   grep the manuscript for hand-typed search dates, model names
   (`claude-haiku`, `claude-sonnet`), keyword strings, year bounds.
-  These must use inline expressions from `search_metadata.json`.
+  These must use inline expressions from the stats dictionary
+  (`s['search.databases']`, `s['provenance.fulltext.model']`, …).
 - **PRISMA arithmetic test.** `include + borderline + exclude = total
   screened`; `coded include + exclude = total coded`. Catches missing
   items or pipeline drops.
@@ -356,23 +575,43 @@ patterns:
   invariant: Zotero DOIs == search DOIs. Abort if extras exist (items
   added outside the pipeline).
 
-## Test suite patterns
+## Test suite
 
-See `empirical-integrity` for the baseline. SR-specific additions:
+See `empirical-integrity` for the overall approach and file layout.
+SR-specific invariants live in
+`${CLAUDE_PLUGIN_ROOT}/templates/test_systematic_review.py` (copy into
+the project's `scripts/`). The file ships 14 active tests:
 
 | Test | What it catches |
-|------|-----------------|
-| Results files exist and non-empty | Pipeline didn't run |
-| Count consistency (stats JSON vs. raw CSV) | Export script bug or stale outputs |
-| BBT keys non-empty and unique | Missing or duplicate citation keys |
-| Qualitative table markers present | Empirical-integrity compliance |
-| Script constant round-trip | Metadata staleness |
+|---|---|
+| Pipeline artefacts exist and non-empty | Pipeline didn't run |
+| `search_run.json` marker matches dedup CSV | Stale or missing integrity gatekeeper |
+| `search_metadata.json` has required fields | Export bug |
+| No duplicate DOIs in dedup CSV | Dedup gap |
+| Abstract log uses allowed decision states | Pipeline emitted an unexpected abstract-stage decision |
+| Fulltext log final decisions | Non-final (`error`) decision left at the end of the fulltext log |
 | PRISMA arithmetic | Screening funnel inconsistency |
-| Forbidden methodology literals in manuscript | Hand-typed dates, models, keywords |
-| Screened count == search unique count | Pipeline residue |
-| No duplicates in target collection | Import dedup gaps (use `mcp__zotero__zotero_find_duplicates`) |
-| Search run marker verified | Stale or missing integrity gatekeeper |
-| Temperature=0 pinned in Claude API calls | Reproducibility regression |
+| Coded count == fulltext includes | Export/coding drift |
+| `temperature=0` pinned in Claude calls | Reproducibility regression |
+| `screening_config` constants match logs | Config changed without a re-run |
+| No `decision=error` left in fulltext log | Unresolved screening errors |
+| No ghost keys (fulltext log ⊆ Zotero) | Items removed or renamed outside the pipeline |
+| **Fulltext tags consistent with CSV log** | Zotero tag state diverges from CSV decisions — tag write-back failed, or an out-of-band CSV edit wasn't mirrored in Zotero |
+| **Every `fulltext:include` item has an SLR Coding note** | Include-tag set without a coded note — export script has nothing to read for that paper |
+
+BBT-key uniqueness and `coded_papers.csv` → `references.bib` resolution
+live in `test_citations.py` (citation concerns). Manuscript-prose
+invariants — forbidden literals, label uniqueness, inline `s['…']`
+resolution, figure-file existence — live in
+`test_empirical_integrity.py`. Zotero-collection dedup checks are run
+via `mcp__zotero__zotero_find_duplicates`, not as a static test.
+
+**Grow the suite with the pipeline.** When you find a new SR-pipeline
+regression a static check could catch — a new metadata field that
+should round-trip, a new PRISMA edge case, a new Zotero-drift pattern —
+add the test to `scripts/test_systematic_review.py` before closing
+out the task. The failure becomes the sentinel so the same class of
+mistake can't silently return across runs.
 
 ## Scope note
 

@@ -59,6 +59,45 @@ Optional:
 - `--rendered-path <path>` — override the rendered output path if the
   render command writes somewhere non-obvious.
 
+## Rendering: what and why
+
+Rendering is a first-class step of the loop, not a side-effect of
+"let's see the output". Three reasons the critics read the rendered
+file, not the source:
+
+1. **Render is the final integrity test.** A missing `s['key']` lookup
+   or an unresolved `@citekey` crashes the renderer louder than any
+   grep. `test_empirical_integrity.py` catches the static version of
+   this; render catches the runtime version (stats module throws on a
+   downstream computation, pipeline output file is stale). Render
+   failure is a specific-class-of-integrity signal — treat it as a
+   test failure and route the fix through Step 1, not around it.
+2. **Critics should see what the reader sees.** Resolved numbers and
+   rendered citations, not `{python} s['screen.n_included']`
+   placeholders. The evidence critic's "does this claim match the
+   source?" is a different question when the claim is still an
+   expression.
+3. **The rendered snapshot is the iteration diff anchor.** Iteration
+   N+1's critics compare against iteration N's `rendered.md`; the
+   source file is too volatile.
+
+Document-format defaults assume Quarto → gfm, with the snapshot landing
+at `.claude/critic-loop/iter-{N}/rendered.md`. For other formats:
+
+- **Plain `.md`** — no render needed; snapshot is a file copy.
+- **`.ipynb`** — `jupyter nbconvert --to markdown {doc}` (add
+  `--execute` if cells are runnable).
+- **`.tex`** — `latexmk -pdf {doc}` yields a PDF, not markdown. Either
+  add a `pandoc` post-step back to markdown, or set
+  `--rendered-path` to the PDF and tell the critics to accept PDF.
+- **`.Rmd` → `html_document`** — default advice is `md_document`
+  because critics prefer markdown; `--to html` works, but if you
+  override the render command that way you must also pass
+  `--rendered-path` so the snapshot step still finds the output.
+
+Whenever you override `--render-cmd` to produce something other than a
+sibling `.md`, pass `--rendered-path` to match. They vary together.
+
 ## Procedure
 
 Create the iteration working directory up front (project-local; portable):
@@ -74,13 +113,22 @@ iter = 1
 while iter <= MAX_ITER:
 
   ── Step 1: test gate ──────────────────────────────────────────────
-  Unless --no-test: run the project's test suite (check the project's CLAUDE.md
-  for the exact command; common defaults: `python3 scripts/test_suite.py`,
-  `pytest`, `npm test`). If any test fails:
+  Unless --no-test: run every `test_*.py` script the project ships in
+  `scripts/`, in the order the project's CLAUDE.md names (typical order:
+  `test_citations.py`, `test_empirical_integrity.py`,
+  `test_systematic_review.py`). Common invocations: `pytest`,
+  `npm test`, or the bare `python3 scripts/test_<name>.py` sequence.
+  If any file fails:
     - diagnose the failure
     - fix the underlying cause (do not suppress or skip tests)
     - re-run
     - only proceed to Step 2 when all tests pass.
+  Each test file maps to a skill — a failure in `test_citations.py` is
+  a `grounded-citations` / `fact-check` regression; a failure in
+  `test_empirical_integrity.py` is an `empirical-integrity` regression;
+  a failure in `test_systematic_review.py` is a `systematic-review`
+  pipeline regression. Read the relevant skill if the fix is not
+  obvious.
   If tests cannot be made to pass without the user's input, stop the loop and
   surface the failure to the user. Do NOT call critics on a broken build.
 

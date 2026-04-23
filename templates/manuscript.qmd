@@ -17,13 +17,14 @@ csl: apa.csl
   Quarto manuscript scaffold for an SLR.
 
   The setup chunk below imports `build_stats()` from the sibling
-  `analysis/stats.py`. Every number you cite in the prose must come
-  from `s['some.key']` — never a literal in the Markdown. See the
-  empirical-integrity skill for the full rationale and the test suite
-  template for a regression check that greps for forbidden literals.
+  `analysis/manuscript_stats.py`. Every number you cite in the prose
+  must come from `s['some.key']` — never a literal in the Markdown.
+  See the empirical-integrity skill for the full rationale and the
+  test suite template for a regression check that greps for forbidden
+  literals.
 
-  Table functions live in `manuscript/tables.py`. Keep prose readable
-  by putting table logic there.
+  Table functions live in `manuscript/manuscript_tables.py`. Keep
+  prose readable by putting table logic there.
 
   Delete these HTML comments before final submission.
 -->
@@ -35,13 +36,13 @@ csl: apa.csl
 import sys
 from pathlib import Path
 
-# Make analysis/stats.py and manuscript/tables.py importable
+# Make analysis/manuscript_stats.py and manuscript/manuscript_tables.py importable
 _ROOT = Path().resolve()
 for _p in (_ROOT, _ROOT / "analysis", _ROOT / "manuscript"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from stats import build_stats  # noqa: E402
+from manuscript_stats import build_stats  # noqa: E402
 
 s = build_stats()
 ```
@@ -105,8 +106,9 @@ any human-adjudication flips appended after the automated run.
 
 @fig-prisma summarises the four-stage funnel (search → dedup → abstract
 screen → full-text include). Every count below is an inline lookup
-against `stats.json`, so re-rendering the manuscript after any
-screening / adjudication change updates the diagram automatically.
+against the live `build_stats()` dict, so re-rendering the manuscript
+after any screening / adjudication change updates the diagram
+automatically.
 
 ```{python}
 #| label: fig-prisma
@@ -145,7 +147,7 @@ flowchart TD
 #| label: tbl-methods
 #| tbl-cap: "Distribution of the included papers by research method."
 #| echo: false
-from tables import tbl_methods
+from manuscript_tables import tbl_methods
 print(tbl_methods().to_markdown(index=False))
 ```
 
@@ -153,7 +155,7 @@ print(tbl_methods().to_markdown(index=False))
 #| label: tbl-regions
 #| tbl-cap: "Geographic regions represented in the sample."
 #| echo: false
-from tables import tbl_sample_regions
+from manuscript_tables import tbl_sample_regions
 print(tbl_sample_regions().to_markdown(index=False))
 ```
 
@@ -162,10 +164,10 @@ print(tbl_sample_regions().to_markdown(index=False))
 #| tbl-cap: "Included papers grouped by construct family."
 #| echo: false
 #| output: asis
-from tables import tbl_construct_families
+from manuscript_tables import tbl_construct_families
 _fam = tbl_construct_families(s)
 if _fam.empty:
-    print("<!-- No construct families configured — see CONSTRUCT_FAMILIES in stats.py -->")
+    print("<!-- No construct families configured — see CONSTRUCT_FAMILIES in manuscript_stats.py -->")
 else:
     print(_fam.to_markdown(index=False))
 ```
@@ -195,7 +197,7 @@ between initial automated decision and final human judgment.
 #| label: tbl-exclusions
 #| tbl-cap: "Full-text exclusions by reason code."
 #| echo: false
-from tables import tbl_exclusion_reasons
+from manuscript_tables import tbl_exclusion_reasons
 print(tbl_exclusion_reasons().to_markdown(index=False))
 ```
 

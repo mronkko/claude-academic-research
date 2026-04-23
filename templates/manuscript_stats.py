@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
-"""Pipeline-summary stats for an SLR manuscript — project template.
+"""Manuscript-facing stats dictionary for an SLR — project template.
 
-Reads all pipeline outputs (search_metadata.json, search_run.json,
+This is the per-project **producer** of every number the manuscript cites.
+It reads all pipeline outputs (search_metadata.json, search_run.json,
 screening CSVs, coded_papers.csv) and returns a FLAT dict of derived
 numbers. The Quarto manuscript's inline expressions look these up
 directly, so there is NO hand-typed methodology number in the prose.
+
+This module is PROJECT-OWNED (lives in `analysis/manuscript_stats.py`).
+It is NOT a plugin-shipped pipeline script. The plugin ships this file
+as a starting template; you extend `build_stats()` as the manuscript
+needs new facts. Every value returned must trace back to (a) a pipeline
+artefact file, (b) file-system metadata, or (c) a pipeline subprocess
+call — never a literal typed inline.
 
 Flat keys with dotted namespaces (e.g. `screen.n_included`). Flat
 lookup fails loudly on typos in the manuscript — `s['screen.xxx']`
@@ -12,12 +20,19 @@ raises KeyError. Nested dicts would silently return None on typos,
 which is a footgun.
 
 Usage in a Quarto setup chunk:
-    from analysis.stats import build_stats
+    from manuscript_stats import build_stats
     s = build_stats()
     # then `{python} s['screen.n_included']` anywhere in prose
 
 CLI:
-    python3 analysis/stats.py     # writes analysis/results/stats.json
+    python3 analysis/manuscript_stats.py    # writes analysis/results/manuscript_stats.json
+
+The output file (`manuscript_stats.json`) is for human inspection and
+the regression-test's content-integrity check. The manuscript itself
+calls `build_stats()` live at render time rather than reading the JSON,
+so hand-edits to the JSON have no effect on rendered output — but they
+are still forbidden by the `empirical-integrity` skill. Regenerate via
+the CLI only.
 """
 
 from __future__ import annotations
@@ -40,7 +55,7 @@ SEARCH_DEDUP_PATH    = PROJECT_ROOT / "analysis" / "raw" / "search_results.csv"
 ABSTRACT_LOG_PATH    = PROJECT_ROOT / "screening" / "abstract_screening.csv"
 FULLTEXT_LOG_PATH    = PROJECT_ROOT / "screening" / "fulltext_screening.csv"
 CODED_PAPERS_PATH    = PROJECT_ROOT / "analysis" / "results" / "coded_papers.csv"
-STATS_OUT_PATH       = PROJECT_ROOT / "analysis" / "results" / "stats.json"
+STATS_OUT_PATH       = PROJECT_ROOT / "analysis" / "results" / "manuscript_stats.json"
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +66,7 @@ STATS_OUT_PATH       = PROJECT_ROOT / "analysis" / "results" / "stats.json"
 # "growth aspirations; self-efficacy". Uncomment the list below to group
 # those strings into families. `_coding_stats()` then emits one
 # `coding.family.<slug>` key per family, and `tbl_construct_families(s)`
-# in `tables.py` renders them as a Findings table. Order matters — the
+# in `manuscript_tables.py` renders them as a Findings table. Order matters — the
 # first regex that matches wins, so put a broad "Other" last.
 #
 # To adapt to your own SLR: replace the field name in `_coding_stats()`

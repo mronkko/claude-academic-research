@@ -27,6 +27,29 @@ If the result is `configured`, proceed.
 
 ---
 
+## Bootstrap (first run in this project)
+
+Before running the audit, check that the regression-test backstop
+this skill relies on is installed in the project:
+
+```bash
+python -c "from pathlib import Path; missing = [f for f in ('scripts/test_common.py', 'scripts/test_citations.py') if not Path(f).is_file()]; print('ok' if not missing else 'missing: ' + ', '.join(missing))"
+```
+
+If the output lists missing files, install them:
+
+```bash
+mkdir -p scripts
+cp "${CLAUDE_PLUGIN_ROOT}/templates/test_common.py" scripts/
+cp "${CLAUDE_PLUGIN_ROOT}/templates/test_citations.py" scripts/
+```
+
+Tell the user what was installed and flag that the top of
+`scripts/test_citations.py` has project-specific paths they should
+review. Then proceed with the audit.
+
+---
+
 This skill is the standalone cousin of the `critic-loop` evidence
 critic. The evidence critic fires inside the revision loop; fact-check
 runs one-shot when the user explicitly asks for a citation/claim audit.
@@ -162,6 +185,25 @@ Path('.claude/fact-check').mkdir(parents=True, exist_ok=True)"`):
 Write a concise summary (~100 words) pointing at the report file, with
 MAJOR counts and one-line description of each MAJOR issue. Do not paste
 the full report into the chat.
+
+## Regression backstop
+
+Fact-check is a one-shot audit. The recurring companion is
+`scripts/test_citations.py` (installed by Bootstrap above; source at
+`${CLAUDE_PLUGIN_ROOT}/templates/test_citations.py`) — it catches the
+regressions that would show up on the *next* audit: unresolved
+`@citekey`s, bare *Author (YYYY)* mentions without a governing `@key`,
+and BBT-key drift in `coded_papers.csv`. Run it in the `critic-loop`
+test gate so fact-checkable issues never rebuild silently between
+audits.
+
+**Grow the suite with the audit.** Every MAJOR item in a fact-check
+report is a regression class. Before closing out the audit, promote
+each MAJOR into a test in `scripts/test_citations.py` (or
+`scripts/test_empirical_integrity.py` for hand-typed numbers) if a
+static check could catch it. The test failure then becomes the
+sentinel for the next cycle — the audit's value compounds rather
+than resetting each time.
 
 ## Red flags
 

@@ -38,9 +38,12 @@ ignore = ["E501"]
 # IDE static analysis: pipeline scripts add `scripts/` to sys.path at runtime
 # so they can import sibling packages (publishers, sources, core). Tell the
 # analyzer about it so imports like `from publishers.registry import ...`
-# resolve without warnings.
+# resolve without warnings. `templates/` is on the list so the test
+# templates (`test_citations.py`, `test_empirical_integrity.py`, `test_systematic_review.py`)
+# can import their sibling `test_common.py` — they sit next to each other
+# once copied into a project's `scripts/` directory.
 [tool.pyrefly]
-search-path = ["scripts", "scripts/pipelines"]
+search-path = ["scripts", "scripts/pipelines", "templates"]
 
 [tool.pyright]
-extraPaths = ["scripts", "scripts/pipelines"]
+extraPaths = ["scripts", "scripts/pipelines", "templates"]

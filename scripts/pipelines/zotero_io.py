@@ -36,6 +36,7 @@ import logging
 import sys
 import warnings
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
 
 # pyzotero ≤1.11 uses a deprecated `whenever.ZonedDateTime.py_datetime()`
@@ -60,6 +61,32 @@ from tenacity import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def parse_slr_coding_note(note_html: str) -> dict | None:
+    """Extract the machine-readable JSON payload from an SLR Coding
+    note written by `fulltext_code._build_slr_coding_note_html`.
+
+    Returns the decoded payload dict or `None` if no `SLR_CODING_DATA`
+    comment is present or the JSON is malformed. Used by
+    `export_coded_includes.py` to read coded fields from Zotero
+    authoritatively, bypassing the CSV log entirely.
+    """
+    import json
+    import re
+
+    match = re.search(
+        r"<!--\s*SLR_CODING_DATA:\s*(\{.*\})\s*-->",
+        note_html,
+        flags=re.DOTALL,
+    )
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group(1))
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        return None
 
 
 class VersionConflictError(RuntimeError):
@@ -439,6 +466,205 @@ class ZoteroClient:
                     f"{item_key}: version {current['version']} was stale"
                 ) from exc
             raise
+
+    @retry(
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception_type(VersionConflictError),
+        wait=wait_exponential(multiplier=1, max=10),
+        reraise=True,
+    )
+    def update_tags(
+        self,
+        item_key: str,
+        *,
+        add: Iterable[str] = (),
+        remove: Iterable[str] = (),
+        remove_prefixed: Iterable[str] = (),
+    ) -> int:
+        """Atomically add / remove tags on an item in a single PATCH.
+
+        The backbone of Zotero-as-ground-truth: screening scripts use
+        this to record decisions as stage tags (`abstract:include`,
+        `fulltext:exclude`, …) that resume logic then reads.
+
+        `add`: exact tags to add (no-op if already present).
+        `remove`: exact tags to remove (no-op if not present).
+        `remove_prefixed`: tags whose first `:`-segment matches any of
+          the given prefixes are removed. Use for atomic stage-tag
+          replacement — to flip `abstract:borderline` → `abstract:include`
+          in one write, pass `add=['abstract:include']` and
+          `remove_prefixed=['abstract:']`.
+
+        Returns the number of tags that changed (additions + removals).
+        Returns 0 without writing when the computed target tag set
+        equals the current set.
+
+        Retries up to 3 times on HTTP 412 by re-fetching the item's
+        current version, same pattern as `update_abstract`.
+        """
+        current = self.get_item(item_key)
+        data = current.get("data", {})
+        existing = {
+            t.get("tag", "")
+            for t in data.get("tags", [])
+            if t.get("tag")
+        }
+
+        add_set = {t for t in add if t}
+        remove_set = {t for t in remove if t}
+        prefix_tuple = tuple(p for p in remove_prefixed if p)
+
+        def _matches_prefix(tag: str) -> bool:
+            return any(tag.startswith(p) for p in prefix_tuple)
+
+        target = {
+            t for t in existing
+            if t not in remove_set and not _matches_prefix(t)
+        } | add_set
+
+        if target == existing:
+            return 0
+
+        payload = {
+            "key": item_key,
+            "version": current["version"],
+            "tags": [{"tag": t} for t in sorted(target)],
+        }
+        try:
+            self.cloud.update_item(payload)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 412:
+                raise VersionConflictError(
+                    f"{item_key}: version {current['version']} was stale "
+                    f"during tag update"
+                ) from exc
+            raise
+
+        added = len(target - existing)
+        removed = len(existing - target)
+        return added + removed
+
+    def get_tags(self, item_key: str) -> set[str]:
+        """Return the current set of tags on an item (for resume checks)."""
+        item = self.get_item(item_key)
+        return {
+            t.get("tag", "")
+            for t in item.get("data", {}).get("tags", [])
+            if t.get("tag")
+        }
+
+    def items_with_tag(
+        self,
+        collection_key: str,
+        tag: str,
+        *,
+        item_type: str = "journalArticle",
+    ) -> list[dict]:
+        """All items in the collection whose tag set contains `tag`.
+
+        Used by export / test scripts to read Zotero-authoritative state
+        (e.g. `items_with_tag(coll, 'fulltext:include')` enumerates the
+        included-paper set). Works against any tag vocabulary, not just
+        stage tags.
+        """
+        items = self.collection_items(collection_key, item_type=item_type)
+        return [
+            it for it in items
+            if any(
+                t.get("tag") == tag
+                for t in it.get("data", {}).get("tags", [])
+            )
+        ]
+
+    @retry(
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception_type(VersionConflictError),
+        wait=wait_exponential(multiplier=1, max=10),
+        reraise=True,
+    )
+    def upsert_child_note(
+        self,
+        parent_key: str,
+        marker: str,
+        note_html: str,
+    ) -> str:
+        """Create or update a child note on `parent_key` identified by
+        `marker`. The marker is a string the note's HTML content starts
+        with (e.g. `<h1>SLR Coding</h1>`); this lets us find our own
+        note among any other child notes the user may have added.
+
+        If a note starting with `marker` already exists under the
+        parent, its `note` field is overwritten with `note_html`. If no
+        such note exists, a new one is created.
+
+        Returns the Zotero key of the note (new or existing). Retries
+        on HTTP 412 version conflicts.
+
+        `note_html` must begin with `marker` for subsequent runs to
+        find and update it rather than creating duplicates.
+        """
+        if not note_html.startswith(marker):
+            raise ValueError(
+                f"note_html must begin with the marker {marker!r} so the "
+                f"next upsert can find and update it."
+            )
+
+        # Find existing note with the marker.
+        existing: dict | None = None
+        for child in self.cloud.children(parent_key):
+            data = child.get("data", {})
+            if data.get("itemType") != "note":
+                continue
+            if (data.get("note") or "").lstrip().startswith(marker):
+                existing = child
+                break
+
+        if existing is None:
+            # Create new note.
+            payload = {
+                "itemType": "note",
+                "parentItem": parent_key,
+                "note": note_html,
+                "tags": [],
+                "collections": [],
+                "relations": {},
+            }
+            resp = self.cloud.create_items([payload])
+            # pyzotero returns a dict with 'success' / 'failed' keys.
+            success = resp.get("success") or resp.get("successful") or {}
+            if isinstance(success, dict):
+                keys = list(success.values())
+                if keys:
+                    first = keys[0]
+                    if isinstance(first, dict):
+                        return first.get("key") or first.get("data", {}).get("key", "")
+                    return str(first)
+            failed = resp.get("failed") or resp.get("failure") or {}
+            raise RuntimeError(
+                f"upsert_child_note: create_items did not return a key "
+                f"for parent {parent_key}: success={success!r} failed={failed!r}"
+            )
+
+        # Update existing note.
+        existing_data = existing.get("data", {})
+        note_key = existing_data.get("key", existing.get("key", ""))
+        note_version = existing_data.get("version", existing.get("version", 0))
+        payload = {
+            "key": note_key,
+            "version": note_version,
+            "note": note_html,
+        }
+        try:
+            self.cloud.update_item(payload)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 412:
+                raise VersionConflictError(
+                    f"{note_key}: version {note_version} was stale during "
+                    f"child-note upsert"
+                ) from exc
+            raise
+
+        return note_key
 
     def attach_pdf(self, item_key: str, pdf_path: str | Path) -> str | None:
         """Upload a PDF as a child attachment of `item_key`.

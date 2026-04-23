@@ -9,8 +9,21 @@
 """LLM-driven title+abstract screening for a systematic review.
 
 Reads items from a Zotero collection, screens each title+abstract via
-Claude Haiku (configurable; temperature=0), and writes decisions to an
-append-only CSV log. Resumable: re-running skips items already logged.
+Claude Haiku (configurable; temperature=0), and writes the decision in
+two places:
+
+1. As an `abstract:include` / `abstract:exclude` / `abstract:borderline`
+   Zotero tag on the item — this is the authoritative state per the
+   `systematic-review` skill's Zotero-as-ground-truth principle.
+   Downstream stages (`fulltext_code.py`, `export_coded_includes.py`)
+   filter by this tag.
+2. As an append-only row in `screening/abstract_screening.csv` — this
+   is the run-history for provenance (who decided what, when, with
+   which model and prompt version).
+
+Resumable: re-running reads the collection's items, skips any that
+already carry an `abstract:*` tag, and processes the rest. The CSV log
+is not consulted for resume decisions.
 
 Reads the screening prompt from a per-project `screening_config.py`
 (see `${CLAUDE_PLUGIN_ROOT}/templates/screening_config.py`) so the
@@ -25,7 +38,10 @@ Usage:
         --output screening/abstract_screening.csv
 
 Flags: --dry-run (print prompt, no API calls), --sample N (random
-subset), --workers N (parallel API calls; default 8).
+subset), --workers N (parallel API calls; default 8),
+--csv-backfill (read the CSV log and apply tags for any item with a
+decision but no Zotero tag — one-time migration from pre-Zotero-as-truth
+deployments; no LLM calls made).
 """
 
 from __future__ import annotations
@@ -93,16 +109,73 @@ def _format_user_message(title: str, abstract: str, source: str,
     return "\n\n".join(parts)
 
 
-def _load_already_screened(path: Path) -> set[str]:
+STAGE_TAG_PREFIX = "abstract:"
+
+
+def _already_tagged(items: list[dict]) -> set[str]:
+    """Items that already have any `abstract:*` tag in Zotero — these are
+    'done' for resume purposes. Canonical source of truth."""
+    done: set[str] = set()
+    for it in items:
+        tags = {
+            t.get("tag", "")
+            for t in it.get("data", {}).get("tags", [])
+        }
+        if any(t.startswith(STAGE_TAG_PREFIX) for t in tags):
+            done.add(it["key"])
+    return done
+
+
+def _csv_decisions(path: Path) -> dict[str, str]:
+    """Last-decision-per-key map from the CSV log. Used ONLY for
+    `--csv-backfill` migration, not for resume decisions."""
     if not path.exists():
-        return set()
-    keys: set[str] = set()
+        return {}
+    latest: dict[str, str] = {}
     with path.open(newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             k = row.get("item_key")
-            if k:
-                keys.add(k)
-    return keys
+            d = row.get("decision", "")
+            if k and d in VALID_DECISIONS:
+                latest[k] = d
+    return latest
+
+
+def _run_csv_backfill(
+    zot: zotero_io.ZoteroClient,
+    coll_items: list[dict],
+    output_path: Path,
+) -> int:
+    """One-time migration: apply abstract:* tags from CSV decisions for
+    items that have a CSV decision but no Zotero tag yet. No LLM calls.
+    Exits with 0 on success, 1 on partial failure."""
+    tagged = _already_tagged(coll_items)
+    csv_done = _csv_decisions(output_path)
+    drift = {k: d for k, d in csv_done.items() if k not in tagged}
+
+    if not drift:
+        print("Nothing to backfill — all CSV-decided items already have "
+              "abstract:* tags in Zotero.", flush=True)
+        return 0
+
+    print(f"Backfilling abstract:* tags for {len(drift)} item(s)...",
+          flush=True)
+    applied = 0
+    failed = 0
+    for key, decision in drift.items():
+        tag = f"{STAGE_TAG_PREFIX}{decision}"
+        try:
+            zot.update_tags(
+                key, add=[tag], remove_prefixed=[STAGE_TAG_PREFIX],
+            )
+            applied += 1
+        except Exception as e:  # noqa: BLE001 — per-item tolerance
+            failed += 1
+            print(f"  FAILED {key}: {e}", flush=True)
+
+    print(f"Backfill complete: {applied} tagged, {failed} failed.",
+          flush=True)
+    return 0 if failed == 0 else 1
 
 
 def _load_doi_to_query(search_csv: Path | None) -> dict[str, str]:
@@ -137,6 +210,11 @@ def main() -> int:
                         help="Screen a random sample of N items (0 = all).")
     parser.add_argument("--workers", type=int, default=8,
                         help="Parallel API workers (default: 8).")
+    parser.add_argument("--csv-backfill", action="store_true",
+                        help="One-time migration from pre-Zotero-as-truth "
+                             "deployments: read CSV decisions and apply "
+                             "matching abstract:* tags for items that don't "
+                             "have one yet. Makes no LLM calls; exits after.")
     args = parser.parse_args()
 
     if not args.group:
@@ -144,7 +222,7 @@ def main() -> int:
 
     api_key = "" if args.dry_run else require("zotero", "api_key",
                                               env="ZOTERO_API_KEY")
-    if not args.dry_run and not os.environ.get("ANTHROPIC_API_KEY"):
+    if not args.dry_run and not args.csv_backfill and not os.environ.get("ANTHROPIC_API_KEY"):
         require("anthropic", "api_key", env="ANTHROPIC_API_KEY")
         # config_loader.require raised SystemExit already if missing
 
@@ -162,10 +240,24 @@ def main() -> int:
     coll_items = zot.collection_items(args.collection, item_type="journalArticle")
     print(f"  {len(coll_items)} items in collection", flush=True)
 
-    already = _load_already_screened(output_path)
-    to_screen = [it for it in coll_items if it["key"] not in already]
-    print(f"  Already screened: {len(already)}, remaining: {len(to_screen)}",
-          flush=True)
+    if args.csv_backfill:
+        return _run_csv_backfill(zot, coll_items, output_path)
+
+    tagged = _already_tagged(coll_items)
+    to_screen = [it for it in coll_items if it["key"] not in tagged]
+    print(f"  Already tagged (abstract:*): {len(tagged)}, remaining: "
+          f"{len(to_screen)}", flush=True)
+
+    # Warn on tag/CSV drift: items with CSV decisions but no matching tag.
+    csv_done = set(_csv_decisions(output_path).keys())
+    drift = csv_done - tagged
+    if drift:
+        print(
+            f"  WARNING: {len(drift)} item(s) in CSV log lack "
+            f"abstract:* tags in Zotero. Run with --csv-backfill to "
+            f"apply tags from CSV decisions.",
+            flush=True,
+        )
 
     if args.sample and args.sample < len(to_screen):
         to_screen = random.sample(to_screen, args.sample)
@@ -234,6 +326,20 @@ def main() -> int:
         except Exception as e:
             decision = "error"
             reason = str(e)[:200]
+
+        # Apply stage tag to Zotero. Non-fatal — if tag write fails
+        # (network, version conflict after retries), the decision still
+        # lands in the CSV and a subsequent re-run will detect the
+        # untagged item and re-screen it.
+        if decision in VALID_DECISIONS:
+            try:
+                zot.update_tags(
+                    key,
+                    add=[f"{STAGE_TAG_PREFIX}{decision}"],
+                    remove_prefixed=[STAGE_TAG_PREFIX],
+                )
+            except Exception as tag_exc:  # noqa: BLE001
+                reason = f"{reason} [TAG WRITE FAILED: {tag_exc}]"[:400]
 
         return key, doi, title, source, query, decision, reason
 

@@ -96,6 +96,142 @@ enrich_pdfs.py --all --group <id> --filter-keys-file /tmp/audit.missing_pdf.keys
 - `audit_zotero_library.py`: adds `missing_doi_count` / `missing_doi`
   to the JSON report and writes the corresponding `.keys` file.
 
+### Manuscript-facing stats/tables rename and provenance enforcement
+
+The per-project "stats producer" module and its pandas companion have
+both been renamed to make their role explicit. `stats.py` → generic;
+`manuscript_stats.py` names the consumer and distinguishes it from
+any library statistics code. The JSON it writes and the tables module
+follow suit so the three manuscript-facing artefacts read as a matched
+set.
+
+**Renames (downstream users need to rename their local copies):**
+
+- `templates/stats.py` → `templates/manuscript_stats.py`.
+  Your project's copy: `analysis/stats.py` → `analysis/manuscript_stats.py`.
+- `templates/tables.py` → `templates/manuscript_tables.py`.
+  Your project's copy: `manuscript/tables.py` → `manuscript/manuscript_tables.py`.
+- Generated output: `analysis/results/stats.json` →
+  `analysis/results/manuscript_stats.json`. Regenerate via
+  `python3 analysis/manuscript_stats.py` after renaming the producer;
+  the old JSON can be deleted.
+- Manuscript `.qmd` imports update automatically when you re-copy
+  `templates/manuscript.qmd`, or manually change `from stats import
+  build_stats` to `from manuscript_stats import build_stats` and
+  `from tables import …` to `from manuscript_tables import …`.
+
+The function names stay (`build_stats()`, `tbl_methods()`, etc.) — no
+API churn for downstream code that already imports them.
+
+### Provenance enforcement for `manuscript_stats.json`
+
+Four layers protect the new JSON from the hallucination attack surface
+"Claude hand-edits the JSON to fix a missing key":
+
+- **Skill rules** in `empirical-integrity/SKILL.md`: the *What is never
+  acceptable* list and the *Red flags* list now ban Edit/Write on
+  `analysis/results/manuscript_stats.json` and ban hardcoded literals
+  inside `build_stats()`.
+- **Ownership and lifecycle** subsection: makes explicit that
+  `manuscript_stats.py` is project-owned, extended by the researcher,
+  and that every value in the dict must trace to a pipeline artefact /
+  file metadata / subprocess call.
+- **Permission deny rules** in `.claude/settings.json`: Bootstrap step
+  now merges idempotent `Write` / `Edit` deny rules for
+  `//**/analysis/results/**` so the tool layer refuses direct edits.
+- **Content-integrity test** in `test_empirical_integrity.py`: the new
+  `test_stats_json_matches_build_stats` imports `build_stats()` live
+  and diffs the result against the on-disk JSON. Replaces the previous
+  mtime-based freshness check — catches both staleness and tampering.
+  The inline-resolution test (`test_inline_stats_keys_resolve`) now
+  also uses the live `build_stats()` return value, falling back to the
+  JSON only when the producer module isn't importable.
+
+### Zotero as ground truth for screening and coding
+
+Screening decisions, coding fields, predatory-journal status, and
+adjudication outcomes now live on the Zotero item — as tags and as a
+structured child note — rather than only in CSV logs. The CSV logs
+remain as run-history (who decided what, when, with which model and
+prompt version), but **Zotero is the authoritative source**: the
+manuscript, the export script, the regression tests, and the
+adjudication UX all read Zotero, not the CSV.
+
+This resolves a long-standing gap: `fulltext_code.py` previously
+printed "Deferred to a later plugin release: automatic write-back of
+tags and coded-field child notes to Zotero". That deferral is gone.
+
+**Tag writes at screening time:**
+
+- `abstract_screen.py` now writes `abstract:include` /
+  `abstract:exclude` / `abstract:borderline` tags after every
+  decision, and resumes from Zotero tags rather than the CSV log.
+- `fulltext_code.py` now writes `fulltext:include` /
+  `fulltext:exclude` tags after every decision (errors stay
+  untagged so re-runs retry them), and resumes from Zotero tags.
+  `--full-recode` clears the stage tag before re-processing.
+- `import_to_zotero.py` runs the existing `sources/predatory.py`
+  check at import time and adds a `predatory:flag` tag to items
+  whose journal appears on Beall's list — the author sees the
+  warning in Zotero. Flag, not exclude.
+- Both screening scripts accept a new `--csv-backfill` flag that
+  applies tags from existing CSV decisions without any LLM calls —
+  the migration path for projects upgrading from the previous
+  CSV-only pipeline.
+
+**SLR Coding child note:**
+
+- `fulltext_code.py` writes (or overwrites) an `SLR Coding` child
+  note on every included paper. The note has a visible HTML body
+  (decision, reason, each coding field as `<h2>` + `<p>`) that the
+  adjudicator reads directly in Zotero, plus a trailing
+  `<!-- SLR_CODING_DATA: {…} -->` comment carrying the same data as
+  machine-parseable JSON for downstream scripts.
+
+**`zotero_io.py` helpers:**
+
+- `update_tags(item_key, add, remove, remove_prefixed)` — atomic
+  tag add/remove in a single PATCH, with tenacity retry on HTTP 412.
+  Supports stage-tag flips via `remove_prefixed=['abstract:']`.
+- `get_tags(item_key)` — read tags for resume checks.
+- `items_with_tag(collection, tag)` — enumerate tagged items in a
+  collection; used by the export script.
+- `upsert_child_note(parent_key, marker, note_html)` — create a new
+  note or update an existing one identified by a content marker.
+  The marker approach means re-runs don't create duplicate notes
+  and the upsert never touches user-authored notes.
+- `parse_slr_coding_note(note_html)` — extract the JSON payload
+  from an SLR Coding note's comment block.
+
+**`export_coded_includes.py` reads from Zotero:**
+
+The script no longer takes `--log-csv`. It takes `--group` and
+`--collection`, queries items tagged `fulltext:include`, fetches
+each item's `SLR Coding` note, parses the JSON payload, and merges
+it with bibliographic fields from the Zotero item (title, authors,
+year, journal, DOI, Better BibTeX key from `extra`). Adjudication
+flips propagate automatically because tags are authoritative;
+exclusion-code corrections propagate because the note is
+authoritative. Missing SLR Coding notes on tagged items are
+surfaced as warnings, never silently dropped.
+
+**Regression tests added to `templates/test_systematic_review.py`
+(now 14 active tests, up from 12):**
+
+- `fulltext tags consistent with CSV log` — drift check: every
+  Zotero `fulltext:*` tag must have a matching CSV decision, and
+  every CSV include/exclude must have a matching tag.
+- `every fulltext:include item has SLR Coding note` — if an item
+  is tagged include but lacks a coded note, the export pipeline
+  has nothing to read.
+
+**Skill update** — `skills/systematic-review/SKILL.md` gained a top-
+level *Zotero tag and note conventions* section (the consolidated
+catalogue of all tags and child notes), reworded the *Core
+architecture* principles to name Zotero as ground truth, and
+rewrote the adjudication loop so tag flips are atomic with decision
+flips.
+
 ## [0.4.0] — unreleased
 
 ### Two-pass PDF retrieval: API cascade first, browser + Connector on residuals

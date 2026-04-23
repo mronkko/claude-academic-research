@@ -5,6 +5,27 @@ description: Use when inserting a new citation into academic prose, attributing 
 
 # Grounded citations
 
+## Bootstrap (first run in this project)
+
+Before applying the rules below, check that this skill's regression
+tests are installed in the project:
+
+```bash
+python -c "from pathlib import Path; missing = [f for f in ('scripts/test_common.py', 'scripts/test_citations.py') if not Path(f).is_file()]; print('ok' if not missing else 'missing: ' + ', '.join(missing))"
+```
+
+If the output lists missing files, install them:
+
+```bash
+mkdir -p scripts
+cp "${CLAUDE_PLUGIN_ROOT}/templates/test_common.py" scripts/
+cp "${CLAUDE_PLUGIN_ROOT}/templates/test_citations.py" scripts/
+```
+
+Then tell the user what was installed and flag that the top of
+`scripts/test_citations.py` has project-specific paths (manuscript,
+`references.bib`, optional `coded_papers.csv`) they should review.
+
 ## Core rule
 
 Every citation Claude inserts into academic prose must satisfy **all four**
@@ -66,6 +87,24 @@ Procedures for *adding papers to Zotero*, *fixing BBT keys*, and
 in `scripts/pipelines/generate_bib.py`. Bulk citation workflows for
 systematic reviews live in `systematic-review`. Auditing citations in an
 existing draft is `fact-check`'s job.
+
+## Regression backstop
+
+`scripts/test_citations.py` (installed by Bootstrap above; source at
+`${CLAUDE_PLUGIN_ROOT}/templates/test_citations.py`) is the recurring
+test that catches violations of the rules above: unresolved
+`@citekey`s, bare *Author (YYYY)* mentions without a governing `@key`,
+and BBT-key uniqueness. Runs in the `critic-loop` test gate alongside
+`test_empirical_integrity.py` and (for SR projects)
+`test_systematic_review.py`.
+
+**Grow the suite with the project.** When you discover a new citation
+failure mode this skill's rule would prevent — a new
+reference-manager key format, a new prose pattern that smuggles in
+uncited author-year mentions, a DOI-resolution check the project
+needs — add the test to `scripts/test_citations.py` before closing
+out the task. The failure becomes the sentinel so the same class of
+mistake can't silently return.
 
 ## Red flags
 

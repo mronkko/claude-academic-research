@@ -604,3 +604,290 @@ def test_merge_duplicate_item_reports_trash_failure(monkeypatch, caplog) -> None
     assert stats["trashed"] == []
     assert any("trash PATCH returned HTTP 412" in r.message
                for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# update_tags / get_tags — the tag write-back backbone of Zotero-as-truth.
+# ---------------------------------------------------------------------------
+
+
+def _tagged_item(key: str, version: int, tags: list[str]) -> dict:
+    """Fake Zotero item payload with the given tags."""
+    return {
+        "key": key,
+        "version": version,
+        "data": {
+            "key": key,
+            "version": version,
+            "tags": [{"tag": t} for t in tags],
+        },
+    }
+
+
+def test_update_tags_adds_new_tag_preserving_existing() -> None:
+    zc = _client()
+    fake_cloud = MagicMock()
+    fake_cloud.item.return_value = _tagged_item("X1", 5, ["keep:me"])
+    fake_cloud.update_item.return_value = MagicMock(status_code=204)
+    zc._cloud = fake_cloud
+
+    changes = zc.update_tags("X1", add=["abstract:include"])
+
+    assert changes == 1
+    # Payload merges existing + new, sorted.
+    expected_payload = {
+        "key": "X1",
+        "version": 5,
+        "tags": [{"tag": "abstract:include"}, {"tag": "keep:me"}],
+    }
+    fake_cloud.update_item.assert_called_once_with(expected_payload)
+
+
+def test_update_tags_noop_when_target_equals_existing() -> None:
+    """If the computed target tag set equals the current set, skip the
+    PATCH entirely — saves a network round-trip for items already in
+    the desired state."""
+    zc = _client()
+    fake_cloud = MagicMock()
+    fake_cloud.item.return_value = _tagged_item(
+        "X1", 5, ["abstract:include", "keep:me"],
+    )
+    zc._cloud = fake_cloud
+
+    changes = zc.update_tags("X1", add=["abstract:include"])
+
+    assert changes == 0
+    fake_cloud.update_item.assert_not_called()
+
+
+def test_update_tags_remove_prefixed_replaces_stage_tag_atomically() -> None:
+    """The canonical flip pattern: swap abstract:borderline → abstract:include
+    in a single PATCH by combining add + remove_prefixed."""
+    zc = _client()
+    fake_cloud = MagicMock()
+    fake_cloud.item.return_value = _tagged_item(
+        "X1", 5, ["abstract:borderline", "predatory:flag"],
+    )
+    fake_cloud.update_item.return_value = MagicMock(status_code=204)
+    zc._cloud = fake_cloud
+
+    changes = zc.update_tags(
+        "X1",
+        add=["abstract:include"],
+        remove_prefixed=["abstract:"],
+    )
+
+    # +abstract:include, -abstract:borderline = 2 changes.
+    assert changes == 2
+    fake_cloud.update_item.assert_called_once_with({
+        "key": "X1",
+        "version": 5,
+        "tags": [{"tag": "abstract:include"}, {"tag": "predatory:flag"}],
+    })
+
+
+def test_update_tags_remove_exact() -> None:
+    zc = _client()
+    fake_cloud = MagicMock()
+    fake_cloud.item.return_value = _tagged_item(
+        "X1", 5, ["qa-flag", "qa-hard", "abstract:include"],
+    )
+    fake_cloud.update_item.return_value = MagicMock(status_code=204)
+    zc._cloud = fake_cloud
+
+    changes = zc.update_tags("X1", remove=["qa-flag", "qa-hard"])
+
+    assert changes == 2
+    fake_cloud.update_item.assert_called_once_with({
+        "key": "X1",
+        "version": 5,
+        "tags": [{"tag": "abstract:include"}],
+    })
+
+
+def test_update_tags_retries_on_412_version_conflict(monkeypatch) -> None:
+    """The @retry decorator catches VersionConflictError and re-runs
+    update_tags, which re-fetches the item's current version."""
+    import httpx
+    zc = _client()
+    fake_cloud = MagicMock()
+
+    fake_cloud.item.side_effect = [
+        _tagged_item("X1", 5, []),
+        _tagged_item("X1", 6, []),
+    ]
+    conflict = httpx.HTTPStatusError(
+        "Precondition Failed",
+        request=httpx.Request("PATCH", "http://test"),
+        response=httpx.Response(412),
+    )
+    fake_cloud.update_item.side_effect = [conflict, MagicMock(status_code=204)]
+    zc._cloud = fake_cloud
+
+    import tenacity
+    monkeypatch.setattr(zc.update_tags.retry, "wait", tenacity.wait_none())
+
+    changes = zc.update_tags("X1", add=["fulltext:include"])
+
+    assert changes == 1
+    assert fake_cloud.item.call_count == 2
+    assert fake_cloud.update_item.call_count == 2
+
+
+def test_get_tags_returns_set_of_tag_names() -> None:
+    zc = _client()
+    fake_cloud = MagicMock()
+    fake_cloud.item.return_value = _tagged_item(
+        "X1", 5, ["abstract:include", "predatory:flag", ""],
+    )
+    zc._cloud = fake_cloud
+
+    tags = zc.get_tags("X1")
+
+    assert tags == {"abstract:include", "predatory:flag"}
+
+
+def test_get_tags_returns_empty_set_for_untagged_item() -> None:
+    zc = _client()
+    fake_cloud = MagicMock()
+    fake_cloud.item.return_value = _tagged_item("X1", 5, [])
+    zc._cloud = fake_cloud
+
+    assert zc.get_tags("X1") == set()
+
+
+# ---------------------------------------------------------------------------
+# upsert_child_note — creates a new note if none exists; updates in place
+# if a matching-marker note is already attached. Used by fulltext_code.py
+# to write/overwrite the SLR Coding child note.
+# ---------------------------------------------------------------------------
+
+
+MARKER = "<h1>SLR Coding</h1>"
+
+
+def _note_child(key: str, version: int, body: str) -> dict:
+    return {
+        "key": key,
+        "version": version,
+        "data": {
+            "key": key,
+            "version": version,
+            "itemType": "note",
+            "note": body,
+        },
+    }
+
+
+def _non_note_child(key: str) -> dict:
+    return {
+        "key": key,
+        "data": {"key": key, "itemType": "attachment"},
+    }
+
+
+def test_upsert_child_note_creates_new_note_when_none_exists() -> None:
+    zc = _client()
+    fake_cloud = MagicMock()
+    fake_cloud.children.return_value = [_non_note_child("ATT1")]
+    # pyzotero's create_items returns success keyed by index as string.
+    fake_cloud.create_items.return_value = {
+        "success": {"0": {"key": "NEW1", "data": {"key": "NEW1"}}},
+    }
+    zc._cloud = fake_cloud
+
+    body = f"{MARKER}\n<p>Decision: include</p>"
+    key = zc.upsert_child_note("PARENT", marker=MARKER, note_html=body)
+
+    assert key == "NEW1"
+    fake_cloud.create_items.assert_called_once()
+    call_payload = fake_cloud.create_items.call_args[0][0][0]
+    assert call_payload["itemType"] == "note"
+    assert call_payload["parentItem"] == "PARENT"
+    assert call_payload["note"] == body
+    fake_cloud.update_item.assert_not_called()
+
+
+def test_upsert_child_note_updates_existing_note_matching_marker() -> None:
+    zc = _client()
+    fake_cloud = MagicMock()
+    # One non-note child and one note that starts with MARKER.
+    old_note = _note_child("N1", 12, f"{MARKER}\n<p>old body</p>")
+    fake_cloud.children.return_value = [_non_note_child("ATT1"), old_note]
+    fake_cloud.update_item.return_value = MagicMock(status_code=204)
+    zc._cloud = fake_cloud
+
+    new_body = f"{MARKER}\n<p>new body</p>"
+    key = zc.upsert_child_note("PARENT", marker=MARKER, note_html=new_body)
+
+    assert key == "N1"
+    # No new items created.
+    fake_cloud.create_items.assert_not_called()
+    # Update patched the existing note with its version.
+    fake_cloud.update_item.assert_called_once_with({
+        "key": "N1", "version": 12, "note": new_body,
+    })
+
+
+def test_upsert_child_note_ignores_unrelated_notes() -> None:
+    """A paper may have user-authored child notes (reading notes,
+    annotations-as-notes). Our upsert must only touch notes that start
+    with the marker — never overwrite the user's work."""
+    zc = _client()
+    fake_cloud = MagicMock()
+    user_note = _note_child("U1", 3, "<p>My reading notes. Very important.</p>")
+    fake_cloud.children.return_value = [user_note]
+    fake_cloud.create_items.return_value = {
+        "success": {"0": {"key": "NEW1"}},
+    }
+    zc._cloud = fake_cloud
+
+    body = f"{MARKER}\n<p>Decision: include</p>"
+    key = zc.upsert_child_note("PARENT", marker=MARKER, note_html=body)
+
+    assert key == "NEW1"
+    fake_cloud.create_items.assert_called_once()
+    # The user's note must NOT have been touched.
+    fake_cloud.update_item.assert_not_called()
+
+
+def test_upsert_child_note_rejects_body_without_marker() -> None:
+    """Guardrail: if note_html doesn't start with the marker, subsequent
+    upserts won't find and update it — we'd leak duplicate notes. Fail
+    loudly at the call site."""
+    zc = _client()
+    zc._cloud = MagicMock()
+
+    with pytest.raises(ValueError, match="must begin with the marker"):
+        zc.upsert_child_note("PARENT", marker=MARKER, note_html="<p>oops</p>")
+
+
+def test_upsert_child_note_retries_on_412_version_conflict(monkeypatch) -> None:
+    import httpx
+    zc = _client()
+    fake_cloud = MagicMock()
+
+    # children() returns the old note twice (once per attempt); update
+    # fails first with 412, succeeds second.
+    old_note_v1 = _note_child("N1", 12, f"{MARKER}\n<p>old</p>")
+    old_note_v2 = _note_child("N1", 13, f"{MARKER}\n<p>old</p>")
+    fake_cloud.children.side_effect = [[old_note_v1], [old_note_v2]]
+    conflict = httpx.HTTPStatusError(
+        "Precondition Failed",
+        request=httpx.Request("PATCH", "http://test"),
+        response=httpx.Response(412),
+    )
+    fake_cloud.update_item.side_effect = [conflict, MagicMock(status_code=204)]
+    zc._cloud = fake_cloud
+
+    import tenacity
+    monkeypatch.setattr(
+        zc.upsert_child_note.retry, "wait", tenacity.wait_none(),
+    )
+
+    new_body = f"{MARKER}\n<p>new</p>"
+    key = zc.upsert_child_note("PARENT", marker=MARKER, note_html=new_body)
+
+    assert key == "N1"
+    assert fake_cloud.children.call_count == 2
+    assert fake_cloud.update_item.call_count == 2

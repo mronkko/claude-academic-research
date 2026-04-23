@@ -10,17 +10,27 @@
 # ///
 """LLM-driven full-text screening + structured coding for an SLR.
 
-Reads items from a Zotero collection (typically those marked `include`
-or `borderline` at the abstract stage), locates each paper's PDF
-attachment, extracts the full text (pdfplumber with pypdf fallback),
-then passes title + full text to Claude Sonnet for a single decision
-(`include` / `exclude`) plus extraction of the coding fields declared
-in the project's `screening_config.py`.
+Reads items from a Zotero collection (typically those marked
+`abstract:include` or `abstract:borderline` at the abstract stage),
+locates each paper's PDF attachment, extracts the full text
+(pdfplumber with pypdf fallback), then passes title + full text to
+Claude Sonnet for a single decision (`include` / `exclude`) plus
+extraction of the coding fields declared in the project's
+`screening_config.py`.
 
-Writes an append-only CSV with the dynamically-sized schema derived
-from `FULLTEXT_CODING_FIELDS`. Resumable: re-running skips items whose
-last logged decision is `include` or `exclude`; `--rerun` reprocesses
-`error` rows; `--full-recode` backs up the log and rebuilds.
+Writes the decision in two places:
+
+1. As a `fulltext:include` / `fulltext:exclude` Zotero tag on the
+   item — the authoritative state (per the `systematic-review`
+   skill's Zotero-as-ground-truth principle). Error rows are NOT
+   tagged, so a re-run naturally retries them.
+2. As an append-only row in `screening/fulltext_screening.csv` — the
+   run-history for provenance.
+
+Resumable: on start, reads the collection's items, skips any that
+already carry `fulltext:include` / `fulltext:exclude`, and processes
+the rest. `--full-recode` removes the stage tag first so every item
+is re-coded.
 
 The prompt, model, and coding schema all come from the per-project
 config — the plugin's copy of this script is deliberately generic.
@@ -31,7 +41,9 @@ Usage:
         --output screening/fulltext_screening.csv
 
 Common flags: --dry-run (print first prompt, no API calls),
---limit N, --only-keys K1,K2,..., --workers N, --rerun, --full-recode.
+--limit N, --only-keys K1,K2,..., --workers N, --rerun, --full-recode,
+--csv-backfill (one-time migration: apply fulltext:* tags from CSV
+decisions, no LLM calls; exits after).
 """
 
 from __future__ import annotations
@@ -72,6 +84,87 @@ import zotero_io  # noqa: E402
 # leaves headroom for prompt + response in Sonnet's 200k context).
 SOFT_FULLTEXT_CHAR_CAP = 720_000
 PLACEHOLDER = "{coding_fields_json_placeholder}"
+
+# Marker at the top of the SLR Coding child note — used to find and
+# overwrite our own note among an item's children without touching
+# any user-authored notes.
+SLR_CODING_NOTE_MARKER = "<h1>SLR Coding</h1>"
+
+
+def _build_slr_coding_note_html(
+    row: dict,
+    fields: list[dict],
+    prompt_version: str,
+) -> str:
+    """Render a coded row as an HTML note body for Zotero.
+
+    Two layers in one note:
+    - The visible HTML above (h2 headings + paragraphs) is the
+      adjudicator's view in Zotero Desktop.
+    - A trailing `<!-- SLR_CODING_DATA: {json} -->` comment carries the
+      same data in machine-parseable JSON. `export_coded_includes.py`
+      reads the JSON block, not the HTML, so presentation changes don't
+      break the export pipeline.
+
+    Skips fields whose value is empty (the coder had nothing to say).
+    """
+    import json
+    from html import escape
+
+    parts = [SLR_CODING_NOTE_MARKER]
+    decision = row.get("decision", "")
+    reason = row.get("reason", "")
+    exclusion_code = row.get("exclusion_code", "")
+
+    parts.append(f"<p><strong>Decision:</strong> {escape(decision)}</p>")
+    if exclusion_code:
+        parts.append(
+            f"<p><strong>Exclusion code:</strong> {escape(exclusion_code)}</p>"
+        )
+    if reason:
+        parts.append(f"<p><strong>Reason:</strong> {escape(reason)}</p>")
+
+    for f in fields:
+        name = f.get("name", "")
+        if not name:
+            continue
+        value = (row.get(name) or "").strip()
+        if not value:
+            continue
+        # Human-readable label: snake_case → Title Case.
+        label = name.replace("_", " ").title()
+        parts.append(f"<h2>{escape(label)}</h2>")
+        # Preserve paragraph breaks; don't blow up on HTML inside values.
+        for para in value.split("\n\n"):
+            para = para.strip()
+            if para:
+                parts.append(f"<p>{escape(para)}</p>")
+
+    parts.append(
+        f"<hr/><p><em>Produced by fulltext_code.py — "
+        f"model={escape(str(row.get('model', '')))}; "
+        f"prompt_version={escape(str(prompt_version))}; "
+        f"timestamp={escape(str(row.get('timestamp', '')))}</em></p>"
+    )
+
+    # Machine-parseable JSON block (an HTML comment, hidden from Zotero's
+    # note renderer). `export_coded_includes.py` extracts this rather
+    # than parsing the HTML above.
+    data_payload: dict = {
+        "decision": decision,
+        "exclusion_code": exclusion_code,
+        "reason": reason,
+        "model": row.get("model", ""),
+        "prompt_version": prompt_version,
+        "timestamp": row.get("timestamp", ""),
+        "fields": {f["name"]: row.get(f["name"], "")
+                   for f in fields if f.get("name")},
+    }
+    parts.append(
+        f"<!-- SLR_CODING_DATA: "
+        f"{json.dumps(data_payload, ensure_ascii=False)} -->"
+    )
+    return "\n".join(parts)
 
 
 def _load_screening_config(path: str):
@@ -132,7 +225,28 @@ def _csv_columns(coding_fields: list[dict]) -> list[str]:
     ]
 
 
+STAGE_TAG_PREFIX = "fulltext:"
+STAGE_TAG_VALUES = ("include", "exclude")
+
+
+def _already_tagged(items: list[dict]) -> set[str]:
+    """Items that already have `fulltext:include` or `fulltext:exclude`
+    in Zotero — these are 'done' for resume purposes. Canonical source."""
+    stage_tags = {f"{STAGE_TAG_PREFIX}{v}" for v in STAGE_TAG_VALUES}
+    done: set[str] = set()
+    for it in items:
+        tags = {
+            t.get("tag", "")
+            for t in it.get("data", {}).get("tags", [])
+        }
+        if tags & stage_tags:
+            done.add(it["key"])
+    return done
+
+
 def _load_last_decisions(path: Path) -> dict[str, str]:
+    """Last CSV decision per key. Used for the `--rerun` path (retry
+    `error` rows) and for `--csv-backfill`, NOT for resume decisions."""
     if not path.exists():
         return {}
     last: dict[str, str] = {}
@@ -142,6 +256,46 @@ def _load_last_decisions(path: Path) -> dict[str, str]:
             if k:
                 last[k] = row.get("decision", "")
     return last
+
+
+def _run_csv_backfill(
+    zot: zotero_io.ZoteroClient,
+    coll_items: list[dict],
+    output_path: Path,
+) -> int:
+    """One-time migration: apply fulltext:* tags from CSV decisions for
+    items that have a CSV decision but no Zotero tag yet. No LLM calls."""
+    tagged = _already_tagged(coll_items)
+    csv_decisions = {
+        k: d for k, d in _load_last_decisions(output_path).items()
+        if d in STAGE_TAG_VALUES
+    }
+    drift = {k: d for k, d in csv_decisions.items() if k not in tagged}
+
+    if not drift:
+        print("Nothing to backfill — all CSV-decided items already have "
+              "fulltext:* tags in Zotero.", flush=True)
+        return 0
+
+    print(f"Backfilling fulltext:* tags for {len(drift)} item(s)...",
+          flush=True)
+    applied = 0
+    failed = 0
+    for key, decision in drift.items():
+        try:
+            zot.update_tags(
+                key,
+                add=[f"{STAGE_TAG_PREFIX}{decision}"],
+                remove_prefixed=[STAGE_TAG_PREFIX],
+            )
+            applied += 1
+        except Exception as e:  # noqa: BLE001
+            failed += 1
+            print(f"  FAILED {key}: {e}", flush=True)
+
+    print(f"Backfill complete: {applied} tagged, {failed} failed.",
+          flush=True)
+    return 0 if failed == 0 else 1
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +424,11 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=5,
                         help="Parallel API workers (default: 5; Sonnet has "
                              "tighter rate limits than Haiku).")
+    parser.add_argument("--csv-backfill", action="store_true",
+                        help="One-time migration from pre-Zotero-as-truth "
+                             "deployments: read CSV decisions and apply "
+                             "matching fulltext:* tags for items that don't "
+                             "have one yet. Makes no LLM calls; exits after.")
     args = parser.parse_args()
 
     if not args.group:
@@ -300,6 +459,10 @@ def main() -> int:
           f"collection={args.collection})...", flush=True)
     zot = zotero_io.ZoteroClient(api_key=api_key or "dummy", group_id=args.group)
     items = zot.collection_items(args.collection, item_type="journalArticle")
+
+    if args.csv_backfill:
+        return _run_csv_backfill(zot, items, output_path)
+
     attachments = zot.all_attachments()
     atts_by_parent: dict[str, list[dict]] = {}
     for a in attachments:
@@ -312,15 +475,52 @@ def main() -> int:
         wanted = {k.strip() for k in args.only_keys.split(",") if k.strip()}
         items = [it for it in items if it["key"] in wanted]
 
+    # --full-recode removes the fulltext:* tag from every targeted item,
+    # forcing re-processing. The CSV backup already happened above.
+    if args.full_recode:
+        print("--full-recode: clearing fulltext:* tags on all targeted items",
+              flush=True)
+        for it in items:
+            try:
+                zot.update_tags(it["key"], remove_prefixed=[STAGE_TAG_PREFIX])
+            except Exception as e:  # noqa: BLE001
+                print(f"  WARN: could not clear tag on {it['key']}: {e}",
+                      flush=True)
+        # Refresh items to reflect the tag clearing.
+        items = zot.collection_items(
+            args.collection, item_type="journalArticle",
+        )
+        if args.only_keys:
+            wanted = {k.strip() for k in args.only_keys.split(",") if k.strip()}
+            items = [it for it in items if it["key"] in wanted]
+
+    # Resume: skip items already carrying fulltext:include / fulltext:exclude.
+    tagged = _already_tagged(items)
     last = _load_last_decisions(output_path)
     to_code: list[dict] = []
     for it in items:
-        last_decision = last.get(it["key"], "")
-        if last_decision in ("include", "exclude") and not args.full_recode:
+        if it["key"] in tagged:
             continue
-        if last_decision == "error" and not (args.rerun or args.full_recode):
+        last_decision = last.get(it["key"], "")
+        # CSV-only: an 'error' row not yet tagged — usually the
+        # screening-time tag write failed OR pre-Zotero-as-truth state.
+        # Only retry if --rerun.
+        if last_decision == "error" and not args.rerun:
             continue
         to_code.append(it)
+
+    # Warn on tag/CSV drift (CSV decision exists but no tag yet).
+    drift_count = sum(
+        1 for k, d in last.items()
+        if d in STAGE_TAG_VALUES and k not in tagged
+    )
+    if drift_count:
+        print(
+            f"  WARNING: {drift_count} item(s) in CSV log lack fulltext:* "
+            f"tags in Zotero. Run with --csv-backfill to apply tags from "
+            f"CSV decisions.",
+            flush=True,
+        )
 
     if args.limit and args.limit < len(to_code):
         to_code = to_code[:args.limit]
@@ -386,8 +586,46 @@ def main() -> int:
             else:
                 counts[decision] = counts.get(decision, 0) + 1
 
+            # Apply stage tag. Only include / exclude get tagged;
+            # error / no_pdf stay untagged so a re-run picks them up.
             row["timestamp"] = datetime.now(UTC).isoformat()
             row["prompt_version"] = prompt_version
+            if decision in STAGE_TAG_VALUES:
+                item_key = row.get("item_key", "")
+                if item_key:
+                    try:
+                        zot.update_tags(
+                            item_key,
+                            add=[f"{STAGE_TAG_PREFIX}{decision}"],
+                            remove_prefixed=[STAGE_TAG_PREFIX],
+                        )
+                    except Exception as tag_exc:  # noqa: BLE001
+                        existing_reason = row.get("reason", "")
+                        row["reason"] = (
+                            f"{existing_reason} "
+                            f"[TAG WRITE FAILED: {tag_exc}]"
+                        )[:500]
+
+                # Write the SLR Coding child note for includes only.
+                # Excludes don't get a note — the tag plus the CSV row
+                # is enough provenance, and excluded papers typically
+                # have empty / placeholder coding fields.
+                if decision == "include":
+                    try:
+                        note_html = _build_slr_coding_note_html(
+                            row, fields, prompt_version,
+                        )
+                        zot.upsert_child_note(
+                            item_key,
+                            marker=SLR_CODING_NOTE_MARKER,
+                            note_html=note_html,
+                        )
+                    except Exception as note_exc:  # noqa: BLE001
+                        existing_reason = row.get("reason", "")
+                        row["reason"] = (
+                            f"{existing_reason} "
+                            f"[NOTE WRITE FAILED: {note_exc}]"
+                        )[:500]
             with log_lock:
                 writer.writerow(row)
                 log_fh.flush()
@@ -403,10 +641,6 @@ def main() -> int:
     for k in ("include", "exclude", "error", "no_pdf"):
         print(f"  {k}: {counts.get(k, 0)}")
     print(f"Log: {output_path}")
-    print("\nDeferred to a later plugin release: automatic write-back of")
-    print("tags (`fulltext:include` / `fulltext:exclude`) and coded-field")
-    print("child notes to Zotero. Use `export_coded_includes.py` to build")
-    print("the manuscript-facing view of the include rows.")
     return 0
 
 

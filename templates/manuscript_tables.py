@@ -1,13 +1,18 @@
-"""Manuscript table helpers — project template.
+"""Manuscript-facing table functions for an SLR — project template.
 
-Pandas-based helpers that turn the `coded_papers.csv` file into
-publication-ready tables. Imported by the Quarto manuscript's Python
-chunks — keeps the manuscript source readable and puts the table
-logic in a separate, testable module.
+This is the per-project module that turns the `coded_papers.csv` file
+into publication-ready tables. Imported by the Quarto manuscript's
+Python chunks — keeps the manuscript source readable and puts the
+table logic in a separate, testable module.
+
+This module is PROJECT-OWNED (lives in `manuscript/manuscript_tables.py`).
+It is NOT a plugin-shipped pipeline script. The plugin ships this file
+as a starting template; you extend it with new `tbl_*` helpers as the
+manuscript needs new tables.
 
 Typical Quarto usage:
     ```{python}
-    from manuscript.tables import tbl_exclusion_reasons, tbl_methods
+    from manuscript_tables import tbl_exclusion_reasons, tbl_methods
     print(tbl_methods().to_markdown(index=False))
     ```
 
@@ -91,8 +96,8 @@ def tbl_exclusion_reasons() -> pd.DataFrame:
 def tbl_construct_families(stats: dict) -> pd.DataFrame:
     """Counts of included papers by construct family.
 
-    Reads `coding.family.<slug>` keys produced by `stats.py` — only
-    populated when the project's `stats.py:CONSTRUCT_FAMILIES` regex
+    Reads `coding.family.<slug>` keys produced by `manuscript_stats.py` — only
+    populated when the project's `manuscript_stats.py:CONSTRUCT_FAMILIES` regex
     list is non-empty. If the stats dict contains no family keys, the
     returned DataFrame is empty (the manuscript's family section then
     falls back to its static prose).
@@ -100,7 +105,7 @@ def tbl_construct_families(stats: dict) -> pd.DataFrame:
     Pass the `build_stats()` output in from the Quarto setup chunk:
 
         ```{python}
-        from tables import tbl_construct_families
+        from manuscript_tables import tbl_construct_families
         print(tbl_construct_families(s).to_markdown(index=False))
         ```
     """
