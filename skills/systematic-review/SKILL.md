@@ -373,6 +373,63 @@ items with `--rerun`. Field **reordering** is free; field
 
 ---
 
+## No improvised pipeline-style code (hard rule)
+
+Before writing ANY of the following, STOP:
+
+- A Bash heredoc that runs Python (`python3 <<'EOF' ... EOF` or
+  `python3 - <<'PY' ... PY`).
+- An inline `python -c "..."` for anything beyond a single-line
+  probe (the four shipped probes under `scripts/setup/check_*.py`
+  and `ensure_dir.py` cover all the legitimate single-line cases).
+- A multi-line shell pipeline that munges Zotero / search /
+  screening / coding state.
+
+If the task is pipeline-shaped (enumerate Zotero items, summarise a
+screening CSV, mutate tags, fetch abstracts, filter a search CSV,
+compute counts), one of two things must be true:
+
+1. **A shipped script covers it.** Invoke that script with explicit
+   flags. The Pipeline-scripts table below is the canonical list.
+2. **No shipped script covers it.** Tell the user:
+
+   > There is no shipped script for *<task>*. I can either (a) add a
+   > new script under `scripts/pipelines/` (recommended — keeps the
+   > work auditable and reusable across sessions), or (b) use the
+   > Zotero / OpenAlex / etc. MCP tools directly for this one task.
+   > Which do you prefer?
+
+   Wait for their answer. Do **not** write the heredoc.
+
+**Why this rule is hard:**
+
+- Heredoc invocations are not covered by the wizard's allow rules
+  (`Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/**)` matches paths,
+  not heredocs). Every heredoc triggers a permission prompt.
+- Improvised code is composed mid-session — the user has to read
+  and approve fresh logic in real time, instead of pre-audited
+  shipped code.
+- Without a shipped script, every session writes its own variant
+  of "filter / count / summarise". The plugin's value is the
+  shared library; one-offs erode it.
+
+**Common gaps that surface as "I'll just write a quick script":**
+
+| Task | Right move |
+|------|------------|
+| Filter / dedup a search CSV (top-N by year, top journals) | Propose adding `scripts/pipelines/filter_search_results.py`. |
+| Summarise screening decisions across passes (last-row-wins, decision counts, list re-screened items) | Propose adding `scripts/pipelines/screening_report.py`. |
+| Inspect tag state for one item | Use `mcp__zotero__zotero_get_item_metadata` directly — single MCP call, no Python needed. |
+| Read a CSV row count | `wc -l <path>` — already a one-liner. |
+
+**Self-check before any Bash heredoc / inline `python -c`
+exceeding one line:** is this task in the Pipeline-scripts table or
+covered by a `scripts/setup/` helper? If the answer is "no, but I
+could write a quick one", STOP and propose adding the shipped
+script instead.
+
+---
+
 ## Core architecture
 
 Every systematic review runs through the same stages:
