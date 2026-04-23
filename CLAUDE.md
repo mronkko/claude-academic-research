@@ -66,11 +66,3 @@ When designing a new skill, pipeline module, or workflow, check these first — 
 
 - **[Imbad0202/academic-research-skills](https://github.com/Imbad0202/academic-research-skills)** — a similar Claude Code plugin targeting academic research. Useful as a sanity check on skill decomposition, description patterns, and scope boundaries. *Reference only*, not a dependency — lifting code requires license/attribution review.
 - **[54yyyu/zotero-mcp](https://github.com/54yyyu/zotero-mcp)** — the Zotero MCP server this plugin depends on at runtime. Its source is a good reference when extending our Zotero handling: look here before building a new pyzotero helper or re-implementing a Zotero API call locally.
-
-## Coordinating with a second Claude Code instance
-
-This repo is frequently edited by two Claude Code instances in parallel (one on the main branch, one on a feature branch) sharing the same working tree. When that is happening:
-
-- Read `git status` before staging. Stage files explicitly (`git add <paths>`) rather than `git add -A` / `git add .` — the other instance may have uncommitted work in the tree.
-- Lint and CI failures on newly-landed commits from the other instance are fair game to fix (mechanical cleanups: I001, UP037, F401, F541). Keep the commit message factual about what rule fired; don't narrate the coordination in the log.
-- Do NOT bump `plugin.json` or add a CHANGELOG entry for lint-only / CI-only commits — the other instance owns the next feature-release version number.
