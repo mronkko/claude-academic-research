@@ -129,6 +129,15 @@ confirmation):**
 7. **Exclusion criteria** — language restriction? editorials / book
    reviews / proceedings? conference papers? predatory-listed
    journals?
+8. **Search keyword blocks** — the literal AI-side and
+   entrepreneurship-side term lists (plus any additional Boolean
+   blocks) that will go into Scopus / WoS / OpenAlex queries.
+   Present them block-by-block, with wildcards where stemming is
+   needed, and ask the user to approve each block. This is the
+   level of detail that actually goes into `search_config.py` — do
+   not commit without explicit approval, because small term choices
+   (e.g. `SME*` alone vs `SME* OR "small and medium enterprise*"`)
+   drastically change recall.
 
 Draft the brief in conversation, ask the user to confirm, then write
 `.claude/systematic-review/scope.md`. Create the directory first:
@@ -143,6 +152,77 @@ affected `search_config.py` together before further searches.
 **Self-check before every search call:** has `scope.md` been written?
 Has the user said "proceed" (or equivalent) since the brief was
 finalised? If either answer is no, STOP and finish the interview.
+
+**Self-check before any Write / Edit on `search_config.py`:** is the
+keyword list in the current draft of `search_config.py` identical
+(up to formatting) to the block-by-block keyword list the user
+approved as item 8 of the scope brief? If the agent revised
+keywords after a pilot or reviewer feedback, update `scope.md`
+first, get fresh user confirmation on the revised blocks, then
+write `search_config.py`. Never silently expand keyword coverage
+between scope.md and search_config.py.
+
+---
+
+## Zotero library selection (required before any Zotero write)
+
+After the scope brief is confirmed — and BEFORE the first Zotero
+write (`import_to_zotero.py`, `mcp__zotero__zotero_add_*`,
+`mcp__zotero__zotero_create_*`) — pin down which Zotero library
+will hold this review's bibliography.
+
+The choice is stored in the project's `CLAUDE.md` and passed
+explicitly to every pipeline script as `--group <id>` (and
+`--collection <key>` where supported). It is NOT set via the
+`ZOTERO_GROUP` env var — env vars are per-shell, easily lost on a
+new terminal, and invisible to future sessions that read the
+project's `CLAUDE.md` to orient themselves.
+
+**Procedure:**
+
+1. List available libraries:
+
+   ```
+   mcp__zotero__zotero_list_libraries()
+   ```
+
+   Show the user the personal library (type `user`) and each group
+   (type `group`, with numeric IDs). Ask which to use. Group
+   libraries are the usual choice for SRs — shared with
+   collaborators, higher upload quota, cleaner archival than mixing
+   into personal.
+
+2. Optional: scope to a collection within the chosen library. Ask
+   the user whether this SR's items should go into an existing
+   collection, or a fresh one. For an existing one:
+
+   ```
+   mcp__zotero__zotero_get_collections(library_id=<id>)
+   ```
+
+   For a fresh collection, note the intended name — `import_to_zotero.py`
+   creates it on first use when `--collection <name>` is passed and
+   no matching key exists.
+
+3. Write the choice into the project's `CLAUDE.md` under a
+   `## Zotero library` heading (create or extend the file as
+   needed). Ask the user to confirm the edit before saving:
+
+   ```markdown
+   ## Zotero library
+
+   - **Group ID:** `<numeric id>`
+   - **Collection key:** `<8-char Zotero key>`   (omit if creating
+     fresh at import time)
+
+   All pipeline scripts take `--group <id>` and (where supported)
+   `--collection <key>` as explicit CLI flags. Do not set
+   `ZOTERO_GROUP` as an env var — the canonical record is here.
+   ```
+
+**Self-check before every Zotero write:** does the project's
+`CLAUDE.md` have a `## Zotero library` section with a group ID? If
+not, STOP and run the procedure.
 
 ---
 
@@ -199,7 +279,6 @@ Principles:
 | Variable | Used by | Purpose |
 |----------|---------|---------|
 | `ZOTERO_API_KEY` | All scripts | Zotero API authentication (required) |
-| `ZOTERO_GROUP` | All scripts | Zotero group library ID (per-project, set in the project's own CLAUDE.md or shell) |
 | `ANTHROPIC_API_KEY` | Screening scripts | Claude API (required for LLM screening) |
 | `ELSEVIER_API_KEY` | `enrich_pdfs.py`, `enrich_abstracts.py` | Elsevier/ScienceDirect full-text retrieval |
 | `SCOPUS_API_KEY` | Search scripts | Scopus API (often same as `ELSEVIER_API_KEY`; some institutions issue separately) |
@@ -213,6 +292,13 @@ Principles:
 The `/setup` skill writes these to `~/.config/academic-research/config.toml`
 (mode 0600) on first run. Environment variables take precedence over the
 file.
+
+Project-level Zotero selection (group ID, collection key) is **not**
+an env var — it lives in the project's `CLAUDE.md` per the *Zotero
+library selection* section above, and is passed to every pipeline
+script as `--group <id>` (and `--collection <key>` where supported).
+Scripts fall back to `$ZOTERO_GROUP` only as a convenience for
+command-line invocations; skill agents pass the flag explicitly.
 
 ## Zotero tag and note conventions
 

@@ -70,14 +70,25 @@ Python that touches the Zotero API or handles API keys — invoke the
 named script. See the `systematic-review` skill for the full matrix of
 invocations.
 
-## Environment variables (per-project)
+## Zotero library
 
-- `ZOTERO_GROUP=<group id>` — the Zotero group library for this
-  review. Set in your shell, not in the plugin's global config.
-- API keys (`ZOTERO_API_KEY`, `ANTHROPIC_API_KEY`, `ELSEVIER_API_KEY`,
-  `WOS_API_KEY_EXTENDED`, etc.) live in
-  `~/.config/academic-research/config.toml` — never read or inspect
-  that file from Claude Code.
+*Populate during the systematic-review bootstrap — the agent will
+ask `mcp__zotero__zotero_list_libraries` and offer options.*
+
+- **Group ID:** `<numeric id>`
+- **Collection key:** `<8-char Zotero key>`   (omit if collection is
+  created fresh at import time)
+
+All pipeline scripts take `--group <id>` and (where supported)
+`--collection <key>` as explicit CLI flags. Do not set
+`ZOTERO_GROUP` as an env var — the canonical record is here.
+
+## API keys
+
+All API keys (`ZOTERO_API_KEY`, `ANTHROPIC_API_KEY`,
+`ELSEVIER_API_KEY`, `WOS_API_KEY_EXTENDED`, etc.) live in
+`~/.config/academic-research/config.toml` — never read or inspect
+that file from Claude Code.
 
 ## Screening defaults
 
