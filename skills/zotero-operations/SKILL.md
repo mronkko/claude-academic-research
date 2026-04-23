@@ -26,9 +26,40 @@ If the result is `configured`, proceed.
 
 ---
 
-For SLR-specific operations (bulk screening, coding, QA tags), use the
-`systematic-review` skill. This skill covers general Zotero patterns
-that apply outside an SLR context.
+## Relationship to `systematic-review` — who owns enrichment?
+
+Both this skill and `systematic-review` list the enrichment scripts
+(`enrich_abstracts.py`, `enrich_pdfs.py`, `enrich_dois.py`,
+`audit_zotero_library.py`). **The scripts are the same; the operational
+context differs.** The decision is simple:
+
+- **Use `systematic-review`** when enrichment is part of a PRISMA-style
+  pipeline that will flow into abstract screening and full-text coding.
+  Stage tags (`abstract:*`, `fulltext:*`), the screening-config
+  round-trip, QA evaluator agents, and export to `coded_papers.csv`
+  are all in scope. The audit report drives which items need
+  enrichment *before screening can start*.
+- **Use this skill** when the work is **standalone library
+  housekeeping** — the user has a Zotero collection (SLR or not) and
+  wants missing abstracts filled, missing PDFs attached, BBT keys
+  fixed, duplicates found, or a one-off Zotero query answered. No
+  downstream screening / coding step is planned.
+
+**Signal for the harness.** If the user's prompt mentions PRISMA,
+systematic review, screening, inclusion criteria, coding, QA
+evaluators, adjudication, or anything that implies a full-text
+review pipeline — route to `systematic-review`. If it's
+"just add abstracts / PDFs / tags to my Zotero library", stay here.
+A half-SLR library that also needs housekeeping is still SR work:
+delegate to `systematic-review` and note the housekeeping step is
+a sub-task of that pipeline, not an independent operation.
+
+**Overlap is not redundancy.** The same script (`enrich_pdfs.py`)
+behaves identically whether called from SR context or ad-hoc
+context — the scripts don't know which skill invoked them. What
+differs is **what comes next**: SR context expects
+`abstract_screen.py` to read the enriched library; ad-hoc context
+stops after enrichment.
 
 ## Pipeline scripts — direct path, no probing
 
