@@ -133,15 +133,13 @@ def test_cache_round_trips_validation_fields(tmp_path) -> None:
     assert reloaded.issued_year == "2014"
 
 
-def test_cache_legacy_entry_without_validation_fields_loads() -> None:
+def test_cache_legacy_entry_without_validation_fields_loads(tmp_path: Path) -> None:
     """v0.4.0 cache entries only had url/publisher/issn. Loading them
     into the v0.5.0 DoiResolution must not crash; new fields default
     to empty so validation-callers treat the entry as 'no title to
     compare'."""
     import json
-    c_dir = Path("/tmp/test_legacy_cache_entry")
-    c_dir.mkdir(exist_ok=True)
-    legacy = c_dir / "doi_resolver_cache.json"
+    legacy = tmp_path / "doi_resolver_cache.json"
     legacy.write_text(json.dumps({
         "10.1/x": {
             "url": "https://old",
@@ -149,16 +147,12 @@ def test_cache_legacy_entry_without_validation_fields_loads() -> None:
             "issn": "1234-5678",
         }
     }))
-    try:
-        got = DoiResolverCache(c_dir).get("10.1/x")
-        assert got is not None
-        assert got.url == "https://old"
-        assert got.title == ""
-        assert got.author_surnames == []
-        assert got.issued_year == ""
-    finally:
-        legacy.unlink(missing_ok=True)
-        c_dir.rmdir()
+    got = DoiResolverCache(tmp_path).get("10.1/x")
+    assert got is not None
+    assert got.url == "https://old"
+    assert got.title == ""
+    assert got.author_surnames == []
+    assert got.issued_year == ""
 
 
 # ---------------------------------------------------------------------------

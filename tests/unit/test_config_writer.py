@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 import tomllib
 from pathlib import Path
 
@@ -35,7 +36,11 @@ def _redirect_config(tmp_path: Path, monkeypatch):
 
 def _write_initial(path: Path, body: str) -> None:
     path.write_text(body, encoding="utf-8")
-    os.chmod(path, 0o600)
+    if sys.platform != "win32":
+        # POSIX permission bits are a no-op on Windows (os.chmod only
+        # toggles the read-only flag there) — and setting read-only
+        # would break the subsequent write() in the test itself.
+        os.chmod(path, 0o600)
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +116,10 @@ def test_append_to_list_preserves_other_sections(_redirect_config) -> None:
     assert parsed["library"]["no_access"] == ["aom"]
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX permission bits; NTFS uses per-user ACLs instead",
+)
 def test_append_to_list_preserves_file_mode_0600(_redirect_config) -> None:
     """Every write restores mode 0600. Prevents leaking keys to other
     users after a `chmod 644` fumble."""
