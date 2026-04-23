@@ -811,67 +811,176 @@ def _write_config(values: dict[str, dict]) -> None:
         os.chmod(CONFIG_PATH, 0o600)
 
 
-def _permission_patterns() -> tuple[list[str], list[str]]:
+@dataclass(frozen=True)
+class PermissionCategory:
+    """One bucket of permission allow rules the wizard offers as a
+    single Y/n decision. Each rule carries its own one-line purpose
+    so the user sees exactly what is being added.
+    """
+    name: str
+    purpose: str
+    skip_impact: str
+    rules: tuple[tuple[str, str], ...]   # (rule, per-rule purpose)
+
+
+def _permission_categories() -> tuple[list[PermissionCategory], list[str]]:
+    """Return (categorised allow rules, flat deny list).
+
+    Allow rules are grouped so the wizard can prompt category-by-
+    category. Deny rules are non-optional security guardrails — they
+    are added unconditionally.
+    """
     home = str(Path.home())
     absolute_home_pattern = f"//{home.lstrip('/')}"
 
-    allow = [
-        # Bash: pipeline scripts, helper utilities, and Playwright setup.
-        f"Bash(uv run {PLUGIN_ROOT_ENV}/scripts/**)",
-        f"Bash(uv run -s {PLUGIN_ROOT_ENV}/scripts/**)",
-        f"Bash(uv run --script {PLUGIN_ROOT_ENV}/scripts/**)",
-        f"Bash(python3 {PLUGIN_ROOT_ENV}/scripts/**)",
-        f"Bash({PLUGIN_ROOT_ENV}/scripts/**.py:*)",
-        "Bash(playwright install chromium)",
-        "Bash(playwright install-deps)",
-        # Listing plugin-internal directories — agents routinely `ls`
-        # `scripts/pipelines/` / `templates/` to orient themselves.
-        # Plugin source is public on GitHub; no security benefit to
-        # prompting on every enumeration.
-        f"Bash(ls {PLUGIN_ROOT_ENV}/**)",
-        f"Bash(ls -l {PLUGIN_ROOT_ENV}/**)",
-        f"Bash(ls -la {PLUGIN_ROOT_ENV}/**)",
-        f"Read({absolute_home_pattern}/.config/academic-research/)",
-        # MCP: citation-database and paper-search servers. All of their
-        # tools are read-only (search, fetch, metadata lookup), so the
-        # per-call permission prompt is pure friction — the skills call
-        # these dozens of times per screening run.
-        "mcp__scopus__*",
-        "mcp__openalex__*",
-        "mcp__semantic-scholar__*",
-        "mcp__paper-search__*",
-        "mcp__paper-search-nodejs__*",
-        # MCP: Zotero — the library is user-owned data, so writes stay
-        # behind the permission prompt. Reads are enumerated individually
-        # (adds a new read tool upstream stays prompted until the user
-        # adds it here, which is the conservative default).
-        "mcp__zotero__fetch",
-        "mcp__zotero__search",
-        "mcp__zotero__scite_check_retractions",
-        "mcp__zotero__zotero_advanced_search",
-        "mcp__zotero__zotero_find_duplicates",
-        "mcp__zotero__zotero_get_annotations",
-        "mcp__zotero__zotero_get_collection_items",
-        "mcp__zotero__zotero_get_collections",
-        "mcp__zotero__zotero_get_feed_items",
-        "mcp__zotero__zotero_get_item_children",
-        "mcp__zotero__zotero_get_item_fulltext",
-        "mcp__zotero__zotero_get_item_metadata",
-        "mcp__zotero__zotero_get_items_children",
-        "mcp__zotero__zotero_get_notes",
-        "mcp__zotero__zotero_get_pdf_outline",
-        "mcp__zotero__zotero_get_recent",
-        "mcp__zotero__zotero_get_search_database_status",
-        "mcp__zotero__zotero_get_tags",
-        "mcp__zotero__zotero_list_feeds",
-        "mcp__zotero__zotero_list_libraries",
-        "mcp__zotero__zotero_search_by_citation_key",
-        "mcp__zotero__zotero_search_by_tag",
-        "mcp__zotero__zotero_search_collections",
-        "mcp__zotero__zotero_search_items",
-        "mcp__zotero__zotero_search_notes",
-        "mcp__zotero__zotero_semantic_search",
+    categories = [
+        PermissionCategory(
+            name="Pipeline script execution",
+            purpose=(
+                "Lets the agent run the plugin's shipped pipeline "
+                "scripts (search, screening, coding) via uv or "
+                "python3, plus the one-time Playwright install for "
+                "browser-based PDF retrieval."
+            ),
+            skip_impact=(
+                "Every pipeline-stage call (and every helper script "
+                "the skills invoke) will trigger a permission prompt."
+            ),
+            rules=(
+                (f"Bash(uv run {PLUGIN_ROOT_ENV}/scripts/**)",
+                 "uv run + script path (default invocation)"),
+                (f"Bash(uv run -s {PLUGIN_ROOT_ENV}/scripts/**)",
+                 "uv run -s (PEP 723 inline-deps marker, alt form)"),
+                (f"Bash(uv run --script {PLUGIN_ROOT_ENV}/scripts/**)",
+                 "uv run --script (newer alternate form)"),
+                (f"Bash(python3 {PLUGIN_ROOT_ENV}/scripts/**)",
+                 "Direct python3 invocation (used by skill helpers)"),
+                (f"Bash({PLUGIN_ROOT_ENV}/scripts/**.py:*)",
+                 "Direct script execution when shebang resolves"),
+                ("Bash(playwright install chromium)",
+                 "One-time browser install for browser PDF fetch"),
+                ("Bash(playwright install-deps)",
+                 "One-time system dependencies for Playwright"),
+            ),
+        ),
+        PermissionCategory(
+            name="Plugin file inspection",
+            purpose=(
+                "Lets the agent list directories under the plugin "
+                "root. Plugin source is public on GitHub; agents "
+                "routinely `ls scripts/pipelines/` to orient "
+                "themselves to the available stages."
+            ),
+            skip_impact=(
+                "Every `ls` of a plugin directory will trigger a "
+                "permission prompt."
+            ),
+            rules=(
+                (f"Bash(ls {PLUGIN_ROOT_ENV}/**)",
+                 "List directories under the plugin root"),
+                (f"Bash(ls -l {PLUGIN_ROOT_ENV}/**)",
+                 "Long-form list under the plugin root"),
+                (f"Bash(ls -la {PLUGIN_ROOT_ENV}/**)",
+                 "Long-form list with hidden files"),
+                (f"Read({absolute_home_pattern}/.config/academic-research/)",
+                 "Read the config DIRECTORY (the config file itself "
+                 "stays denied — see the deny rules below)"),
+            ),
+        ),
+        PermissionCategory(
+            name="MCP citation databases (read-only)",
+            purpose=(
+                "Auto-approves search and metadata-lookup calls to "
+                "Scopus, OpenAlex, Semantic Scholar, and the two "
+                "paper-search MCP servers. All tools in these "
+                "servers are read-only."
+            ),
+            skip_impact=(
+                "Every search / abstract-fetch call (typically "
+                "dozens per screening run) will trigger a "
+                "permission prompt."
+            ),
+            rules=(
+                ("mcp__scopus__*",
+                 "All Scopus tools (search, get_abstract, etc.)"),
+                ("mcp__openalex__*",
+                 "All OpenAlex tools (~30; search, analyze, find)"),
+                ("mcp__semantic-scholar__*",
+                 "All Semantic Scholar tools (search, citations)"),
+                ("mcp__paper-search__*",
+                 "Paper-search Python MCP (arXiv, PubMed, etc.)"),
+                ("mcp__paper-search-nodejs__*",
+                 "Paper-search Node.js MCP (broader publishers)"),
+            ),
+        ),
+        PermissionCategory(
+            name="MCP Zotero (read-only)",
+            purpose=(
+                "Auto-approves Zotero queries (fetch, search, list, "
+                "get_*). Zotero WRITES are deliberately NOT auto-"
+                "approved — your library is user-owned data and "
+                "write tools (add, update, delete, merge) keep "
+                "prompting so you see every change before it lands."
+            ),
+            skip_impact=(
+                "Every metadata read, search, and listing of your "
+                "Zotero library will trigger a prompt."
+            ),
+            rules=(
+                ("mcp__zotero__fetch", "Generic fetch helper"),
+                ("mcp__zotero__search", "Generic search helper"),
+                ("mcp__zotero__scite_check_retractions",
+                 "Check for retractions via Scite (read-only)"),
+                ("mcp__zotero__zotero_advanced_search",
+                 "Advanced query"),
+                ("mcp__zotero__zotero_find_duplicates",
+                 "Find duplicates (read-only; merge stays denied)"),
+                ("mcp__zotero__zotero_get_annotations",
+                 "Get annotations on items"),
+                ("mcp__zotero__zotero_get_collection_items",
+                 "Items in a collection"),
+                ("mcp__zotero__zotero_get_collections",
+                 "List collections"),
+                ("mcp__zotero__zotero_get_feed_items",
+                 "Items in a feed"),
+                ("mcp__zotero__zotero_get_item_children",
+                 "Children of an item"),
+                ("mcp__zotero__zotero_get_item_fulltext",
+                 "Full-text of an item (if attached)"),
+                ("mcp__zotero__zotero_get_item_metadata",
+                 "Metadata for an item"),
+                ("mcp__zotero__zotero_get_items_children",
+                 "Bulk children fetch"),
+                ("mcp__zotero__zotero_get_notes",
+                 "Notes on items"),
+                ("mcp__zotero__zotero_get_pdf_outline",
+                 "Table of contents of a PDF"),
+                ("mcp__zotero__zotero_get_recent",
+                 "Recently added items"),
+                ("mcp__zotero__zotero_get_search_database_status",
+                 "Search index status"),
+                ("mcp__zotero__zotero_get_tags",
+                 "All tags in the library"),
+                ("mcp__zotero__zotero_list_feeds",
+                 "List subscribed feeds"),
+                ("mcp__zotero__zotero_list_libraries",
+                 "List accessible libraries (you + groups)"),
+                ("mcp__zotero__zotero_search_by_citation_key",
+                 "Find by BBT citekey"),
+                ("mcp__zotero__zotero_search_by_tag",
+                 "Find by tag"),
+                ("mcp__zotero__zotero_search_collections",
+                 "Search collection names"),
+                ("mcp__zotero__zotero_search_items",
+                 "Search items"),
+                ("mcp__zotero__zotero_search_notes",
+                 "Search notes"),
+                ("mcp__zotero__zotero_semantic_search",
+                 "Semantic search"),
+            ),
+        ),
     ]
+
     # Deny patterns for the config file. Claude Code's permission matcher
     # is prefix-based, so we enumerate the common shapes (absolute path,
     # tilde, with/without redirects). Not exhaustive — reading `~/.claude/`
@@ -890,11 +999,18 @@ def _permission_patterns() -> tuple[list[str], list[str]]:
                     "awk", "sed", "od", "xxd", "strings", "bat"):
             deny.append(f"Bash({cmd} {path}:*)")
             deny.append(f"Bash({cmd} {path})")
+    return categories, deny
+
+
+def _permission_patterns() -> tuple[list[str], list[str]]:
+    """Backwards-compat wrapper for tests that consume a flat allow list."""
+    categories, deny = _permission_categories()
+    allow = [rule for cat in categories for rule, _ in cat.rules]
     return allow, deny
 
 
-def _patch_settings() -> tuple[int, int]:
-    allow_new, deny_new = _permission_patterns()
+def _patch_settings(interactive: bool = True) -> tuple[int, int]:
+    categories, deny_new = _permission_categories()
 
     if SETTINGS_PATH.exists():
         try:
@@ -912,17 +1028,63 @@ def _patch_settings() -> tuple[int, int]:
     allow_list = perms.setdefault("allow", [])
     deny_list = perms.setdefault("deny", [])
 
+    if interactive:
+        print()
+        print(_wrap_body(
+            "Permission allow rules. The wizard groups them by purpose; "
+            "each category is a single Y/n decision. Skip any category "
+            "you don't want auto-approved — the agent will then prompt "
+            "you on every relevant call instead.",
+        ))
+
     allow_added = 0
-    for p in allow_new:
-        if p not in allow_list:
-            allow_list.append(p)
+    for cat in categories:
+        new_rules = [(r, p) for r, p in cat.rules if r not in allow_list]
+        if not new_rules:
+            continue
+
+        if interactive:
+            print()
+            print(f"  ── {cat.name} ({len(new_rules)} new rule"
+                  f"{'' if len(new_rules) == 1 else 's'}) ──")
+            print(_wrap_body(cat.purpose, indent=4))
+            print(_wrap_body(f"Skipping these means: {cat.skip_impact}",
+                             indent=4))
+            print()
+            for rule, purpose in new_rules:
+                print(f"      + {rule}")
+                print(f"        → {purpose}")
+            print()
+            try:
+                answer = input("    Add all? [Y/n] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\n    Skipped.")
+                continue
+            if answer in ("n", "no"):
+                print("    Skipped.")
+                continue
+
+        for rule, _ in new_rules:
+            allow_list.append(rule)
             allow_added += 1
+        if interactive:
+            print(f"    Added {len(new_rules)} rule"
+                  f"{'' if len(new_rules) == 1 else 's'}.")
 
     deny_added = 0
     for p in deny_new:
         if p not in deny_list:
             deny_list.append(p)
             deny_added += 1
+    if interactive and deny_added:
+        print()
+        print(_wrap_body(
+            f"Added {deny_added} security deny rules (non-optional). "
+            "These block the Read tool from `~/.config/academic-research"
+            "/config.toml` and block common Bash readers (cat, head, "
+            "grep, ...) from the same path so API keys cannot reach "
+            "Claude's context.",
+        ))
 
     SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     SETTINGS_PATH.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -1363,7 +1525,7 @@ def main() -> int:
         values.setdefault("library", {})["no_access"] = updated_no_access
 
     _write_config(values)
-    allow_added, deny_added = _patch_settings()
+    allow_added, deny_added = _patch_settings(interactive=interactive)
     gitignore_updated = _maybe_add_claude_to_gitignore()
 
     # Local Zotero API probe. Pipeline scripts default to local reads for

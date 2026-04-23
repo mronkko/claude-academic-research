@@ -88,6 +88,34 @@ def test_permission_patterns_deny_covers_read_and_shell() -> None:
     assert any("cat " in p for p in deny), "deny list missing `cat` Bash"
 
 
+def test_permission_categories_have_purpose_and_per_rule_explanations() -> None:
+    """Every category has a purpose + skip_impact, and every rule has a
+    one-line explanation. The wizard prints these in interactive mode
+    so the user can audit each allow rule."""
+    mod = _load()
+    cats, _ = mod._permission_categories()
+    assert len(cats) >= 4, "expected at least 4 permission categories"
+    for cat in cats:
+        assert cat.name, "category missing name"
+        assert cat.purpose, f"{cat.name}: missing purpose"
+        assert cat.skip_impact, f"{cat.name}: missing skip_impact"
+        assert cat.rules, f"{cat.name}: no rules"
+        for rule, purpose in cat.rules:
+            assert rule, f"{cat.name}: empty rule string"
+            assert purpose, f"{cat.name}: rule '{rule}' missing per-rule purpose"
+
+
+def test_permission_categories_match_flat_list() -> None:
+    """The legacy `_permission_patterns()` flat list must equal the
+    concatenation of category rule lists — no rule lost or duplicated
+    by the categorisation refactor."""
+    mod = _load()
+    flat_allow, _ = mod._permission_patterns()
+    cats, _ = mod._permission_categories()
+    cat_rules = [rule for cat in cats for rule, _ in cat.rules]
+    assert flat_allow == cat_rules
+
+
 def test_config_path_is_under_home() -> None:
     mod = _load()
     # Compare by Path parts rather than trailing-string match so the test
