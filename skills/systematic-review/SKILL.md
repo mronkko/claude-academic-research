@@ -99,8 +99,9 @@ touches Zotero. Running it first also means the project's
 future session opening the project sees it immediately.
 
 The choice is stored in the project's `CLAUDE.md` and passed
-explicitly to every pipeline script as `--group <id>` (and
-`--collection <key>` where supported). It is NOT set via the
+explicitly to every pipeline script as either `--group <id>` (a
+group library) or `--user` (your personal / My Library), plus
+`--collection <key>` where supported. It is NOT set via the
 `ZOTERO_GROUP` env var — env vars are per-shell, easily lost on a
 new terminal, and invisible to future sessions that read the
 project's `CLAUDE.md` to orient themselves.
@@ -117,7 +118,8 @@ project's `CLAUDE.md` to orient themselves.
    (type `group`, with numeric IDs). Ask which to use. Group
    libraries are the usual choice for SRs — shared with
    collaborators, higher upload quota, cleaner archival than mixing
-   into personal.
+   into personal — but pipeline scripts fully support My Library via
+   `--user`, so either works.
 
 2. Optional: scope to a collection within the chosen library. Ask
    the user whether this SR's items should go into an existing
@@ -133,18 +135,21 @@ project's `CLAUDE.md` to orient themselves.
 
 3. Write the choice into the project's `CLAUDE.md` under a
    `## Zotero library` heading (create or extend the file as
-   needed). Ask the user to confirm the edit before saving:
+   needed). Ask the user to confirm the edit before saving. Shape
+   depends on group vs personal:
 
    ```markdown
    ## Zotero library
 
-   - **Group ID:** `<numeric id>`
+   - **Library:** group (or `user` for personal)
+   - **Group ID:** `<numeric id>`   (omit if `Library: user`)
    - **Collection key:** `<8-char Zotero key>`   (omit if creating
      fresh at import time)
 
-   All pipeline scripts take `--group <id>` and (where supported)
-   `--collection <key>` as explicit CLI flags. Do not set
-   `ZOTERO_GROUP` as an env var — the canonical record is here.
+   All pipeline scripts take `--group <id>` (group library) or
+   `--user` (personal library) and, where supported,
+   `--collection <key>`. Do not set `ZOTERO_GROUP` as an env var —
+   the canonical record is here.
    ```
 
 **Self-check before every Zotero write:** does the project's

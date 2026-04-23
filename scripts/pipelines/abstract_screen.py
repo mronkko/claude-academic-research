@@ -4,6 +4,8 @@
 # dependencies = [
 #     "anthropic>=0.40",
 #     "pyzotero>=1.6",
+#     "tenacity>=8.0",
+#     "httpx>=0.25",
 # ]
 # ///
 """LLM-driven title+abstract screening for a systematic review.
@@ -196,8 +198,7 @@ def main() -> int:
     parser.add_argument("--config", default="./screening_config.py",
                         help="Path to screening_config.py (default: "
                              "./screening_config.py).")
-    parser.add_argument("--group", default=os.environ.get("ZOTERO_GROUP", ""),
-                        help="Zotero group ID (default: $ZOTERO_GROUP).")
+    zotero_io.add_library_args(parser)
     parser.add_argument("--collection", required=True,
                         help="Zotero collection key to screen.")
     parser.add_argument("--search-csv", default="",
@@ -218,9 +219,6 @@ def main() -> int:
                              "have one yet. Makes no LLM calls; exits after.")
     args = parser.parse_args()
 
-    if not args.group:
-        sys.exit("ERROR: --group required (or set ZOTERO_GROUP).")
-
     api_key = "" if args.dry_run else require("zotero", "api_key",
                                               env="ZOTERO_API_KEY")
     if not args.dry_run and not args.csv_backfill and not os.environ.get("ANTHROPIC_API_KEY"):
@@ -235,9 +233,9 @@ def main() -> int:
     search_csv = Path(args.search_csv) if args.search_csv else None
     doi_to_query = _load_doi_to_query(search_csv)
 
-    print(f"Fetching items from Zotero (group={args.group}, "
+    zot = zotero_io.ZoteroClient.from_args(args, api_key=api_key or "dummy")
+    print(f"Fetching items from Zotero ({zot.describe_library()}, "
           f"collection={args.collection})...", flush=True)
-    zot = zotero_io.ZoteroClient(api_key=api_key or "dummy", group_id=args.group)
     coll_items = zot.collection_items(args.collection, item_type="journalArticle")
     print(f"  {len(coll_items)} items in collection", flush=True)
 

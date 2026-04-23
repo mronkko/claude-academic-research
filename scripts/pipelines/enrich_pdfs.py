@@ -1186,11 +1186,7 @@ def main() -> int:
         help="Path to a text file of Zotero item keys (one per line) "
              "to restrict processing to.",
     )
-    parser.add_argument(
-        "--group", default=os.environ.get("ZOTERO_GROUP", ""),
-        help="Zotero group ID (per-project; default: $ZOTERO_GROUP). "
-             "If omitted and only one group is accessible, auto-selected.",
-    )
+    zotero_io.add_library_args(parser)
     parser.add_argument(
         "--legacy-browser", action="store_true",
         help="(browser mode) Delegate to the legacy fetch_pdfs_browser.py "
@@ -1235,11 +1231,14 @@ def main() -> int:
 
     # Validate Zotero config via require() — surfaces a clear error.
     require("zotero", "api_key", env="ZOTERO_API_KEY")
-    try:
-        zot = zotero_io.ZoteroClient.from_config(group_id=args.group or None)
-    except zotero_io.GroupSelectionRequired as e:
-        print(zotero_io.format_group_selection_error(e.groups), file=sys.stderr)
-        return 2
+    if not getattr(args, "user", False) and not args.group:
+        try:
+            zot = zotero_io.ZoteroClient.from_config(group_id=None)
+        except zotero_io.GroupSelectionRequired as e:
+            print(zotero_io.format_group_selection_error(e.groups), file=sys.stderr)
+            return 2
+    else:
+        zot = zotero_io.ZoteroClient.from_args(args)
 
     print("Fetching Zotero items...", end=" ", flush=True)
     all_items = zot.journal_articles()

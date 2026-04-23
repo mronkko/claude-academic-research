@@ -183,8 +183,8 @@ def test_main_writes_rows_for_tagged_items(monkeypatch, tmp_path) -> None:
     fake_client.cloud = fake_cloud
 
     monkeypatch.setattr(
-        zotero_io, "ZoteroClient",
-        lambda *a, **kw: fake_client,
+        zotero_io.ZoteroClient, "from_args",
+        classmethod(lambda cls, *a, **kw: fake_client),
     )
 
     out = tmp_path / "coded.csv"
@@ -229,8 +229,8 @@ def test_main_warns_on_missing_slr_coding_note(
     fake_cloud.children.side_effect = lambda k: children_by_parent.get(k, [])
     fake_client.cloud = fake_cloud
     monkeypatch.setattr(
-        zotero_io, "ZoteroClient",
-        lambda *a, **kw: fake_client,
+        zotero_io.ZoteroClient, "from_args",
+        classmethod(lambda cls, *a, **kw: fake_client),
     )
 
     out = tmp_path / "coded.csv"
@@ -256,8 +256,8 @@ def test_dry_run_writes_nothing(monkeypatch, tmp_path) -> None:
     fake_client.items_with_tag.return_value = []
     fake_client.cloud = MagicMock()
     monkeypatch.setattr(
-        zotero_io, "ZoteroClient",
-        lambda *a, **kw: fake_client,
+        zotero_io.ZoteroClient, "from_args",
+        classmethod(lambda cls, *a, **kw: fake_client),
     )
 
     out = tmp_path / "coded.csv"

@@ -532,10 +532,7 @@ def main() -> int:
         "--filter-keys-file",
         help="Text file of Zotero item keys (one per line) to process.",
     )
-    parser.add_argument(
-        "--group", default=os.environ.get("ZOTERO_GROUP", ""),
-        help="Zotero group ID (per-project; default: $ZOTERO_GROUP).",
-    )
+    zotero_io.add_library_args(parser)
     parser.add_argument(
         "--log-csv", default=DEFAULT_LOG_CSV,
         help=f"CSV log path (default: {DEFAULT_LOG_CSV}).",
@@ -568,11 +565,14 @@ def main() -> int:
 
     # Zotero + Crossref clients.
     require("zotero", "api_key", env="ZOTERO_API_KEY")
-    try:
-        zot = zotero_io.ZoteroClient.from_config(group_id=args.group or None)
-    except zotero_io.GroupSelectionRequired as e:
-        print(zotero_io.format_group_selection_error(e.groups), file=sys.stderr)
-        return 2
+    if not getattr(args, "user", False) and not args.group:
+        try:
+            zot = zotero_io.ZoteroClient.from_config(group_id=None)
+        except zotero_io.GroupSelectionRequired as e:
+            print(zotero_io.format_group_selection_error(e.groups), file=sys.stderr)
+            return 2
+    else:
+        zot = zotero_io.ZoteroClient.from_args(args)
 
     config = _load_config()
     from habanero import Crossref

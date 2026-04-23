@@ -75,13 +75,15 @@ invocations.
 *Populate during the systematic-review bootstrap — the agent will
 ask `mcp__zotero__zotero_list_libraries` and offer options.*
 
-- **Group ID:** `<numeric id>`
+- **Library:** group (or `user` for personal)
+- **Group ID:** `<numeric id>`   (omit if `Library: user`)
 - **Collection key:** `<8-char Zotero key>`   (omit if collection is
   created fresh at import time)
 
-All pipeline scripts take `--group <id>` and (where supported)
-`--collection <key>` as explicit CLI flags. Do not set
-`ZOTERO_GROUP` as an env var — the canonical record is here.
+All pipeline scripts take `--group <id>` (group library) or `--user`
+(personal library) and, where supported, `--collection <key>` as
+explicit CLI flags. Do not set `ZOTERO_GROUP` as an env var — the
+canonical record is here.
 
 ## API keys
 

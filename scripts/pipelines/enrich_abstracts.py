@@ -142,11 +142,7 @@ def main() -> int:
                         help="Parallel fetch threads (default: 4).")
     parser.add_argument("--filter-keys-file",
                         help="Text file with Zotero item keys, one per line.")
-    parser.add_argument(
-        "--group", default=os.environ.get("ZOTERO_GROUP", ""),
-        help="Zotero group ID (per-project; default: $ZOTERO_GROUP). "
-             "If omitted and only one group is accessible, auto-selected.",
-    )
+    zotero_io.add_library_args(parser)
     args = parser.parse_args()
 
     source_names = [s.strip() for s in args.sources.split(",") if s.strip()]
@@ -158,11 +154,17 @@ def main() -> int:
 
     config = _load_config()
     session = http_client.build_session(mailto=config.crossref_mailto)
-    try:
-        zot = zotero_io.ZoteroClient.from_config(group_id=args.group or None)
-    except zotero_io.GroupSelectionRequired as e:
-        print(zotero_io.format_group_selection_error(e.groups), file=sys.stderr)
-        return 2
+    if not getattr(args, "user", False) and not args.group:
+        # No explicit library chosen — fall back to from_config's
+        # group auto-selection (single-group accounts) or error
+        # with the accessible-groups list.
+        try:
+            zot = zotero_io.ZoteroClient.from_config(group_id=None)
+        except zotero_io.GroupSelectionRequired as e:
+            print(zotero_io.format_group_selection_error(e.groups), file=sys.stderr)
+            return 2
+    else:
+        zot = zotero_io.ZoteroClient.from_args(args)
 
     print("Fetching Zotero items...", end=" ", flush=True)
     all_items = zot.journal_articles()

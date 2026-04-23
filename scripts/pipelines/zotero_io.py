@@ -31,6 +31,7 @@ Attribution:
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import sys
@@ -169,6 +170,26 @@ def format_group_selection_error(groups: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def add_library_args(parser: argparse.ArgumentParser) -> None:
+    """Add mutually-exclusive `--group` / `--user` flags to a parser.
+
+    Pipeline scripts call this once on their argparse parser, then
+    pass the parsed namespace to `ZoteroClient.from_args(args)`. This
+    keeps the user-vs-group choice in one place rather than repeated
+    across every script that touches Zotero.
+    """
+    import os
+    target = parser.add_mutually_exclusive_group()
+    target.add_argument(
+        "--group", default=os.environ.get("ZOTERO_GROUP", ""),
+        help="Zotero group library ID (numeric). Default: $ZOTERO_GROUP.",
+    )
+    target.add_argument(
+        "--user", action="store_true",
+        help="Use your personal (My Library) instead of a group library.",
+    )
+
+
 class ZoteroClient:
     """Thin pyzotero wrapper used by every pipeline script.
 
@@ -261,6 +282,47 @@ class ZoteroClient:
             api_key=api_key,
             group_id=user_id,
             library_type="user",
+            prefer_local=prefer_local,
+        )
+
+    @classmethod
+    def from_args(
+        cls,
+        args: argparse.Namespace,
+        *,
+        prefer_local: bool = True,
+        api_key: str | None = None,
+    ) -> ZoteroClient:
+        """Build a client from parsed `--group` / `--user` argparse args.
+
+        Expects the parser was set up with `add_library_args(parser)`.
+        Returns a client pointing at either a group library (numeric
+        `--group <id>`) or the user's personal library (`--user`).
+        Raises SystemExit with an actionable message if neither is
+        set (and `$ZOTERO_GROUP` isn't populated).
+        """
+        import os
+
+        from core.config_loader import require
+        if api_key is None:
+            api_key = require("zotero", "api_key", env="ZOTERO_API_KEY")
+        if getattr(args, "user", False):
+            user_id = require("zotero", "user_id", env="ZOTERO_USER_ID")
+            return cls.for_user_library(
+                user_id,
+                api_key=api_key,
+                prefer_local=prefer_local,
+            )
+        group = getattr(args, "group", "") or os.environ.get("ZOTERO_GROUP", "")
+        if not group:
+            raise SystemExit(
+                "ERROR: --group <id> or --user is required "
+                "(or set $ZOTERO_GROUP).",
+            )
+        return cls(
+            api_key=api_key,
+            group_id=group,
+            library_type="group",
             prefer_local=prefer_local,
         )
 
@@ -369,6 +431,28 @@ class ZoteroClient:
     def get_item(self, item_key: str) -> dict:
         """Fetch a single item's current payload (used for version refresh)."""
         return self.cloud.item(item_key)
+
+    def api_base_url(self) -> str:
+        """Zotero REST API prefix for this library.
+
+        Returns `https://api.zotero.org/groups/<id>` or
+        `https://api.zotero.org/users/<id>` depending on `library_type`.
+        Pipeline scripts that issue raw HTTP requests (outside pyzotero)
+        use this instead of hard-coding `/groups/`.
+        """
+        return f"https://api.zotero.org/{self.library_type}s/{self.group_id}"
+
+    def describe_library(self) -> str:
+        """Human-readable summary for log lines.
+
+        Examples:
+            "group 6015547 'AI in entrepreneurship'"
+            "user 5591 (personal library)"
+        """
+        if self.library_type == "user":
+            return f"user {self.group_id} (personal library)"
+        name = self.group_name() or "?"
+        return f"group {self.group_id} ({name!r})"
 
     def selected_local_library(self) -> dict | None:
         """Return the library currently highlighted in Zotero Desktop's

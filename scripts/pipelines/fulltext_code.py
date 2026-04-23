@@ -6,6 +6,8 @@
 #     "pyzotero>=1.6",
 #     "pdfplumber>=0.10",
 #     "pypdf>=4.0",
+#     "tenacity>=8.0",
+#     "httpx>=0.25",
 # ]
 # ///
 """LLM-driven full-text screening + structured coding for an SLR.
@@ -52,7 +54,6 @@ import argparse
 import concurrent.futures
 import csv
 import importlib.util
-import os
 import shutil
 import sys
 import threading
@@ -401,8 +402,7 @@ def main() -> int:
     parser.add_argument("--config", default="./screening_config.py",
                         help="Path to screening_config.py (default: "
                              "./screening_config.py).")
-    parser.add_argument("--group", default=os.environ.get("ZOTERO_GROUP", ""),
-                        help="Zotero group ID (default: $ZOTERO_GROUP).")
+    zotero_io.add_library_args(parser)
     parser.add_argument("--collection", required=True,
                         help="Zotero collection key whose items to code.")
     parser.add_argument("--pdf-dir", required=True,
@@ -431,9 +431,6 @@ def main() -> int:
                              "have one yet. Makes no LLM calls; exits after.")
     args = parser.parse_args()
 
-    if not args.group:
-        sys.exit("ERROR: --group required (or set ZOTERO_GROUP).")
-
     prompt_template, fields, model, prompt_version = _load_screening_config(
         args.config)
     rendered_prompt = _render_prompt(prompt_template, fields)
@@ -455,9 +452,9 @@ def main() -> int:
         output_path.unlink()
         print(f"Backed up existing log to {backup}; rebuilding.", flush=True)
 
-    print(f"Fetching items from Zotero (group={args.group}, "
+    zot = zotero_io.ZoteroClient.from_args(args, api_key=api_key or "dummy")
+    print(f"Fetching items from Zotero ({zot.describe_library()}, "
           f"collection={args.collection})...", flush=True)
-    zot = zotero_io.ZoteroClient(api_key=api_key or "dummy", group_id=args.group)
     items = zot.collection_items(args.collection, item_type="journalArticle")
 
     if args.csv_backfill:

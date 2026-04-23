@@ -4,6 +4,8 @@
 # dependencies = [
 #     "pyzotero>=1.6",
 #     "requests>=2.31",
+#     "tenacity>=8.0",
+#     "httpx>=0.25",
 # ]
 # ///
 """Import a deduplicated search-results CSV into a Zotero group library.
@@ -137,13 +139,12 @@ def _title_author_key(title: str, authors) -> str:
 
 
 def _fetch_existing_items(
-    group: str, api_key: str, dry_run: bool,
+    zot: zotero_io.ZoteroClient, dry_run: bool,
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Return (doi_map, title_map) for existing items in the library."""
     if dry_run:
         return {}, {}
     print("Fetching existing library items via local Zotero client...", flush=True)
-    zot = zotero_io.ZoteroClient(api_key=api_key, group_id=group)
     items = zot.journal_articles()
 
     doi_map: dict[str, str] = {}
@@ -165,8 +166,7 @@ def _fetch_existing_items(
 
 def _patch_existing_items(
     to_add: list[tuple[str, str]],
-    group: str,
-    api_key: str,
+    zot: zotero_io.ZoteroClient,
     collection_key: str | None,
 ) -> None:
     """Patch existing items to add missing abstracts and/or collection
@@ -177,7 +177,6 @@ def _patch_existing_items(
     if not to_add:
         return
     print(f"\nReading {len(to_add)} existing items from local Zotero...", flush=True)
-    zot = zotero_io.ZoteroClient(api_key=api_key, group_id=group)
     all_items = zot.journal_articles()
     item_by_key = {it["key"]: it for it in all_items}
 
@@ -211,12 +210,11 @@ def _patch_existing_items(
 
 def _create_new_items(
     to_create: list[dict],
-    group: str,
-    api_key: str,
+    zot: zotero_io.ZoteroClient,
 ) -> tuple[int, int]:
-    base_url = f"https://api.zotero.org/groups/{group}"
+    base_url = zot.api_base_url()
     headers = {
-        "Zotero-API-Key": api_key,
+        "Zotero-API-Key": zot.api_key,
         "Zotero-API-Version": "3",
         "Content-Type": "application/json",
     }
@@ -241,8 +239,7 @@ def _create_new_items(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--group", default=os.environ.get("ZOTERO_GROUP", ""),
-                        help="Zotero group ID (default: $ZOTERO_GROUP).")
+    zotero_io.add_library_args(parser)
     parser.add_argument("--collection",
                         default=os.environ.get("ZOTERO_SLR_COLL", ""),
                         help="Collection key to add items into "
@@ -253,11 +250,9 @@ def main() -> int:
                         help="Parse and report without writing to Zotero.")
     args = parser.parse_args()
 
-    if not args.group:
-        sys.exit("ERROR: --group required (or set ZOTERO_GROUP).")
-
     api_key = "" if args.dry_run else require("zotero", "api_key",
                                               env="ZOTERO_API_KEY")
+    zot = zotero_io.ZoteroClient.from_args(args, api_key=api_key or "dummy")
 
     csv_path = Path(args.input)
     if not csv_path.exists():
@@ -265,9 +260,10 @@ def main() -> int:
 
     with csv_path.open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
-    print(f"Records to import: {len(rows)}", flush=True)
+    print(f"Records to import into {zot.describe_library()}: {len(rows)}",
+          flush=True)
 
-    doi_map, title_map = _fetch_existing_items(args.group, api_key, args.dry_run)
+    doi_map, title_map = _fetch_existing_items(zot, args.dry_run)
 
     to_add: list[tuple[str, str]] = []
     to_create: list[dict] = []
@@ -322,12 +318,12 @@ def main() -> int:
         print("\n[DRY RUN] No changes written.", flush=True)
         return 0
 
-    _patch_existing_items(to_add, args.group, api_key, args.collection or None)
+    _patch_existing_items(to_add, zot, args.collection or None)
 
     created = 0
     if to_create:
         print(f"\nCreating {len(to_create)} new items...", flush=True)
-        created, failed = _create_new_items(to_create, args.group, api_key)
+        created, failed = _create_new_items(to_create, zot)
         print(f"  Created: {created}  Failed: {failed}", flush=True)
 
     total = len(to_add) + created

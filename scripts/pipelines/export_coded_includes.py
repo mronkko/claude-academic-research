@@ -3,6 +3,8 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "pyzotero>=1.6",
+#     "tenacity>=8.0",
+#     "httpx>=0.25",
 # ]
 # ///
 """Export the manuscript-facing view of coded includes, reading from
@@ -126,8 +128,7 @@ def _row_from_item(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--group", default=os.environ.get("ZOTERO_GROUP", ""),
-                        help="Zotero group ID (default: $ZOTERO_GROUP).")
+    zotero_io.add_library_args(parser)
     parser.add_argument("--collection", required=True,
                         help="Zotero collection key.")
     parser.add_argument("--out", required=True,
@@ -144,13 +145,11 @@ def main() -> int:
                         help="Count; do not write output.")
     args = parser.parse_args()
 
-    if not args.group:
-        sys.exit("ERROR: --group required (or set ZOTERO_GROUP).")
     api_key = require("zotero", "api_key", env="ZOTERO_API_KEY")
 
-    print(f"Querying Zotero (group={args.group}, "
+    zot = zotero_io.ZoteroClient.from_args(args, api_key=api_key)
+    print(f"Querying Zotero ({zot.describe_library()}, "
           f"collection={args.collection}, tag={args.tag})...", flush=True)
-    zot = zotero_io.ZoteroClient(api_key=api_key, group_id=args.group)
     items = zot.items_with_tag(args.collection, args.tag)
     print(f"  {len(items)} item(s) carry tag {args.tag!r}", flush=True)
 

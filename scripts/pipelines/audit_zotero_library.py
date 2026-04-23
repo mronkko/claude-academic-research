@@ -3,6 +3,8 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "pyzotero>=1.6",
+#     "tenacity>=8.0",
+#     "httpx>=0.25",
 # ]
 # ///
 """Audit a Zotero library for items missing abstracts and / or PDF attachments.

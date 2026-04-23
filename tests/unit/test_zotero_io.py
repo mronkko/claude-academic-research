@@ -1028,3 +1028,102 @@ def test_upsert_child_note_retries_on_412_version_conflict(monkeypatch) -> None:
     assert key == "N1"
     assert fake_cloud.children.call_count == 2
     assert fake_cloud.update_item.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# add_library_args + from_args
+# ---------------------------------------------------------------------------
+
+
+def test_add_library_args_accepts_group_numeric(monkeypatch) -> None:
+    """--group <id> populates args.group; args.user stays False."""
+    import argparse
+    monkeypatch.delenv("ZOTERO_GROUP", raising=False)
+    parser = argparse.ArgumentParser()
+    zotero_io.add_library_args(parser)
+    args = parser.parse_args(["--group", "12345"])
+    assert args.group == "12345"
+    assert args.user is False
+
+
+def test_add_library_args_accepts_user_flag(monkeypatch) -> None:
+    """--user sets args.user=True, args.group defaults to ''."""
+    import argparse
+    monkeypatch.delenv("ZOTERO_GROUP", raising=False)
+    parser = argparse.ArgumentParser()
+    zotero_io.add_library_args(parser)
+    args = parser.parse_args(["--user"])
+    assert args.user is True
+    assert args.group == ""
+
+
+def test_add_library_args_group_and_user_are_mutually_exclusive() -> None:
+    import argparse
+    parser = argparse.ArgumentParser()
+    zotero_io.add_library_args(parser)
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--group", "12345", "--user"])
+
+
+def test_from_args_builds_group_client(monkeypatch) -> None:
+    from core import config_loader
+    monkeypatch.setattr(config_loader, "load_config", lambda: {
+        "zotero": {"api_key": "from-config"}
+    })
+    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+    monkeypatch.delenv("ZOTERO_GROUP", raising=False)
+
+    import argparse
+    parser = argparse.ArgumentParser()
+    zotero_io.add_library_args(parser)
+    args = parser.parse_args(["--group", "12345"])
+
+    zc = zotero_io.ZoteroClient.from_args(args)
+    assert zc.library_type == "group"
+    assert zc.group_id == "12345"
+    assert zc.api_key == "from-config"
+
+
+def test_from_args_builds_user_client(monkeypatch) -> None:
+    from core import config_loader
+    monkeypatch.setattr(config_loader, "load_config", lambda: {
+        "zotero": {"api_key": "k", "user_id": "5591"}
+    })
+    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+    monkeypatch.delenv("ZOTERO_USER_ID", raising=False)
+
+    import argparse
+    parser = argparse.ArgumentParser()
+    zotero_io.add_library_args(parser)
+    args = parser.parse_args(["--user"])
+
+    zc = zotero_io.ZoteroClient.from_args(args)
+    assert zc.library_type == "user"
+    assert zc.group_id == "5591"
+
+
+def test_from_args_errors_without_group_or_user(monkeypatch) -> None:
+    from core import config_loader
+    monkeypatch.setattr(config_loader, "load_config", lambda: {
+        "zotero": {"api_key": "k"}
+    })
+    monkeypatch.delenv("ZOTERO_GROUP", raising=False)
+    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+
+    import argparse
+    parser = argparse.ArgumentParser()
+    zotero_io.add_library_args(parser)
+    args = parser.parse_args([])
+
+    with pytest.raises(SystemExit):
+        zotero_io.ZoteroClient.from_args(args)
+
+
+def test_api_base_url_matches_library_type() -> None:
+    group_zc = zotero_io.ZoteroClient(api_key="k", group_id="12345")
+    assert group_zc.api_base_url() == "https://api.zotero.org/groups/12345"
+
+    user_zc = zotero_io.ZoteroClient(
+        api_key="k", group_id="5591", library_type="user",
+    )
+    assert user_zc.api_base_url() == "https://api.zotero.org/users/5591"
