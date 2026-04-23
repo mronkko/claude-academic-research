@@ -12,7 +12,7 @@ description: Use when the user asks to revise, polish, or critique an academic m
 Before any step below, verify the plugin has been configured:
 
 ```bash
-python -c "from pathlib import Path; print('configured' if (Path.home()/'.config'/'academic-research'/'config.toml').is_file() else 'NOT CONFIGURED')"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"
 ```
 
 If the result is `NOT CONFIGURED`, stop immediately and tell the user:
@@ -116,7 +116,7 @@ sibling `.md`, pass `--rendered-path` to match. They vary together.
 Create the iteration working directory up front (project-local; portable):
 
 ```bash
-python -c "from pathlib import Path; Path('.claude/critic-loop').mkdir(parents=True, exist_ok=True)"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/ensure_dir.py" .claude/critic-loop
 ```
 
 Then:

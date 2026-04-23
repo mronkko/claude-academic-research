@@ -10,7 +10,7 @@ description: Use when the user asks to work with a Zotero library — adding mis
 Before any step below, verify the plugin has been configured:
 
 ```bash
-python -c "from pathlib import Path; print('configured' if (Path.home()/'.config'/'academic-research'/'config.toml').is_file() else 'NOT CONFIGURED')"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"
 ```
 
 If the result is `NOT CONFIGURED`, stop immediately and tell the user:

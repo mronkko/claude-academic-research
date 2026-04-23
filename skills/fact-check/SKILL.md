@@ -10,7 +10,7 @@ description: Use when the user asks to fact-check a manuscript, verify citations
 Before any step below, verify the plugin has been configured:
 
 ```bash
-python -c "from pathlib import Path; print('configured' if (Path.home()/'.config'/'academic-research'/'config.toml').is_file() else 'NOT CONFIGURED')"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"
 ```
 
 If the result is `NOT CONFIGURED`, stop immediately and tell the user:
@@ -33,7 +33,8 @@ Before running the audit, check that the regression-test backstop
 this skill relies on is installed in the project:
 
 ```bash
-python -c "from pathlib import Path; missing = [f for f in ('scripts/test_common.py', 'scripts/test_citations.py') if not Path(f).is_file()]; print('ok' if not missing else 'missing: ' + ', '.join(missing))"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_project_scaffold.py" \
+    scripts/test_common.py scripts/test_citations.py
 ```
 
 If the output lists missing files, install them:
@@ -168,9 +169,14 @@ Report sample size in the first report entry.
 
 ## Report format
 
-Write the report to `.claude/fact-check/report.md` (create the
-directory first if needed — `python -c "from pathlib import Path;
-Path('.claude/fact-check').mkdir(parents=True, exist_ok=True)"`):
+Write the report to `.claude/fact-check/report.md`. Create the
+directory first if needed:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/ensure_dir.py" .claude/fact-check
+```
+
+Report layout:
 
 ```markdown
 # Fact-check report

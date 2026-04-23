@@ -11,7 +11,8 @@ Before applying the rules below, check that this skill's regression
 tests are installed in the project:
 
 ```bash
-python -c "from pathlib import Path; missing = [f for f in ('scripts/test_common.py', 'scripts/test_empirical_integrity.py') if not Path(f).is_file()]; print('ok' if not missing else 'missing: ' + ', '.join(missing))"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_project_scaffold.py" \
+    scripts/test_common.py scripts/test_empirical_integrity.py
 ```
 
 If the output lists missing files, install them:
@@ -32,7 +33,8 @@ Next, check whether the project's `.claude/settings.json` has the
 from hand-editing:
 
 ```bash
-python -c "import json, pathlib; p=pathlib.Path('.claude/settings.json'); data=json.loads(p.read_text()) if p.is_file() else {}; deny=data.get('permissions',{}).get('deny',[]); needed=['Write(//**/analysis/results/**)','Edit(//**/analysis/results/**)']; missing=[d for d in needed if d not in deny]; print('ok' if not missing else 'missing: '+', '.join(missing))"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_deny_rules.py" \
+    "Write(//**/analysis/results/**)" "Edit(//**/analysis/results/**)"
 ```
 
 If the output lists missing rules, merge them in idempotently:

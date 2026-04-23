@@ -10,7 +10,7 @@ description: Use when running a full systematic literature review (SLR) — PRIS
 Before any step below, verify the plugin has been configured:
 
 ```bash
-python -c "from pathlib import Path; print('configured' if (Path.home()/'.config'/'academic-research'/'config.toml').is_file() else 'NOT CONFIGURED')"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"
 ```
 
 If the result is `NOT CONFIGURED`, stop immediately and tell the user:
@@ -35,7 +35,9 @@ the pipeline spans citations, empirical numbers, and pipeline-integrity
 invariants:
 
 ```bash
-python -c "from pathlib import Path; missing = [f for f in ('scripts/test_common.py', 'scripts/test_citations.py', 'scripts/test_empirical_integrity.py', 'scripts/test_systematic_review.py') if not Path(f).is_file()]; print('ok' if not missing else 'missing: ' + ', '.join(missing))"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_project_scaffold.py" \
+    scripts/test_common.py scripts/test_citations.py \
+    scripts/test_empirical_integrity.py scripts/test_systematic_review.py
 ```
 
 If the output lists missing files, install them:

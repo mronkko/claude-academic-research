@@ -11,7 +11,8 @@ Before applying the rules below, check that this skill's regression
 tests are installed in the project:
 
 ```bash
-python -c "from pathlib import Path; missing = [f for f in ('scripts/test_common.py', 'scripts/test_citations.py') if not Path(f).is_file()]; print('ok' if not missing else 'missing: ' + ', '.join(missing))"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_project_scaffold.py" \
+    scripts/test_common.py scripts/test_citations.py
 ```
 
 If the output lists missing files, install them:
