@@ -54,30 +54,42 @@ directory — not checked in because it references machine-local paths).
   pain caused by the `.claude/` default — otherwise keep as-is.
   Files: [scripts/pipelines/audit_zotero_library.py:118](scripts/pipelines/audit_zotero_library.py#L118).
 
+- **S6** — stronger deprecation callout for `legacy/` in
+  `zotero-operations/SKILL.md`.
+  **Closed** — premise no longer holds. A fresh grep of
+  `skills/zotero-operations/SKILL.md` returns zero `legacy` or
+  `rollback` references; the rollback-mention concern evaporated,
+  likely during the portability pass. Left here for audit trail.
+
 ---
 
 ## Tier 2 — medium impact, medium effort (needs approval)
 
 ### Skills
 
-- **S3** — add "companion skills" cross-links for
-  `critic-loop ↔ empirical-integrity`.
-  **Why deferred:** the loop's Step 1 test gate invokes
-  `test_empirical_integrity.py`, but the skill body doesn't say so.
-  Tier 1 pass scoped this out to avoid drifting off S1.
+- **S3** — add an explicit "Companion skills" section to
+  `critic-loop`.
+  **Why deferred:** the skill body already references
+  `empirical-integrity` in prose (five mentions in
+  `skills/critic-loop/SKILL.md` — e.g. line 141 on the Step 1 test
+  gate), but there is no dedicated structural section anchoring the
+  companion relationships. Tier 1 pass scoped this out to avoid
+  drifting off S1.
   **What it would take:** ~10 lines in `skills/critic-loop/SKILL.md`
   — a "Companion skills" section enumerating the dependency on
   `empirical-integrity` (test gate), `grounded-citations` (write-time
   rule-book), and `manuscript-revision` (doctrine).
   Files: [skills/critic-loop/SKILL.md](skills/critic-loop/SKILL.md).
 
-- **S4** — cross-link `academic-style` and `manuscript-revision`.
-  **Why deferred:** they're meant to be used in sequence (clean
-  draft → critic-loop revision) but neither mentions the other.
+- **S4** — add reverse cross-link from `manuscript-revision` to
+  `academic-style`.
+  **Why deferred:** `academic-style/SKILL.md:3,22` already delegates
+  to `manuscript-revision`; only the reverse direction is missing.
   Users who skip `academic-style` incur extra critic iterations.
-  **What it would take:** one short paragraph in each SKILL.md
-  naming the companion.
-  Files: [skills/academic-style/SKILL.md](skills/academic-style/SKILL.md), [skills/manuscript-revision/SKILL.md](skills/manuscript-revision/SKILL.md).
+  **What it would take:** one short paragraph in
+  `skills/manuscript-revision/SKILL.md` naming `academic-style` as
+  the "before the loop" companion.
+  Files: [skills/manuscript-revision/SKILL.md](skills/manuscript-revision/SKILL.md).
 
 - **R9** — document `zotero-mcp-server[scite,semantic]` optional
   extras in the setup wizard.
@@ -92,23 +104,34 @@ directory — not checked in because it references machine-local paths).
 
 ### Scripts
 
-- **P1** — extract shared `LogManager` / `ConfigLoader` for the
-  three `enrich_*` orchestrators.
-  **Why deferred:** config-loading, CSV-log initialization, and
-  "already-done" tracking are reimplemented in each of
-  `enrich_abstracts.py`, `enrich_pdfs.py`, `enrich_dois.py`. Adding
-  a field to the log means editing three files in sync.
+- **P1** — extract shared `LogManager` for the three `enrich_*`
+  orchestrators.
+  **Why deferred:** `core.config_loader` already handles the
+  config-loading side (all three scripts import `get` / `require`
+  from it). What remains reimplemented in each of
+  `enrich_abstracts.py`, `enrich_pdfs.py`, `enrich_dois.py` is
+  CSV-log initialization (`_open_log`), "already-done" tracking
+  (`_already_done` / `_load_done_dois` — note the status-filter
+  string differs: `"updated"` vs `"attached"`), and the per-file
+  `LOG_FIELDS` list. Adding a field to the log still means editing
+  three files in sync.
   **What it would take:** new
-  `scripts/pipelines/shared_orchestrators.py` with `LogManager`
-  class (append-only CSV with last-row-wins reduction) and
-  `ConfigLoader` helper. Refactor the three scripts to use it.
-  Existing tests should drive this — no behaviour change.
+  `scripts/pipelines/shared_orchestrators.py` with a `LogManager`
+  class (append-only CSV with last-row-wins reduction, parametric
+  status filter). Refactor the three scripts to use it. Existing
+  tests should drive this — no behaviour change.
   Files: [scripts/pipelines/enrich_abstracts.py](scripts/pipelines/enrich_abstracts.py), [scripts/pipelines/enrich_pdfs.py](scripts/pipelines/enrich_pdfs.py), [scripts/pipelines/enrich_dois.py](scripts/pipelines/enrich_dois.py).
 
 - **P5** — shared credential-check helper for searchers.
   **Why deferred:** each of `scopus.py`, `wos.py`, `openalex.py`,
   `semantic_scholar.py` re-implements "API key missing → raise"
-  logic with inconsistent error messages.
+  logic with inconsistent error regimes. Concrete cases to cover:
+  `wos.py` uses `os.environ["WOS_API_KEY_EXTENDED"]` (raises bare
+  `KeyError` with a useless message); `semantic_scholar.py` uses
+  `os.environ.get(..., "")` (silently empties — the API accepts
+  anon calls with lower quota); `openalex.py` doesn't need a key.
+  The helper must accommodate "required", "optional", and
+  "unauthenticated-allowed" modes.
   **What it would take:** add `require_config_key()` helper or
   `@requires_credential` decorator to `searchers/base.py`; refactor
   each searcher to use it.
@@ -140,6 +163,23 @@ directory — not checked in because it references machine-local paths).
   for partial flush on SIGINT. Thread-safety tests.
   Files: [scripts/pipelines/abstract_screen.py](scripts/pipelines/abstract_screen.py), [scripts/pipelines/fulltext_code.py](scripts/pipelines/fulltext_code.py), [scripts/pipelines/zotero_io.py](scripts/pipelines/zotero_io.py).
 
+- **P9** — migrate `test_live_coverage.py` from `legacy/` to
+  `fetchers/*.py`.
+  **Why deferred:** the live-coverage guard currently walks
+  `legacy/fetch_abstracts.py` and `legacy/attach_pdfs.py` for the
+  canonical list of sources ([tests/unit/test_live_coverage.py:103-110](tests/unit/test_live_coverage.py#L103-L110)).
+  The docstring itself flags this: "When the refactored `fetchers/*.py`
+  classes become the coverage source of truth, this function … should
+  walk them instead — then the legacy/ directory can be deleted."
+  This is load-bearing for any future `legacy/` cleanup: as long as
+  the guard reads from `legacy/`, we can't remove those scripts.
+  **What it would take:** rewrite the two guard functions to walk
+  `scripts/pipelines/fetchers/*.py` and enumerate
+  `AbstractFetcher` / `PdfFetcher` subclasses. Preserve the alias
+  mapping, or map subclass `name` attributes to test names. Keep the
+  test coverage strictness unchanged.
+  Files: [tests/unit/test_live_coverage.py](tests/unit/test_live_coverage.py).
+
 ### Reference-project adoptions
 
 - **R1 + R2 + R3** — Concession Threshold Protocol, frame-lock
@@ -162,56 +202,92 @@ directory — not checked in because it references machine-local paths).
   function costume. Hard to test in isolation.
   Files: [scripts/pipelines/enrich_pdfs.py](scripts/pipelines/enrich_pdfs.py).
 
-- **P3** — split `zotero_io.py` (now ~1100 LOC after the 0.5.0 tag
-  + note work) into `zotero_io_api.py` (auth + pyzotero wrapping)
-  and `zotero_io_slr.py` (`parse_slr_coding_note`, SLR-specific
-  helpers). The module has become a kitchen-sink.
+- **P3** — split `zotero_io.py` (978 LOC) into `zotero_io_api.py`
+  (auth + pyzotero wrapping) and `zotero_io_slr.py`
+  (`parse_slr_coding_note`, SLR-specific helpers). The module has
+  become a kitchen-sink.
   Files: [scripts/pipelines/zotero_io.py](scripts/pipelines/zotero_io.py).
 
-- **R10 + R11** — adopt the OA fallback chain from
-  `openags/paper-search-mcp` (source-native → OpenAIRE / Europe PMC
-  / PMC → Unpaywall → optional Sci-Hub) and add CORE / Europe PMC
-  / PMC as new `AbstractFetcher` / `PdfFetcher` providers. Each new
-  provider must ship with a matching file under `tests/live/`
-  (enforced by `tests/live/test_live_coverage.py`).
+- **R10 + R11 (partial)** — finish the OA fallback chain from
+  `openags/paper-search-mcp`. PMC and Unpaywall are already live
+  ([fetchers/pmc.py](scripts/pipelines/fetchers/pmc.py),
+  [fetchers/unpaywall.py](scripts/pipelines/fetchers/unpaywall.py))
+  and [fetchers/\_\_init\_\_.py:62](scripts/pipelines/fetchers/__init__.py#L62)
+  sketches the cascade order. What remains is **CORE** and
+  **Europe PMC** as new `AbstractFetcher` / `PdfFetcher` providers,
+  plus an audit of the cascade ordering in `fetchers/__init__.py`.
+  Each new provider must ship with a matching file under
+  `tests/live/` (enforced by `tests/live/test_live_coverage.py`).
   Files: [scripts/pipelines/fetchers/](scripts/pipelines/fetchers/).
 
 ---
 
 ## Tier 4 — do if convenient
 
-- **S5** — expand `skills/setup/SKILL.md` (~50 lines currently) with
+- **S5** — expand `skills/setup/SKILL.md` (101 lines currently) with
   guidance on rotating a single API key, re-running the wizard, and
   auditing what's already configured. The wizard is idempotent but
   the skill doesn't advertise it.
-- **S6** — stronger deprecation callout for `legacy/` in
-  `zotero-operations/SKILL.md`. The rollback mention shouldn't read
-  as a first-class option.
-- **P6** — standardize on `http_client.get_json()` across all
-  fetchers. Currently some fetchers call `session.get()` directly
-  and parse ad-hoc. Hard to add a global rate-limit or retry policy.
-  Files: [scripts/pipelines/fetchers/](scripts/pipelines/fetchers/), [scripts/pipelines/http_client.py](scripts/pipelines/http_client.py).
+- **P6 (near-closed)** — standardize on `http_client.get_json()`
+  across all fetchers. Only two direct `session.get()` calls remain
+  outside `http_client`, both on non-content paths:
+  [fetchers/library_resolver.py:297](scripts/pipelines/fetchers/library_resolver.py#L297)
+  (SFX resolver probe) and
+  [fetchers/browser/connector.py:655](scripts/pipelines/fetchers/browser/connector.py#L655)
+  (connector ping). Not worth a dedicated pass; tidy opportunistically
+  if touching those files.
 - **P8** — CI guard that fails if `--legacy-browser` flag is removed
   but `legacy/` directory still exists, or vice versa. Currently a
   four-item checklist in `legacy/README.md` that nothing enforces.
 - **R4** — IRON RULE tables in long SKILL.mds
   (`systematic-review/SKILL.md` is >700 lines). Anti-pattern / Why
   it fails / Correct behaviour rows as an anti-context-rot device.
-- **R7** — `mcp__zotero__zotero_find_duplicates` +
-  `mcp__zotero__zotero_merge_duplicates` in
-  `audit_zotero_library.py` and post-import. MCP offers a dry-run
-  preview we currently improvise. Same MCP-from-headless-script
-  constraint as R5 — would be skill doctrine, not script code.
+- **R7 (narrowed)** — port `find_duplicates` detection into
+  `audit_zotero_library.py` so the audit report surfaces duplicate
+  candidates offline. The merge half is already ported —
+  [zotero_io.py:830](scripts/pipelines/zotero_io.py#L830)
+  (`merge_duplicate_item`, adapted from zotero-mcp) — and the
+  find-duplicates doctrine is already wired into
+  [zotero-operations/SKILL.md:240](skills/zotero-operations/SKILL.md).
+  What remains is detection in the audit script itself (MCP
+  find/merge still can't be invoked from a headless script, but the
+  detection algorithm can be reimplemented locally).
 - **R8** — `mcp__zotero__zotero_get_pdf_outline` in `fulltext_code.py`.
   Jump to coding-relevant sections without reading the whole PDF.
   Requires restructuring the LLM-input pipeline (currently sends the
   whole PDF up to a soft cap). Tier 3 work in practice.
+- **S7** — add missing `Trigger phrases:` blocks to three skills.
+  CLAUDE.md says every procedural skill follows the shape
+  "Use when … + Trigger phrases: … + Do NOT use for X". The
+  description lines in
+  [skills/academic-style/SKILL.md](skills/academic-style/SKILL.md),
+  [skills/empirical-integrity/SKILL.md](skills/empirical-integrity/SKILL.md),
+  and [skills/setup/SKILL.md](skills/setup/SKILL.md) lack the
+  `Trigger phrases:` block. Breaking the shape risks wrong-skill
+  triggering. One-line description edit per skill; no body changes
+  needed.
+- **P10** — drop the legacy-layout branch from the
+  `test_systematic_review.py` template. The template defines
+  `ABSTRACT_SCRIPT` / `FULLTEXT_SCRIPT` paths and Test 8 silently
+  passes if neither local copy exists ([templates/test_systematic_review.py:58-65](templates/test_systematic_review.py#L58-L65),
+  [:160-170](templates/test_systematic_review.py#L160-L170)). Now
+  that SR projects invoke plugin scripts by path, the silent-pass
+  branch adds cognitive load without catching anything. Delete the
+  branch or assert-fail if a local copy is found (indicating an
+  outdated project layout).
+- **M1** — add `keywords` to `.claude-plugin/plugin.json` for
+  marketplace search. The manifest currently has only `name`,
+  `version`, `description`, `author`, `license`, `homepage`. An
+  array like `["systematic-review", "zotero", "citations",
+  "manuscript", "critic-loop", "academic"]` would improve
+  discoverability in `/plugin marketplace`.
 
 ---
 
 ## House-keeping
 
-- **`REVIEW_NOTES.md`** at repo root is stale v0.1.0 material —
-  marked "gitignored, delete after review" in its own header but
-  still tracked. Either remove it (obsolete items resolved in later
-  releases) or replace with a "historical" header.
+- **`REVIEW_NOTES.md`** — deleted in this backlog-review pass.
+  The file was v0.1.0 scratch material referencing skills that no
+  longer exist by those names (`mcp-research`, `academic-writing`);
+  it was already gitignored (line 41 of `.gitignore`) and never
+  tracked, so the delete is local-only — no follow-up needed.
