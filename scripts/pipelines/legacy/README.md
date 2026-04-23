@@ -6,6 +6,14 @@ are proven on production libraries. **Do not extend them.** New
 features go in the refactored modules under
 `scripts/pipelines/fetchers/` and the top-level orchestrators.
 
+**POSIX-only.** These scripts use POSIX-specific constructs
+(`fetch_pdfs_browser.py` reads from `/dev/tty` for the interactive
+prompt) and are not supported on Windows. Users on Windows use the
+refactored `enrich_pdfs.py` orchestrator, which is cross-platform.
+When the refactored path has replaced the legacy rollback entirely
+and this directory is deleted, the Windows-vs-POSIX distinction
+goes away.
+
 ## What's here
 
 | Legacy | Replacement |

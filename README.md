@@ -16,6 +16,10 @@ Inside the Claude Code chat (Desktop or CLI):
 After install, run `/setup` once to configure API keys, MCP servers, and
 permission rules. The wizard is chat-driven — no terminal required.
 
+Works on Windows, macOS, and Linux. Windows users do **not** need WSL or
+Git Bash — native `cmd` and PowerShell are supported, and CI verifies
+every commit against `windows-latest`.
+
 ## What's in the plugin
 
 Eight skills:

@@ -54,6 +54,18 @@ CI (`.github/workflows/ci.yml`) runs `ruff check scripts tests` then `pytest tes
 - A `permissions.deny` rule blocks the Read tool from the config file so API keys never enter a conversation.
 - Zotero writes go through the Zotero Web API; reads prefer the local HTTP server at `localhost:23119` (Better BibTeX must be enabled in Zotero desktop).
 
+### Cross-platform notes
+
+The plugin runs on Windows, macOS, and Linux. CI verifies all three
+(`.github/workflows/ci.yml` matrix is `ubuntu + windows + macos ×
+Python 3.11/3.12/3.13`). A few conventions that keep it that way:
+
+- **Config path**: `Path.home() / ".config" / "academic-research" / "config.toml"` on every OS. The literal string `~/.config/` appears in prose only; never write `open("~/x")` in code (use `Path.home()`).
+- **Project-local artefacts**: scripts and skills write run-outputs under `.claude/<scope>/` in the user's project (e.g. `.claude/critic-loop/`, `.claude/audit/`, `.claude/fact-check/`). The setup wizard adds `.claude/` to the project `.gitignore` if one exists.
+- **`os.chmod`**: always guard with `if sys.platform != "win32":`. Python's chmod on Windows only toggles the read-only bit; NTFS per-user ACLs already protect paths under `C:\Users\<user>\`.
+- **Skill pre-flight checks**: use the cross-shell Python one-liner `python -c "from pathlib import Path; print('configured' if (Path.home()/'.config'/'academic-research'/'config.toml').is_file() else 'NOT CONFIGURED')"` — not POSIX `test -f`.
+- **Legacy scripts** (`scripts/pipelines/legacy/*.py`) are POSIX-only (one of them reads `/dev/tty`). Users on Windows use the refactored `enrich_*.py` scripts. Do not add new work to `legacy/`.
+
 ### Test suite shape
 
 - `tests/conftest.py` inserts both `scripts/` and `scripts/pipelines/` on `sys.path`, so unit tests can `import zotero_io` and `import http_client` directly without the sys.path gymnastics the scripts do at runtime.
