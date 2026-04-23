@@ -123,9 +123,20 @@ confirmation):**
 5. **Journal set** — tier list (AJG/ABS 2024 / FT50 / ABDC), which
    field codes within it, and whether ISSN-filtering will be used
    (requires WoS Expanded).
-6. **Database access** — which databases the user's institution
-   provides, which of those the formal search will use, and which
-   databases are excluded (with reason).
+6. **Database access** — which databases the formal search will
+   use. Do NOT ask the user blind. First run the probe (it reads
+   `~/.config/academic-research/config.toml` out-of-process and
+   emits only yes/no status — no keys):
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_database_access.py"
+   ```
+
+   Then present the detected set and ask which subset to use. For a
+   formal SR, two or three databases are typical; prefer WoS
+   Expanded + Scopus when both are available, OpenAlex + Semantic
+   Scholar as free fallbacks. Record both the chosen set and any
+   available-but-excluded databases (with the user's reason).
 7. **Exclusion criteria** — language restriction? editorials / book
    reviews / proceedings? conference papers? predatory-listed
    journals?
