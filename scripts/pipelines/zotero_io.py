@@ -553,6 +553,106 @@ class ZoteroClient:
             if t.get("tag")
         }
 
+    def batch_update_tags(
+        self,
+        updates: list[tuple[str, dict]],
+        *,
+        batch_size: int = 50,
+    ) -> dict[str, int]:
+        """Apply tag changes to many items via pyzotero's multi-item
+        PATCH. Intended for bulk paths like `--csv-backfill` where N
+        tag writes over N separate PATCH calls would be slow and
+        412-prone; the steady-state per-worker path continues to use
+        `update_tags()`.
+
+        Each entry in `updates` is `(item_key, op)` where `op` is a
+        dict with any of `add`, `remove`, `remove_prefixed` (same
+        semantics as `update_tags`). Items are fetched in one call
+        per batch, new tag sets are computed, and the batch is sent
+        as a single PATCH. `batch_size` caps per-PATCH size at 50
+        (Zotero's per-request limit).
+
+        Returns `{applied, unchanged, failed}` counts across all
+        batches. Partial-batch failures are surfaced individually via
+        pyzotero's success / failed buckets; this method does not
+        retry on 412 (callers should re-invoke after fetching fresh
+        state).
+        """
+        if not updates:
+            return {"applied": 0, "unchanged": 0, "failed": 0}
+
+        stats = {"applied": 0, "unchanged": 0, "failed": 0}
+
+        for i in range(0, len(updates), batch_size):
+            chunk = updates[i:i + batch_size]
+            keys = [k for k, _ in chunk]
+            # One bulk fetch per batch: `items` filtered by itemKey.
+            fetched = self.cloud.items(itemKey=",".join(keys))
+            fetched_by_key = {it.get("key"): it for it in fetched}
+
+            payloads: list[dict] = []
+            for item_key, op in chunk:
+                item = fetched_by_key.get(item_key)
+                if item is None:
+                    stats["failed"] += 1
+                    continue
+
+                data = item.get("data", {})
+                existing = {
+                    t.get("tag", "")
+                    for t in data.get("tags", [])
+                    if t.get("tag")
+                }
+                add_set = {t for t in op.get("add", ()) if t}
+                remove_set = {t for t in op.get("remove", ()) if t}
+                prefix_tuple = tuple(
+                    p for p in op.get("remove_prefixed", ()) if p
+                )
+
+                def _matches_prefix(tag: str, _pt=prefix_tuple) -> bool:
+                    return any(tag.startswith(p) for p in _pt)
+
+                target = {
+                    t for t in existing
+                    if t not in remove_set and not _matches_prefix(t)
+                } | add_set
+
+                if target == existing:
+                    stats["unchanged"] += 1
+                    continue
+
+                payloads.append({
+                    "key": item_key,
+                    "version": data.get("version", 0),
+                    "tags": [{"tag": t} for t in sorted(target)],
+                })
+
+            if not payloads:
+                continue
+
+            if not hasattr(self.cloud, "update_items"):
+                # Fallback for older pyzotero without multi-item PATCH.
+                for p in payloads:
+                    try:
+                        self.cloud.update_item(p)
+                        stats["applied"] += 1
+                    except Exception:  # noqa: BLE001
+                        stats["failed"] += 1
+                continue
+
+            # pyzotero's update_items returns a dict
+            # `{success, unchanged, failed}` each keyed by batch index.
+            # pyright's stub mis-types it as bool; ignore at the
+            # boundary since the runtime contract is documented by
+            # Zotero's multi-item PATCH response shape.
+            resp: dict = self.cloud.update_items(payloads)  # type: ignore[assignment]
+            stats["applied"] += len(resp.get("success") or {})
+            stats["unchanged"] += len(resp.get("unchanged") or {})
+            failed = resp.get("failed") or resp.get("failure") or {}
+            stats["failed"] += len(failed)
+
+        return stats
+
     def items_with_tag(
         self,
         collection_key: str,

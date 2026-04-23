@@ -158,24 +158,25 @@ def _run_csv_backfill(
               "abstract:* tags in Zotero.", flush=True)
         return 0
 
-    print(f"Backfilling abstract:* tags for {len(drift)} item(s)...",
-          flush=True)
-    applied = 0
-    failed = 0
-    for key, decision in drift.items():
-        tag = f"{STAGE_TAG_PREFIX}{decision}"
-        try:
-            zot.update_tags(
-                key, add=[tag], remove_prefixed=[STAGE_TAG_PREFIX],
-            )
-            applied += 1
-        except Exception as e:  # noqa: BLE001 — per-item tolerance
-            failed += 1
-            print(f"  FAILED {key}: {e}", flush=True)
-
-    print(f"Backfill complete: {applied} tagged, {failed} failed.",
-          flush=True)
-    return 0 if failed == 0 else 1
+    print(f"Backfilling abstract:* tags for {len(drift)} item(s) "
+          f"(batched)...", flush=True)
+    updates = [
+        (
+            key,
+            {
+                "add": [f"{STAGE_TAG_PREFIX}{decision}"],
+                "remove_prefixed": [STAGE_TAG_PREFIX],
+            },
+        )
+        for key, decision in drift.items()
+    ]
+    stats = zot.batch_update_tags(updates)
+    print(
+        f"Backfill complete: {stats['applied']} tagged, "
+        f"{stats['unchanged']} unchanged, {stats['failed']} failed.",
+        flush=True,
+    )
+    return 0 if stats["failed"] == 0 else 1
 
 
 def _load_doi_to_query(search_csv: Path | None) -> dict[str, str]:
