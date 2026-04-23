@@ -150,14 +150,16 @@ time via the Zotero API and remove prior stage tags on flip.
 | `fulltext:include` | `fulltext_code.py` | Passes full-text screening; has `SLR Coding` child note |
 | `fulltext:exclude` | `fulltext_code.py` | Excluded at full-text stage |
 
-### Pre-screening tags
+### Pre-screening and quality-flag tags
 
-Set before Claude-driven screening, typically by a preflight check
-against a predatory-journal list.
+Set outside the main screening loop — by preflight checks (predatory)
+or post-screening quality audits (retraction). Both are warnings the
+adjudicator sees in Zotero, not automatic exclusions.
 
 | Tag | Applied by | Meaning |
 |---|---|---|
-| `predatory:flag` | Preflight journal check against Beall's list | **Warning, not exclusion.** Author decides during full-text review whether to keep each flagged paper. Transparent flagging is the rule. |
+| `predatory:flag` | Preflight journal check against Beall's list (`import_to_zotero.py`) | **Warning, not exclusion.** Author decides during full-text review whether to keep each flagged paper. |
+| `retracted:flag` | Post-coding retraction check via `mcp__zotero__scite_check_retractions` (see *Retraction check* in *Key methodological rules*) | **Warning, not exclusion.** Cited paper has been retracted per Scite's retraction-watch data. Adjudicator decides whether to keep (with a discussion note), replace the citation, or drop the paper. |
 
 ### QA and adjudication tags
 
@@ -427,6 +429,32 @@ from listed journals get a `predatory:flag` tag in Zotero. This is a
 **warning, not an exclusion** — the author decides during full-text
 review whether to keep each flagged paper. Transparent flagging
 (not silent removal) is the rule.
+
+### Retraction check
+
+PRISMA quality assessment should catch **retracted papers** in the
+included set — citing a retracted paper is a fact-check failure mode.
+Run this check **after full-text coding is complete and before
+exporting `coded_papers.csv`**, so retractions don't slip into the
+manuscript's bibliography.
+
+The Zotero MCP server wraps Scite's free retraction-watch endpoint
+(no Scite account required). Invoke via:
+
+```
+mcp__zotero__scite_check_retractions(
+    group_id=<group>,
+    collection_key=<collection>,
+)
+```
+
+Narrow the scope to items already tagged `fulltext:include` so the
+check runs against papers that matter for the synthesis, not the
+full library. Retracted items get a `retracted:flag` tag; surface
+them to the author before re-running `export_coded_includes.py`.
+**Flag, don't silently drop** — the adjudicator decides whether to
+keep (with a prominent discussion note), replace the citation, or
+exclude.
 
 ### Post-screening QA
 

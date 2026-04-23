@@ -121,6 +121,38 @@ running these stages:**
    in its "Next steps" output — use those verbatim.
 5. Re-run the audit to confirm counts dropped.
 
+### Optional: retraction check
+
+Retracted papers in a Zotero library are a silent data-quality
+problem — citing a retracted paper is a fact-check failure mode the
+author almost certainly wants to catch. Scite exposes a free
+retraction-watch endpoint that the Zotero MCP server wraps as
+`mcp__zotero__scite_check_retractions` (no Scite account required).
+
+**Offer the check as a post-audit step** when any of the following
+is true: the library is being prepared for submission, the user
+mentions bibliography hygiene / citation integrity, or the audit
+report shows a mature library (no stubs, few missing abstracts). The
+check queries each DOI in the collection against the retraction
+registry and reports matches.
+
+Invocation (agent-mediated — the pipeline script can't call MCP tools
+directly):
+
+```
+mcp__zotero__scite_check_retractions(
+    group_id=<group>,
+    collection_key=<collection>,
+)
+```
+
+Report any retracted items to the user with the matching citation
+key; ask whether to tag them (`retracted:flag` is the convention)
+and/or remove them from the collection. **Flag, don't auto-remove** —
+the author decides. For SLR projects where retraction screening is
+part of PRISMA quality assessment, the `systematic-review` skill
+has the equivalent step inside its pipeline.
+
 ### Do not improvise
 
 If the user's request does not clearly map to one of the rows above,
