@@ -109,14 +109,27 @@ paper, get explicit sign-off, then search.
 **Brief contents (every section required before asking for
 confirmation):**
 
-1. **AI scope** — narrow (generative AI / LLMs only) / medium (ML +
-   genAI, pre-LLM work included) / broad (all algorithmic
-   decision-making). Give the reason for the choice.
-2. **Entrepreneurship scope** — new ventures / SMEs / both. If both,
-   name the synthesis strategy (separate strands? single framework?).
+1. **Focal construct / phenomenon scope** — what is the central
+   topic, and at what breadth? Give the breadth as a narrow / medium
+   / broad choice with a concrete definition of each, and justify
+   the choice. (E.g. a review on "remote work" could go narrow
+   = post-2020 pandemic-induced remote work, medium = any scheduled
+   telework since 2000, broad = all spatially distributed work
+   arrangements.)
+2. **Population / unit of analysis / context** — what units are in
+   scope (individuals / teams / firms / ventures / SMEs / industries
+   / countries / etc.)? Geographic / sectoral / temporal-era
+   restrictions? If multiple units appear in the scope, name the
+   synthesis strategy (separate strands? single framework?).
 3. **Research question(s)** — one or more focal questions the review
-   will answer. If the synthesis will map multiple streams (e.g.
-   AI-as-tool vs AI-as-domain vs AI-as-method), name the streams.
+   will answer. If the synthesis will map multiple streams of the
+   literature — e.g. X-as-antecedent vs X-as-outcome, or phenomenon
+   used as a tool vs studied as a domain vs applied as a research
+   method — name the streams. Flag whether streams are a narrative
+   device only, or whether a per-paper `research_stream` coding
+   field should extend `FULLTEXT_CODING_FIELDS` in
+   `screening_config.py` (this is a proposal, not a prescription —
+   the default template does not include one).
 4. **Time window** — start year (inclusive), end year (inclusive),
    and the reason for the start year (a pivot paper, a technology
    event, a round number with a defence).
@@ -140,14 +153,16 @@ confirmation):**
 7. **Exclusion criteria** — language restriction? editorials / book
    reviews / proceedings? conference papers? predatory-listed
    journals?
-8. **Search keyword blocks** — the literal AI-side and
-   entrepreneurship-side term lists (plus any additional Boolean
-   blocks) that will go into Scopus / WoS / OpenAlex queries.
-   Present them block-by-block, with wildcards where stemming is
-   needed, and ask the user to approve each block. This is the
-   level of detail that actually goes into `search_config.py` — do
-   not commit without explicit approval, because small term choices
-   (e.g. `SME*` alone vs `SME* OR "small and medium enterprise*"`)
+8. **Search keyword blocks** — the literal term lists for each
+   Boolean block of the query (typically one block per scope
+   dimension identified in items 1–2). These lists go verbatim into
+   Scopus / WoS / OpenAlex queries. Present them block-by-block,
+   with wildcards where stemming is needed (WoS does not stem
+   phrases; Scopus does), and ask the user to approve each block.
+   This is the level of detail that actually goes into
+   `search_config.py` — do not commit without explicit approval,
+   because small term choices (e.g. `"firm growth"` alone vs
+   `"firm growth" OR "venture growth" OR "business growth*"`)
    drastically change recall.
 
 Draft the brief in conversation, ask the user to confirm, then write
