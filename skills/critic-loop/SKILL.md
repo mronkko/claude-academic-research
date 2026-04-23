@@ -12,7 +12,7 @@ description: Use when the user asks to revise, polish, or critique an academic m
 Before any step below, verify the plugin has been configured:
 
 ```bash
-test -f ~/.config/academic-research/config.toml && echo "configured" || echo "NOT CONFIGURED"
+python -c "from pathlib import Path; print('configured' if (Path.home()/'.config'/'academic-research'/'config.toml').is_file() else 'NOT CONFIGURED')"
 ```
 
 If the result is `NOT CONFIGURED`, stop immediately and tell the user:
