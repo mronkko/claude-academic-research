@@ -751,7 +751,12 @@ def _render_toml_value(val: object) -> str:
 
 def _write_config(values: dict[str, dict]) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    os.chmod(CONFIG_DIR, 0o700)
+    # POSIX permission bits don't apply on Windows (os.chmod only toggles
+    # the read-only flag there). The config path is under the user's home
+    # directory, which NTFS protects per-user by default, so skipping is
+    # safe on Windows.
+    if sys.platform != "win32":
+        os.chmod(CONFIG_DIR, 0o700)
 
     lines = [
         "# academic-research plugin configuration.",
@@ -765,7 +770,8 @@ def _write_config(values: dict[str, dict]) -> None:
         lines.append("")
 
     CONFIG_PATH.write_text("\n".join(lines), encoding="utf-8")
-    os.chmod(CONFIG_PATH, 0o600)
+    if sys.platform != "win32":
+        os.chmod(CONFIG_PATH, 0o600)
 
 
 def _permission_patterns() -> tuple[list[str], list[str]]:

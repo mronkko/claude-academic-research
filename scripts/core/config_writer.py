@@ -21,6 +21,7 @@ Design notes:
 from __future__ import annotations
 
 import os
+import sys
 
 from core.config_loader import CONFIG_PATH, load_config
 
@@ -58,9 +59,15 @@ def _read() -> dict:
 
 def _write(values: dict) -> None:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    os.chmod(CONFIG_PATH.parent, 0o700)
+    # POSIX permission bits don't apply on Windows (os.chmod only toggles
+    # the read-only flag there). The config file is under the user's home
+    # directory, which NTFS protects per-user by default, so skipping is
+    # safe on Windows.
+    if sys.platform != "win32":
+        os.chmod(CONFIG_PATH.parent, 0o700)
     CONFIG_PATH.write_text(_dump(values), encoding="utf-8")
-    os.chmod(CONFIG_PATH, 0o600)
+    if sys.platform != "win32":
+        os.chmod(CONFIG_PATH, 0o600)
     load_config.cache_clear()
 
 
