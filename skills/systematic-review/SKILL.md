@@ -252,6 +252,119 @@ not, STOP and run the procedure.
 
 ---
 
+## Screening protocol (required before `abstract_screen.py`)
+
+The abstract-screening system prompt lives in `screening_config.py`
+(`ABSTRACT_SCREENING_SYSTEM_PROMPT`) and is **the** record of what
+got in and what got out at stage 1. Reviewers will read it to judge
+whether the review is reproducible. PRISMA expects it to be fixed
+before screening starts, not tuned while decisions accumulate.
+
+**Procedure** (run the first time the agent is about to call
+`abstract_screen.py`):
+
+1. Open `screening_config.py` and locate every `<INSERT …>` / `<…>`
+   placeholder in `ABSTRACT_SCREENING_SYSTEM_PROMPT`. There are
+   typically four:
+   - **Research question.** Copy verbatim from `.claude/systematic-review/scope.md` item 3.
+   - **Inclusion criteria (population / construct / outcome).**
+     Translate scope-brief items 1–2 into decision rules an LLM can
+     apply to a title-and-abstract pair in one pass. Each criterion
+     needs an **examples** list (what passes) and a **NOT relevant**
+     list (what fails — common false-positives).
+   - **Exclusion codes E1…E5.** One code per criterion missing + a
+     catch-all. Keep them short (≤ 40 chars) so they fit in tag
+     labels and QA summaries.
+   - **Bias line.** Default "be liberal; missing a relevant paper
+     is more costly than reading one extra full text" is correct
+     for most SRs; override only if the user has a defensible
+     reason (tight inclusion domain, pre-registered precision
+     target).
+
+2. Draft each replacement in conversation. Show the user the
+   resulting prompt in full (prefer a read-back / inline code block
+   over just "here's the diff"). Ask them to approve criterion by
+   criterion — criteria are the review's spine.
+
+3. Bump `ABSTRACT_SCREENING_PROMPT_VERSION` to a fresh string (e.g.
+   `vN-YYYY-MM-DD`). The version goes into every log row; reviewers
+   use it to distinguish a re-run under the same protocol from a
+   re-run under a revised protocol.
+
+4. Write the revised file. Record a one-line summary of the
+   protocol in `.claude/systematic-review/scope.md` (append, don't
+   replace) so the scope brief and the screening config stay in
+   lockstep.
+
+**Self-check before every `abstract_screen.py` call:** does
+`ABSTRACT_SCREENING_SYSTEM_PROMPT` contain any `<INSERT` /
+`<CRITERION` / bare `<…>` placeholders? Has the user approved the
+prompt in the current session? If either answer is no, STOP and run
+the procedure.
+
+**Revision during screening.** If the user wants to tighten a
+criterion after seeing real decisions: bump
+`ABSTRACT_SCREENING_PROMPT_VERSION`, have the user re-approve, and
+re-run with `--rerun` so the new version replaces prior decisions
+on the affected items. The append-only log preserves the original
+decisions under the old version for audit.
+
+---
+
+## Coding protocol (required before `fulltext_code.py`)
+
+The full-text coding schema — `FULLTEXT_CODING_FIELDS` plus
+`FULLTEXT_CODING_SYSTEM_PROMPT` in `screening_config.py` — is the
+record of what data the review extracts from each included paper.
+Fields added or reworded after coding starts create inconsistent
+columns in `coded_papers.csv`; PRISMA expects the schema to be
+fixed before coding starts.
+
+**Procedure** (run the first time the agent is about to call
+`fulltext_code.py`):
+
+1. Draft the coding schema. The template defaults are
+   `key_findings`, `sample`, `method`; these are safe starters for
+   nearly any SR. Propose additions based on the scope brief's
+   research questions — common add-ons for social-sciences SRs
+   include `theories_and_references`, `direction_of_relationship`,
+   `moderators_boundary_conditions`, `causal_inference_strength`,
+   `future_research`, and (if the scope brief named streams) a
+   `research_stream` enum field. 5–15 fields total is typical;
+   each field needs a `name`, a `description` written for an LLM
+   reader, and ideally an `example`.
+
+2. Fill in `FULLTEXT_CODING_SYSTEM_PROMPT` placeholders: research
+   question (same as stage 1), stage-2 criteria (what the full
+   text must show that the abstract could not), and exclusion
+   codes `FE1…FE5`.
+
+3. Show the user the full schema (every field) and the prompt.
+   Ask them to approve field-by-field — adding a field mid-run
+   costs a re-code of every already-coded paper.
+
+4. Bump `FULLTEXT_CODING_PROMPT_VERSION` to a fresh string.
+
+5. Write the revised file. Append a one-line summary to
+   `.claude/systematic-review/scope.md`.
+
+**Self-check before every `fulltext_code.py` call:** does
+`FULLTEXT_CODING_SYSTEM_PROMPT` contain any `<INSERT` /
+unpopulated placeholders? Does `FULLTEXT_CODING_FIELDS` still hold
+the template's three starter entries unmodified? Has the user
+approved the schema in the current session? If any answer is no or
+yes-still-template, STOP and run the procedure.
+
+**Revision during coding.** A truly new field added mid-run means
+every prior paper gets re-coded (the old rows have a missing
+column). Treat a schema-widening request as a major version bump
+(`v1 → v2`), ask the user to confirm they accept the re-coding
+cost, bump `FULLTEXT_CODING_PROMPT_VERSION`, and re-run affected
+items with `--rerun`. Field **reordering** is free; field
+**renaming** needs a data migration the user has to sign off on.
+
+---
+
 ## Core architecture
 
 Every systematic review runs through the same stages:
