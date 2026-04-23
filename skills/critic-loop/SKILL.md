@@ -33,6 +33,19 @@ Execute the editing loop documented in the `manuscript-revision` skill.
 This skill is the *procedure*; that skill is the *doctrine*. Read it
 first if you have not recently.
 
+## Relationship to `fact-check`
+
+`fact-check` is the standalone citation / claim audit. The evidence
+critic inside this loop covers the same ground during iterative
+revision.
+
+**Mutual-exclusion rule.** Do NOT spawn a `/fact-check` run while this
+loop is active, and skip it immediately after a loop that finished
+with no unresolved evidence-critic MAJORs — the work is duplicate and
+burns MCP / Zotero quota twice. Use `fact-check` instead of this loop
+when the user wants a focused citation-only pre-submission report
+without the method / argument / expert perspectives.
+
 ## Argument parsing
 
 Required:

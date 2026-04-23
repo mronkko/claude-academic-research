@@ -1,6 +1,6 @@
 ---
 name: fact-check
-description: Use when the user asks to fact-check a manuscript, verify citations, audit sources, or check whether a paper's cited sources actually support the claims made about them. Trigger phrases: "fact-check", "verify citations", "audit citations", "check the sources", "do these papers actually say that", "verify the numbers in this draft". Runs citation-by-citation verification against Zotero / MCP-retrieved sources, and quantitative claims against the authoritative results file. Unlike the `critic-loop` evidence critic, this skill is a standalone one-shot audit with no revision loop.
+description: Use when the user asks to fact-check a manuscript, verify citations, audit sources, or check whether a paper's cited sources actually support the claims made about them. Trigger phrases: "fact-check", "verify citations", "audit citations", "check the sources", "do these papers actually say that", "verify the numbers in this draft". Runs citation-by-citation verification against Zotero / MCP-retrieved sources, and quantitative claims against the authoritative results file. Produces a one-shot report. Do NOT use during or immediately after a `/critic-loop` run — the evidence critic inside that loop performs the same verification as part of iterative revision; invoking fact-check on top of it duplicates the work and spends MCP / Zotero quota twice. Use `critic-loop` for verification during revision rounds; use `fact-check` for pre-submission audits, standalone spot-checks, or a focused citation-only pass without the other critic perspectives.
 ---
 
 # fact-check
@@ -50,9 +50,33 @@ review. Then proceed with the audit.
 
 ---
 
+## Relationship to `critic-loop`
+
 This skill is the standalone cousin of the `critic-loop` evidence
 critic. The evidence critic fires inside the revision loop; fact-check
 runs one-shot when the user explicitly asks for a citation/claim audit.
+
+**Mutual-exclusion rule.** If a `/critic-loop` session is currently
+running, or just completed with no unresolved evidence-critic MAJORs,
+fact-check is redundant — skip unless the user explicitly asks for a
+second pass. The two cover the same ground for citations and
+quantitative claims; running both on the same draft in the same
+session burns MCP lookups twice without new information. If the user
+invokes fact-check while a `critic-loop` is clearly in progress (e.g.
+`.claude/critic-loop/iter-*/` directories exist and were written in
+the last few minutes), ask whether they want to wait for the loop to
+finish, or proceed with fact-check as an additional audit.
+
+**When to prefer which.**
+
+- **`critic-loop`** — during revision rounds; citations are one of
+  four concerns (with method, argument, expert) and the loop applies
+  fixes iteratively.
+- **`fact-check`** — pre-submission audit, supervisor hand-off,
+  journal-submission checklist, or a deliberate citation-only
+  spot-check without the other three critic perspectives. Produces a
+  durable report at `.claude/fact-check/report.md` that the author can
+  share.
 
 ## Invocation
 
