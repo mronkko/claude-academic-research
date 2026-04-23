@@ -18,9 +18,9 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_project_scaffold.py" \
 If the output lists missing files, install them:
 
 ```bash
-mkdir -p scripts
-cp "${CLAUDE_PLUGIN_ROOT}/templates/test_common.py" scripts/
-cp "${CLAUDE_PLUGIN_ROOT}/templates/test_empirical_integrity.py" scripts/
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/install_templates.py" \
+    test_common.py:scripts/test_common.py \
+    test_empirical_integrity.py:scripts/test_empirical_integrity.py
 ```
 
 Then tell the user what was installed and flag that the top of

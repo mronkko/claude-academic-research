@@ -816,6 +816,7 @@ def _permission_patterns() -> tuple[list[str], list[str]]:
     absolute_home_pattern = f"//{home.lstrip('/')}"
 
     allow = [
+        # Bash: pipeline scripts, helper utilities, and Playwright setup.
         f"Bash(uv run {PLUGIN_ROOT_ENV}/scripts/**)",
         f"Bash(uv run -s {PLUGIN_ROOT_ENV}/scripts/**)",
         f"Bash(uv run --script {PLUGIN_ROOT_ENV}/scripts/**)",
@@ -824,6 +825,45 @@ def _permission_patterns() -> tuple[list[str], list[str]]:
         "Bash(playwright install chromium)",
         "Bash(playwright install-deps)",
         f"Read({absolute_home_pattern}/.config/academic-research/)",
+        # MCP: citation-database and paper-search servers. All of their
+        # tools are read-only (search, fetch, metadata lookup), so the
+        # per-call permission prompt is pure friction — the skills call
+        # these dozens of times per screening run.
+        "mcp__scopus__*",
+        "mcp__openalex__*",
+        "mcp__semantic-scholar__*",
+        "mcp__paper-search__*",
+        "mcp__paper-search-nodejs__*",
+        # MCP: Zotero — the library is user-owned data, so writes stay
+        # behind the permission prompt. Reads are enumerated individually
+        # (adds a new read tool upstream stays prompted until the user
+        # adds it here, which is the conservative default).
+        "mcp__zotero__fetch",
+        "mcp__zotero__search",
+        "mcp__zotero__scite_check_retractions",
+        "mcp__zotero__zotero_advanced_search",
+        "mcp__zotero__zotero_find_duplicates",
+        "mcp__zotero__zotero_get_annotations",
+        "mcp__zotero__zotero_get_collection_items",
+        "mcp__zotero__zotero_get_collections",
+        "mcp__zotero__zotero_get_feed_items",
+        "mcp__zotero__zotero_get_item_children",
+        "mcp__zotero__zotero_get_item_fulltext",
+        "mcp__zotero__zotero_get_item_metadata",
+        "mcp__zotero__zotero_get_items_children",
+        "mcp__zotero__zotero_get_notes",
+        "mcp__zotero__zotero_get_pdf_outline",
+        "mcp__zotero__zotero_get_recent",
+        "mcp__zotero__zotero_get_search_database_status",
+        "mcp__zotero__zotero_get_tags",
+        "mcp__zotero__zotero_list_feeds",
+        "mcp__zotero__zotero_list_libraries",
+        "mcp__zotero__zotero_search_by_citation_key",
+        "mcp__zotero__zotero_search_by_tag",
+        "mcp__zotero__zotero_search_collections",
+        "mcp__zotero__zotero_search_items",
+        "mcp__zotero__zotero_search_notes",
+        "mcp__zotero__zotero_semantic_search",
     ]
     # Deny patterns for the config file. Claude Code's permission matcher
     # is prefix-based, so we enumerate the common shapes (absolute path,
