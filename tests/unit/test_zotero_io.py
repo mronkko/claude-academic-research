@@ -231,9 +231,10 @@ def test_pdf_map_unparseable_dateadded_protects_attachment() -> None:
     assert result["PARENT_Y"][1] == []
 
 
-def test_attach_pdf_delegates_to_pyzotero_attachment_simple() -> None:
+def test_attach_pdf_delegates_to_pyzotero_attachment_simple(tmp_path) -> None:
     """pyzotero's Zupload returns lists of item dicts under success /
     failure / unchanged (see _upload.py:218-239)."""
+    from pathlib import Path as _Path
     zc = _client()
     fake_cloud = MagicMock()
     fake_cloud.attachment_simple.return_value = {
@@ -243,10 +244,14 @@ def test_attach_pdf_delegates_to_pyzotero_attachment_simple() -> None:
     }
     zc._cloud = fake_cloud
 
-    result = zc.attach_pdf("PARENT1", "/tmp/paper.pdf")
+    pdf_path = tmp_path / "paper.pdf"
+    result = zc.attach_pdf("PARENT1", str(pdf_path))
 
+    # attach_pdf normalises via str(Path(...)), which uses backslashes on
+    # Windows. Build the expected list through the same transformation so
+    # the assertion matches on every OS.
     fake_cloud.attachment_simple.assert_called_once_with(
-        ["/tmp/paper.pdf"], parentid="PARENT1",
+        [str(_Path(str(pdf_path)))], parentid="PARENT1",
     )
     assert result == "NEWATT1"
 

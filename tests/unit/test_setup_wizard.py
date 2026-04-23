@@ -90,7 +90,11 @@ def test_permission_patterns_deny_covers_read_and_shell() -> None:
 
 def test_config_path_is_under_home() -> None:
     mod = _load()
-    assert str(mod.CONFIG_PATH).endswith(".config/academic-research/config.toml")
+    # Compare by Path parts rather than trailing-string match so the test
+    # passes on Windows (where str(Path) uses backslashes).
+    assert mod.CONFIG_PATH.parts[-3:] == (
+        ".config", "academic-research", "config.toml",
+    )
 
 
 # ---------------------------------------------------------------------------
