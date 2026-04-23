@@ -824,6 +824,13 @@ def _permission_patterns() -> tuple[list[str], list[str]]:
         f"Bash({PLUGIN_ROOT_ENV}/scripts/**.py:*)",
         "Bash(playwright install chromium)",
         "Bash(playwright install-deps)",
+        # Listing plugin-internal directories — agents routinely `ls`
+        # `scripts/pipelines/` / `templates/` to orient themselves.
+        # Plugin source is public on GitHub; no security benefit to
+        # prompting on every enumeration.
+        f"Bash(ls {PLUGIN_ROOT_ENV}/**)",
+        f"Bash(ls -l {PLUGIN_ROOT_ENV}/**)",
+        f"Bash(ls -la {PLUGIN_ROOT_ENV}/**)",
         f"Read({absolute_home_pattern}/.config/academic-research/)",
         # MCP: citation-database and paper-search servers. All of their
         # tools are read-only (search, fetch, metadata lookup), so the

@@ -88,6 +88,71 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/install_templates.py" \
 
 ---
 
+## Zotero library selection (required before any Zotero write)
+
+Run this **first**, right after bootstrap. Pin down which Zotero
+library will hold this review's bibliography before starting the
+scope conversation — the choice is independent of scope, takes a
+single question to resolve, and unblocks every later step that
+touches Zotero. Running it first also means the project's
+`CLAUDE.md` carries the library reference from the outset, so a
+future session opening the project sees it immediately.
+
+The choice is stored in the project's `CLAUDE.md` and passed
+explicitly to every pipeline script as `--group <id>` (and
+`--collection <key>` where supported). It is NOT set via the
+`ZOTERO_GROUP` env var — env vars are per-shell, easily lost on a
+new terminal, and invisible to future sessions that read the
+project's `CLAUDE.md` to orient themselves.
+
+**Procedure:**
+
+1. List available libraries:
+
+   ```
+   mcp__zotero__zotero_list_libraries()
+   ```
+
+   Show the user the personal library (type `user`) and each group
+   (type `group`, with numeric IDs). Ask which to use. Group
+   libraries are the usual choice for SRs — shared with
+   collaborators, higher upload quota, cleaner archival than mixing
+   into personal.
+
+2. Optional: scope to a collection within the chosen library. Ask
+   the user whether this SR's items should go into an existing
+   collection, or a fresh one. For an existing one:
+
+   ```
+   mcp__zotero__zotero_get_collections(library_id=<id>)
+   ```
+
+   For a fresh collection, note the intended name — `import_to_zotero.py`
+   creates it on first use when `--collection <name>` is passed and
+   no matching key exists.
+
+3. Write the choice into the project's `CLAUDE.md` under a
+   `## Zotero library` heading (create or extend the file as
+   needed). Ask the user to confirm the edit before saving:
+
+   ```markdown
+   ## Zotero library
+
+   - **Group ID:** `<numeric id>`
+   - **Collection key:** `<8-char Zotero key>`   (omit if creating
+     fresh at import time)
+
+   All pipeline scripts take `--group <id>` and (where supported)
+   `--collection <key>` as explicit CLI flags. Do not set
+   `ZOTERO_GROUP` as an env var — the canonical record is here.
+   ```
+
+**Self-check before every Zotero write:** does the project's
+`CLAUDE.md` have a `## Zotero library` section with a group ID? If
+not, STOP and run the procedure.
+
+---
+
 ## Scope lock-in (required before any search)
 
 Before calling ANY search tool — MCP (`mcp__scopus__search_scopus`,
@@ -187,68 +252,6 @@ keywords after a pilot or reviewer feedback, update `scope.md`
 first, get fresh user confirmation on the revised blocks, then
 write `search_config.py`. Never silently expand keyword coverage
 between scope.md and search_config.py.
-
----
-
-## Zotero library selection (required before any Zotero write)
-
-After the scope brief is confirmed — and BEFORE the first Zotero
-write (`import_to_zotero.py`, `mcp__zotero__zotero_add_*`,
-`mcp__zotero__zotero_create_*`) — pin down which Zotero library
-will hold this review's bibliography.
-
-The choice is stored in the project's `CLAUDE.md` and passed
-explicitly to every pipeline script as `--group <id>` (and
-`--collection <key>` where supported). It is NOT set via the
-`ZOTERO_GROUP` env var — env vars are per-shell, easily lost on a
-new terminal, and invisible to future sessions that read the
-project's `CLAUDE.md` to orient themselves.
-
-**Procedure:**
-
-1. List available libraries:
-
-   ```
-   mcp__zotero__zotero_list_libraries()
-   ```
-
-   Show the user the personal library (type `user`) and each group
-   (type `group`, with numeric IDs). Ask which to use. Group
-   libraries are the usual choice for SRs — shared with
-   collaborators, higher upload quota, cleaner archival than mixing
-   into personal.
-
-2. Optional: scope to a collection within the chosen library. Ask
-   the user whether this SR's items should go into an existing
-   collection, or a fresh one. For an existing one:
-
-   ```
-   mcp__zotero__zotero_get_collections(library_id=<id>)
-   ```
-
-   For a fresh collection, note the intended name — `import_to_zotero.py`
-   creates it on first use when `--collection <name>` is passed and
-   no matching key exists.
-
-3. Write the choice into the project's `CLAUDE.md` under a
-   `## Zotero library` heading (create or extend the file as
-   needed). Ask the user to confirm the edit before saving:
-
-   ```markdown
-   ## Zotero library
-
-   - **Group ID:** `<numeric id>`
-   - **Collection key:** `<8-char Zotero key>`   (omit if creating
-     fresh at import time)
-
-   All pipeline scripts take `--group <id>` and (where supported)
-   `--collection <key>` as explicit CLI flags. Do not set
-   `ZOTERO_GROUP` as an env var — the canonical record is here.
-   ```
-
-**Self-check before every Zotero write:** does the project's
-`CLAUDE.md` have a `## Zotero library` section with a group ID? If
-not, STOP and run the procedure.
 
 ---
 
