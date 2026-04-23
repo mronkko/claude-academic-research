@@ -121,7 +121,9 @@ Report sample size in the first report entry.
 
 ## Report format
 
-Write the report to `/tmp/fact-check/report.md`:
+Write the report to `.claude/fact-check/report.md` (create the
+directory first if needed — `python -c "from pathlib import Path;
+Path('.claude/fact-check').mkdir(parents=True, exist_ok=True)"`):
 
 ```markdown
 # Fact-check report

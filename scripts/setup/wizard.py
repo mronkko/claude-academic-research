@@ -839,6 +839,49 @@ def _patch_settings() -> tuple[int, int]:
     return allow_added, deny_added
 
 
+def _maybe_add_claude_to_gitignore(cwd: Path | None = None) -> Path | None:
+    """If we're inside a git repo, ensure `.claude/` is in its `.gitignore`.
+
+    Pipeline scripts write per-project artefacts under `.claude/` (audit
+    keys files, critic-loop reports, fact-check reports). A user who
+    commits their research project shouldn't also commit those — they
+    are ephemeral run-outputs, not source.
+
+    Returns the .gitignore Path if the entry was added, else None.
+    Silent no-op when the CWD isn't inside a git repo (e.g. the user
+    ran the wizard from $HOME). Cross-platform — uses `git rev-parse`
+    via subprocess list form, which works on Windows.
+    """
+    import subprocess
+    cwd = cwd or Path.cwd()
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None  # not a git repo, or git not installed, or network FS oddity
+
+    repo_root = Path(result.stdout.strip())
+    if not repo_root.exists():
+        return None
+
+    gi = repo_root / ".gitignore"
+    existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
+    # Match exact entry — don't treat `.claude-plugin/` as a hit.
+    lines = {line.strip() for line in existing.splitlines()}
+    if ".claude/" in lines or ".claude" in lines:
+        return None
+
+    separator = "" if (not existing) or existing.endswith("\n") else "\n"
+    gi.write_text(f"{existing}{separator}.claude/\n", encoding="utf-8")
+    return gi
+
+
 def _parse_mcp_list(stdout: str) -> dict[str, str]:
     """Parse `claude mcp list` output into {name: status}.
 
@@ -1226,6 +1269,7 @@ def main() -> int:
 
     _write_config(values)
     allow_added, deny_added = _patch_settings()
+    gitignore_updated = _maybe_add_claude_to_gitignore()
 
     # Local Zotero API probe. Pipeline scripts default to local reads for
     # speed; failing here doesn't block setup but surfaces a clear warning.
@@ -1256,6 +1300,8 @@ def main() -> int:
     print("  Setup complete.")
     print(f"    Config:   {CONFIG_PATH} (mode 0600)")
     print(f"    Settings: {SETTINGS_PATH} (+{allow_added} allow, +{deny_added} deny)")
+    if gitignore_updated is not None:
+        print(f"    Gitignore: added .claude/ entry to {gitignore_updated}")
     glyph = "✓" if zotero_local_status == ZOTERO_LOCAL_STATUS_OK else "✗"
     print(f"    Zotero local API: {glyph} {zotero_local_message}")
     bbt_glyph = "✓" if zotero_bbt_status == ZOTERO_BBT_STATUS_OK else "✗"

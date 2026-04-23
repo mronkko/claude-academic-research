@@ -115,8 +115,9 @@ def main() -> int:
         help="Audit the personal (user) library instead of a group.",
     )
     parser.add_argument(
-        "--output", default="/tmp/zotero_audit.json",
-        help="Path to write JSON report (default: /tmp/zotero_audit.json).",
+        "--output", default=".claude/audit/audit.json",
+        help="Path to write JSON report (default: .claude/audit/audit.json, "
+             "project-local).",
     )
     parser.add_argument(
         "--local", action="store_true", default=True,
