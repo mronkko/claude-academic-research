@@ -27,6 +27,7 @@ import os
 import re
 import shutil
 import sys
+import textwrap
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -468,6 +469,40 @@ EXPECTED_MCP: tuple[McpServerSpec, ...] = (
 # ---------------------------------------------------------------------------
 
 
+# Hard-cap output at 80 columns — the wizard is often read in the side panel
+# of an IDE (VS Code, Positron), where anything wider soft-wraps ugly.
+_WRAP_COLS = 80
+_LABEL_COL = 16  # "    What it is: " / "    Used by:    " — labels pad to 12 chars after a 4-space indent
+
+
+def _wrap_labeled(label: str, text: str) -> str:
+    """Wrap a labeled help line. Continuation lines align under the text,
+    not the label, so the label stands out."""
+    first = "    " + (label + " " * 12)[:12]  # pad/truncate label to 12 chars
+    rest = " " * _LABEL_COL
+    return textwrap.fill(
+        text,
+        width=_WRAP_COLS,
+        initial_indent=first,
+        subsequent_indent=rest,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+
+
+def _wrap_body(text: str, indent: int = 2) -> str:
+    """Wrap a body paragraph at 80 cols with a uniform left indent."""
+    pad = " " * indent
+    return textwrap.fill(
+        text,
+        width=_WRAP_COLS,
+        initial_indent=pad,
+        subsequent_indent=pad,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+
+
 def _print_header() -> None:
     print()
     print("=" * 64)
@@ -504,11 +539,13 @@ def _prompt_key(spec: KeySpec, existing: str | None, interactive: bool,
         display = "*" * 8 if spec.hidden else default
         default_tag = f" (from {source}: {display}; press Enter to keep)"
 
-    print(f"\n  {spec.label}{required_tag}{default_tag}")
-    print(f"    What it is: {spec.what}")
-    print(f"    Used by:    {spec.used_by}")
-    print(f"    If missing: {spec.impact}")
-    print(f"    Get one at: {spec.where}")
+    print()
+    print(_wrap_body(f"{spec.label}{required_tag}{default_tag}"))
+    print(_wrap_labeled("What it is:", spec.what))
+    print(_wrap_labeled("Used by:", spec.used_by))
+    print(_wrap_labeled("If missing:", spec.impact))
+    print(_wrap_labeled("Get one at:", spec.where))
+    print()
 
     try:
         if spec.hidden:
@@ -1073,13 +1110,15 @@ def _print_mcp_offer(spec: McpServerSpec, status: str) -> None:
         else "(auto-installed on first use; no separate install command)"
     )
 
-    print(f"\n  {headline}")
-    print(f"    What it is: {spec.purpose}")
-    print(f"    Project:    {spec.homepage}")
-    print(f"    Install:    {install_line}")
+    print()
+    print(_wrap_body(headline))
+    print(_wrap_labeled("What it is:", spec.purpose))
+    print(_wrap_labeled("Project:", spec.homepage))
+    print(_wrap_labeled("Install:", install_line))
     if spec.install_note:
-        print(f"                {spec.install_note}")
-    print(f"    Register:   {_format_register_command(spec)}")
+        print(_wrap_labeled("", spec.install_note))
+    print(_wrap_labeled("Register:", _format_register_command(spec)))
+    print()
 
 
 def _run_claude_mcp(args: list[str], timeout: int = 30) -> tuple[int, str, str]:
@@ -1168,17 +1207,20 @@ def _offer_register_mcp(
             updated[spec.name] = MCP_STATUS_CONNECTED
             registered += 1
             if spec.name == "zotero":
-                print("    Note: for local-mode (Zotero desktop instead of cloud), "
-                      "re-run with `-e ZOTERO_LOCAL=true` — see the project page.")
+                print(_wrap_body(
+                    "Note: for local-mode (Zotero desktop instead of cloud), "
+                    "re-run with `-e ZOTERO_LOCAL=true` — see the project page.",
+                    indent=4,
+                ))
         else:
             err_clean = err.strip() or "unknown error"
-            print(f"    ✗ Registration failed: {err_clean}")
+            print(_wrap_body(f"✗ Registration failed: {err_clean}", indent=4))
             if _looks_like_missing_binary(err) and spec.install_cmd:
-                print("    The required command isn't on your PATH.")
-                print(f"    Install it with: {spec.install_cmd}")
+                print(_wrap_body("The required command isn't on your PATH.", indent=4))
+                print(_wrap_labeled("Install:", spec.install_cmd))
                 if spec.install_note:
-                    print(f"                    {spec.install_note}")
-                print("    Then re-run this wizard.")
+                    print(_wrap_labeled("", spec.install_note))
+                print(_wrap_body("Then re-run this wizard.", indent=4))
             updated[spec.name] = updated.get(spec.name, MCP_STATUS_MISSING)
 
     return registered, updated
@@ -1212,7 +1254,7 @@ def _print_mcp_summary(current: dict[str, str]) -> tuple[bool, bool]:
         MCP_STATUS_MISSING: "✗ not registered",
     }
 
-    print("    MCP servers")
+    print("    MCP (Model Context Protocol) servers")
     name_width = max(len(s.name) for s in EXPECTED_MCP)
     for tier in (MCP_TIER_REQUIRED, MCP_TIER_SEARCH_DB, MCP_TIER_OPTIONAL):
         print(f"      {tier_labels[tier]}")
@@ -1293,8 +1335,12 @@ def main() -> int:
     current_mcp = _check_mcp_servers()
     if interactive:
         print()
-        print("  Checking MCP servers (Model Context Protocol — provides Claude")
-        print("  with tools for Zotero, citation databases, and PDF retrieval).")
+        print(_wrap_body(
+            "Checking MCP (Model Context Protocol) servers. These are small "
+            "helper programs that let Claude read your Zotero library, "
+            "search citation databases, and fetch PDFs. The plugin uses "
+            "five of them and offers to register any that are missing.",
+        ))
         registered, current_mcp = _offer_register_mcp(
             EXPECTED_MCP, current_mcp, interactive=True,
         )
