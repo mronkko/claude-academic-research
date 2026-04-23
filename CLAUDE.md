@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Deferred development ideas — things consciously not done yet but worth revisiting — live in [BACKLOG.md](BACKLOG.md). Consult it before starting non-trivial work; the current item may already be captured there with context for why it was deferred.
+
 ## What this repo is
 
 A Claude Code **plugin** — not an application. It ships skills (prose rule-books), pipeline scripts, and templates for academic-research workflows. End users install via `/plugin marketplace add mronkko/claude-academic-research`. Anything you change here is consumed by downstream Claude Code instances in user projects.
