@@ -417,8 +417,8 @@ compute counts), one of two things must be true:
 
 | Task | Right move |
 |------|------------|
-| Filter / dedup a search CSV (top-N by year, top journals) | Propose adding `scripts/pipelines/filter_search_results.py`. |
-| Summarise screening decisions across passes (last-row-wins, decision counts, list re-screened items) | Propose adding `scripts/pipelines/screening_report.py`. |
+| Filter / trim a search CSV (top-N by year, year range) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/filter_search_results.py --input <csv> --output <csv> [--year-min Y] [--year-max Y] [--top-n N]` |
+| Summarise screening decisions across passes (last-row-wins, decision counts, list re-screened items) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/screening_report.py <log.csv> [--list <decision>] [--list-rescreened]` |
 | Inspect tag state for one item | Use `mcp__zotero__zotero_get_item_metadata` directly — single MCP call, no Python needed. |
 | Read a CSV row count | `wc -l <path>` — already a one-liner. |
 
@@ -608,9 +608,11 @@ single-item debugging).
 | Single-database piloting (Web of Science) | `search_wos.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_wos.py --config ./search_config.py` |
 | Single-database piloting (OpenAlex, free) | `search_openalex.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_openalex.py --config ./search_config.py` |
 | Single-database piloting (Semantic Scholar) | `search_semantic_scholar.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_semantic_scholar.py --config ./search_config.py` |
+| Filter / trim a search CSV (top-N by year, year range) | `filter_search_results.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/filter_search_results.py --input <csv> --output <csv> [--year-min Y] [--year-max Y] [--top-n N]` |
 | Import deduplicated search CSV into Zotero | `import_to_zotero.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/import_to_zotero.py --group <id> --input <search.csv> [--collection <key>]` |
 | Abstract screening (Claude Haiku on title+abstract) | `abstract_screen.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/abstract_screen.py --group <id> --collection <key> --config ./screening_config.py` |
 | Full-text screening + structured coding (Claude Sonnet) | `fulltext_code.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs` |
+| Summarise screening / coding decisions across passes | `screening_report.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/screening_report.py <log.csv> [--list <decision>] [--list-rescreened]` |
 | Fetch missing abstracts (multi-source cascade) | `enrich_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_abstracts.py --filter-keys-file <keys>` |
 | Attach missing PDFs (multi-source cascade) | `enrich_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --filter-keys-file <keys>` |
 | Attach Wiley PDFs only (TDM token) | `enrich_pdfs.py --sources wiley` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --sources wiley --filter-keys-file <keys>` |
