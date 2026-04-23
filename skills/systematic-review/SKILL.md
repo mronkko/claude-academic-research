@@ -29,35 +29,120 @@ If the result is `configured`, proceed.
 
 ## Bootstrap (first run in this project)
 
-Before running any pipeline stage, check that the project's regression
-tests are installed. An SR project needs all three test files because
-the pipeline spans citations, empirical numbers, and pipeline-integrity
-invariants:
+An SR project needs (a) the canonical directory scaffold, (b) four
+regression-test files, and (c) pipeline-stage config templates. Run
+the three setup helpers below in order. They are all idempotent —
+re-running skips anything already in place. Do not use shell
+`mkdir -p` (prompts the user, bash-only) or chained `cp` calls
+(prompts the user for every chain) for the same work.
+
+Create the directory scaffold:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/ensure_dir.py" \
+    scripts screening pdfs analysis analysis/results manuscript
+```
+
+Check what's already present:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_project_scaffold.py" \
     scripts/test_common.py scripts/test_citations.py \
-    scripts/test_empirical_integrity.py scripts/test_systematic_review.py
+    scripts/test_empirical_integrity.py scripts/test_systematic_review.py \
+    search_config.py screening_config.py \
+    analysis/manuscript_stats.py manuscript/manuscript_tables.py \
+    manuscript/manuscript.qmd
 ```
 
-If the output lists missing files, install them:
+If any are missing, install them (one call, skip-if-exists for the
+rest):
 
 ```bash
-mkdir -p scripts
-cp "${CLAUDE_PLUGIN_ROOT}/templates/test_common.py" scripts/
-cp "${CLAUDE_PLUGIN_ROOT}/templates/test_citations.py" scripts/
-cp "${CLAUDE_PLUGIN_ROOT}/templates/test_empirical_integrity.py" scripts/
-cp "${CLAUDE_PLUGIN_ROOT}/templates/test_systematic_review.py" scripts/
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/install_templates.py" \
+    test_common.py:scripts/test_common.py \
+    test_citations.py:scripts/test_citations.py \
+    test_empirical_integrity.py:scripts/test_empirical_integrity.py \
+    test_systematic_review.py:scripts/test_systematic_review.py \
+    search_config.py:search_config.py \
+    screening_config.py:screening_config.py \
+    manuscript_stats.py:analysis/manuscript_stats.py \
+    manuscript_tables.py:manuscript/manuscript_tables.py \
+    manuscript.qmd:manuscript/manuscript.qmd
 ```
 
-Tell the user what was installed and flag that the top of each
-`test_*.py` has project-specific paths and (for
-`test_empirical_integrity.py`) a `FORBIDDEN_LITERALS` tuple they
-should review.
+Tell the user which files were installed and flag that the top of
+each `test_*.py` has project-specific paths, `test_empirical_integrity.py`
+has a `FORBIDDEN_LITERALS` tuple, and `search_config.py` /
+`screening_config.py` / `manuscript_stats.py` all need customisation
+before use.
 
 If the project has no `CLAUDE.md` yet, suggest using
-`${CLAUDE_PLUGIN_ROOT}/templates/sr_claude_md.md` as a starting point —
-but don't write it without the user's say-so. CLAUDE.md is user-owned.
+`${CLAUDE_PLUGIN_ROOT}/templates/sr_claude_md.md` as a starting
+point — but don't write it without the user's say-so. CLAUDE.md is
+user-owned. To install once the user confirms:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/install_templates.py" \
+    sr_claude_md.md:CLAUDE.md
+```
+
+---
+
+## Scope lock-in (required before any search)
+
+Before calling ANY search tool — MCP (`mcp__scopus__search_scopus`,
+`mcp__openalex__search_*`, `mcp__semantic-scholar__*-search*`,
+`mcp__paper-search*__search_*`) or script
+(`scripts/pipelines/search*.py`) — **including piloting and volume
+probes** — the scope brief must exist at
+`.claude/systematic-review/scope.md` AND the user must have
+explicitly confirmed it in the current session ("proceed", "looks
+good", "confirmed", or equivalent). Silence is not confirmation, and
+"experiment with X" is not confirmation of the surrounding scope.
+
+The gate exists because "just a pilot search" shapes the methods:
+keyword combinations get baked into the user's mental model, volume
+numbers anchor downstream inclusion calls, and reframing after a
+pilot is more expensive than reframing on paper. Pin down scope on
+paper, get explicit sign-off, then search.
+
+**Brief contents (every section required before asking for
+confirmation):**
+
+1. **AI scope** — narrow (generative AI / LLMs only) / medium (ML +
+   genAI, pre-LLM work included) / broad (all algorithmic
+   decision-making). Give the reason for the choice.
+2. **Entrepreneurship scope** — new ventures / SMEs / both. If both,
+   name the synthesis strategy (separate strands? single framework?).
+3. **Research question(s)** — one or more focal questions the review
+   will answer. If the synthesis will map multiple streams (e.g.
+   AI-as-tool vs AI-as-domain vs AI-as-method), name the streams.
+4. **Time window** — start year (inclusive), end year (inclusive),
+   and the reason for the start year (a pivot paper, a technology
+   event, a round number with a defence).
+5. **Journal set** — tier list (AJG/ABS 2024 / FT50 / ABDC), which
+   field codes within it, and whether ISSN-filtering will be used
+   (requires WoS Expanded).
+6. **Database access** — which databases the user's institution
+   provides, which of those the formal search will use, and which
+   databases are excluded (with reason).
+7. **Exclusion criteria** — language restriction? editorials / book
+   reviews / proceedings? conference papers? predatory-listed
+   journals?
+
+Draft the brief in conversation, ask the user to confirm, then write
+`.claude/systematic-review/scope.md`. Create the directory first:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/ensure_dir.py" .claude/systematic-review
+```
+
+If the user changes scope mid-run, update `scope.md` and any
+affected `search_config.py` together before further searches.
+
+**Self-check before every search call:** has `scope.md` been written?
+Has the user said "proceed" (or equivalent) since the brief was
+finalised? If either answer is no, STOP and finish the interview.
 
 ---
 

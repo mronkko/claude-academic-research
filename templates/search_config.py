@@ -27,9 +27,9 @@ TO_YEAR   = 2026
 # "FT50", "UTD24", etc.). It appears in the metadata JSON and in
 # manuscript tables. The full title is displayed in logs.
 #
-# The full example in the SLR-motivation reference project uses 149
-# ABS-2024 journals at rank 4/4* plus ABS-3 entrepreneurship. For a
-# domain-specific review you will typically have 10–50 journals.
+# Sizing: a narrow domain-specific SR typically has 10–50 journals; a
+# broader business-and-management SR (e.g. ABS-2024 rank 4/4* plus
+# ABS-3 entrepreneurship) lands at ~150.
 #
 # ONE journal per line; comments are fine.
 # ---------------------------------------------------------------------------
