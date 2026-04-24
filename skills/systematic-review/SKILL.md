@@ -472,6 +472,13 @@ Principles:
 - **Progress the user can follow.** Pipeline scripts use `flush=True` on
   every print; emit `[N/total]` counters; invoke via `| tee` to a log
   file. Never pipe to `/dev/null`.
+- **Walk the user through the process.** At every milestone, explain the
+  user the process. State the stages, explain where we are now and what the 
+  user needs to do and what Claude does in this stage. Also summarize what
+  we have accomplished this far and what work remains. The users is likely a
+  doctoral student or a professional research but not an engineer. Assume the
+  user knows the basic principles of systematic review but not the details of
+  our tooling.  
 - **Filterable.** Every stage accepts some filter-keys mechanism —
   `--filter-keys-file <path>` for enrichment / audit / export scripts,
   `--only-keys <k1,k2,…>` for screening scripts. Either way, the next
