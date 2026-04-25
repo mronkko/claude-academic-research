@@ -304,20 +304,29 @@ class ZoteroClient:
         import os
 
         from core.config_loader import require
+
+        # Validate library selection BEFORE requiring the API key —
+        # a missing --group should produce the actionable
+        # "specify --group or --user" message, not a confusing
+        # "API key missing" RuntimeError. Order matters in CI / fresh
+        # checkouts where neither is set.
+        is_user = bool(getattr(args, "user", False))
+        group = getattr(args, "group", "") or os.environ.get("ZOTERO_GROUP", "")
+        if not is_user and not group:
+            raise SystemExit(
+                "ERROR: --group <id> or --user is required "
+                "(or set $ZOTERO_GROUP).",
+            )
+
         if api_key is None:
             api_key = require("zotero", "api_key", env="ZOTERO_API_KEY")
-        if getattr(args, "user", False):
+
+        if is_user:
             user_id = require("zotero", "user_id", env="ZOTERO_USER_ID")
             return cls.for_user_library(
                 user_id,
                 api_key=api_key,
                 prefer_local=prefer_local,
-            )
-        group = getattr(args, "group", "") or os.environ.get("ZOTERO_GROUP", "")
-        if not group:
-            raise SystemExit(
-                "ERROR: --group <id> or --user is required "
-                "(or set $ZOTERO_GROUP).",
             )
         return cls(
             api_key=api_key,

@@ -161,10 +161,12 @@ def test_main_writes_rows_for_tagged_items(monkeypatch, tmp_path) -> None:
     """Happy path: two items tagged fulltext:include, each with a
     parseable SLR Coding note. Output has two rows, columns include
     bibliographic + coding fields."""
-    # Stub `require` so no real config access. Patch the binding in the
-    # export module (from-import copies the reference at module-load time,
-    # so patching core.config_loader.require is too late).
-    monkeypatch.setattr(exp, "require", lambda *a, **kw: "fake-key")
+    # No need to stub `require` — we patch `from_args` to return a
+    # pre-built client below, so the real config loader is never
+    # reached. (Earlier versions stubbed `exp.require`, but the
+    # CI-friendly reorder of `from_args` validates --group/--user
+    # before reading the api key, so the require import was lifted
+    # out of export_coded_includes entirely.)
 
     items = [
         _tagged_item("A", title="Alpha", bbt="alpha2020", year="2020-01"),
@@ -218,7 +220,6 @@ def test_main_warns_on_missing_slr_coding_note(
 ) -> None:
     """A tagged item with no SLR Coding child note is reported as a
     warning and excluded from the output. Never silently dropped."""
-    monkeypatch.setattr(exp, "require", lambda *a, **kw: "fake-key")
 
     items = [_tagged_item("X", title="Lonely", bbt="lonely", year="2020")]
     children_by_parent: dict[str, list] = {"X": []}  # no note child
@@ -250,8 +251,6 @@ def test_main_warns_on_missing_slr_coding_note(
 
 
 def test_dry_run_writes_nothing(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(exp, "require", lambda *a, **kw: "fake-key")
-
     fake_client = MagicMock(spec=zotero_io.ZoteroClient)
     fake_client.items_with_tag.return_value = []
     fake_client.cloud = MagicMock()

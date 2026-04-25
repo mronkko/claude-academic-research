@@ -51,7 +51,6 @@ if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
 import zotero_io  # noqa: E402
-from core.config_loader import require  # noqa: E402
 
 # Default column order — bibliographic fields first, then provenance,
 # then every coding field the note carries (preserved in note-declared
@@ -145,9 +144,12 @@ def main() -> int:
                         help="Count; do not write output.")
     args = parser.parse_args()
 
-    api_key = require("zotero", "api_key", env="ZOTERO_API_KEY")
-
-    zot = zotero_io.ZoteroClient.from_args(args, api_key=api_key)
+    # Validate library selection before reading the API key — gives a
+    # clear "--group or --user required" error rather than a confusing
+    # "API key missing" RuntimeError when both are unset (e.g. in CI
+    # or a fresh checkout). from_args() reads the api_key internally
+    # via require() when api_key=None.
+    zot = zotero_io.ZoteroClient.from_args(args)
     print(f"Querying Zotero ({zot.describe_library()}, "
           f"collection={args.collection}, tag={args.tag})...", flush=True)
     items = zot.items_with_tag(args.collection, args.tag)
