@@ -10,6 +10,7 @@
 #     "pyalex>=0.15",
 #     "pybliometrics>=3.6",
 #     "wiley-tdm>=0.2",
+#     "reportlab>=4.0",
 # ]
 # ///
 """Enrich Zotero items by downloading missing PDFs and attaching them.
