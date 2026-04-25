@@ -63,6 +63,84 @@ import zotero_io  # noqa: E402
 
 BATCH_SIZE = 50  # Zotero write API max
 
+# Journal-aliases lookup tables, populated on first call. The CSV ships
+# with the plugin at scripts/pipelines/data/journal_aliases.csv and grows
+# over time as users encounter dedup misses across search databases.
+# Two indices: name → canonical (lowercase variant lookup) and ISSN →
+# canonical (catches cases where the variant isn't yet in the table but
+# the ISSN matches a known canonical entry).
+_DATA_DIR = SCRIPT_DIR / "data"
+_JOURNAL_ALIAS_BY_NAME: dict[str, str] = {}
+_JOURNAL_ALIAS_BY_ISSN: dict[str, str] = {}
+_JOURNAL_ALIASES_LOADED = False
+
+
+def _canonicalize_issn(issn: str) -> str:
+    """Normalize an ISSN to canonical L-form: ``NNNN-NNNN`` (or NNNN-NNNX
+    for check-digit X).
+
+    Scopus emits ISSNs without hyphens (``00401625``) while WoS, Crossref,
+    and OpenAlex keep the hyphen (``0040-1625``). Returning a single
+    canonical shape makes downstream dedup work; without it, two rows
+    pointing at the same journal can survive as duplicates only because
+    their ISSN strings don't compare equal.
+
+    Returns ``""`` if the input doesn't normalize to 8 digits + optional
+    check-digit X — never a partial canonical form.
+    """
+    if not issn:
+        return ""
+    cleaned = re.sub(r"[^0-9Xx]", "", issn)
+    if len(cleaned) != 8:
+        return ""
+    return f"{cleaned[:4]}-{cleaned[4:].upper()}"
+
+
+def _load_journal_aliases() -> None:
+    """Populate the lookup tables from data/journal_aliases.csv on first call."""
+    global _JOURNAL_ALIASES_LOADED
+    if _JOURNAL_ALIASES_LOADED:
+        return
+    _JOURNAL_ALIASES_LOADED = True
+    path = _DATA_DIR / "journal_aliases.csv"
+    if not path.is_file():
+        return
+    with path.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            variant = (row.get("variant") or "").strip().lower()
+            canonical = (row.get("canonical") or "").strip()
+            issn = _canonicalize_issn(row.get("issn") or "")
+            if variant and canonical:
+                _JOURNAL_ALIAS_BY_NAME[variant] = canonical
+            if issn and canonical:
+                _JOURNAL_ALIAS_BY_ISSN.setdefault(issn, canonical)
+
+
+def _canonicalize_journal_name(name: str, issn: str = "") -> str:
+    """Map a journal-name variant to its canonical form using the
+    plugin-shipped alias table.
+
+    Lookup order:
+      1. exact case-insensitive match of the trimmed name in the
+         variant→canonical table;
+      2. fall back to canonical ISSN match (catches cases where the
+         variant string isn't yet in the table but the ISSN identifies
+         the journal);
+      3. otherwise return the input name (trimmed).
+
+    Pure function; safe to call from `_row_to_zotero_item` once per row.
+    """
+    _load_journal_aliases()
+    if not name:
+        return ""
+    key = name.strip().lower()
+    if key in _JOURNAL_ALIAS_BY_NAME:
+        return _JOURNAL_ALIAS_BY_NAME[key]
+    canonical_issn = _canonicalize_issn(issn)
+    if canonical_issn and canonical_issn in _JOURNAL_ALIAS_BY_ISSN:
+        return _JOURNAL_ALIAS_BY_ISSN[canonical_issn]
+    return name.strip()
+
 
 def _parse_authors(author_str: str) -> list[dict]:
     """Parse 'Last, First; Last, First' into Zotero creator dicts."""
@@ -86,14 +164,23 @@ def _parse_authors(author_str: str) -> list[dict]:
 
 
 def _row_to_zotero_item(row: dict, collection_key: str | None) -> dict:
+    # Canonicalize at ingest so dedup downstream works across databases:
+    # Scopus strips ISSN hyphens (`00401625`) while WoS keeps them
+    # (`0040-1625`); journal names abbreviate inconsistently
+    # (`Strat Manag J` vs `Strategic Management Journal`). Both fixes
+    # are pure, table-driven, and skip-safe (returning the input on miss).
+    canonical_issn = _canonicalize_issn(row.get("issn", ""))
+    canonical_source = _canonicalize_journal_name(
+        row.get("source", ""), canonical_issn,
+    )
     item: dict = {
         "itemType": "journalArticle",
         "title": row.get("title", ""),
         "creators": _parse_authors(row.get("authors", "")),
-        "publicationTitle": row.get("source", ""),
+        "publicationTitle": canonical_source,
         "date": row.get("year", ""),
         "DOI": row.get("doi", ""),
-        "ISSN": row.get("issn", ""),
+        "ISSN": canonical_issn,
         "abstractNote": row.get("abstract", ""),
         "extra": "",
     }
@@ -107,15 +194,19 @@ def _row_to_zotero_item(row: dict, collection_key: str | None) -> dict:
     # Beall's-list snapshot in `sources/predatory.py`. Flag (don't
     # exclude) per the social-sciences convention in the
     # systematic-review skill. The screener sees the flag and decides
-    # during full-text review.
+    # during full-text review. Use the canonical name + ISSN here so a
+    # Scopus-abbreviated entry like "J Bus Venturing" matches the same
+    # predatory-list entries as the WoS-form "Journal of Business
+    # Venturing" — without canonicalization they would each be checked
+    # against different keys and only one might hit.
     try:
         from sources.predatory import check_predatory
     except ImportError:
         check_predatory = None  # type: ignore[assignment]
     if check_predatory is not None:
         result = check_predatory(
-            journal=row.get("source") or None,
-            issn=row.get("issn") or None,
+            journal=canonical_source or None,
+            issn=canonical_issn or None,
         )
         if result.is_predatory:
             tags.append({"tag": "predatory:flag", "type": 1})
