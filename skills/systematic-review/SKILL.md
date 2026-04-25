@@ -915,6 +915,28 @@ vocabulary — `qa-flag`, `qa-hard`, `qa-soft-include`,
 `qa-soft-exclude`, `qa-wrong-code`, and the two post-adjudication
 `qa-adjudicated-*` tags.
 
+**Required: each evaluator emits a `decisions.json` alongside the
+markdown report.** The markdown is for human review; the JSON is the
+machine-actionable input that `apply_qa_adjudications.py` consumes
+once the human has reviewed and (optionally) overridden the
+evaluator's calls. Schema:
+
+```json
+[
+  {
+    "item_key": "ABCD0001",
+    "verdict": "include" | "exclude" | "borderline",
+    "reason": "(optional) free-text rationale, written to apply log",
+    "flip_fulltext": false
+  }
+]
+```
+
+`flip_fulltext` is `true` only when the adjudication **overrides**
+the screener's `fulltext:*` tag — leave `false` for confirmations of
+the original decision. The evaluator subagent prompt must instruct
+the model to emit one JSON entry per flagged item.
+
 #### Human adjudication loop
 
 The human opens Zotero, filters the collection by `qa-flag`, and for
@@ -940,6 +962,23 @@ each flagged item:
    `test_systematic_review.py`) read from Zotero, not from the CSV.
 5. Writes one line to `screening/qa_review.md` recording the decision
    (format below).
+
+**Bulk-applying many adjudications:** when the human-curated decision
+list is non-trivial (more than ~5 items), use the shipped pipeline
+script rather than per-item MCP tag calls:
+
+```bash
+uv run "${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/apply_qa_adjudications.py" \
+    --group <id> --decisions .claude/qa/decisions.json
+```
+
+The script consumes `decisions.json` (the schema in *Applying QA
+tags* above), routes through `zotero_io.batch_update_tags` —
+constructing the full PATCH payload with the right `version` field
+per item — and writes an audit log to `output/qa_adjudications_log.csv`.
+Replaces the user's earlier ad-hoc adjudication script that hit a
+silent-write pyzotero footgun (calling `add_tags()` with a stub item
+dict drops the write).
 
 #### `screening/qa_review.md` structure
 
