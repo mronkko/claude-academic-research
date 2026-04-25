@@ -61,11 +61,16 @@ for _p in (str(SCRIPT_DIR), str(SCRIPTS_ROOT)):
 
 import fetchers  # noqa: E402
 import http_client  # noqa: E402
+import pdf_fetch_log  # noqa: E402
 import zotero_io  # noqa: E402
 from core.config_loader import get, require  # noqa: E402
 
 DEFAULT_LOG_CSV = os.path.join("output", "pdf_attach_log.csv")
 DEFAULT_CACHE_DIR = os.path.join("output", "pdf_cache")
+# Structured failure log (T4-3). Sibling to the legacy attach log;
+# audit_zotero_library reads it to group failures by cause and suggest
+# FE codes. Same `output/` dir so users see both files together.
+DEFAULT_FAILURE_LOG_CSV = os.path.join("output", "pdf_fetch_log.csv")
 
 LOG_FIELDS = ["run_date", "item_key", "doi", "title", "status", "source"]
 
@@ -1027,24 +1032,65 @@ def _try_cascade(
     item: dict,
     sources: list,
     cache_dir: str,
+    *,
+    failure_log_path: str | None = None,
 ) -> tuple[Path, str] | None:
     """Try each PDF fetcher in priority order. Returns (path, source_name)
-    on the first hit."""
-    doi = (item.get("data", {}).get("DOI") or "").strip()
+    on the first hit.
+
+    On full-cascade failure (every source returns None or raises), the
+    cause is classified via `pdf_fetch_log.classify_failure` and a row
+    is appended to `failure_log_path` (when provided). Audits read that
+    log to group items by cause and suggest FE codes — see T4-3.
+    """
+    d = item.get("data", {})
+    doi = (d.get("DOI") or "").strip()
     if not doi:
         return None
+    item_type = d.get("itemType", "") or ""
+    item_key = item.get("key", "") or d.get("key", "") or ""
+    last_source = ""
+    raised_exception = False
     for src in sources:
+        last_source = src.name
         try:
             result = src.fetch_pdf(doi, cache_dir=cache_dir)
         except NotImplementedError:
             continue
         except Exception as e:
             print(f"    {src.name}: {e}", flush=True)
+            raised_exception = True
             continue
         if result is None:
             continue
         path, _ = result
         return path, src.name
+
+    # Cascade exhausted. Classify and persist if a log path was given.
+    if failure_log_path and item_key:
+        # Best-effort cause: out-of-scope item types resolve regardless;
+        # otherwise lean on UNAVAILABLE for "all fetchers returned None"
+        # vs NETWORK_ERROR when an exception was raised at least once
+        # (transport problem rather than missing PDF).
+        cause: pdf_fetch_log.FailureCause | None = None
+        if item_type in pdf_fetch_log.DEFAULT_OUT_OF_SCOPE_TYPES:
+            cause = pdf_fetch_log.FailureCause.OUT_OF_SCOPE
+        elif raised_exception:
+            cause = pdf_fetch_log.FailureCause.NETWORK_ERROR
+        try:
+            pdf_fetch_log.log_failure(
+                failure_log_path,
+                item_key=item_key,
+                doi=doi,
+                item_type=item_type,
+                attempt=1,
+                source=last_source,
+                cause=cause,
+            )
+        except Exception as e:  # noqa: BLE001
+            # Logging is best-effort — never let a CSV write break a
+            # cascade run. Surface to stderr for diagnostics.
+            print(f"    [pdf_fetch_log write failed: {e}]", flush=True)
     return None
 
 
@@ -1071,7 +1117,10 @@ def _run_api_cascade(
     results: list[tuple[dict, tuple[Path, str] | None]] = []
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = {
-            pool.submit(_try_cascade, it, sources, args.cache_dir): it
+            pool.submit(
+                _try_cascade, it, sources, args.cache_dir,
+                failure_log_path=args.failure_log_csv,
+            ): it
             for it in to_process
         }
         for fut in as_completed(futures):
@@ -1177,6 +1226,16 @@ def main() -> int:
                         help="Download PDFs, do not upload to Zotero.")
     parser.add_argument("--log-csv", default=DEFAULT_LOG_CSV,
                         help=f"Path to log CSV (default: {DEFAULT_LOG_CSV}).")
+    parser.add_argument(
+        "--failure-log-csv", default=DEFAULT_FAILURE_LOG_CSV,
+        help=(
+            "Structured PDF-fetch failure log (default: "
+            f"{DEFAULT_FAILURE_LOG_CSV}). audit_zotero_library reads this "
+            "to group items by failure cause (out-of-scope, "
+            "access-blocked, unavailable, network-error) and suggest "
+            "FE codes during adjudication."
+        ),
+    )
     parser.add_argument("--cache-dir", default=DEFAULT_CACHE_DIR,
                         help=f"PDF cache directory (default: {DEFAULT_CACHE_DIR}).")
     parser.add_argument("--workers", type=int, default=6,

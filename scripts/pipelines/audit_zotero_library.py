@@ -129,6 +129,16 @@ def main() -> int:
         "--remote", action="store_true",
         help="Use the remote api.zotero.org instead of the local client.",
     )
+    parser.add_argument(
+        "--pdf-fetch-log", default="output/pdf_fetch_log.csv",
+        help=(
+            "Path to the structured PDF-fetch failure log written by "
+            "enrich_pdfs.py (default: output/pdf_fetch_log.csv). When "
+            "present, the audit groups failures by cause (out-of-scope, "
+            "access-blocked, unavailable, network-error) and suggests "
+            "FE codes per group. Pass an empty string to skip."
+        ),
+    )
     args = parser.parse_args()
 
     api_key = require("zotero", "api_key", env="ZOTERO_API_KEY")
@@ -206,6 +216,43 @@ def main() -> int:
     if report["empty_stub_count"]:
         print(f"  # {report['empty_stub_count']} empty stubs to delete; see "
               f"{keys_files['empty_stubs']}")
+
+    # PDF-fetch failure-cause grouping (T4-3). Reads the structured log
+    # written by enrich_pdfs and groups items by why the cascade gave
+    # up. Each group gets a suggested FE-code label so the user can
+    # adjudicate in bulk rather than retyping per item.
+    if args.pdf_fetch_log:
+        try:
+            import pdf_fetch_log
+        except ImportError:
+            pdf_fetch_log = None  # type: ignore[assignment]
+        if pdf_fetch_log is not None:
+            failures = pdf_fetch_log.read_failures(args.pdf_fetch_log)
+            if failures:
+                groups = pdf_fetch_log.group_by_cause(failures)
+                print()
+                print(
+                    f"PDF-fetch failures grouped by cause "
+                    f"({len(failures)} total, from {args.pdf_fetch_log})"
+                )
+                # Stable ordering: most actionable causes first.
+                ordered = [
+                    pdf_fetch_log.FailureCause.ACCESS_BLOCKED.value,
+                    pdf_fetch_log.FailureCause.OUT_OF_SCOPE.value,
+                    pdf_fetch_log.FailureCause.UNAVAILABLE.value,
+                    pdf_fetch_log.FailureCause.NETWORK_ERROR.value,
+                ]
+                for cause in ordered:
+                    rows = groups.get(cause, [])
+                    if not rows:
+                        continue
+                    suggestion = pdf_fetch_log.SUGGESTED_FE_CODE.get(cause, "")
+                    print(f"  {cause} ({len(rows)} items)")
+                    print(f"    suggested action: {suggestion}")
+                    sample_keys = [r.get("item_key", "") for r in rows[:5]]
+                    print(f"    sample keys: {', '.join(k for k in sample_keys if k)}")
+                    if len(rows) > 5:
+                        print(f"    ...and {len(rows) - 5} more")
     return 0
 
 
