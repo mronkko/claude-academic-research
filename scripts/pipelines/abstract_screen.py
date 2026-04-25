@@ -74,12 +74,13 @@ except ImportError:
         "block at the top declares anthropic + pyzotero."
     )
 
+import csv_io  # noqa: E402
 import zotero_io  # noqa: E402
+from log_schemas import ABSTRACT_SCREENING_FIELDS  # noqa: E402
 
-LOG_FIELDS = [
-    "timestamp", "item_key", "doi", "title", "source", "query",
-    "decision", "reason", "model", "prompt_version",
-]
+# Re-export under the legacy name so any external consumer (or test
+# fixture) that imports `abstract_screen.LOG_FIELDS` keeps working.
+LOG_FIELDS = ABSTRACT_SCREENING_FIELDS
 
 VALID_DECISIONS = ("include", "borderline", "exclude")
 
@@ -282,10 +283,10 @@ def main() -> int:
         return 0
 
     client = anthropic.Anthropic()
-    log_fh = output_path.open("a", newline="", encoding="utf-8")
-    writer = csv.DictWriter(log_fh, fieldnames=LOG_FIELDS)
-    if output_path.stat().st_size == 0:
-        writer.writeheader()
+    # Schema-stable + idempotent writes via csv_io.upsert_by_item_key.
+    # Re-running on the same item replaces the prior row instead of
+    # appending, so partial-then-resumed screening passes don't double
+    # up. Lock guards file rewrite (upsert reads → mutates → renames).
     log_lock = threading.Lock()
 
     counts: dict[str, int] = {k: 0 for k in (*VALID_DECISIONS, "error")}
@@ -352,25 +353,23 @@ def main() -> int:
             done_count += 1
             counts[decision] = counts.get(decision, 0) + 1
 
+            row = {
+                "timestamp": datetime.now(UTC).isoformat(),
+                "item_key": key,
+                "doi": doi,
+                "title": title,
+                "source": source,
+                "query": query,
+                "decision": decision,
+                "reason": reason,
+                "model": model,
+                "prompt_version": prompt_version,
+            }
             with log_lock:
-                writer.writerow({
-                    "timestamp": datetime.now(UTC).isoformat(),
-                    "item_key": key,
-                    "doi": doi,
-                    "title": title,
-                    "source": source,
-                    "query": query,
-                    "decision": decision,
-                    "reason": reason,
-                    "model": model,
-                    "prompt_version": prompt_version,
-                })
-                log_fh.flush()
+                csv_io.upsert_by_item_key(output_path, row, ABSTRACT_SCREENING_FIELDS)
 
             print(f"[{done_count}/{total}] {title[:70]:<70} → {decision}",
                   flush=True)
-
-    log_fh.close()
 
     print(f"\n{'=' * 60}")
     print(f"Done. Screened {total} items.")

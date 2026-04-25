@@ -79,7 +79,9 @@ except ImportError:
         "block at the top declares anthropic + pyzotero + pdfplumber + pypdf."
     )
 
+import csv_io  # noqa: E402
 import zotero_io  # noqa: E402
+from log_schemas import fulltext_screening_fields  # noqa: E402
 
 # Soft cap on full-text chars sent to Sonnet (~180k tokens at 4 chars/token;
 # leaves headroom for prompt + response in Sonnet's 200k context).
@@ -216,14 +218,14 @@ def _render_prompt(template: str, fields: list[dict]) -> str:
 
 
 def _csv_columns(coding_fields: list[dict]) -> list[str]:
-    base = [
-        "timestamp", "item_key", "doi", "title", "year", "journal",
-        "pdf_path", "fulltext_chars", "truncated",
-        "decision", "exclusion_code", "reason",
-    ]
-    return base + [f["name"] for f in coding_fields] + [
-        "model", "prompt_version",
-    ]
+    """Compose the canonical full-text screening column list.
+
+    Delegates to `log_schemas.fulltext_screening_fields` so the column
+    order stays in sync with what `abstract_screen.py` and any manual
+    adjudication path use. Project-specific fields come from the user's
+    `screening_config.FULLTEXT_CODING_FIELDS` (each dict's `name`).
+    """
+    return fulltext_screening_fields([f["name"] for f in coding_fields])
 
 
 STAGE_TAG_PREFIX = "fulltext:"
@@ -538,10 +540,9 @@ def main() -> int:
         return 0
 
     client = anthropic.Anthropic()
-    log_fh = output_path.open("a", newline="", encoding="utf-8")
-    writer = csv.DictWriter(log_fh, fieldnames=csv_columns, extrasaction="ignore")
-    if output_path.stat().st_size == 0:
-        writer.writeheader()
+    # Schema-stable + idempotent writes via csv_io.upsert_by_item_key.
+    # Re-running on the same item replaces the prior row instead of
+    # appending; recovers cleanly from partial / interrupted runs.
     log_lock = threading.Lock()
 
     counts = {"include": 0, "exclude": 0, "error": 0, "no_pdf": 0}
@@ -624,14 +625,11 @@ def main() -> int:
                             f"[NOTE WRITE FAILED: {note_exc}]"
                         )[:500]
             with log_lock:
-                writer.writerow(row)
-                log_fh.flush()
+                csv_io.upsert_by_item_key(output_path, row, csv_columns)
 
             title = row.get("title", "")[:60]
             print(f"[{done_count}/{total}] {title:<60} → {decision}",
                   flush=True)
-
-    log_fh.close()
 
     print(f"\n{'=' * 60}")
     print(f"Done. Coded {total} items.")
