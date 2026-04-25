@@ -171,6 +171,42 @@ script to the plugin. A one-off improvised script has no place here —
 it breaks the security model (API keys flow through your context)
 and sidesteps pre-approved permissions.
 
+## IRON RULE — Zotero access goes through the plugin's surface
+
+When you need to talk to the user's Zotero library, the access
+hierarchy is:
+
+1. **Registered MCP tools** (`mcp__zotero__zotero_get_item_metadata`,
+   `mcp__zotero__zotero_get_item_children`, `mcp__zotero__zotero_search_items`,
+   `mcp__zotero__zotero_get_item_fulltext`, …). These cover most
+   *reads* — item metadata, children, attachments, items lists,
+   fulltext, annotations.
+2. **`scripts/pipelines/zotero_io.py` and `scripts/pipelines/bbt_client.py`**
+   for operations the MCP doesn't cover — Better BibTeX endpoints
+   (`get_bibtex_export`, `bbt_json_rpc`, `get_bbt_keys`,
+   `populate_missing_bbt_keys`), bulk transactional writes
+   (`batch_update_tags`, `upsert_child_note`, `merge_duplicate_item`),
+   and any other custom Zotero operation.
+3. **Direct HTTP** to `http://127.0.0.1:23119/...` is **not** a third
+   option. It is a defect signal. If you find yourself writing
+   `urllib.request.urlopen("http://127.0.0.1:23119/...")` or
+   `curl localhost:23119`, that means the plugin is missing a helper.
+
+**Stop, name the gap to the user, and propose adding a method to
+`zotero_io.py` (or `bbt_client.py` for BBT) — do not work around it
+inline.**
+
+A direct-HTTP call by Claude bypasses retries, schema versioning,
+cross-project reuse, and the one-line definition-of-Zotero-shape
+that other consumers rely on. Inline urllib also drives Claude back
+into improvising pipeline code, which the standing rule forbids.
+
+**Implementation note for plugin contributors.** The CI guard at
+`tests/unit/test_no_direct_localhost_zotero.py` greps every file
+under `scripts/pipelines/` for `127.0.0.1:23119` or `localhost:23119`
+and fails the build on a match outside `zotero_io.py` and
+`bbt_client.py`. New code must route through those modules.
+
 ## Local client for reads, remote for writes
 
 `pyzotero.zotero.Zotero(group, "group", key, local=True)` reads from

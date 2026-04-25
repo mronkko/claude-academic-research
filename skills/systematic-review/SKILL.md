@@ -88,6 +88,22 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/install_templates.py" \
 
 ---
 
+## Zotero access — see the `zotero-operations` skill's IRON RULE
+
+Before any Zotero work in this skill: when reading or writing the
+user's library, the access hierarchy is **(1) MCP `mcp__zotero__*`
+tools → (2) `scripts/pipelines/zotero_io.py` and
+`scripts/pipelines/bbt_client.py` → (3) never direct HTTP**. A
+direct `urllib.request.urlopen("http://127.0.0.1:23119/...")` or
+`curl localhost:23119` is a defect signal — propose adding the
+missing helper to `zotero_io.py` rather than working around it
+inline. The full rule lives in [skills/zotero-operations/SKILL.md](../zotero-operations/SKILL.md)
+under "IRON RULE — Zotero access goes through the plugin's surface".
+
+The CI guard at `tests/unit/test_no_direct_localhost_zotero.py`
+fails the build if a direct-HTTP call slips into a pipeline file
+that isn't `zotero_io.py` or `bbt_client.py`.
+
 ## Zotero library selection (required before any Zotero write)
 
 Run this **first**, right after bootstrap. Pin down which Zotero

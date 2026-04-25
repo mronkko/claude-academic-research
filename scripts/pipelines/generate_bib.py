@@ -25,14 +25,21 @@ Usage:
         python3 generate_bib.py /Users/me/projects/my_thesis
 """
 
-import json
 import re
 import sys
-import urllib.error as urlerr
-import urllib.request as urlreq
 from pathlib import Path
 
-BBT_URL = "http://localhost:23119/better-bibtex/json-rpc"
+# Local sibling import — generate_bib runs from `scripts/pipelines/` and
+# uv run lands the cwd next to bbt_client.py. The pipeline orchestrators
+# add their own dir to sys.path at runtime; this script doesn't need
+# pyzotero, so it bypasses zotero_io entirely.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bbt_client import (  # noqa: E402
+    BBTUnreachableError,
+    bbt_json_rpc,
+    get_group_library_ids,
+)
+
 TRANSLATOR = "Better BibLaTeX"
 
 # Match [@Key], [@Key1; @Key2], [@Key, p. 5], etc.
@@ -43,36 +50,8 @@ ENTRY_KEY_RE = re.compile(r'^@\w+\{([^,]+),', re.MULTILINE)
 
 
 # ---------------------------------------------------------------------------
-# BBT JSON-RPC helpers
+# BBT JSON-RPC export helpers (transport in bbt_client.py)
 # ---------------------------------------------------------------------------
-
-def bbt_call(method: str, params: dict) -> dict:
-    """Make a Better BibTeX JSON-RPC call. Returns the parsed response body."""
-    payload = json.dumps({
-        "jsonrpc": "2.0",
-        "method": method,
-        "params": params,
-        "id": 1,
-    }).encode("utf-8")
-
-    req = urlreq.Request(
-        BBT_URL,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-
-    try:
-        with urlreq.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urlerr.URLError as exc:
-        print(
-            f"ERROR: Could not reach Zotero at {BBT_URL}\n"
-            f"       Make sure Zotero is running with Better BibTeX installed.\n"
-            f"       Details: {exc}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
 
 def extract_bibtex(body: dict) -> str:
     """Extract the BibTeX string from a BBT JSON-RPC response."""
@@ -87,11 +66,15 @@ def export_from_library(citekeys: list[str], library_id: int) -> tuple[str, list
     Try to export citekeys from a specific Zotero library.
     Returns (bibtex_string, list_of_missing_keys).
     """
-    body = bbt_call("item.export", {
-        "citekeys": citekeys,
-        "translator": TRANSLATOR,
-        "libraryID": library_id,
-    })
+    try:
+        body = bbt_json_rpc("item.export", {
+            "citekeys": citekeys,
+            "translator": TRANSLATOR,
+            "libraryID": library_id,
+        })
+    except BBTUnreachableError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     if "error" in body:
         msg = body["error"].get("message", str(body["error"]))
@@ -103,11 +86,15 @@ def export_from_library(citekeys: list[str], library_id: int) -> tuple[str, list
             if not found_keys:
                 return "", missing
             # Re-export only the found keys
-            body2 = bbt_call("item.export", {
-                "citekeys": found_keys,
-                "translator": TRANSLATOR,
-                "libraryID": library_id,
-            })
+            try:
+                body2 = bbt_json_rpc("item.export", {
+                    "citekeys": found_keys,
+                    "translator": TRANSLATOR,
+                    "libraryID": library_id,
+                })
+            except BBTUnreachableError as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                sys.exit(1)
             if "error" in body2:
                 return "", missing
             return extract_bibtex(body2), missing
@@ -116,17 +103,6 @@ def export_from_library(citekeys: list[str], library_id: int) -> tuple[str, list
             return "", citekeys
 
     return extract_bibtex(body), []
-
-
-def get_group_library_ids() -> list[int]:
-    """Return Zotero group library IDs via the BBT user.groups method."""
-    body = bbt_call("user.groups", {})
-    if "error" in body or "result" not in body:
-        return []
-    groups = body["result"]
-    if isinstance(groups, list):
-        return [g["id"] for g in groups if isinstance(g, dict) and "id" in g]
-    return []
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +197,7 @@ def _to_sentence_case(content: str) -> str:
             cap_next = False
         else:
             result.append(c)
-            if c in (':', '\u2013', '\u2014'):   # colon, en-dash, em-dash
+            if c in (':', '–', '—'):   # colon, en-dash, em-dash
                 cap_next = True
         i += 1
     return ''.join(result)

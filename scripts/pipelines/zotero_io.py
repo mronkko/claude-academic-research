@@ -907,6 +907,87 @@ class ZoteroClient:
         )
 
     # -----------------------------------------------------------------
+    # Better BibTeX (BBT) helpers.
+    #
+    # The stdlib-only transport (`bbt_json_rpc`, `get_bibtex_export`)
+    # lives in `bbt_client.py` so light-weight scripts like
+    # generate_bib.py can use it without importing pyzotero. The
+    # methods on this class are thin instance wrappers plus the
+    # higher-level ops (`get_bbt_keys`, `populate_missing_bbt_keys`)
+    # that need pyzotero for item enumeration.
+    #
+    # Direct urllib / curl against `127.0.0.1:23119/better-bibtex/...`
+    # from anywhere outside `zotero_io.py` and `bbt_client.py` is a
+    # defect — see the IRON RULE in skills/zotero-operations/SKILL.md
+    # and the CI guard at tests/unit/test_no_direct_localhost_zotero.py.
+    # -----------------------------------------------------------------
+
+    def bbt_json_rpc(self, method: str, params: dict | None = None) -> dict:
+        """Call a Better BibTeX JSON-RPC method. See bbt_client.bbt_json_rpc."""
+        from bbt_client import bbt_json_rpc as _rpc
+        return _rpc(method, params)
+
+    def get_bibtex_export(self, *, library_id: int | str | None = None) -> str:
+        """Fetch the full BibTeX export for a Zotero library.
+
+        Defaults to this client's `group_id`. Pass `library_id=1` for
+        the user's personal library, or any numeric ID to override.
+        See bbt_client.get_bibtex_export.
+        """
+        from bbt_client import get_bibtex_export as _export
+        lid = library_id if library_id is not None else self.group_id
+        return _export(lid)
+
+    def get_bbt_keys(self, item_keys: list[str]) -> dict[str, str]:
+        """Bulk-lookup BBT citation keys for a list of Zotero item keys.
+
+        Calls BBT's `item.citationkey` JSON-RPC method. Returns a dict
+        mapping `{zotero_item_key: bbt_citation_key}` for every item
+        BBT has a key for. Items without a BBT key (BBT not yet
+        synced, or item added without BBT running) are absent from
+        the returned dict — callers can compute the missing set as
+        `set(item_keys) - result.keys()`.
+        """
+        if not item_keys:
+            return {}
+        body = self.bbt_json_rpc("item.citationkey", {"keys": list(item_keys)})
+        result = body.get("result")
+        if not isinstance(result, dict):
+            return {}
+        # BBT returns {"<zotero_key>": "<bbt_key>", ...}; filter empty values.
+        return {k: v for k, v in result.items() if isinstance(v, str) and v}
+
+    def populate_missing_bbt_keys(
+        self,
+        item_keys: list[str] | None = None,
+    ) -> dict[str, list[str]]:
+        """Identify items missing a BBT citation key.
+
+        Returns a dict with two lists:
+          - `keyed`:   item keys that already have a BBT citation key.
+          - `missing`: item keys for which BBT did not return a key.
+
+        BBT auto-generates keys at item-add time when the plugin is
+        running. Items added while BBT was off, or imported via paths
+        that bypass BBT, end up without keys until the user runs
+        "Generate BibTeX key" / "Refresh BibTeX key" in the Zotero
+        right-click menu, or until BBT's auto-pin sweep runs.
+
+        If `item_keys` is None, scans every top-level item in the
+        library. The remediation step itself (regenerating the keys)
+        is a Zotero-UI action; this method is intentionally read-only
+        — it tells you what needs the user's attention without
+        clobbering existing keys.
+        """
+        if item_keys is None:
+            top = self.top_items()
+            item_keys = [it.get("key", "") for it in top if it.get("key")]
+        keyed_map = self.get_bbt_keys(item_keys)
+        keyed = sorted(keyed_map.keys())
+        missing = sorted(set(item_keys) - set(keyed))
+        return {"keyed": keyed, "missing": missing}
+
+    # -----------------------------------------------------------------
     # Duplicate merge — see module attribution. Ported from
     # zotero-mcp's merge_duplicates (MIT-licensed).
     # -----------------------------------------------------------------
