@@ -42,3 +42,8 @@ REVIEW_NOTES.md
 
 # Claude Code local state (scheduled task locks, plan files, …)
 .claude/
+
+# Real-session transcripts kept locally for plugin development — JSONL
+# session logs from ~/.claude/projects/ that surface bugs, friction, and
+# missed signals. Useful as input when designing fixes; not safe to ship.
+logs/

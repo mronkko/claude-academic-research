@@ -163,6 +163,91 @@ directory — not checked in because it references machine-local paths).
   for partial flush on SIGINT. Thread-safety tests.
   Files: [scripts/pipelines/abstract_screen.py](scripts/pipelines/abstract_screen.py), [scripts/pipelines/fulltext_code.py](scripts/pipelines/fulltext_code.py), [scripts/pipelines/zotero_io.py](scripts/pipelines/zotero_io.py).
 
+- **P12** — Setup wizard paste-in command breaks when two plugin
+  versions are cached side-by-side.
+  **Why deferred:** ergonomic failure on a happy-path command — it
+  bites whenever Claude Code keeps an older plugin version cached
+  alongside the new one (common after `/plugin marketplace
+  upgrade`). The skill emits this paste-in line:
+
+      python3 ~/.claude/plugins/cache/mronkko/academic-research/*/scripts/setup/wizard.py
+
+  The literal `*` is a shell glob; with two versions present it
+  expands to two paths and `python3` aborts with "can't open file:
+  ambiguous arguments". Surfaced in the real-session log
+  (gitignored `logs/b1ecdc14-c827-414a-a772-7050633ffc7b.jsonl`
+  line 4 — IDE-selected by the user when reporting this).
+  Three call sites use the broken pattern:
+  [skills/setup/SKILL.md:13](skills/setup/SKILL.md#L13) (Wizard
+  path callout), [skills/setup/SKILL.md:42](skills/setup/SKILL.md#L42)
+  (the literal pasted command), and
+  [scripts/core/config_loader.py:61](scripts/core/config_loader.py#L61)
+  (runtime error message inside `require()`).
+  **What it would take:**
+  1. Skill prose: replace the glob with
+     `${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py`. Claude Code
+     resolves `${CLAUDE_PLUGIN_ROOT}` to the active version's
+     absolute path before the model emits text, so the user pastes
+     a concrete path. This is already the canonical pattern in
+     CLAUDE.md and is allow-listed under
+     `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/**)`.
+  2. `config_loader.py:require()`: `${CLAUDE_PLUGIN_ROOT}` is
+     unresolved at user-terminal time, so the same trick won't
+     work. Compute the wizard path from `__file__` instead:
+     `(Path(__file__).resolve().parent.parent / "setup" /
+     "wizard.py")`. Points to the same version currently running,
+     by construction.
+  3. Regression guard: a unit test that greps `skills/setup/SKILL.md`
+     for stray `*` globs in fenced code blocks. One assertion —
+     prevents future drift back to the broken pattern.
+  Files: [skills/setup/SKILL.md](skills/setup/SKILL.md), [scripts/core/config_loader.py](scripts/core/config_loader.py), [tests/unit/](tests/unit/).
+
+- **P11** — Elsevier ScienceDirect PDF fetcher silently caches
+  1-page previews when entitlement is partial.
+  **Why deferred:** silent correctness failure, not a crash —
+  surfaced only because the user noticed 39 papers with <10K
+  extracted chars after full-text coding had already started.
+  [fetchers/sciencedirect.py:106](scripts/pipelines/fetchers/sciencedirect.py#L106)
+  validates only `status_code == 200` and `%PDF` magic bytes;
+  Elsevier signals partial entitlement via the response header
+  `x-els-status: WARNING - Response limited to first page because
+  requestor not entitled to resource`, which the fetcher receives
+  but never inspects. The 1-page preview is a valid PDF and passes
+  both checks, so it gets cached and propagates to coding. JYU's
+  TDM license grants this **per-article**, not per-journal — same
+  journal/year mixes entitled and non-entitled papers, so a
+  prefix/journal denylist is not a fix.
+  **Evidence in real-session log** (gitignored
+  `logs/b1ecdc14-c827-414a-a772-7050633ffc7b.jsonl`): the warning
+  header appears 8 times — diagnostic message at line 1742,
+  empirical comparison of PDF vs XML endpoints at lines 1760-1770
+  (preview returns SIZE=234516 / Pages=1 with WARNING; XML returns
+  full body with `x-els-status: OK`), root-cause writeup at
+  lines 2339-2340, and the session-memory summary at line 2931.
+  The user's improvised remediation (downstream
+  `scripts/fetch_elsevier_xml_pdfs.py`, not in this repo) confirms
+  the fix shape — but per the standing "no improvised pipeline
+  code" rule it must be lifted into the plugin.
+  **What it would take:**
+  1. In `ScienceDirectSource.fetch_pdf`, after the `resp` check,
+     reject the PDF when `resp.headers.get("x-els-status",
+     "").startswith("WARNING")`. Fall through, do not cache.
+  2. Add an XML fallback at the same URL with
+     `Accept: text/xml`. On `x-els-status: OK`, parse the
+     `<body>` element, render a text-only archival PDF via
+     `reportlab`, cache that. Document the provenance in the
+     cache filename or sidecar so the audit script can tell a
+     real PDF from a TDM-recovered one.
+  3. Distinguish "preview blocked, XML also empty" (truly
+     unrecoverable → FE6) from "PDF preview but XML succeeded"
+     (recovered) so
+     [audit_zotero_library.py](scripts/pipelines/audit_zotero_library.py)
+     can flag the former before coding starts rather than after.
+  4. Live test under `tests/live/` using one known-blocked Elsevier
+     DOI (per the "every source has a live test" rule). The XML
+     fallback path also needs its own live coverage entry.
+  Files: [scripts/pipelines/fetchers/sciencedirect.py](scripts/pipelines/fetchers/sciencedirect.py), [scripts/pipelines/audit_zotero_library.py](scripts/pipelines/audit_zotero_library.py), [tests/live/](tests/live/).
+
 - **P9** — migrate `test_live_coverage.py` from `legacy/` to
   `fetchers/*.py`.
   **Why deferred:** the live-coverage guard currently walks

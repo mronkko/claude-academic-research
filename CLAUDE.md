@@ -74,6 +74,12 @@ Python 3.11/3.12/3.13`). A few conventions that keep it that way:
 - Default run deselects `live` and `live_browser` markers — those require real API keys and are opt-in per `pyproject.toml`.
 - Live tests live under `tests/live/` and each publisher / source / API key MUST have a matching live test. The `test_live_coverage.py` guard enforces this at CI time.
 
+## Real-session logs (`logs/`)
+
+`logs/` holds JSONL session transcripts copied from `~/.claude/projects/<encoded-cwd>/` — full per-session captures of real downstream usage of this plugin (every tool call and every raw tool result, not just the visible chat). They surface bugs, missed warnings, and friction points the user hit while running the plugin end-to-end. They are gitignored — keep them local, never commit.
+
+Use them as primary input when designing fixes: grep for warnings the pipeline silently swallowed (e.g. publisher API entitlement messages), retry storms, permission prompts, or improvised inline scripts. The condensed text exports a user might paste into chat are lossy; the JSONL is authoritative.
+
 ## Reference projects
 
 When designing a new skill, pipeline module, or workflow, check these first — both for prior-art ideas and for code that can be lifted or adapted (with attribution):
