@@ -5,6 +5,11 @@ description: Use when running a full systematic literature review (SLR) — PRIS
 
 # systematic-review
 
+> **Glossary:** unfamiliar with **PRISMA**, **MCP**, **BBT**, **ABS**,
+> **DOI**, **ISSN**, **SFX**, **TDM**, **CSL**, **stage tag**, or
+> **FE-code**? See [skills/_glossary.md](../_glossary.md) for one-line
+> definitions of every acronym this skill uses.
+
 ## Pre-flight (ALWAYS run first)
 
 Before any step below, verify the plugin has been configured:
@@ -771,6 +776,15 @@ the authenticated session then captures subsequent downloads
 automatically. `--legacy-browser` is the rollback path to the pre-v0.3
 handler in `scripts/pipelines/legacy/fetch_pdfs_browser.py` — use only
 if the refactored browser cascade regresses.
+
+> **Run the browser cascade in your own terminal — not via the
+> Bash tool.** The Playwright window opens visibly and prompts you
+> for Cloudflare / SSO confirmation. Claude's Bash subprocess has no
+> controlling TTY, so the script detects this on startup and exits
+> with a paste-in command rather than silently hanging on the first
+> prompt. For unattended runs (cron, agent loops) pass `--no-prompt`
+> — the script then auto-skips publishers that would prompt and
+> records them in the run log.
 
 **Phase 3 — Zotero Connector + institutional SFX/OpenURL**
 (`enrich_pdfs.py` with Connector handlers). For items the browser

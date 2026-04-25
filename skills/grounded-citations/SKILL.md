@@ -5,6 +5,10 @@ description: Use when inserting a new citation into academic prose, attributing 
 
 # Grounded citations
 
+> **Glossary:** unfamiliar with **BBT**, **MCP**, **DOI**? See
+> [skills/_glossary.md](../_glossary.md) for one-line definitions of
+> every acronym this skill uses.
+
 ## Bootstrap (first run in this project)
 
 Before applying the rules below, check that this skill's regression

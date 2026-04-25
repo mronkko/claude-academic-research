@@ -650,6 +650,60 @@ async def _drive_connector(
         await ctx.close()
 
 
+def _has_interactive_surface() -> bool:
+    """True iff the script can prompt the user. Checks `/dev/tty`
+    (POSIX, the canonical controlling terminal) first, then falls
+    back to `sys.stdin.isatty()` so Windows interactive runs still
+    pass when /dev/tty is absent.
+
+    Used by the browser-cascade fail-fast guard (T4-2). The Bash tool
+    subprocesses Claude Code spawns have neither a controlling TTY
+    nor a TTY-shaped stdin, so this returns False there — and the
+    caller exits fast with a copy-paste-friendly hint instead of
+    silently hanging on the first `_wait_for_user()` prompt.
+    """
+    try:
+        with open("/dev/tty"):
+            return True
+    except OSError:
+        pass
+    try:
+        return sys.stdin.isatty()
+    except Exception:  # noqa: BLE001 — stdin may be closed in odd subprocess wraps
+        return False
+
+
+def _exit_no_interactive_surface(args: argparse.Namespace) -> None:
+    """Print a paste-in command for a fresh terminal and exit non-zero.
+
+    Surfaces the "browser did not open / nothing happens" failure mode
+    the user described in the session log (T4-2). Mentions `--no-prompt`
+    so unattended runs (cron, agent loops) can opt in to skip-on-prompt
+    rather than fail.
+    """
+    publisher_arg = (
+        f" --publisher {args.publisher}" if getattr(args, "publisher", "") else ""
+    )
+    keys_arg = (
+        f" --filter-keys-file {args.filter_keys_file}"
+        if getattr(args, "filter_keys_file", "")
+        else ""
+    )
+    sys.exit(
+        "ERROR: This run needs an interactive terminal — the browser "
+        "cascade prompts you for Cloudflare / SSO / Yes-or-No "
+        "confirmations on each publisher.\n"
+        "\n"
+        "  • Run from your own terminal, not Claude's Bash tool.\n"
+        "  • macOS: ⌘-Space → Terminal → paste:\n"
+        f"      uv run ${{CLAUDE_PLUGIN_ROOT}}/scripts/pipelines/enrich_pdfs.py "
+        f"--browser{publisher_arg}{keys_arg}\n"
+        "  • For unattended runs (no prompts; auto-skip on first "
+        "publisher failure), add `--no-prompt` (sets "
+        "`--on-first-failure=skip`).\n"
+    )
+
+
 def _run_browser_in_process(
     to_process: list[dict],
     zot,
@@ -695,6 +749,16 @@ def _run_browser_in_process(
     for targeted validation runs.
     """
     from collections import defaultdict
+    # Fail fast if the script can't prompt — the browser cascade
+    # depends on user interaction (Cloudflare challenges, SSO, per-
+    # publisher Y/n confirmations). When neither /dev/tty nor a TTY-
+    # shaped stdin is available (Bash tool subprocess, piped invocation),
+    # exit immediately with a paste-in command for a fresh terminal
+    # rather than starting and silently hanging on the first prompt.
+    # Bypass via --no-prompt for unattended runs.
+    if not getattr(args, "no_prompt", False) and not _has_interactive_surface():
+        _exit_no_interactive_surface(args)
+
     from urllib.parse import urlparse
 
     from core import config_writer
@@ -1260,6 +1324,16 @@ def main() -> int:
              "runs. Default (empty) asks on a TTY and uses 'skip' when "
              "stdin is piped. 'always_skip' also writes the publisher to "
              "[library] no_access in config.toml.",
+    )
+    parser.add_argument(
+        "--no-prompt", action="store_true",
+        help="Bypass the interactive-surface check and auto-skip on first "
+             "publisher failure. Useful for unattended runs (cron, agent "
+             "loops). Equivalent to --on-first-failure=skip plus skipping "
+             "the upfront 'no terminal detected' guard. Browser-cascade "
+             "items that require live confirmation will be silently "
+             "skipped — check the run log to see which publishers were "
+             "bypassed.",
     )
     parser.add_argument(
         "--all", action="store_true",

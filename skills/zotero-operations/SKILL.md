@@ -5,6 +5,10 @@ description: Use when the user asks to work with a Zotero library — adding mis
 
 # zotero-operations
 
+> **Glossary:** unfamiliar with **MCP**, **BBT**, **DOI**, **ISSN**?
+> See [skills/_glossary.md](../_glossary.md) for one-line definitions
+> of every acronym this skill uses.
+
 ## Pre-flight (ALWAYS run first)
 
 Before any step below, verify the plugin has been configured:

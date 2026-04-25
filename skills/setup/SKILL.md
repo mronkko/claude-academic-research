@@ -5,6 +5,21 @@ description: Use when the user invokes `/setup`, asks to configure the academic-
 
 # setup
 
+> **Quick definitions** (T4-5; full glossary at [skills/_glossary.md](../_glossary.md)):
+> - A **plugin** is the code bundle this `/setup` is configuring — a
+>   downloadable package shipped with skills, pipeline scripts, and
+>   templates that Claude Code uses for academic-research work.
+> - A **skill** is a prose rule-book Claude loads when your request
+>   matches its trigger phrases. Skills tell Claude *how* to approach
+>   a task; they don't run code on their own. `setup`, `zotero-
+>   operations`, `systematic-review`, etc. are all skills in this
+>   plugin.
+> - An **MCP server** is a small helper program Claude talks to in
+>   the background. Example: the **Zotero MCP server** lets Claude
+>   read and update your Zotero library directly. The wizard checks
+>   five MCP servers (Zotero, Scopus, Semantic Scholar, OpenAlex,
+>   paper-search) and offers to register the missing ones.
+
 Setup runs as a terminal wizard the **user** executes. Claude's role is
 only to give them the command and confirm when they are done. Do not
 run any tool calls — no Bash, no Read, no probes. All the information
