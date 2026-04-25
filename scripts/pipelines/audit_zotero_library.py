@@ -9,18 +9,30 @@
 # ///
 """Audit a Zotero library for items missing abstracts and / or PDF attachments.
 
-Prints a one-line summary to stdout and writes a JSON file listing the
-actionable item keys. Intended to drive subsequent pipeline stages
-(enrich_abstracts.py, enrich_pdfs.py) via their --filter-keys-file arg.
-
-Usage:
+Default mode (no subcommand) — the legacy macro audit:
     audit_zotero_library.py --group 6015547
     audit_zotero_library.py --group 6015547 --output analysis/raw/audit.json
     audit_zotero_library.py --user  # audit the personal library instead
 
+Prints a one-line summary to stdout and writes a JSON file listing the
+actionable item keys. Intended to drive subsequent pipeline stages
+(enrich_abstracts.py, enrich_pdfs.py) via their --filter-keys-file arg.
+
+Row-level subcommands (T1-2) — operate on a screening CSV, no Zotero:
+    audit_zotero_library.py find <substring> [--csv path] [--in-field title]
+    audit_zotero_library.py show <item-key> [--csv path]
+    audit_zotero_library.py diff <csv-a> <csv-b> [--key item_key]
+    audit_zotero_library.py by-decision <include|exclude|borderline> [--csv path]
+
+These replace the 22 inline `python3 -c "import csv; ..."` lookups
+visible in the SLR session log — the user's standing rule against
+improvised pipeline code applies here, and the operations recur often
+enough to deserve named subcommands.
+
 The script reads the Zotero API key from the plugin config
-(~/.config/academic-research/config.toml) via core.config_loader. The
-API key never crosses into Claude's tool layer.
+(~/.config/academic-research/config.toml) via core.config_loader for
+the macro-audit path only. Subcommand row-queries do not touch
+Zotero or the API key.
 """
 
 from __future__ import annotations
@@ -99,7 +111,170 @@ def _classify(items: list[dict], attachments_by_parent: dict[str, list[dict]]) -
     }
 
 
+_ROW_QUERY_SUBCOMMANDS = {"find", "show", "diff", "by-decision"}
+
+DEFAULT_SCREENING_CSV = "screening/fulltext_screening.csv"
+
+
+def _row_query_main(argv: list[str]) -> int:
+    """Handle the four CSV-only subcommands without touching Zotero.
+
+    Each subcommand is a thin wrapper around the pure helpers in
+    `csv_summary.py` (Package 1). Lives in audit_zotero_library so the
+    user has one entry point for "look at my screening data" rather
+    than juggling separate scripts.
+    """
+    import csv_summary
+
+    parser = argparse.ArgumentParser(
+        prog="audit_zotero_library.py",
+        description=(
+            "Row-level lookup against a screening CSV. Operates on the "
+            "CSV directly — does not connect to Zotero."
+        ),
+    )
+    sub = parser.add_subparsers(dest="op", required=True)
+
+    p_find = sub.add_parser("find", help="Rows whose values contain a substring.")
+    p_find.add_argument("substring", help="Text to search for.")
+    p_find.add_argument(
+        "--csv", default=DEFAULT_SCREENING_CSV,
+        help=f"Screening CSV path (default: {DEFAULT_SCREENING_CSV}).",
+    )
+    p_find.add_argument(
+        "--in-field", default="",
+        help="Limit search to this column (default: search all columns).",
+    )
+    p_find.add_argument(
+        "--case-sensitive", action="store_true",
+        help="Match substring case-sensitively (default: insensitive).",
+    )
+
+    p_show = sub.add_parser("show", help="Print one row by item_key.")
+    p_show.add_argument("item_key", help="Zotero item key to look up.")
+    p_show.add_argument(
+        "--csv", default=DEFAULT_SCREENING_CSV,
+        help=f"Screening CSV path (default: {DEFAULT_SCREENING_CSV}).",
+    )
+
+    p_diff = sub.add_parser("diff", help="Three-way diff between two screening CSVs.")
+    p_diff.add_argument("csv_a", help="First CSV (typically older / before).")
+    p_diff.add_argument("csv_b", help="Second CSV (typically newer / after).")
+    p_diff.add_argument(
+        "--key", default="item_key",
+        help="Column to join on (default: item_key).",
+    )
+
+    p_by = sub.add_parser(
+        "by-decision",
+        help="Show row counts by decision (include / exclude / borderline / etc.).",
+    )
+    p_by.add_argument(
+        "--csv", default=DEFAULT_SCREENING_CSV,
+        help=f"Screening CSV path (default: {DEFAULT_SCREENING_CSV}).",
+    )
+    p_by.add_argument(
+        "--filter", default="",
+        help=(
+            "Optional decision value to list (`include` / `exclude` / "
+            "`borderline`). When set, prints item_keys + titles for "
+            "rows with that decision rather than just the summary count."
+        ),
+    )
+
+    args = parser.parse_args(argv)
+
+    if args.op == "find":
+        rows = csv_summary.read_csv(args.csv)
+        hits = csv_summary.find_rows(
+            rows, args.substring,
+            in_field=args.in_field or None,
+            case_sensitive=args.case_sensitive,
+        )
+        if not hits:
+            print(
+                f"No rows match {args.substring!r} in {args.csv}"
+                + (f" (field={args.in_field!r})" if args.in_field else ""),
+                flush=True,
+            )
+            return 0
+        print(f"Found {len(hits)} matching row(s) in {args.csv}:", flush=True)
+        for r in hits:
+            key = r.get("item_key", "?")
+            title = (r.get("title") or "")[:80]
+            decision = r.get("decision", "")
+            print(f"  {key}  [{decision}]  {title}", flush=True)
+        return 0
+
+    if args.op == "show":
+        rows = csv_summary.read_csv(args.csv)
+        match = next(
+            (r for r in rows if r.get("item_key") == args.item_key),
+            None,
+        )
+        if match is None:
+            print(f"No row with item_key={args.item_key!r} in {args.csv}", flush=True)
+            return 1
+        max_field = max(len(k) for k in match.keys())
+        for k, v in match.items():
+            print(f"  {k:<{max_field}}  {v}", flush=True)
+        return 0
+
+    if args.op == "diff":
+        result = csv_summary.diff_csvs(args.csv_a, args.csv_b, key=args.key)
+        print(
+            f"Diff {args.csv_a} vs {args.csv_b} (joining on {args.key!r}):",
+            flush=True,
+        )
+        print(f"  only in A: {len(result['only_in_a'])}", flush=True)
+        print(f"  only in B: {len(result['only_in_b'])}", flush=True)
+        print(f"  changed:   {len(result['changed'])}", flush=True)
+        for entry in result["only_in_a"][:10]:
+            print(f"    only-A: {entry[args.key]}", flush=True)
+        for entry in result["only_in_b"][:10]:
+            print(f"    only-B: {entry[args.key]}", flush=True)
+        for entry in result["changed"][:10]:
+            print(f"    changed: {entry[args.key]}", flush=True)
+        return 0
+
+    if args.op == "by-decision":
+        rows = csv_summary.read_csv(args.csv)
+        if args.filter:
+            wanted = args.filter.lower()
+            matches = [r for r in rows if (r.get("decision") or "").lower() == wanted]
+            print(
+                f"{len(matches)} row(s) with decision={args.filter!r} in {args.csv}",
+                flush=True,
+            )
+            for r in matches:
+                key = r.get("item_key", "?")
+                title = (r.get("title") or "")[:80]
+                code = r.get("exclusion_code") or ""
+                trailer = f" [{code}]" if code else ""
+                print(f"  {key}{trailer}  {title}", flush=True)
+            return 0
+        counts = csv_summary.summarize_by(rows, "decision")
+        if not counts:
+            print(f"  (no rows in {args.csv})", flush=True)
+            return 0
+        print(f"Decision counts in {args.csv} ({len(rows)} rows total):", flush=True)
+        for decision, count in counts.most_common():
+            label = decision or "(blank)"
+            print(f"  {label:<14}  {count}", flush=True)
+        return 0
+
+    return 0
+
+
 def main() -> int:
+    # Subcommand fast-path: when the first positional arg is one of the
+    # row-level operations, skip Zotero and dispatch to the CSV helpers.
+    # Falls through to the legacy macro audit otherwise so existing
+    # `--group X` invocations keep working.
+    argv = sys.argv[1:]
+    if argv and argv[0] in _ROW_QUERY_SUBCOMMANDS:
+        return _row_query_main(argv)
+
     try:
         import zotero_io
     except ImportError:
