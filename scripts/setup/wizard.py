@@ -864,6 +864,62 @@ def _permission_categories() -> tuple[list[PermissionCategory], list[str]]:
             ),
         ),
         PermissionCategory(
+            name="Safe read-only command-line inspection",
+            purpose=(
+                "Lets the agent run common read-only tools the SLR "
+                "skills routinely invoke — grep, head, tail, wc, file, "
+                "find, which, etc. None of these mutate state. "
+                "Conservative by design: state-changing commands "
+                "(curl, mkdir, cp, mv, rm, ln) are intentionally NOT "
+                "auto-approved — those operations are the job of "
+                "shipped scripts, not ad-hoc Bash."
+            ),
+            skip_impact=(
+                "Every grep / head / tail / wc / etc. invocation will "
+                "trigger a permission prompt. SLR work involves dozens "
+                "of these per session (CSV inspection, screening "
+                "audits, diff comparisons)."
+            ),
+            rules=(
+                ("Bash(grep:*)",
+                 "grep with any arguments (project-file search)"),
+                ("Bash(rg:*)",
+                 "ripgrep — faster grep alternative"),
+                ("Bash(sed -n:*)",
+                 "sed in print-only mode (no in-place edits)"),
+                ("Bash(awk:*)",
+                 "awk text processing (read-only)"),
+                ("Bash(head:*)",
+                 "Show first N lines of a file"),
+                ("Bash(tail:*)",
+                 "Show last N lines of a file"),
+                ("Bash(wc:*)",
+                 "Word / line / byte counts"),
+                ("Bash(cat:*)",
+                 "Print file contents (read-only — config.toml is "
+                 "still denied below)"),
+                ("Bash(ls:*)",
+                 "List directory contents"),
+                ("Bash(file:*)",
+                 "Identify file type"),
+                ("Bash(stat:*)",
+                 "Show file metadata"),
+                ("Bash(find:*)",
+                 "Locate files matching a pattern (read-only)"),
+                ("Bash(which:*)",
+                 "Locate an executable"),
+                ("Bash(command -v:*)",
+                 "Shell-built-in alternative to which"),
+                ("Bash(python3 -c:*)",
+                 "Single-line Python introspection (no improvised "
+                 "pipelines — those go through shipped scripts)"),
+                ("Bash(python --version)",
+                 "Check Python version"),
+                ("Bash(python3 --version)",
+                 "Check Python 3 version"),
+            ),
+        ),
+        PermissionCategory(
             name="Plugin file inspection",
             purpose=(
                 "Lets the agent list directories under the plugin "

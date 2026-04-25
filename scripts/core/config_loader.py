@@ -49,16 +49,26 @@ def get(section: str, key: str, env: str | None = None, default: str = "") -> st
 
 
 def require(section: str, key: str, env: str | None = None) -> str:
-    """Like `get`, but raise RuntimeError if the value is empty."""
+    """Like `get`, but raise RuntimeError if the value is empty.
+
+    The error message points at the wizard via `Path(__file__)` rather
+    than a `~/.claude/plugins/cache/.../*/` glob — the glob breaks when
+    two plugin versions are cached side-by-side after an update
+    (P12 in BACKLOG.md). `__file__` always resolves to the version of
+    the script currently executing, so the path is single-valued by
+    construction.
+    """
     val = get(section, key, env=env)
     if not val:
         sources = f"{env}" if env else ""
         sources += " or " if env else ""
         sources += f"config.toml [{section}].{key}"
+        wizard_path = (
+            Path(__file__).resolve().parent.parent / "setup" / "wizard.py"
+        )
         raise RuntimeError(
             f"Required configuration missing: {sources}. "
-            f"Run /setup (or re-run the wizard at "
-            f"~/.claude/plugins/cache/mronkko/academic-research/*/scripts/setup/wizard.py) "
+            f"Run /setup (or re-run the wizard at {wizard_path}) "
             f"to provide this value."
         )
     return val

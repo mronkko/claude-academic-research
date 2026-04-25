@@ -10,8 +10,12 @@ only to give them the command and confirm when they are done. Do not
 run any tool calls — no Bash, no Read, no probes. All the information
 needed is already known:
 
-- **Wizard path:** `~/.claude/plugins/cache/mronkko/academic-research/*/scripts/setup/wizard.py`
-  (the shell glob `*` matches whichever version is installed).
+- **Wizard path:** `${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py`
+  — Claude Code's harness substitutes `${CLAUDE_PLUGIN_ROOT}` to the
+  active plugin version's absolute path before you emit text, so the
+  user pastes a concrete, single path. (Earlier wizard prose used a
+  shell glob `*` over `~/.claude/plugins/cache/.../*/`, which broke
+  when two plugin versions were cached side-by-side after an update.)
 - **Config written to:** `~/.config/academic-research/config.toml` (mode 0600).
 - **Settings patched:** `~/.claude/settings.json` (backed up as `.bak-wizard`).
 - **Wizard is idempotent:** re-running updates or adds keys without
@@ -39,7 +43,7 @@ text):
 > Paste this into a terminal and press Enter:
 >
 > ```
-> python3 ~/.claude/plugins/cache/mronkko/academic-research/*/scripts/setup/wizard.py
+> python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py
 > ```
 >
 > **How to open a terminal** if you are not already in one:
