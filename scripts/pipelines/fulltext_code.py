@@ -54,6 +54,7 @@ import argparse
 import concurrent.futures
 import csv
 import importlib.util
+import os
 import shutil
 import sys
 import threading
@@ -80,6 +81,7 @@ except ImportError:
     )
 
 import csv_io  # noqa: E402
+import pdf_text_cache  # noqa: E402
 import zotero_io  # noqa: E402
 from log_schemas import fulltext_screening_fields  # noqa: E402
 
@@ -306,26 +308,74 @@ def _run_csv_backfill(
 # ---------------------------------------------------------------------------
 
 
-def _find_pdf_path(item: dict, attachments_by_parent: dict[str, list[dict]],
-                  pdf_dir: Path) -> Path | None:
-    """Find the best PDF path for an item: attachment path or DOI-named file."""
+def _find_pdf_path(
+    item: dict,
+    attachments_by_parent: dict[str, list[dict]],
+    pdf_dir: Path | None = None,
+    zotero_storage: Path | None = None,
+) -> Path | None:
+    """Resolve an item's PDF path, preferring Zotero's own storage tree.
+
+    Resolution order:
+      1. **Linked-file attachments** (`linkMode == "linked_file"`):
+         use `data.path` directly. Zotero stores absolute paths or
+         the literal sentinel `attachments:<filename>` for entries
+         relative to the data dir.
+      2. **Stored attachments**: `<zotero_storage>/storage/<attachment_key>/<filename>`
+         is Zotero's convention for items the user dragged into the
+         library. The attachment item's `key` field gives the directory.
+      3. **Legacy project-local pdfs/ dir**: `<pdf_dir>/<filename>` —
+         covers users who symlinked Zotero PDFs into a project-local
+         directory before this fix landed (the `link_zotero_pdfs.py`
+         workaround). Optional.
+      4. **DOI-named fallback** in `pdf_dir`: covers PDFs renamed by
+         the Elsevier-TDM remediation (P11) or hand-placed by the user.
+
+    Returns the first existing path or None.
+    """
     key = item["key"]
     d = item.get("data", {})
     doi = (d.get("DOI") or "").strip()
     atts = attachments_by_parent.get(key, [])
-    pdfs = [a for a in atts if a.get("data", {}).get("contentType") == "application/pdf"
-            and a.get("data", {}).get("md5")]
-    if pdfs:
-        # pyzotero stores attachment files under the profile; resolve to local path
-        att_data = pdfs[0].get("data", {})
-        filename = att_data.get("filename", "")
-        # Zotero's local storage convention: look under pdf_dir for matching file
-        if filename:
+    pdfs = [
+        a for a in atts
+        if a.get("data", {}).get("contentType") == "application/pdf"
+        and a.get("data", {}).get("md5")
+    ]
+
+    for att in pdfs:
+        att_data = att.get("data", {})
+        att_key = att.get("key", "") or att_data.get("key", "")
+        filename = att_data.get("filename", "") or ""
+        link_mode = att_data.get("linkMode", "")
+        att_path = att_data.get("path", "") or ""
+
+        # 1. Linked-file attachment.
+        if link_mode == "linked_file" and att_path:
+            if att_path.startswith("attachments:") and zotero_storage:
+                rel = att_path.split(":", 1)[1]
+                candidate = zotero_storage / rel
+                if candidate.exists():
+                    return candidate
+            else:
+                candidate = Path(att_path)
+                if candidate.exists():
+                    return candidate
+
+        # 2. Stored attachment under Zotero's storage tree.
+        if zotero_storage and att_key and filename:
+            candidate = zotero_storage / "storage" / att_key / filename
+            if candidate.exists():
+                return candidate
+
+        # 3. Legacy project-local pdfs/ dir.
+        if pdf_dir and filename:
             candidate = pdf_dir / filename
             if candidate.exists():
                 return candidate
-    # Fallback: look for DOI-named PDF in pdf_dir
-    if doi:
+
+    # 4. DOI-named fallback in the project-local pdf_dir.
+    if pdf_dir and doi:
         candidate = pdf_dir / (doi.replace("/", "_") + ".pdf")
         if candidate.exists():
             return candidate
@@ -341,7 +391,18 @@ def _code_one(item: dict, pdf_path: Path, client, model: str, prompt: str,
               fields: list[dict]) -> dict:
     d = item.get("data", {})
     title = (d.get("title") or "").strip()
-    fulltext = extract_pdf_text(str(pdf_path))
+    item_key = d.get("key", item.get("key", ""))
+    # Route through pdf_text_cache so re-codes / audits / re-runs reuse
+    # the prior extraction. The cache is keyed by content hash, so an
+    # Elsevier-TDM PDF replacement (P11) auto-invalidates the prior
+    # entry. Falls back to direct extraction when the cache helper is
+    # unavailable (e.g. pdftotext missing) — preserves the old contract.
+    try:
+        fulltext = pdf_text_cache.get_text(item_key, pdf_path)
+    except FileNotFoundError:
+        # pdftotext binary missing — let the existing extractor try
+        # (it has multiple internal fallbacks: pypdf, pdfplumber).
+        fulltext = extract_pdf_text(str(pdf_path))
     truncated = len(fulltext) > SOFT_FULLTEXT_CHAR_CAP
     if truncated:
         fulltext = fulltext[:SOFT_FULLTEXT_CHAR_CAP]
@@ -407,8 +468,14 @@ def main() -> int:
     zotero_io.add_library_args(parser)
     parser.add_argument("--collection", required=True,
                         help="Zotero collection key whose items to code.")
-    parser.add_argument("--pdf-dir", required=True,
-                        help="Directory containing the PDFs for this project.")
+    parser.add_argument("--pdf-dir", default="",
+                        help="Optional fallback directory for project-local PDFs "
+                             "(legacy `./pdfs/` convention). PDFs are normally "
+                             "resolved from the Zotero attachment's storage path.")
+    parser.add_argument("--zotero-storage", default="",
+                        help="Override path to the Zotero data directory "
+                             "(contains the `storage/` subtree). Default: "
+                             "$ZOTERO_DATA_DIR or ~/Zotero.")
     parser.add_argument("--output", default="screening/fulltext_screening.csv",
                         help="Append-only log path.")
     parser.add_argument("--dry-run", action="store_true",
@@ -443,7 +510,30 @@ def main() -> int:
     if not args.dry_run:
         require("anthropic", "api_key", env="ANTHROPIC_API_KEY")
 
-    pdf_dir = Path(args.pdf_dir)
+    pdf_dir = Path(args.pdf_dir) if args.pdf_dir else None
+    # Resolve Zotero data directory: --zotero-storage flag → $ZOTERO_DATA_DIR
+    # → ~/Zotero (Zotero's cross-platform default). Stored attachments
+    # live at <zotero_storage>/storage/<attachment_key>/<filename>; the
+    # _find_pdf_path resolver checks that path before any project-local
+    # symlink convention.
+    storage_candidate = Path(
+        args.zotero_storage
+        or os.environ.get("ZOTERO_DATA_DIR")
+        or (Path.home() / "Zotero")
+    )
+    zotero_storage: Path | None
+    if storage_candidate.is_dir():
+        zotero_storage = storage_candidate
+    else:
+        # Don't fail outright — `_find_pdf_path` falls back to pdf_dir.
+        # But surface the miss so the user knows why their Zotero PDFs
+        # aren't being picked up.
+        print(
+            f"  warning: Zotero storage dir {storage_candidate} not found; "
+            f"falling back to --pdf-dir-only resolution.",
+            flush=True,
+        )
+        zotero_storage = None
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -550,7 +640,11 @@ def main() -> int:
     total = len(to_code)
 
     def worker(item: dict) -> dict:
-        pdf_path = _find_pdf_path(item, atts_by_parent, pdf_dir)
+        pdf_path = _find_pdf_path(
+            item, atts_by_parent,
+            pdf_dir=pdf_dir,
+            zotero_storage=zotero_storage,
+        )
         if pdf_path is None:
             d = item.get("data", {})
             return {
