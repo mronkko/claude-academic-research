@@ -6,8 +6,8 @@ Usage:
 
 Creates each directory (and any missing parents). Idempotent — silent
 on already-existing paths. Skills use this to create project-local
-working directories (`.claude/fact-check/`, `.claude/critic-loop/`,
-etc.) before writing reports.
+working directories (`.claude/fact-check/`, `critic-reviews/`, etc.)
+before writing reports.
 
 Kept as a script (not an inline `python -c`) so the wizard's existing
 `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/**)` allow rule covers it.

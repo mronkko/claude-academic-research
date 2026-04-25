@@ -64,7 +64,7 @@ second pass. The two cover the same ground for citations and
 quantitative claims; running both on the same draft in the same
 session burns MCP lookups twice without new information. If the user
 invokes fact-check while a `critic-loop` is clearly in progress (e.g.
-`.claude/critic-loop/iter-*/` directories exist and were written in
+`critic-reviews/iter-*/` directories exist and were written in
 the last few minutes), ask whether they want to wait for the loop to
 finish, or proceed with fact-check as an additional audit.
 

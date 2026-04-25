@@ -95,7 +95,7 @@ file, not the source:
    source file is too volatile.
 
 Document-format defaults assume Quarto → gfm, with the snapshot landing
-at `.claude/critic-loop/iter-{N}/rendered.md`. For other formats:
+at `critic-reviews/iter-{N}/rendered.md`. For other formats:
 
 - **Plain `.md`** — no render needed; snapshot is a file copy.
 - **`.ipynb`** — `jupyter nbconvert --to markdown {doc}` (add
@@ -116,7 +116,7 @@ sibling `.md`, pass `--rendered-path` to match. They vary together.
 Create the iteration working directory up front (project-local; portable):
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/ensure_dir.py" .claude/critic-loop
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/ensure_dir.py" critic-reviews
 ```
 
 Then:
@@ -148,14 +148,14 @@ while iter <= MAX_ITER:
   ── Step 2: render ──────────────────────────────────────────────────
   Run the render command. Verify the rendered output file exists and is
   non-empty. If render fails, treat as a test failure (go to Step 1 fix loop).
-  Snapshot: copy the rendered .md to .claude/critic-loop/iter-{N}/rendered.md.
+  Snapshot: copy the rendered .md to critic-reviews/iter-{N}/rendered.md.
 
   ── Step 3: launch critics IN PARALLEL ─────────────────────────────
   Single message, multiple Agent tool calls — one per critic. Each Agent call
   uses subagent_type="general-purpose" (model="sonnet" is a reasonable default)
   and receives the generic prompt preamble below plus the perspective prompt.
 
-  Save each Agent's returned text to .claude/critic-loop/iter-{N}/critic-<name>.md.
+  Save each Agent's returned text to critic-reviews/iter-{N}/critic-<name>.md.
 
   ── Step 4: adjudicate ─────────────────────────────────────────────
   For every numbered item across all critics, pick one disposition:
@@ -171,7 +171,7 @@ while iter <= MAX_ITER:
   named work exists and says what the critic claimed. If not, reject the item
   and note that the expert critic's prompt may need tuning.
 
-  Write everything to .claude/critic-loop/iter-{N}/decisions.md (format below).
+  Write everything to critic-reviews/iter-{N}/decisions.md (format below).
 
   ── Step 5: apply edits ────────────────────────────────────────────
   Apply every "applied" item to the authoring source (not the rendered
@@ -196,7 +196,7 @@ Append the perspective-specific prompt below this preamble:
 
 ```
 You are an <perspective> critic reviewing the manuscript at
-.claude/critic-loop/iter-{N}/rendered.md.
+critic-reviews/iter-{N}/rendered.md.
 
 Research context: <one-paragraph summary of the project's research question,
 scope, and data — pulled from the project's CLAUDE.md>.
@@ -431,7 +431,7 @@ active critics it must not duplicate.
 
 ## Final report
 
-After the loop exits, write `.claude/critic-loop/final-report.md`:
+After the loop exits, write `critic-reviews/final-report.md`:
 
 ```markdown
 # Critic-loop final report
@@ -476,7 +476,7 @@ UNRESOLVED ITEMS — see below.**`.
 After writing the final report, send the user a concise summary message
 (~100 words): exit reason, iterations used, count of applied/deferred/
 rejected items, and any unresolved MAJORs. Do not paste the full critic
-reports into the chat — point to the files under `.claude/critic-loop/`.
+reports into the chat — point to the files under `critic-reviews/`.
 
 ## Red flags
 
