@@ -111,59 +111,76 @@ the quoted block wins — the user is auditing that excerpt, not the
 whole document. Announce the chosen mode at the start of the run
 ("Mode: console" or "Mode: file") so the user knows what to expect.
 
-### 2. Extract claims
+### 2. Extract claim mentions and group by citation
 
 Walk the target document and extract three lists:
 
-- **Cited claims** — each `@citekey` or `[@citekey]` reference with
-  ~20 words of surrounding context.
-- **Bare author–year mentions** — *Author (YYYY)* or *(Author, YYYY)*
-  prose without a governing `@citekey`. These are **MAJOR
-  automatically**: there is no resolvable Zotero item to verify
-  against, and `scripts/test_citations.py` already treats them as a
-  regression class. Record them and move on — no subagent dispatch
-  needed.
+- **Cited claim mentions** — every `@citekey` / `[@citekey]` reference
+  OR every *Author (YYYY)* / *(Author, YYYY)* prose mention, with
+  ~20 words of surrounding context per mention. **Then group by the
+  underlying citation** — the same paper cited in five places is one
+  *citation* with five *mentions*, not five separate items. For
+  `@citekey` form, the grouping is exact; for Author-Year prose in
+  console mode, treat the surface form as the grouping key
+  (subagent's resolution step will catch ambiguities).
+- **Bare author–year mentions in rendered manuscripts (file mode
+  only)** — *Author (YYYY)* prose without a governing `@citekey`
+  inside a rendered `.qmd` / `.md` is **MAJOR automatically**: the
+  manuscript should be using BBT keys, not raw author-year, and
+  `scripts/test_citations.py` treats this as a regression class. In
+  **console mode** the input is normal prose, not rendered output —
+  Author-Year is the normal form, *not* an error.
 - **Quantitative claims** — numbers, percentages, p-values, effect
   sizes, sample sizes, date ranges mentioned in prose.
 
-### 3. Verify cited claims (parallel dispatch)
+### 3. Verify cited claims (per-citation parallel dispatch)
 
 **REQUIRED SUB-SKILLS:**
 
-- `verifying-citations` — defines the staged abstract-then-fulltext
-  rule, the VERIFIED / MINOR / MAJOR / UNVERIFIABLE classification, and
-  the always-escalate triggers (quoted passages, specific statistics,
-  method details, subgroup findings). Every dispatched subagent loads
-  it.
+- `verifying-citations` — defines the staged resolve-then-abstract-then-
+  fulltext rule, the VERIFIED / MINOR / MAJOR / UNVERIFIABLE
+  classification, the always-escalate triggers (quoted passages,
+  specific statistics, method details, subgroup findings), the
+  multiple-mentions handling, and the cross-mention consistency check.
+  Every dispatched subagent loads it.
 - `superpowers:dispatching-parallel-agents` — the pattern for fanning
   work out to subagents in a single assistant message.
 
 **Decide audit scope** (once, before dispatching):
 
-- ≤ 30 citations → audit every one.
-- \> 30 citations → audit a sample. Sample size
-  `n = max(20, ⌈0.25 × total⌉)`. Quoted passages and specific statistics
-  cited from a paper are **never sampled** — every one is audited.
-  Sample the remainder, prioritising in order: directional claims about
-  the manuscript's core contribution → other directional claims →
-  topical/biographical references. Record `n` of `total` in the first
-  line of the output.
+- ≤ 30 *unique citations* → audit every one.
+- \> 30 unique citations → audit a sample. Sample size
+  `n = max(20, ⌈0.25 × total_unique⌉)`. Quoted passages and specific
+  statistics cited from a paper are **never sampled** — every citation
+  containing one of these claim types is audited (all of its mentions).
+  Sample the remainder, prioritising in order: citations whose
+  mentions include directional claims about the manuscript's core
+  contribution → other directional claims → topical/biographical
+  references. Record `n` of `total_unique` in the first line of the
+  output.
 
-**Dispatch.** In a single assistant message, launch one `Agent` per
-citation (or one per batch of ~5 when the in-scope count exceeds 15)
-with `subagent_type="general-purpose"`. Each subagent receives:
+**Dispatch.** In a single assistant message, launch **one `Agent`
+per unique citation** with `subagent_type="general-purpose"`. Each
+subagent receives:
 
-- The `@citekey` and ~20 words of surrounding context.
-- Instructions to follow `verifying-citations` for the staged rule and
-  classification.
-- The return contract from `verifying-citations` (one block per
-  citation: classification, stage that resolved it, evidence,
-  recommendation).
+- The citation identifier — `@citekey` for rendered docs, the
+  Author-Year surface form for console mode — and **every mention of
+  it** with ~20 words of context each.
+- Instructions to follow `verifying-citations`: Stage 0 (resolve once),
+  Stage A (fetch abstract once), Stage C only if any mention requires
+  it (fetch fulltext once); classify each mention independently; run
+  the cross-mention consistency check at the end.
+- The return contract from `verifying-citations` (per-mention blocks
+  plus an optional cross-mention block).
 
-The main agent aggregates the returned blocks directly into the report
-or console table — no per-citation file writes (scale doesn't justify
-the disk-write overhead that `critic-loop` uses for its four critics).
-Both **console** and **file** modes use the parallel dispatch; the
+The unit of work is the unique citation, not the mention — a paper
+cited five times is one subagent with five mentions in its prompt,
+not five subagents. This (a) fetches the source once and (b) lets the
+subagent catch internal inconsistency in how the manuscript uses that
+source. The main agent aggregates returned blocks directly — no
+per-citation file writes (scale doesn't justify the disk-write
+overhead that `critic-loop` uses for its four critics). Both
+**console** and **file** modes use the parallel dispatch; the
 difference is only in how the aggregate is presented.
 
 ### 4. Verify quantitative claims
@@ -204,17 +221,21 @@ Report layout:
 
 **Document:** <path>
 **Mode:** file
-**Sampled:** <n> of <total> citations (or "all")
+**Sampled:** <n> of <total_unique> citations (or "all")
 **Date:** <YYYY-MM-DD>
 
 ## Summary
 
-| Classification | Cited claims | Quantitative claims |
+| Classification | Cited-claim mentions | Quantitative claims |
 |---|---:|---:|
 | VERIFIED      | N | N |
 | MINOR         | N | N |
 | MAJOR         | N | N |
 | UNVERIFIABLE  | N | — |
+
+(Mentions are counted here, not unique citations — a paper cited
+three times with one MAJOR and two VERIFIED contributes 1 MAJOR and
+2 VERIFIED to the table.)
 
 ## MAJOR issues (fix before submission)
 
@@ -230,6 +251,15 @@ Report layout:
    Recommended fix: run `enrich_pdfs.py` then re-audit, or replace the
    citation.
 
+## Cross-mention inconsistency (one source used in contradictory ways)
+
+(Omit this section if no subagent flagged a cross-mention finding.)
+
+1. `@citekey` cited in sections X (claim Y) and Z (claim ¬Y).
+   Source: <what the paper actually says>.
+   Recommended fix: <reconcile the two mentions — drop one, qualify
+   one, or pick a different source for one>.
+
 ## MINOR issues (tighten when convenient)
 
 ...
@@ -242,12 +272,14 @@ Report layout:
 ### Console mode — inline output only
 
 For pasted-paragraph excerpts the entire output is an in-chat table; no
-file is written:
+file is written. One row per unique citation in single-mention cases,
+one row per mention when a citation appears more than once in the
+excerpt (rare in a single paragraph):
 
 ```
 Fact-check: <first ~10 words of the excerpt> …
 Mode: console
-Sampled: all (n=5)
+Sampled: all (n=5 unique citations)
 
 @citekey1  VERIFIED      — claim matches abstract.
 @citekey2  MAJOR         — direction reversal vs paper's β = −0.23.
@@ -256,6 +288,13 @@ Sampled: all (n=5)
 
 Summary: 2 VERIFIED, 1 MAJOR, 1 UNVERIFIABLE.
 Action: address MAJOR and UNVERIFIABLE before relying on this paragraph.
+```
+
+If any subagent returned a cross-mention finding, append a single
+extra line:
+
+```
+CROSS-MENTION  @citekey   — used for X in §A and ¬X in §C; reconcile.
 ```
 
 The console table *is* the report. Do not also write a file; the user

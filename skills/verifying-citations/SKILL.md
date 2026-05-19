@@ -13,6 +13,8 @@ This skill is the single source of truth for citation-verification doctrine. `fa
 
 **Insertion vs verification.** The complementary skill `grounded-citations` governs *inserting* a citation during drafting — same externalised-consultation rule, but it escalates on **recency / context staling** (a faded context-window memory needs re-fetching). This skill governs *auditing* an existing citation, and it escalates on **claim type** — quoted passages, specific β coefficients, and method details always require fulltext regardless of what the abstract says. Same demand for grounding; different decision axis.
 
+**Unit of dispatch: one subagent per unique citation, not per mention.** A paper cited five times in a manuscript becomes one subagent (with five mentions in its prompt), not five subagents. This (a) fetches the source once and (b) lets the subagent catch *cross-mention inconsistency* — e.g. the manuscript citing the same paper for X in Methods and ¬X in Discussion — which per-mention dispatch can't see. See *Multiple mentions of one source* below.
+
 ## Classification scheme
 
 | Classification | When to assign |
@@ -24,12 +26,29 @@ This skill is the single source of truth for citation-verification doctrine. `fa
 
 ## Staged verification rule
 
-### Stage A — resolve the key and fetch the abstract
+### Stage 0 — resolve the citation to a Zotero item
 
-1. `mcp__zotero__zotero_search_by_citation_key` — resolve the BBT key to a Zotero item key.
-2. `mcp__zotero__zotero_get_item_metadata` — read the abstract.
+The caller may pass the citation in one of two forms:
 
-If the key doesn't resolve at all, the citation is **MAJOR** (missing paper) — stop.
+- **`@bbtkey` form** (rendered manuscripts, where citations have been
+  resolved already) → `mcp__zotero__zotero_search_by_citation_key` to
+  resolve the BBT key to a Zotero item key.
+- **Author-Year prose form** (pasted excerpts in fact-check console
+  mode, or any other unrendered prose) → `mcp__zotero__zotero_search_items`
+  with the surname(s) and year (and a second co-author surname if
+  present in the prose to disambiguate). If multiple candidates match,
+  pick the one whose title/venue is consistent with the surrounding
+  context.
+
+If nothing resolves — neither the BBT key nor any Author-Year search
+finds a matching item — the citation is **MAJOR** (paper not in
+library) for **every mention** of it, with the recommendation: "add
+the paper to Zotero, or replace the citation with one that supports
+the claim."
+
+### Stage A — fetch the abstract
+
+`mcp__zotero__zotero_get_item_metadata` on the resolved item key.
 
 ### Stage B — decide from what the abstract says
 
@@ -60,19 +79,58 @@ Skip Stage B and go straight to Stage C — the abstract cannot conclusively sup
 - **Method-detail claims** ("they used fixed effects", "2×2 ANOVA"). Methods sections, not abstracts.
 - **Subgroup / moderator / mediator findings.** Almost always in the results section, not the abstract.
 
+## Multiple mentions of one source
+
+The caller dispatches one subagent per **unique citation** with all of
+the manuscript's mentions of that citation in the prompt. The subagent
+should:
+
+1. Resolve once (Stage 0).
+2. Fetch the abstract once (Stage A). Fetch the full text at most once
+   (Stage C), only if any mention's claim type requires it.
+3. Classify **each mention independently**, applying Stages A–C per
+   mention's specific claim. Two mentions of the same paper may
+   legitimately get different classifications (one VERIFIED for a
+   headline finding the abstract supports, another MAJOR for a
+   subgroup result the body contradicts).
+4. **Cross-mention check.** Once each mention is classified, look
+   across the set: does the manuscript use this paper consistently?
+   Flag as a separate finding if (a) the paper is cited for X in one
+   place and ¬X in another, (b) a directional claim and its inverse
+   are both attributed to the same source, or (c) the same finding is
+   attributed with materially different magnitude or scope across
+   mentions. This catches a class of error per-mention checks miss.
+
 ## Return format (for callers that dispatch this skill to a subagent)
 
-A subagent loading this skill should return one block per citation:
+A subagent returns one block per mention plus, optionally, one
+cross-mention block:
 
 ```
-@citekey
+@citekey   (or the Author-Year surface form when no @key exists yet)
+
+Mention 1 — location: "<section / quoted excerpt>"
 Classification: VERIFIED | MINOR | MAJOR | UNVERIFIABLE
-Stage that resolved it: abstract | fulltext | unverifiable
+Stage: abstract | fulltext | unverifiable
 Evidence: <one line — direct quote or paraphrase of the relevant source content>
 Recommendation: <one line — what the author should do, if anything>
+
+Mention 2 — location: "..."
+Classification: ...
+...
+
+Cross-mention (only if applicable):
+Finding: <one line — describe the internal inconsistency>
+Severity: MAJOR | MINOR
+Recommendation: <one line>
 ```
 
-This is the contract between this skill and its callers. Callers reshape these blocks into their own report formats (`fact-check`'s console table or report file, `critic-loop`'s `ISSUES:` numbered list).
+When a citation has only one mention, the cross-mention block is
+omitted and there is exactly one mention block.
+
+This is the contract between this skill and its callers. Callers
+reshape these blocks into their own report formats — `fact-check`'s
+console table or report file, `critic-loop`'s `ISSUES:` numbered list.
 
 ## Red flags — stop and reclassify
 
@@ -81,3 +139,5 @@ This is the contract between this skill and its callers. Callers reshape these b
 - Softening a direction-reversal flag to MINOR because the contradiction is "interpretive". Direction reversals are MAJOR.
 - Marking UNVERIFIABLE as MAJOR by default. The user's PDF isn't being accused of being wrong; it isn't being read at all. The recommendation is to attach the PDF or change the citation — not to flag the manuscript.
 - About to attempt OpenAlex / Semantic Scholar / publisher MCP fulltext as a fallback inside this skill. That's `enrich_pdfs.py`'s responsibility. UNVERIFIABLE is the correct outcome here.
+- Subagent has multiple mentions of the same source but is treating them in isolation — the cross-mention check is the whole point of per-citation (not per-mention) dispatch. Even when every individual mention is VERIFIED, the paper may still be cited in mutually contradictory ways across the manuscript.
+- Fetching the same source's fulltext twice within one subagent run. Fetch once, classify many. The exception is if the first fetch returned empty content (no PDF) — then UNVERIFIABLE for every mention; do not retry.

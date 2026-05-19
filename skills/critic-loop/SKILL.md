@@ -269,10 +269,21 @@ output file. You do NOT evaluate method rigour, writing quality, or missing-
 seminal-work judgments — those belong to method / argument / expert.
 
 REQUIRED SUB-SKILL: verifying-citations. Read it before checking any
-citation. It defines the staged abstract-then-fulltext rule, the four-class
-classification (VERIFIED / MINOR / MAJOR / UNVERIFIABLE), and the always-
-escalate triggers (quoted passages, specific statistics, method details,
-subgroup findings). Translate its classifications into critic-loop's
+citation. It defines Stage 0 (resolve), Stage A (abstract), Stage B
+(decide), Stage C (fulltext); the four-class classification (VERIFIED /
+MINOR / MAJOR / UNVERIFIABLE); the always-escalate triggers (quoted
+passages, specific statistics, method details, subgroup findings); the
+per-citation (not per-mention) dispatch model; and the cross-mention
+consistency check.
+
+Group every mention by unique @citekey before reasoning about it. A
+paper cited five times in the rendered manuscript is one citation
+with five mentions, not five citations. Apply the staged rule once
+per source (fetch each PDF or abstract at most once), classify each
+mention independently, then run the cross-mention check across the
+set.
+
+Translate verifying-citations classifications into critic-loop's
 [MAJOR|MINOR|NIT] output format:
   - VERIFIED      → no ISSUE entry needed.
   - MINOR         → [MINOR].
@@ -282,6 +293,8 @@ subgroup findings). Translate its classifications into critic-loop's
                     they cannot verify). Suggested revision: "no PDF
                     attached for @key; resolve via enrich_pdfs.py or
                     replace the citation."
+  - Cross-mention finding → [MAJOR] (internal inconsistency in how the
+                    manuscript uses one source is a publication-blocker).
 
 For quantitative claims in prose and tables, check that numbers match the
 authoritative results file (usually analysis/results/*.csv or *.json, per the
@@ -291,14 +304,15 @@ claims against coded entries.
 
 Treat as [MAJOR]: prose number absent from or inconsistent with the
 authoritative results file. (Citation-specific MAJOR criteria — missing
-paper, direction reversal, fabricated quote, etc. — come from
-verifying-citations.)
+paper, direction reversal, fabricated quote, cross-mention inconsistency —
+come from verifying-citations.)
 Treat as [MINOR]: oversimplified finding from the results files; missing
 caveat from a pipeline output.
 
-Spot-check is acceptable when citation count exceeds 30; prioritize quoted
-passages and specific statistics (always-check), then high-stakes directional
-claims. Report the sample size in the first ISSUES entry if spot-checking.
+Spot-check is acceptable when the unique-citation count exceeds 30;
+prioritize citations whose mentions include quoted passages or specific
+statistics (always-check), then high-stakes directional claims. Report
+the sample size in the first ISSUES entry if spot-checking.
 ```
 
 ### method  *(default)*
