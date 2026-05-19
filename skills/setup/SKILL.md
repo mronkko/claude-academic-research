@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Use when the user invokes `/setup`, asks to configure the academic-research plugin for the first time, wants to add or rotate API keys (Zotero, Elsevier, WoS, Anthropic, Semantic Scholar, Wiley TDM, OpenAlex), register MCP servers, or patch permission rules. Also fires when any other academic-research procedural skill (zotero-operations, systematic-review, fact-check, critic-loop) reports `NOT CONFIGURED` on its pre-flight check. Hands the user a single terminal command that launches a setup wizard. The wizard reads keys with hidden input and writes configuration locally. API keys never pass through Claude's context.
+description: Use when the user invokes `/setup`, asks to configure the academic-research plugin, add or rotate API keys (Zotero, Elsevier, WoS, Semantic Scholar, Wiley TDM, OpenAlex), register MCP servers, or patch permission rules. Also fires when another academic-research skill (zotero-operations, systematic-review, fact-check, critic-loop) reports `NOT CONFIGURED` on its pre-flight check.
 ---
 
 # setup

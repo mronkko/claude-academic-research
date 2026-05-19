@@ -18,6 +18,14 @@ on first use within itself; this file is the canonical longer entry.
 - **Skill** — a prose rule-book the harness loads when a user's
   request matches the skill's trigger phrases. Skills tell Claude
   *how* to approach a task; they do not contain executable code.
+- **REQUIRED SUB-SKILL** — a marker inside one skill's body or a
+  per-subagent prompt that names another skill to load via the
+  `Skill` tool **before proceeding**. The receiver loads the named
+  sub-skill itself — the caller does *not* inline the sub-skill's
+  content into the prompt. Used to keep shared doctrine in one
+  place (e.g. `verifying-citations` is loaded as a REQUIRED
+  SUB-SKILL by both `fact-check` and `critic-loop`'s evidence
+  critic). See CLAUDE.md for the full contract.
 - **Plugin** — this repository, packaged for `/plugin marketplace
   add mronkko/claude-academic-research`. Ships skills, pipeline
   scripts, and templates that downstream Claude Code instances use.
@@ -37,16 +45,27 @@ on first use within itself; this file is the canonical longer entry.
   exposes a local JSON-RPC endpoint at
   `http://127.0.0.1:23119/better-bibtex/json-rpc` plus a bibtex
   library export at `/better-bibtex/library/{id}/library.bibtex`.
-- **BBT key / citation key** — the short identifier (e.g.
-  `brownUsingDailyStock1985a`) BBT generates for a Zotero item. Used
-  in manuscripts as `@brownUsingDailyStock1985a`.
+- **BBT key / citation key** — the short identifier BBT generates
+  for a Zotero item, used in manuscripts as `@brownUsingDailyStock1985`.
+  When two items would collide on author / year / first significant
+  title word, BBT appends lower-case suffixes — `…1985`, `…1985a`,
+  `…1985b`, etc. The suffix is part of the key; never strip it.
 - **DOI** — *Digital Object Identifier*, e.g. `10.1016/j.respol.
   2020.104010`. The canonical identifier for a journal article;
   most pipeline scripts key off DOI for dedup and lookups.
 - **ISSN** — *International Standard Serial Number*, the journal
-  identifier (e.g. `0883-9026`). The plugin's `_canonicalize_issn`
-  helper normalises Scopus's bare 8-digit form to L-form (with
-  hyphen) so dedup works across databases.
+  identifier (e.g. `0883-9026`). Most databases return the
+  hyphenated 8-digit L-form; Scopus returns the bare 8-digit form
+  (`08839026`). The pipeline normalises both to L-form for
+  cross-database dedup; the normalisation helper lives in the
+  scripts, not in this glossary.
+- **Scopus** — Elsevier's curated citation database. Accessed
+  in this plugin via two surfaces: the registered `mcp__scopus__*`
+  MCP server (for ad-hoc lookups during drafting) and the
+  `pybliometrics` Python library (config at
+  `~/.config/pybliometrics.cfg`) used by `scripts/pipelines/searchers/`
+  for SR-pipeline searches. Requires an Elsevier API key, registered
+  by the setup wizard.
 
 ## Scholarly / publisher terms
 

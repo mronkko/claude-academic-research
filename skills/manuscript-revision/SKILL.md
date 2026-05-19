@@ -1,9 +1,15 @@
 ---
 name: manuscript-revision
-description: Use when the user asks to revise, polish, improve, critique, or finalize an existing academic draft — manuscripts, papers, theses, chapters, dissertations, or publications. Trigger phrases "revise this draft", "polish this chapter", "finalize this manuscript", "improve this paper", "critique this section", "review this thesis". Enforces that revision goes through the parallel-critic loop — not a single polish pass — and hands execution to `/critic-loop`. Do NOT use for first-draft writing or blank-page work — this skill's doctrine applies once a draft exists and is ready for revision.
+description: Use when the user asks to revise, polish, improve, critique, or finalize an existing academic draft — manuscripts, papers, theses, chapters, dissertations. Trigger phrases "revise this draft", "polish this chapter", "finalize this manuscript", "improve this paper", "critique this section", "review this thesis". Do NOT use for first-draft writing or blank-page work — this skill's doctrine applies once a draft exists and is ready for revision.
 ---
 
 # Manuscript revision
+
+> **No pre-flight, no bootstrap by design.** This skill is *doctrine*
+> — *why* revision works the way it does. Execution lives in
+> `/critic-loop`, which runs its own `check_configured.py` pre-flight.
+> If the user invokes `/critic-loop` in an unconfigured project, the
+> loop will route them to `/setup`. Don't replicate that check here.
 
 ## Core rule
 
@@ -67,6 +73,15 @@ typed.
   termination conditions, the decisions.md / final-report.md schemas,
   and full red-flags list. Single source of truth for how the loop
   actually runs.
+- **`fact-check`** — the standalone audit. Use `fact-check` for
+  *pre-revision* citation audits, supervisor hand-offs, or
+  pre-submission spot-checks. *During* revision, the evidence critic
+  inside `/critic-loop` audits citations on every iteration — do not
+  run both on the same draft in the same session (they share the
+  `verifying-citations` doctrine and would burn MCP / Zotero quota
+  twice). MAJOR / MINOR severity for citation issues is defined in
+  `verifying-citations`; expert-/argument-/method-critic MAJORs are
+  defined inline in their perspective prompts in `/critic-loop`.
 - **`grounded-citations`** — governs citation hygiene during both
   drafting and revision. When a critic flags a weak citation, the fix
   goes through `grounded-citations`' four-part rule (Zotero-backed

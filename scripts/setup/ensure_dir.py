@@ -6,7 +6,7 @@ Usage:
 
 Creates each directory (and any missing parents). Idempotent — silent
 on already-existing paths. Skills use this to create project-local
-working directories (`.claude/fact-check/`, `critic-reviews/`, etc.)
+working directories (`fact-check-reports/`, `critic-reviews/`, etc.)
 before writing reports.
 
 Kept as a script (not an inline `python -c`) so the wizard's existing

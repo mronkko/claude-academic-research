@@ -1,6 +1,6 @@
 ---
 name: systematic-review
-description: Use when running a full systematic literature review (SLR) — PRISMA-style search, screening, coding, and export. End-to-end pipeline from scripted Scopus/WoS search → Zotero import → abstract fetch → PDF attach → Claude-driven abstract and full-text screening → QA evaluator agents → human adjudication in Zotero → export to manuscript. Trigger phrases: "systematic review", "SLR", "PRISMA", "screen papers", "code the included papers", "run the search", "full-text screening". For isolated Zotero enrichment work (adding abstracts, attaching PDFs to an existing library) that is NOT part of a full SLR pipeline, use the `zotero-operations` skill instead. Targets social-sciences research; medical-SLR instruments (RoB 2, ROBINS-I, evidence hierarchies I–VII, PRISMA-P) are out of scope.
+description: Use when running a full systematic literature review (SLR) — PRISMA-style search, screening, coding, and export. Trigger phrases "systematic review", "SLR", "PRISMA", "screen papers", "code papers", "full-text screening". Do NOT use for isolated Zotero enrichment without a screening pipeline — use `zotero-operations`. Targets social sciences; medical-SLR instruments (RoB 2, ROBINS-I, evidence hierarchies, PRISMA-P) are out of scope.
 ---
 
 # systematic-review
@@ -854,23 +854,17 @@ Run this check **after full-text coding is complete and before
 exporting `coded_papers.csv`**, so retractions don't slip into the
 manuscript's bibliography.
 
-The Zotero MCP server wraps Scite's free retraction-watch endpoint
-(no Scite account required). Invoke via:
+The mechanism (`mcp__zotero__scite_check_retractions`, the
+`retracted:flag` tag convention, "flag — don't silently drop")
+lives in `zotero-operations` — see its *Optional: retraction check*
+section. The SR-specific twist is **scope** and **timing**:
 
-```
-mcp__zotero__scite_check_retractions(
-    group_id=<group>,
-    collection_key=<collection>,
-)
-```
-
-Narrow the scope to items already tagged `fulltext:include` so the
-check runs against papers that matter for the synthesis, not the
-full library. Retracted items get a `retracted:flag` tag; surface
-them to the author before re-running `export_coded_includes.py`.
-**Flag, don't silently drop** — the adjudicator decides whether to
-keep (with a prominent discussion note), replace the citation, or
-exclude.
+- **Scope.** Narrow the check to items already tagged
+  `fulltext:include` so it runs against papers that matter for the
+  synthesis, not the full library.
+- **Timing.** Run before `export_coded_includes.py`; the
+  adjudicator decides whether to keep retracted items (with a
+  prominent discussion note), replace the citation, or exclude.
 
 ### Post-screening QA
 

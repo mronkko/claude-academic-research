@@ -37,28 +37,18 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_deny_rules.py" \
     "Write(//**/analysis/results/**)" "Edit(//**/analysis/results/**)"
 ```
 
-If the output lists missing rules, merge them in idempotently:
+If the output lists missing rules, add them via the shipped helper:
 
 ```bash
-python - <<'PY'
-import json, pathlib
-p = pathlib.Path(".claude/settings.json")
-p.parent.mkdir(parents=True, exist_ok=True)
-data = json.loads(p.read_text()) if p.is_file() else {}
-perms = data.setdefault("permissions", {})
-deny = perms.setdefault("deny", [])
-for rule in (
-    "Write(//**/analysis/results/manuscript_stats.json)",
-    "Edit(//**/analysis/results/manuscript_stats.json)",
-    "Write(//**/analysis/results/**)",
-    "Edit(//**/analysis/results/**)",
-):
-    if rule not in deny:
-        deny.append(rule)
-p.write_text(json.dumps(data, indent=2) + "\n")
-print(f"Updated {p}")
-PY
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/add_deny_rules.py" \
+    "Write(//**/analysis/results/manuscript_stats.json)" \
+    "Edit(//**/analysis/results/manuscript_stats.json)" \
+    "Write(//**/analysis/results/**)" \
+    "Edit(//**/analysis/results/**)"
 ```
+
+The helper is idempotent (no-ops for rules already present) and
+creates `.claude/settings.json` if it doesn't exist.
 
 These rules block Claude's `Write` and `Edit` tools from touching
 anything under `analysis/results/` (including `manuscript_stats.json`

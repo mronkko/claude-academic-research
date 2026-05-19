@@ -1,9 +1,16 @@
 ---
 name: academic-style
-description: Use when drafting or editing academic prose — topic sentences, paragraph structure, APA-style citations, active voice where it strengthens clarity, tense and hedging conventions, term definitions. Fires eagerly on any .qmd / .Rmd / .md / .tex file in an academic-research project. Enforces house-style invariants so prose is publishable-adjacent on first draft, not only after the critic loop catches them. Do NOT use for revision workflow — use `manuscript-revision` + `/critic-loop`. Do NOT use for factual or citation accuracy — use `grounded-citations` / `empirical-integrity` / `fact-check`.
+description: Use when drafting or editing academic prose — topic sentences, paragraph structure, APA-style citations, active voice, tense, hedging conventions, term definitions. Fires eagerly on any .qmd / .Rmd / .md / .tex file in an academic-research project. Do NOT use for the revision workflow — use `manuscript-revision` + `/critic-loop`. Do NOT use for factual or citation accuracy — use `grounded-citations` / `empirical-integrity` / `fact-check`.
 ---
 
 # Academic style
+
+> **No pre-flight, no bootstrap by design.** This is a doctrine
+> skill — pure prose conventions. It does not call MCPs, does not
+> install project scaffolds, and does not need `/setup` to have run.
+> The procedural skills (`zotero-operations`, `systematic-review`,
+> `fact-check`, `critic-loop`) gate themselves on
+> `check_configured.py`; this one stays out of the way.
 
 ## Core rule
 

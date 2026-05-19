@@ -1,6 +1,6 @@
 ---
 name: fact-check
-description: Use when the user asks to fact-check a manuscript, verify citations, audit sources, or check whether a paper's cited sources actually support the claims made about them. Trigger phrases: "fact-check", "verify citations", "audit citations", "check the sources", "do these papers actually say that", "verify the numbers in this draft". Runs citation-by-citation verification against Zotero / MCP-retrieved sources, and quantitative claims against the authoritative results file. Produces a one-shot report. Do NOT use during or immediately after a `/critic-loop` run — the evidence critic inside that loop performs the same verification as part of iterative revision; invoking fact-check on top of it duplicates the work and spends MCP / Zotero quota twice. Use `critic-loop` for verification during revision rounds; use `fact-check` for pre-submission audits, standalone spot-checks, or a focused citation-only pass without the other critic perspectives.
+description: Use when the user asks to fact-check a manuscript, verify citations, audit sources, or check whether cited papers actually support the claims attributed to them. Trigger phrases "fact-check", "verify citations", "audit citations", "check the sources", "do these papers actually say that", "verify the numbers in this draft". Do NOT use during or immediately after `/critic-loop` — the evidence critic inside that loop covers the same ground and burns MCP / Zotero quota twice.
 ---
 
 # fact-check
@@ -75,9 +75,10 @@ finish, or proceed with fact-check as an additional audit.
   fixes iteratively.
 - **`fact-check`** — pre-submission audit, supervisor hand-off,
   journal-submission checklist, or a deliberate citation-only
-  spot-check without the other three critic perspectives. Produces a
-  durable report at `.claude/fact-check/report.md` that the author can
-  share.
+  spot-check without the other three critic perspectives. File mode
+  produces a durable report at `fact-check-reports/report.md` the
+  author can share; console mode prints an inline table for paragraph
+  excerpts.
 
 ## Invocation
 
@@ -91,50 +92,79 @@ If the user did not name a target document, ask before proceeding.
 
 ## Procedure
 
-### 1. Identify the target
+### 1. Identify the target and choose output mode
 
 Resolve the document path. If the project has a rendered build (Quarto,
 R Markdown), **fact-check the rendered output**, not the authoring
 source — the rendered form shows resolved inline expressions and
 citations as the reader will see them.
 
+**Output mode.** Two modes, picked from the input shape:
+
+| Input shape | Mode | Output |
+|---|---|---|
+| Quoted prose block in the prompt (no resolvable file path) | **console** | Compact inline table in chat. No report file. |
+| File path (`manuscript.qmd`, `chapter.md`, …) | **file** | Durable report at `fact-check-reports/report.md` plus a ~100-word console summary. |
+
+If both are present ("fact-check this paragraph from `manuscript.qmd`"),
+the quoted block wins — the user is auditing that excerpt, not the
+whole document. Announce the chosen mode at the start of the run
+("Mode: console" or "Mode: file") so the user knows what to expect.
+
 ### 2. Extract claims
 
-Walk the target document and extract two lists:
+Walk the target document and extract three lists:
 
 - **Cited claims** — each `@citekey` or `[@citekey]` reference with
   ~20 words of surrounding context.
+- **Bare author–year mentions** — *Author (YYYY)* or *(Author, YYYY)*
+  prose without a governing `@citekey`. These are **MAJOR
+  automatically**: there is no resolvable Zotero item to verify
+  against, and `scripts/test_citations.py` already treats them as a
+  regression class. Record them and move on — no subagent dispatch
+  needed.
 - **Quantitative claims** — numbers, percentages, p-values, effect
   sizes, sample sizes, date ranges mentioned in prose.
 
-### 3. Verify cited claims
+### 3. Verify cited claims (parallel dispatch)
 
-For each `@citekey`:
+**REQUIRED SUB-SKILLS:**
 
-1. Resolve the key to a Zotero item via
-   `mcp__zotero__zotero_search_by_citation_key`.
-2. Fetch source content in order of preference:
-   - `mcp__zotero__zotero_get_item_fulltext` when a full-text PDF is
-     attached.
-   - `mcp__zotero__zotero_get_item_metadata` for the abstract (often
-     sufficient).
-   - `mcp__openalex__get_work` or `mcp__semantic-scholar__get-paper-abstract`
-     if Zotero has no abstract.
-3. Compare the manuscript's claim against the source. Check:
-   - Does the paper exist under that key?
-   - Does the attributed finding match the abstract / full text?
-   - Is the direction of the claim correct (especially for regression
-     coefficients, moderators, mediators)?
-   - Is any quoted text actually in the paper? Paraphrases are OK;
-     fabricated quotes are not.
+- `verifying-citations` — defines the staged abstract-then-fulltext
+  rule, the VERIFIED / MINOR / MAJOR / UNVERIFIABLE classification, and
+  the always-escalate triggers (quoted passages, specific statistics,
+  method details, subgroup findings). Every dispatched subagent loads
+  it.
+- `superpowers:dispatching-parallel-agents` — the pattern for fanning
+  work out to subagents in a single assistant message.
 
-Classify each citation:
+**Decide audit scope** (once, before dispatching):
 
-- **VERIFIED** — claim matches source.
-- **MINOR** — overreaching paraphrase, oversimplified finding, missing
-  caveat the source considers important.
-- **MAJOR** — missing paper, wrong paper for the key, direction
-  reversal, fabricated finding, fabricated quote, claim not supported.
+- ≤ 30 citations → audit every one.
+- \> 30 citations → audit a sample. Sample size
+  `n = max(20, ⌈0.25 × total⌉)`. Quoted passages and specific statistics
+  cited from a paper are **never sampled** — every one is audited.
+  Sample the remainder, prioritising in order: directional claims about
+  the manuscript's core contribution → other directional claims →
+  topical/biographical references. Record `n` of `total` in the first
+  line of the output.
+
+**Dispatch.** In a single assistant message, launch one `Agent` per
+citation (or one per batch of ~5 when the in-scope count exceeds 15)
+with `subagent_type="general-purpose"`. Each subagent receives:
+
+- The `@citekey` and ~20 words of surrounding context.
+- Instructions to follow `verifying-citations` for the staged rule and
+  classification.
+- The return contract from `verifying-citations` (one block per
+  citation: classification, stage that resolved it, evidence,
+  recommendation).
+
+The main agent aggregates the returned blocks directly into the report
+or console table — no per-citation file writes (scale doesn't justify
+the disk-write overhead that `critic-loop` uses for its four critics).
+Both **console** and **file** modes use the parallel dispatch; the
+difference is only in how the aggregate is presented.
 
 ### 4. Verify quantitative claims
 
@@ -155,25 +185,16 @@ Hand-typed numbers are MAJOR regardless of whether they happen to match
 — they violate the empirical-integrity rule and will drift when the
 pipeline re-runs.
 
-### 5. Spot-check scaling
-
-For manuscripts with > 30 citations, spot-checking is acceptable.
-Prioritize:
-
-- Directional claims (A "increases", "predicts", "is higher than" B).
-- Quoted passages.
-- Statistics cited from specific papers.
-- Claims that support the manuscript's core contribution.
-
-Report sample size in the first report entry.
-
 ## Report format
 
-Write the report to `.claude/fact-check/report.md`. Create the
-directory first if needed:
+Two formats, picked by the output mode chosen in Step 1.
+
+### File mode — `fact-check-reports/report.md`
+
+Create the directory first if needed:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/ensure_dir.py" .claude/fact-check
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/ensure_dir.py" fact-check-reports
 ```
 
 Report layout:
@@ -182,24 +203,32 @@ Report layout:
 # Fact-check report
 
 **Document:** <path>
-**Mode:** full / spot-check (n=<N> of <total>)
+**Mode:** file
+**Sampled:** <n> of <total> citations (or "all")
 **Date:** <YYYY-MM-DD>
 
 ## Summary
 
 | Classification | Cited claims | Quantitative claims |
 |---|---:|---:|
-| VERIFIED | N | N |
-| MINOR | N | N |
-| MAJOR | N | N |
+| VERIFIED      | N | N |
+| MINOR         | N | N |
+| MAJOR         | N | N |
+| UNVERIFIABLE  | N | — |
 
 ## MAJOR issues (fix before submission)
 
 1. `@citekey` in section X: <the claim>.
    Source: <what the paper actually says>.
-   Recommended fix: <replace with supported claim / remove / find different source>.
+   Recommended fix: <replace / remove / find different source>.
 
 ...
+
+## UNVERIFIABLE (cannot audit — resolve before submission)
+
+1. `@citekey`: <the claim>. Reason: <e.g. no PDF attached to Zotero>.
+   Recommended fix: run `enrich_pdfs.py` then re-audit, or replace the
+   citation.
 
 ## MINOR issues (tighten when convenient)
 
@@ -207,14 +236,40 @@ Report layout:
 
 ## VERIFIED (sampled)
 
-- `@citekey1`, `@citekey2`, ... — spot-checked and match sources.
+- `@citekey1`, `@citekey2`, … — checked and match sources.
 ```
+
+### Console mode — inline output only
+
+For pasted-paragraph excerpts the entire output is an in-chat table; no
+file is written:
+
+```
+Fact-check: <first ~10 words of the excerpt> …
+Mode: console
+Sampled: all (n=5)
+
+@citekey1  VERIFIED      — claim matches abstract.
+@citekey2  MAJOR         — direction reversal vs paper's β = −0.23.
+@citekey3  UNVERIFIABLE  — no PDF attached; run enrich_pdfs.py.
+@citekey4  VERIFIED      — fulltext supports the claim.
+
+Summary: 2 VERIFIED, 1 MAJOR, 1 UNVERIFIABLE.
+Action: address MAJOR and UNVERIFIABLE before relying on this paragraph.
+```
+
+The console table *is* the report. Do not also write a file; the user
+asked for an inline check.
 
 ## Reporting to the user
 
-Write a concise summary (~100 words) pointing at the report file, with
-MAJOR counts and one-line description of each MAJOR issue. Do not paste
-the full report into the chat.
+- **File mode** — write a concise summary (~100 words) pointing at
+  `fact-check-reports/report.md`, with MAJOR and UNVERIFIABLE counts
+  and a one-line description of each. Do not paste the full report
+  into chat.
+- **Console mode** — the inline table is the report. Do not also write
+  a file, do not append a separate summary block (the table already
+  ends with one).
 
 ## Regression backstop
 
@@ -237,15 +292,22 @@ than resetting each time.
 
 ## Red flags
 
+(Citation-verification red flags — direction reversals, training-memory
+fetches, abstract-only verification of specific stats — live in
+`verifying-citations`. The flags here are scoped to fact-check's own
+procedure.)
+
 - You are about to mark a hand-typed prose number VERIFIED because it
   happens to match the results file today — mark MAJOR regardless
-  (empirical-integrity violation).
+  (empirical-integrity violation; numbers must come from inline
+  expressions).
 - You are skipping citation checks because "the authors are reputable".
-- You are verifying against training memory instead of an MCP fetch or
-  Zotero fulltext — the `grounded-citations` rule applies.
-- The paper's abstract contradicts the manuscript claim, and you are
-  softening the flag to MINOR because the contradiction is
-  "interpretive". Direction reversals are MAJOR.
+- You are about to write a report file in console mode, or skip the
+  report file in file mode. Mode is decided in Step 1; do not switch
+  mid-run.
+- You are about to dispatch citation checks sequentially instead of in
+  one parallel `Agent`-call batch — re-read
+  `superpowers:dispatching-parallel-agents`.
 - You are about to read `~/.config/academic-research/config.toml` via
   `cat`, `head`, `tail`, `grep`, `less`, `more`, `awk`, `sed`, a
   Python script, or any other command. **NEVER read that file.** It

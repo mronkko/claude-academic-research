@@ -1,6 +1,6 @@
 ---
 name: grounded-citations
-description: Use when inserting a new citation into academic prose, attributing a finding to a source, or summarising what a paper says. Trigger phrases: "cite this", "add a citation for X", "what does Smith (2019) say", "summarise this paper", "attribute this finding". Enforces that every citation is a BBT key from Zotero and that the paper's content has been externally consulted in this session (fresh MCP fetch or a Zotero child note) — never recalled from context. If the consulted source does not support the claim, drop the claim. Do NOT use for Zotero library housekeeping — use `zotero-operations`. Do NOT use for auditing an existing draft's citations — use `fact-check`.
+description: Use when inserting a new citation into academic prose, attributing a finding to a source, or summarising what a paper says. Trigger phrases "cite this", "add a citation for X", "what does Smith (2019) say", "summarise this paper", "attribute this finding". Do NOT use for Zotero library housekeeping — use `zotero-operations`. Do NOT use for auditing an existing draft's citations or for verifying that a cited paper actually supports the claim — use `fact-check`.
 ---
 
 # Grounded citations
@@ -8,6 +8,19 @@ description: Use when inserting a new citation into academic prose, attributing 
 > **Glossary:** unfamiliar with **BBT**, **MCP**, **DOI**? See
 > [skills/_glossary.md](../_glossary.md) for one-line definitions of
 > every acronym this skill uses.
+
+> **Insertion vs verification.** This skill governs *inserting* a
+> citation during drafting — it can drop a claim if no source
+> supports it. The audit-time counterpart is `verifying-citations`
+> (loaded by `fact-check` and by `critic-loop`'s evidence critic),
+> which decides whether an *existing* `@citekey` in a manuscript is
+> honestly supported by its source. Both demand externalised
+> consultation; their *escalation triggers* differ:
+> grounded-citations escalates on **recency / context staling**
+> (a Zotero child note beats a faded context-window memory);
+> verifying-citations escalates on **claim type** (a quoted passage
+> or specific β always requires the full text, regardless of how
+> the abstract reads). Same goal, different decision axis.
 
 ## Bootstrap (first run in this project)
 
@@ -51,7 +64,11 @@ citation may not be made.
    as a **Zotero child note** read via `mcp__zotero__zotero_get_notes`.
    Context-window recall alone is **not** sufficient: remembering an
    abstract read 500K tokens ago is not grounding — either re-fetch it
-   or read the note.
+   or read the note. **Operational rule:** if the abstract or fulltext
+   was read more than ~5 conversational turns ago, *or* if context has
+   been compacted in between, re-fetch via MCP or read the stored
+   Zotero note. The boundary is "could the same words still be in your
+   working context"; when in doubt, re-fetch.
 4. **Claim support.** The consulted content visibly supports the
    attributed claim. If nothing you have consulted supports the claim,
    **drop the claim**. Do not paper over; do not flag for later; do not

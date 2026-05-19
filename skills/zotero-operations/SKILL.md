@@ -1,6 +1,6 @@
 ---
 name: zotero-operations
-description: Use when the user asks to work with a Zotero library — adding missing abstracts, attaching missing PDFs, enriching metadata, importing items, deduplicating, fixing BBT (Better BibTeX) citation keys, or writing structured child notes. Common trigger phrases the harness should match on: "add abstracts to Zotero", "attach PDFs", "enrich my Zotero library", "fix citation keys", "find duplicates in Zotero", "update Zotero items". Do NOT use for a full PRISMA-style systematic review — use the `systematic-review` skill instead.
+description: Use when the user asks to work with a Zotero library — adding abstracts, attaching PDFs, enriching metadata, importing items, deduplicating, fixing BBT (Better BibTeX) citation keys, or writing child notes. Trigger phrases "add abstracts to Zotero", "attach PDFs", "enrich Zotero library", "fix citation keys", "find duplicates in Zotero", "update Zotero items". Do NOT use for a full PRISMA-style systematic review — use `systematic-review` instead.
 ---
 
 # zotero-operations

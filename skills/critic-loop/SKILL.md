@@ -1,6 +1,6 @@
 ---
 name: critic-loop
-description: Use when the user asks to revise, polish, or critique an academic manuscript, chapter, thesis, or paper through parallel critic perspectives. Trigger phrases: "run critic-loop", "/critic-loop", "revise this manuscript", "run critics on this draft", "run a critical review", "review this chapter". Main agent edits → tests pass → render → four critics review in parallel (evidence, method, argument, expert) → main agent adjudicates and applies → loop until no critic asks for a MAJOR revision. Invoke as `/critic-loop <document-path>`.
+description: Use when the user asks to revise, polish, or critique an academic manuscript, chapter, thesis, or paper through parallel critic perspectives. Trigger phrases "/critic-loop", "run critic-loop", "revise this manuscript", "run critics on this draft", "run a critical review", "review this chapter". Invoke as `/critic-loop <document-path>`.
 ---
 
 # critic-loop
@@ -185,7 +185,15 @@ while iter <= MAX_ITER:
     (b) iter == MAX_ITER;
     (c) Loop-back detected: the same MAJOR item was flagged in iter N-1 by
         the same critic, marked "applied", and flagged again by that critic
-        in iter N. Surface this as a human-adjudication request.
+        in iter N.
+
+  On loop-back (case c): Step 5's "applied" items for the CURRENT iter have
+  already been written to disk. Do NOT roll them back — they may be partial
+  progress the author wants to keep. Instead, exit the loop immediately,
+  write the final report flagging the loop-back, and surface to the user
+  as a human-adjudication request (the critic and the main agent disagree
+  on whether the previous fix actually resolved the item). Do NOT proceed
+  to iter N+1.
 
   iter += 1
 ```
@@ -260,21 +268,20 @@ supported by its source — either a cited paper or an authoritative pipeline-
 output file. You do NOT evaluate method rigour, writing quality, or missing-
 seminal-work judgments — those belong to method / argument / expert.
 
-For in-text citations, use the Zotero MCP tools (or equivalent reference-
-manager MCP) in this order of preference:
-  1. mcp__zotero__zotero_get_item_fulltext — when a full-text PDF is attached.
-  2. mcp__zotero__zotero_get_item_metadata — for the abstract (sufficient for
-     many claims) and for basic bibliographic details.
-  3. mcp__zotero__zotero_search_by_citation_key — to resolve a BBT citation
-     key to a Zotero item key.
-
-For each @citekey in the rendered manuscript, check:
-  - Does the paper actually exist under that key?
-  - Does the attributed finding match the paper's abstract/full text?
-  - Is the direction of the claim correct (especially for regression
-    coefficients, moderators, mediators)?
-  - Is the quoted text actually in the paper? Paraphrases are OK; fabricated
-    quotes are not.
+REQUIRED SUB-SKILL: verifying-citations. Read it before checking any
+citation. It defines the staged abstract-then-fulltext rule, the four-class
+classification (VERIFIED / MINOR / MAJOR / UNVERIFIABLE), and the always-
+escalate triggers (quoted passages, specific statistics, method details,
+subgroup findings). Translate its classifications into critic-loop's
+[MAJOR|MINOR|NIT] output format:
+  - VERIFIED      → no ISSUE entry needed.
+  - MINOR         → [MINOR].
+  - MAJOR         → [MAJOR].
+  - UNVERIFIABLE  → [MAJOR] for this loop's purposes (the loop has to
+                    resolve or defer; an author cannot ship a citation
+                    they cannot verify). Suggested revision: "no PDF
+                    attached for @key; resolve via enrich_pdfs.py or
+                    replace the citation."
 
 For quantitative claims in prose and tables, check that numbers match the
 authoritative results file (usually analysis/results/*.csv or *.json, per the
@@ -282,15 +289,16 @@ empirical-integrity skill). If a project-specific coded corpus exists (e.g.
 analysis/results/coded_papers.csv for SLRs), spot-check prose synthesis
 claims against coded entries.
 
-Treat as MAJOR: missing paper, wrong paper for the key, direction reversal,
-fabricated finding, fabricated quote, claim not supported by the source,
-prose number absent from or inconsistent with the authoritative results file.
-Treat as MINOR: overreaching paraphrase, oversimplified finding, missing
-caveat that the source considers important.
+Treat as [MAJOR]: prose number absent from or inconsistent with the
+authoritative results file. (Citation-specific MAJOR criteria — missing
+paper, direction reversal, fabricated quote, etc. — come from
+verifying-citations.)
+Treat as [MINOR]: oversimplified finding from the results files; missing
+caveat from a pipeline output.
 
-Spot-check is acceptable when citation count exceeds ~30; prioritize high-
-stakes claims (MAJOR findings, directional claims, quoted passages). Report
-the sample size in the first ISSUES entry if spot-checking.
+Spot-check is acceptable when citation count exceeds 30; prioritize quoted
+passages and specific statistics (always-check), then high-stakes directional
+claims. Report the sample size in the first ISSUES entry if spot-checking.
 ```
 
 ### method  *(default)*
