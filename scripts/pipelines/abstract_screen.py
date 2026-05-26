@@ -52,7 +52,6 @@ from __future__ import annotations
 import argparse
 import csv
 import importlib.util
-import os
 import random
 import sys
 import threading
@@ -65,12 +64,10 @@ SCRIPTS_ROOT = SCRIPT_DIR.parent
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
-from core.config_loader import require  # noqa: E402
-from core import llm_provider  # noqa: E402
-
-
 import csv_io  # noqa: E402
 import zotero_io  # noqa: E402
+from core import llm_provider  # noqa: E402
+from core.config_loader import require  # noqa: E402
 from log_schemas import ABSTRACT_SCREENING_FIELDS  # noqa: E402
 
 # Re-export under the legacy name so any external consumer (or test

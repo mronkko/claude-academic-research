@@ -7,9 +7,7 @@ by registering new subclasses of LLMProvider.
 
 from __future__ import annotations
 
-import os
 import sys
-import httpx
 from pathlib import Path
 
 # Add parent directory to path to enable core imports
@@ -18,7 +16,7 @@ SCRIPTS_ROOT = SCRIPT_DIR.parent
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
-from core.config_loader import require, get  # noqa: E402
+from core.config_loader import get, require  # noqa: E402
 
 
 class LLMProvider:
@@ -42,14 +40,14 @@ class AnthropicProvider(LLMProvider):
     def __init__(self, api_key: str | None = None):
         if not api_key:
             api_key = require("anthropic", "api_key", env="ANTHROPIC_API_KEY")
-        
+
         try:
             import anthropic
-        except ImportError:
+        except ImportError as e:
             raise ImportError(
                 "Anthropic Python SDK is required for Claude models. "
                 "Ensure 'anthropic' is installed."
-            )
+            ) from e
         self.client = anthropic.Anthropic(api_key=api_key)
 
     def generate(
@@ -79,14 +77,14 @@ class GeminiProvider(LLMProvider):
             api_key = get("gemini", "api_key", env="GEMINI_API_KEY")
             if not api_key:
                 api_key = require("gemini", "api_key", env="GEMINI_API_KEY")
-        
+
         try:
             from google import genai
-        except ImportError:
+        except ImportError as e:
             raise ImportError(
                 "Google GenAI SDK is required for Gemini models. "
                 "Ensure 'google-genai' is installed."
-            )
+            ) from e
         self.client = genai.Client(api_key=api_key)
 
     def generate(
@@ -120,7 +118,7 @@ class GeminiProvider(LLMProvider):
             )
             return response.text.strip()
         except Exception as e:
-            raise RuntimeError(f"Gemini API returned error: {e}")
+            raise RuntimeError(f"Gemini API returned error: {e}") from e
 
 
 def get_provider(model_name: str) -> LLMProvider:

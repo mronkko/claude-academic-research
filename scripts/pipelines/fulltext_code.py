@@ -67,16 +67,15 @@ SCRIPTS_ROOT = SCRIPT_DIR.parent
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
-from core.config_loader import require  # noqa: E402
+import csv_io  # noqa: E402
+import pdf_text_cache  # noqa: E402
+import zotero_io  # noqa: E402
 from core import llm_provider  # noqa: E402
+from core.config_loader import require  # noqa: E402
 from core.llm import (  # noqa: E402
     extract_json_from_response,
     extract_pdf_text,
 )
-
-import csv_io  # noqa: E402
-import pdf_text_cache  # noqa: E402
-import zotero_io  # noqa: E402
 from log_schemas import fulltext_screening_fields  # noqa: E402
 
 # Soft cap on full-text chars sent to Sonnet (~180k tokens at 4 chars/token;
