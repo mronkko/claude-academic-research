@@ -7,6 +7,22 @@ import pytest
 mock_anthropic_module = MagicMock()
 sys.modules["anthropic"] = mock_anthropic_module
 
+# Mock google and google.genai modules so tests can run without having them installed
+mock_google = MagicMock()
+mock_genai = MagicMock()
+mock_google.genai = mock_genai
+
+class MockGenerateContentConfig:
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+mock_genai.types.GenerateContentConfig = MockGenerateContentConfig
+
+sys.modules["google"] = mock_google
+sys.modules["google.genai"] = mock_genai
+sys.modules["google.genai.types"] = mock_genai.types
+
 from core import llm_provider  # noqa: E402
 
 

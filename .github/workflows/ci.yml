@@ -26,7 +26,7 @@ jobs:
       - name: Install dev dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest responses ruff tenacity pyzotero httpx anthropic
+          pip install pytest responses ruff tenacity pyzotero httpx anthropic google-genai
 
       - name: Ruff lint
         run: ruff check scripts tests
