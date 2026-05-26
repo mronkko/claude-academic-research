@@ -8,6 +8,7 @@
 #     "pypdf>=4.0",
 #     "tenacity>=8.0",
 #     "httpx>=0.25",
+#     "google-genai",
 # ]
 # ///
 """LLM-driven full-text screening + structured coding for an SLR.
@@ -67,18 +68,11 @@ if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
 from core.config_loader import require  # noqa: E402
+from core import llm_provider  # noqa: E402
 from core.llm import (  # noqa: E402
     extract_json_from_response,
     extract_pdf_text,
 )
-
-try:
-    import anthropic
-except ImportError:
-    sys.exit(
-        "ERROR: dependencies not available. Run via `uv run`; the PEP 723 "
-        "block at the top declares anthropic + pyzotero + pdfplumber + pypdf."
-    )
 
 import csv_io  # noqa: E402
 import pdf_text_cache  # noqa: E402
@@ -423,14 +417,13 @@ def _code_one(item: dict, pdf_path: Path, client, model: str, prompt: str,
         row[f["name"]] = ""
 
     try:
-        resp = client.messages.create(
+        text = client.generate(
             model=model,
             max_tokens=3500,
-            temperature=0,
+            temperature=0.0,
             system=prompt,
-            messages=[{"role": "user", "content": user_msg}],
+            prompt=user_msg,
         )
-        text = resp.content[0].text.strip()
         parsed = extract_json_from_response(text)
         if not parsed:
             row["decision"] = "error"
@@ -508,7 +501,11 @@ def main() -> int:
     api_key = "" if args.dry_run else require("zotero", "api_key",
                                               env="ZOTERO_API_KEY")
     if not args.dry_run:
-        require("anthropic", "api_key", env="ANTHROPIC_API_KEY")
+        if model.lower().startswith("gemini-"):
+            require("gemini", "api_key", env="GEMINI_API_KEY")
+        else:
+            require("anthropic", "api_key", env="ANTHROPIC_API_KEY")
+
 
     pdf_dir = Path(args.pdf_dir) if args.pdf_dir else None
     # Resolve Zotero data directory: --zotero-storage flag → $ZOTERO_DATA_DIR
@@ -629,7 +626,7 @@ def main() -> int:
               flush=True)
         return 0
 
-    client = anthropic.Anthropic()
+    client = llm_provider.get_provider(model)
     # Schema-stable + idempotent writes via csv_io.upsert_by_item_key.
     # Re-running on the same item replaces the prior row instead of
     # appending; recovers cleanly from partial / interrupted runs.

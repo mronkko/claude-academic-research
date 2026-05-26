@@ -124,6 +124,20 @@ def _verify_anthropic(key: str) -> tuple[bool, str, dict]:
     return True, "key valid; Claude API reachable", {}
 
 
+def _verify_gemini(key: str) -> tuple[bool, str, dict]:
+    status, data, err = _http_json(
+        f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
+    )
+    if status == 0:
+        return False, f"could not reach generativelanguage.googleapis.com ({err}) — saved anyway", {}
+    if status in (400, 403, 401):
+        return False, "Gemini API rejected the key. Re-check the key.", {}
+    if status != 200:
+        return False, f"Gemini returned HTTP {status}", {}
+    return True, "key valid; Gemini API reachable", {}
+
+
+
 def _verify_elsevier(key: str) -> tuple[bool, str, dict]:
     status, _, err = _http_json(
         "https://api.elsevier.com/content/article/doi/10.1016/j.procs.2018.10.404",
@@ -242,7 +256,7 @@ KEYS: tuple[KeySpec, ...] = (
     ),
     KeySpec(
         "ANTHROPIC_API_KEY", "anthropic", "api_key", "Anthropic API key",
-        required=True, hidden=True,
+        required=False, hidden=True,
         what="Anthropic is the company that builds Claude. This API key lets the "
              "plugin's screening and coding scripts call Claude directly — separate "
              "from your interactive Claude Code session.",
@@ -254,6 +268,19 @@ KEYS: tuple[KeySpec, ...] = (
         where="https://console.anthropic.com/settings/keys",
         verify=_verify_anthropic,
     ),
+    KeySpec(
+        "GEMINI_API_KEY", "gemini", "api_key", "Gemini API key",
+        required=False, hidden=True,
+        what="Google is the company that builds Gemini. This API key lets the "
+             "plugin's screening and coding scripts call Gemini (Antigravity) directly.",
+        used_by="systematic-review (Gemini-driven abstract screening, full-text "
+                "screening, and structured coding of included papers).",
+        impact="Systematic-review screening pipelines will fail if you configure them "
+               "to use Gemini models and do not provide this key.",
+        where="https://aistudio.google.com/app/apikey",
+        verify=_verify_gemini,
+    ),
+
     KeySpec(
         "WOS_API_KEY_EXTENDED", "wos", "expanded_key",
         "Web of Science Expanded API key",
@@ -764,7 +791,18 @@ def _collect_keys(
         print("  Re-run the wizard and supply these before using the plugin.")
         sys.exit(2)
 
+    has_llm_key = bool(
+        values.get("anthropic", {}).get("api_key")
+        or values.get("gemini", {}).get("api_key")
+        or existing.get("anthropic", {}).get("api_key")
+        or existing.get("gemini", {}).get("api_key")
+    )
+    if not has_llm_key:
+        print("\n  WARNING: Neither ANTHROPIC_API_KEY nor GEMINI_API_KEY is configured.")
+        print("           You must provide at least one LLM key to run screening pipelines.")
+
     return values
+
 
 
 # ---------------------------------------------------------------------------
@@ -1066,6 +1104,11 @@ def _permission_patterns() -> tuple[list[str], list[str]]:
 
 
 def _patch_settings(interactive: bool = True) -> tuple[int, int]:
+    if not (Path.home() / ".claude").exists():
+        if interactive:
+            print("\n  No Claude Code environment (~/.claude) detected; skipping settings.json patch.")
+        return 0, 0
+
     categories, deny_new = _permission_categories()
 
     if SETTINGS_PATH.exists():

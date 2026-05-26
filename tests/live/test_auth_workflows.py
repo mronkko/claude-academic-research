@@ -119,3 +119,10 @@ def test_auth_openalex_placeholder() -> None:
         "OpenAlex paid key has no auth-only endpoint; actual auth "
         "verified by test_openalex_content_api_returns_pdf_bytes."
     )
+
+
+def test_auth_gemini() -> None:
+    key = require_config("gemini", "api_key", env="GEMINI_API_KEY")
+    ok, msg, _ = _wizard()._verify_gemini(key)
+    assert ok, f"Gemini auth failed: {msg}"
+

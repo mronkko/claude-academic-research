@@ -12,18 +12,17 @@ description: Use when the user asks to revise, polish, or critique an academic m
 Before any step below, verify the plugin has been configured:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/check_configured.py"
 ```
 
 If the result is `NOT CONFIGURED`, stop immediately and tell the user:
 
-> The academic-research plugin has not been set up on this machine
-> yet. Run `/setup` first — the evidence critic depends on MCP
+> The academic-research project has not been set up on this machine
+> yet. Run the setup skill or setup wizard first — the evidence critic depends on MCP
 > citation lookups (Zotero, OpenAlex, Semantic Scholar), which
-> require MCP servers that `/setup` registers.
+> require MCP servers that the setup wizard registers.
 
-Do not launch critics or proceed with the loop. `/setup` is the
-required first step.
+Do not launch critics or proceed with the loop. Running the setup skill/wizard is the required first step.
 
 If the result is `configured`, proceed.
 
@@ -116,7 +115,7 @@ sibling `.md`, pass `--rendered-path` to match. They vary together.
 Create the iteration working directory up front (project-local; portable):
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/ensure_dir.py" critic-reviews
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/ensure_dir.py" critic-reviews
 ```
 
 Then:

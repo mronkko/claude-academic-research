@@ -11,14 +11,14 @@ Before applying the rules below, check that this skill's regression
 tests are installed in the project:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_project_scaffold.py" \
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/check_project_scaffold.py" \
     scripts/test_common.py scripts/test_empirical_integrity.py
 ```
 
 If the output lists missing files, install them:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/install_templates.py" \
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/install_templates.py" \
     test_common.py:scripts/test_common.py \
     test_empirical_integrity.py:scripts/test_empirical_integrity.py
 ```
@@ -33,14 +33,14 @@ Next, check whether the project's `.claude/settings.json` has the
 from hand-editing:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_deny_rules.py" \
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/check_deny_rules.py" \
     "Write(//**/analysis/results/**)" "Edit(//**/analysis/results/**)"
 ```
 
 If the output lists missing rules, add them via the shipped helper:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/add_deny_rules.py" \
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/add_deny_rules.py" \
     "Write(//**/analysis/results/manuscript_stats.json)" \
     "Edit(//**/analysis/results/manuscript_stats.json)" \
     "Write(//**/analysis/results/**)" \
@@ -50,14 +50,14 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/add_deny_rules.py" \
 The helper is idempotent (no-ops for rules already present) and
 creates `.claude/settings.json` if it doesn't exist.
 
-These rules block Claude's `Write` and `Edit` tools from touching
+These rules block the agent's `Write` and `Edit` tools from touching
 anything under `analysis/results/` (including `manuscript_stats.json`
 and `coded_papers.csv`). Regeneration via
 `Bash(python3 analysis/manuscript_stats.py)` is unaffected because the
 deny rules target only `Write`/`Edit`, not `Bash`.
 
 If the project has no `CLAUDE.md` yet, suggest using
-`${CLAUDE_PLUGIN_ROOT}/templates/manuscript_claude_md.md` as a starting
+`${CLAUDE_PLUGIN_ROOT:-.}/templates/manuscript_claude_md.md` as a starting
 point — but don't write it without the user's say-so. CLAUDE.md is
 user-owned.
 
@@ -211,22 +211,22 @@ of one rule.
 Never write a literal number in prose that comes from the data (e.g.,
 "the mean was −2.3%").
 
-> **Starting point.** `${CLAUDE_PLUGIN_ROOT}/templates/manuscript_stats.py` is a
+> **Starting point.** `${CLAUDE_PLUGIN_ROOT:-.}/templates/manuscript_stats.py` is a
 > worked example of `build_stats()` for an SLR project — it ingests
 > `search_metadata.json`, `search_run.json`, the screening logs, and
 > `coded_papers.csv` and emits the flat dict above.
-> `${CLAUDE_PLUGIN_ROOT}/templates/manuscript.qmd` shows the setup
+> `${CLAUDE_PLUGIN_ROOT:-.}/templates/manuscript.qmd` shows the setup
 > chunk and inline-expression patterns end to end.
 
 ### Ownership and lifecycle
 
 `analysis/manuscript_stats.py` is **project-owned**. The plugin ships a
-worked example under `${CLAUDE_PLUGIN_ROOT}/templates/`; you copy it
+worked example under `${CLAUDE_PLUGIN_ROOT:-.}/templates/`; you copy it
 into `analysis/` as your starting point and extend `build_stats()`
 every time the manuscript needs a new methodology fact or derived
 number. The plugin has no way to regenerate it for you — it is not a
 shipped pipeline script you can invoke via
-`${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/...`, it is *your* code.
+`${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/...`, it is *your* code.
 
 Two invariants protect the dictionary's integrity as you extend it:
 
@@ -250,10 +250,7 @@ Two invariants protect the dictionary's integrity as you extend it:
 The `test_empirical_integrity.py` content-integrity test asserts that
 the on-disk JSON equals `build_stats()`'s live output, catching both
 staleness and tampering. The deny rule catches invariant (1) at the
-tool layer. Invariant (2) is self-policed — Claude must read what
-`build_stats()` contains before extending it and refuse to add a
-literal.
-
+tool layer. Invariant (2) is self-policed — the agent must read what `build_stats()` contains before extending it and refuse to add a literal.
 The same ownership pattern applies to `manuscript/manuscript_tables.py`
 (pandas functions for code chunks) and `manuscript/manuscript.qmd`
 (the scaffold) — all three are per-project artefacts the template
@@ -270,7 +267,7 @@ seeds and the researcher owns.
   name, keyword string) that exists as a pipeline-generated metadata
   entry. If the pipeline knows it, the manuscript must read it.
 - Edit or Write on `analysis/results/manuscript_stats.json` (or any
-  file under `analysis/results/`) from Claude's tools. The project's
+  file under `analysis/results/`) from the agent's tools. The project's
   `.claude/settings.json` denies these — see the Bootstrap section.
   Only `python3 analysis/manuscript_stats.py` may produce these files.
 - A hardcoded literal value inside `build_stats()` — e.g.,
@@ -316,7 +313,7 @@ submission, supervisor review). Check CLAUDE.md for the exact test
 command.
 
 The plugin ships three fine-grained test templates under
-`${CLAUDE_PLUGIN_ROOT}/templates/`, each mapped to one skill. Copy into
+`${CLAUDE_PLUGIN_ROOT:-.}/templates/`, each mapped to one skill. Copy into
 your project's `scripts/` directory:
 
 | Template | Skill | Catches |

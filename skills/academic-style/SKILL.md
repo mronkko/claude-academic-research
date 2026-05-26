@@ -14,7 +14,7 @@ description: Use when drafting or editing academic prose — topic sentences, pa
 
 ## Core rule
 
-Academic prose follows a small set of conventions that Claude applies
+Academic prose follows a small set of conventions that the agent applies
 **during drafting**, not only at revision time. These are the rules the
 `critic-loop` argument critic checks later — but writing them in
 correctly the first time reduces how much the critic loop has to
@@ -26,7 +26,7 @@ This skill governs *style and conventions only*. It does not govern:
   `grounded-citations` rule-book.
 - Quantitative claims (numbers from pipeline files) →
   `empirical-integrity` rule-book.
-- When and how to revise a draft → `manuscript-revision` + `/critic-loop`.
+- When and how to revise a draft → `manuscript-revision` + the `critic-loop` skill.
 
 ## Citations (APA-style)
 

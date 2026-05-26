@@ -36,7 +36,8 @@ def test_key_schema_has_required_core_keys() -> None:
     mod = _load()
     required_env = {k.env_var for k in mod.KEYS if k.required}
     assert "ZOTERO_API_KEY" in required_env
-    assert "ANTHROPIC_API_KEY" in required_env
+    # ANTHROPIC_API_KEY and GEMINI_API_KEY are now optional individually
+    # but at least one must be provided.
     # ZOTERO_GROUP deliberately NOT a key in the global config — group IDs
     # are per-project.
     assert "ZOTERO_GROUP" not in {k.env_var for k in mod.KEYS}
@@ -177,6 +178,22 @@ def test_verify_anthropic_401(monkeypatch) -> None:
     assert "401" in msg or "reject" in msg.lower()
 
 
+def test_verify_gemini_success(monkeypatch) -> None:
+    mod = _load()
+    monkeypatch.setattr(mod, "_http_json", lambda *a, **kw: (200, {"models": []}, ""))
+    ok, _msg, _ = mod._verify_gemini("valid-gemini-key")
+    assert ok
+
+
+def test_verify_gemini_rejected(monkeypatch) -> None:
+    mod = _load()
+    monkeypatch.setattr(mod, "_http_json", lambda *a, **kw: (403, None, "403 Forbidden"))
+    ok, msg, _ = mod._verify_gemini("bad-key")
+    assert not ok
+    assert "rejected" in msg.lower()
+
+
+
 def test_verify_crossref_mailto_valid() -> None:
     mod = _load()
     ok, _, _ = mod._verify_crossref_mailto("user@example.com")
@@ -218,13 +235,14 @@ def test_env_var_names_match_user_convention() -> None:
     mod = _load()
     env_names = {k.env_var for k in mod.KEYS}
     expected = {
-        "ZOTERO_API_KEY", "ANTHROPIC_API_KEY",
+        "ZOTERO_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
         "WOS_API_KEY_EXTENDED", "WOS_API_KEY",
         "ELSEVIER_API_KEY", "SCOPUS_API_KEY",
         "SEMANTIC_SCHOLAR_API_KEY", "CROSSREF_MAILTO",
         "WILEY_TDM_TOKEN", "OPENALEX_API_KEY",
     }
     assert env_names == expected, f"env var schema drift: {env_names ^ expected}"
+
 
 
 def test_non_interactive_with_verify_collects_extras(monkeypatch) -> None:

@@ -6,6 +6,7 @@
 #     "pyzotero>=1.6",
 #     "tenacity>=8.0",
 #     "httpx>=0.25",
+#     "google-genai",
 # ]
 # ///
 """LLM-driven title+abstract screening for a systematic review.
@@ -65,14 +66,8 @@ if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
 from core.config_loader import require  # noqa: E402
+from core import llm_provider  # noqa: E402
 
-try:
-    import anthropic
-except ImportError:
-    sys.exit(
-        "ERROR: dependencies not available. Run via `uv run`; the PEP 723 "
-        "block at the top declares anthropic + pyzotero."
-    )
 
 import csv_io  # noqa: E402
 import zotero_io  # noqa: E402
@@ -220,13 +215,16 @@ def main() -> int:
                              "have one yet. Makes no LLM calls; exits after.")
     args = parser.parse_args()
 
+    system_prompt, model, prompt_version = _load_screening_config(args.config)
+
     api_key = "" if args.dry_run else require("zotero", "api_key",
                                               env="ZOTERO_API_KEY")
-    if not args.dry_run and not args.csv_backfill and not os.environ.get("ANTHROPIC_API_KEY"):
-        require("anthropic", "api_key", env="ANTHROPIC_API_KEY")
-        # config_loader.require raised SystemExit already if missing
+    if not args.dry_run and not args.csv_backfill:
+        if model.lower().startswith("gemini-"):
+            require("gemini", "api_key", env="GEMINI_API_KEY")
+        else:
+            require("anthropic", "api_key", env="ANTHROPIC_API_KEY")
 
-    system_prompt, model, prompt_version = _load_screening_config(args.config)
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -282,7 +280,7 @@ def main() -> int:
               flush=True)
         return 0
 
-    client = anthropic.Anthropic()
+    client = llm_provider.get_provider(model)
     # Schema-stable + idempotent writes via csv_io.upsert_by_item_key.
     # Re-running on the same item replaces the prior row instead of
     # appending, so partial-then-resumed screening passes don't double
@@ -305,14 +303,13 @@ def main() -> int:
         msg = _format_user_message(d.get("title", ""), abstract, source, query)
 
         try:
-            resp = client.messages.create(
+            text = client.generate(
                 model=model,
                 max_tokens=200,
-                temperature=0,
+                temperature=0.0,
                 system=system_prompt,
-                messages=[{"role": "user", "content": msg}],
+                prompt=msg,
             )
-            text = resp.content[0].text.strip()
             decision = "error"
             reason = text
             for line in text.splitlines():

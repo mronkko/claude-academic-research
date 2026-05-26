@@ -1,46 +1,40 @@
 ---
 name: setup
-description: Use when the user invokes `/setup`, asks to configure the academic-research plugin, add or rotate API keys (Zotero, Elsevier, WoS, Semantic Scholar, Wiley TDM, OpenAlex), register MCP servers, or patch permission rules. Also fires when another academic-research skill (zotero-operations, systematic-review, fact-check, critic-loop) reports `NOT CONFIGURED` on its pre-flight check.
+description: Use when the user invokes `/setup` (or asks to "configure setup", "run setup wizard", "configure the academic-research project/plugin"), asks to configure the academic-research plugin, add or rotate API keys (Zotero, Elsevier, WoS, Semantic Scholar, Wiley TDM, OpenAlex, Gemini), register MCP servers, or patch permission rules. Also fires when another academic-research skill (zotero-operations, systematic-review, fact-check, critic-loop) reports `NOT CONFIGURED` on its pre-flight check.
 ---
 
 # setup
 
 > **Quick definitions** (T4-5; full glossary at [skills/_glossary.md](../_glossary.md)):
-> - A **plugin** is the code bundle this `/setup` is configuring — a
+> - A **plugin** is the code bundle this setup is configuring — a
 >   downloadable package shipped with skills, pipeline scripts, and
->   templates that Claude Code uses for academic-research work.
-> - A **skill** is a prose rule-book Claude loads when your request
->   matches its trigger phrases. Skills tell Claude *how* to approach
+>   templates that the agentic environment uses for academic-research work.
+> - A **skill** is a prose rule-book the agent loads when your request
+>   matches its trigger phrases. Skills tell the agent *how* to approach
 >   a task; they don't run code on their own. `setup`, `zotero-
 >   operations`, `systematic-review`, etc. are all skills in this
 >   plugin.
-> - An **MCP server** is a small helper program Claude talks to in
->   the background. Example: the **Zotero MCP server** lets Claude
+> - An **MCP server** is a small helper program the agent talks to in
+>   the background. Example: the **Zotero MCP server** lets the agent
 >   read and update your Zotero library directly. The wizard checks
 >   five MCP servers (Zotero, Scopus, Semantic Scholar, OpenAlex,
 >   paper-search) and offers to register the missing ones.
 
-Setup runs as a terminal wizard the **user** executes. Claude's role is
+Setup runs as a terminal wizard the **user** executes. The agent's role is
 only to give them the command and confirm when they are done. Do not
 run any tool calls — no Bash, no Read, no probes. All the information
 needed is already known:
 
-- **Wizard path:** `${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py`
-  — Claude Code's harness substitutes `${CLAUDE_PLUGIN_ROOT}` to the
-  active plugin version's absolute path before you emit text, so the
-  user pastes a concrete, single path. (Earlier wizard prose used a
-  shell glob `*` over `~/.claude/plugins/cache/.../*/`, which broke
-  when two plugin versions were cached side-by-side after an update.)
+- **Wizard path:** `${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py` (or project-relative `./scripts/setup/wizard.py` if not running inside Claude Code)
+  — The active plugin version's absolute path (or project-relative fallback if `${CLAUDE_PLUGIN_ROOT}` is not defined) is used, so the user has a concrete path to run.
 - **Config written to:** `~/.config/academic-research/config.toml` (mode 0600).
-- **Settings patched:** `~/.claude/settings.json` (backed up as `.bak-wizard`).
+- **Settings patched:** `~/.claude/settings.json` (backed up as `.bak-wizard`, bypassed silently if not running under Claude).
 - **Wizard is idempotent:** re-running updates or adds keys without
   clobbering existing ones.
 
 ## Procedure
 
-**CRITICAL:** never ask the user to paste API keys into the Claude
-chat. Any text typed into the chat is transmitted to Anthropic. The
-wizard exists so keys stay local.
+**CRITICAL:** never ask the user to paste API keys into the chat. Any text typed into the chat is transmitted to the model provider. The wizard exists so keys stay local.
 
 Paste the following message to the user (no tool calls needed — just
 text):
@@ -52,13 +46,18 @@ text):
 > it), at least one of **Scopus / Semantic Scholar / OpenAlex**
 > (required for literature search to work), and **paper-search**
 > (optional — for ArXiv / PubMed PDF retrieval). It then writes your
-> config file and permission rules locally. **Your keys never pass
-> through Claude's chat.**
+> config file locally. **Your keys never pass through the chat.**
 >
-> Paste this into a terminal and press Enter:
+> Run the setup wizard in your terminal. If the `${CLAUDE_PLUGIN_ROOT}` environment variable is defined:
 >
 > ```
 > python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py
+> ```
+>
+> Otherwise, run the project-relative command from the root of your workspace:
+>
+> ```
+> python3 ./scripts/setup/wizard.py
 > ```
 >
 > **How to open a terminal** if you are not already in one:
@@ -67,9 +66,8 @@ text):
 >   is not recognised, try `python` instead.
 > - **Linux:** Ctrl-Alt-T (or your distro's terminal app).
 >
-> Already running Claude in a terminal? Either open a new tab and run
-> it there, or press Ctrl-C to exit this Claude session, run the
-> wizard, then `claude -c` to resume this conversation.
+> Already running the agent in a terminal? Either open a new tab and run
+> it there, or temporarily exit this session, run the wizard, and then resume this conversation.
 >
 > When the wizard prints "Setup complete", return here and say "done"
 > (or similar). I'll confirm and we'll continue.

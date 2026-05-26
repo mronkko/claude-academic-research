@@ -10,18 +10,17 @@ description: Use when the user asks to fact-check a manuscript, verify citations
 Before any step below, verify the plugin has been configured:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/check_configured.py"
 ```
 
 If the result is `NOT CONFIGURED`, stop immediately and tell the user:
 
-> The academic-research plugin has not been set up on this machine
-> yet. Run `/setup` first — fact-check depends on Zotero and MCP
+> The academic-research project has not been set up on this machine
+> yet. Run the setup skill or setup wizard first — fact-check depends on Zotero and MCP
 > citation lookups, which require API keys and MCP servers that
-> `/setup` configures.
+> the setup wizard configures.
 
-Do not call MCP tools or proceed with the audit. `/setup` is the
-required first step.
+Do not call MCP tools or proceed with the audit. Running the setup skill/wizard is the required first step.
 
 If the result is `configured`, proceed.
 
@@ -33,14 +32,14 @@ Before running the audit, check that the regression-test backstop
 this skill relies on is installed in the project:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_project_scaffold.py" \
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/check_project_scaffold.py" \
     scripts/test_common.py scripts/test_citations.py
 ```
 
 If the output lists missing files, install them:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/install_templates.py" \
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/install_templates.py" \
     test_common.py:scripts/test_common.py \
     test_citations.py:scripts/test_citations.py
 ```
@@ -57,7 +56,7 @@ This skill is the standalone cousin of the `critic-loop` evidence
 critic. The evidence critic fires inside the revision loop; fact-check
 runs one-shot when the user explicitly asks for a citation/claim audit.
 
-**Mutual-exclusion rule.** If a `/critic-loop` session is currently
+**Mutual-exclusion rule.** If a `critic-loop` session is currently
 running, or just completed with no unresolved evidence-critic MAJORs,
 fact-check is redundant — skip unless the user explicitly asks for a
 second pass. The two cover the same ground for citations and
@@ -211,7 +210,7 @@ Two formats, picked by the output mode chosen in Step 1.
 Create the directory first if needed:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/ensure_dir.py" fact-check-reports
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/ensure_dir.py" fact-check-reports
 ```
 
 Report layout:
@@ -314,7 +313,7 @@ asked for an inline check.
 
 Fact-check is a one-shot audit. The recurring companion is
 `scripts/test_citations.py` (installed by Bootstrap above; source at
-`${CLAUDE_PLUGIN_ROOT}/templates/test_citations.py`) — it catches the
+`${CLAUDE_PLUGIN_ROOT:-.}/templates/test_citations.py`) — it catches the
 regressions that would show up on the *next* audit: unresolved
 `@citekey`s, bare *Author (YYYY)* mentions without a governing `@key`,
 and BBT-key drift in `coded_papers.csv`. Run it in the `critic-loop`

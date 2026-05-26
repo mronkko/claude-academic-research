@@ -16,11 +16,15 @@ Usage:
 """
 
 # =============================================================================
-# Abstract screening (stage 1) — Claude Haiku on title + abstract
+# Abstract screening (stage 1) — Claude Haiku or Gemini Flash on title + abstract
 # =============================================================================
 
+# Model choice:
+#   Anthropic Claude: "claude-haiku-4-5-20251001" (default)
+#   Google Gemini:    "gemini-2.5-flash" (Antigravity)
 ABSTRACT_SCREENING_MODEL = "claude-haiku-4-5-20251001"
 ABSTRACT_SCREENING_PROMPT_VERSION = "v1-2026-04-21"
+
 
 ABSTRACT_SCREENING_SYSTEM_PROMPT = """\
 You are a systematic review screener. Your task is to decide whether a paper \
@@ -62,11 +66,15 @@ REASON: <one sentence citing which criterion or exclusion code triggered the dec
 
 
 # =============================================================================
-# Full-text coding (stage 2) — Claude Sonnet on full PDF text
+# Full-text coding (stage 2) — Claude Sonnet or Gemini Pro on full PDF text
 # =============================================================================
 
+# Model choice:
+#   Anthropic Claude: "claude-sonnet-4-6" (default)
+#   Google Gemini:    "gemini-2.5-pro" (Antigravity)
 FULLTEXT_CODING_MODEL = "claude-sonnet-4-6"
 FULLTEXT_CODING_PROMPT_VERSION = "v1-2026-04-21"
+
 
 # Define every coding field the script should extract. Each entry:
 #   name         — snake_case column name (goes into CSV + manuscript)

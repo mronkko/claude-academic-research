@@ -68,7 +68,7 @@ def require(section: str, key: str, env: str | None = None) -> str:
         )
         raise RuntimeError(
             f"Required configuration missing: {sources}. "
-            f"Run /setup (or re-run the wizard at {wizard_path}) "
+            f"Run setup (or re-run the wizard at {wizard_path}) "
             f"to provide this value."
         )
     return val

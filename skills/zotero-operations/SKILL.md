@@ -14,17 +14,17 @@ description: Use when the user asks to work with a Zotero library — adding abs
 Before any step below, verify the plugin has been configured:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/check_configured.py"
 ```
 
 If the result is `NOT CONFIGURED`, stop immediately and tell the user:
 
-> The academic-research plugin has not been set up on this machine
-> yet. Run `/setup` first to configure API keys, MCP servers, and
+> The academic-research project has not been set up on this machine
+> yet. Run the setup skill or setup wizard first to configure API keys, MCP servers, and
 > permission rules. Do not attempt Zotero operations before that.
 
 Do not call MCP tools, run scripts, or proceed with the procedure.
-`/setup` is the required first step.
+Running the setup skill/wizard is the required first step.
 
 If the result is `configured`, proceed.
 
@@ -73,12 +73,12 @@ exact invocation.
 
 | User intent | Script | Invocation |
 |---|---|---|
-| Audit a library for items missing abstracts / PDFs / empty stubs | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group <id>` |
-| Add missing abstracts to items | `enrich_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_abstracts.py --filter-keys-file .claude/audit/audit.missing_abstract.keys` |
-| Attach missing PDFs (fast HTTP cascade) | `enrich_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
-| Attach PDFs from Wiley journals (TDM token route) | `enrich_pdfs.py --sources wiley` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --sources wiley --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
-| Attach PDFs from Cloudflare-gated publishers (Sage, APA, T&F, Emerald, …) | `enrich_pdfs.py --sources browser` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --sources browser --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
-| Generate `references.bib` from a manuscript's citation keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py <project_dir>` |
+| Audit a library for items missing abstracts / PDFs / empty stubs | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/audit_zotero_library.py --group <id>` |
+| Add missing abstracts to items | `enrich_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_abstracts.py --filter-keys-file .claude/audit/audit.missing_abstract.keys` |
+| Attach missing PDFs (fast HTTP cascade) | `enrich_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
+| Attach PDFs from Wiley journals (TDM token route) | `enrich_pdfs.py --sources wiley` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --sources wiley --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
+| Attach PDFs from Cloudflare-gated publishers (Sage, APA, T&F, Emerald, …) | `enrich_pdfs.py --sources browser` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --sources browser --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
+| Generate `references.bib` from a manuscript's citation keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/generate_bib.py <project_dir>` |
 
 The audit script writes both a JSON report and three `.keys` files
 (`.claude/audit/audit.{missing_abstract,missing_pdf,empty_stubs}.keys`)
@@ -200,9 +200,9 @@ hierarchy is:
 `zotero_io.py` (or `bbt_client.py` for BBT) — do not work around it
 inline.**
 
-A direct-HTTP call by Claude bypasses retries, schema versioning,
+A direct-HTTP call by the agent bypasses retries, schema versioning,
 cross-project reuse, and the one-line definition-of-Zotero-shape
-that other consumers rely on. Inline urllib also drives Claude back
+that other consumers rely on. Inline urllib also drives the agent back
 into improvising pipeline code, which the standing rule forbids.
 
 **Implementation note for plugin contributors.** The CI guard at
@@ -227,7 +227,7 @@ child notes, tag updates.
 - BBT keys are auto-generated from author/year/title (e.g.,
   `brownUsingDailyStock1985a`).
 - Generate the project's bibliography with
-  `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py <project_dir>`.
+  `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/generate_bib.py <project_dir>`.
 - Never hand-craft keys like `Smith2019`.
 - Never write to the Zotero `Extra` field to override or pin BBT keys.
 - BBT keys resolve via the local JSON-RPC endpoint:

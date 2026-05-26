@@ -1,22 +1,23 @@
 # Glossary
 
 Compact reference for the acronyms and tooling terms the
-academic-research plugin's skills use. Each entry is one sentence —
+academic-research project's skills use. Each entry is one sentence —
 enough to anchor the term on first encounter; deeper context lives
 in the skill that introduces it. Skills are loaded independently by
-the Claude Code harness, so each skill *also* defines critical terms
-on first use within itself; this file is the canonical longer entry.
+the agentic harness (such as Claude Code or Antigravity), so each skill
+*also* defines critical terms on first use within itself; this file is the
+canonical longer entry.
 
 ## Tooling and infrastructure
 
-- **MCP** — *Model Context Protocol*. The standard the Claude Code
-  harness uses to talk to "MCP servers" — small helper programs
-  Claude calls in the background.
-- **MCP server** — a small helper process Claude can call. Examples
-  registered by this plugin's setup wizard: Zotero, Scopus,
+- **MCP** — *Model Context Protocol*. The standard the agentic
+  harness (such as Claude Code or Antigravity) uses to talk to "MCP servers" —
+  small helper programs the agent calls in the background.
+- **MCP server** — a small helper process the agent can call. Examples
+  registered by the setup wizard: Zotero, Scopus,
   OpenAlex, Semantic Scholar, paper-search.
 - **Skill** — a prose rule-book the harness loads when a user's
-  request matches the skill's trigger phrases. Skills tell Claude
+  request matches the skill's trigger phrases. Skills tell the agent
   *how* to approach a task; they do not contain executable code.
 - **REQUIRED SUB-SKILL** — a marker inside one skill's body or a
   per-subagent prompt that names another skill to load via the
@@ -26,16 +27,15 @@ on first use within itself; this file is the canonical longer entry.
   place (e.g. `verifying-citations` is loaded as a REQUIRED
   SUB-SKILL by both `fact-check` and `critic-loop`'s evidence
   critic). See CLAUDE.md for the full contract.
-- **Plugin** — this repository, packaged for `/plugin marketplace
-  add mronkko/claude-academic-research`. Ships skills, pipeline
-  scripts, and templates that downstream Claude Code instances use.
-- **`${CLAUDE_PLUGIN_ROOT}`** — environment variable Claude Code
-  resolves to the active plugin version's absolute directory before
-  the model emits text. Always use this in pasted shell commands —
-  never the `~/.claude/plugins/cache/.../*/` glob (it breaks when
-  two plugin versions are cached side-by-side).
+- **Plugin** — this repository, packaged for `/plugin marketplace` or
+  direct integration. Ships skills, pipeline scripts, and templates
+  that agentic environments use.
+- **`${CLAUDE_PLUGIN_ROOT}`** — environment variable resolving to the active
+  plugin version's absolute directory. Always use the POSIX fallback
+  `${CLAUDE_PLUGIN_ROOT:-.}` in pasted shell commands to ensure compatibility
+  across both Claude Code and other agentic environments (such as Antigravity).
 - **glob** — a shell-pattern wildcard like `*.py` or
-  `~/.claude/.../*/scripts/...`. Globs expand to multiple paths;
+  `./scripts/...`. Globs expand to multiple paths;
   passing one to `python3` errors with "ambiguous arguments".
 
 ## Reference data + databases
