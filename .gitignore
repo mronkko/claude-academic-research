@@ -20,6 +20,9 @@ uv.lock
 .env.local
 config.toml
 
+# Project-local MCP overrides (machine-specific paths / dev builds — never publish)
+.mcp.json
+
 # Test artefacts
 /tmp/
 htmlcov/

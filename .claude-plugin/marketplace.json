@@ -10,6 +10,11 @@
       "name": "academic-research",
       "source": "./",
       "description": "Rule-books and procedures for academic research with Claude Code: MCP-grounded citations, empirical integrity, systematic reviews, Zotero operations, and a parallel-critic manuscript revision loop."
+    },
+    {
+      "name": "editorial-tools",
+      "source": "./editorial-tools",
+      "description": "Editorial workflows for journal editors and associate editors: peer-reviewer suggestion from an abstract against pre-built editorial-board profiles plus live external-expert search."
     }
   ]
 }
