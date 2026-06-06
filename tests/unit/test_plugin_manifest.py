@@ -31,10 +31,20 @@ def test_plugin_manifest_version_is_semver() -> None:
 def test_marketplace_manifest_references_plugin() -> None:
     m = _load("marketplace.json")
     assert m["name"] == "mronkko"
-    assert isinstance(m["plugins"], list) and len(m["plugins"]) == 1
-    plug = m["plugins"][0]
-    assert plug["name"] == "academic-research"
-    assert plug["source"] == "./", "marketplace source must be './' for same-repo hosting"
+    assert isinstance(m["plugins"], list) and len(m["plugins"]) >= 1
+    by_name = {p["name"]: p for p in m["plugins"]}
+
+    assert "academic-research" in by_name, "marketplace must list the academic-research plugin"
+    assert (
+        by_name["academic-research"]["source"] == "./"
+    ), "academic-research source must be './' for root-repo hosting"
+
+    # The repo is a marketplace hosting more than one plugin; editorial-tools
+    # is sourced from its own subdirectory.
+    assert "editorial-tools" in by_name, "marketplace must list the editorial-tools plugin"
+    assert (
+        by_name["editorial-tools"]["source"] == "./editorial-tools"
+    ), "editorial-tools source must point at its subdirectory"
 
 
 def test_marketplace_owner_present() -> None:
