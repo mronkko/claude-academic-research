@@ -80,6 +80,10 @@ exact invocation.
 | Attach PDFs from Cloudflare-gated publishers (Sage, APA, T&F, Emerald, …) | `enrich_pdfs.py --sources browser` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --sources browser --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
 | Generate `references.bib` from a manuscript's citation keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/generate_bib.py <project_dir>` |
 
+The browser route (`--sources browser`) needs a one-time Playwright
+browser install before first use: `uvx playwright install chromium`
+(the setup wizard pre-approves this command).
+
 The audit script writes both a JSON report and three `.keys` files
 (`.claude/audit/audit.{missing_abstract,missing_pdf,empty_stubs}.keys`)
 — feed them straight to the next stage's `--filter-keys-file` flag.

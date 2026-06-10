@@ -773,9 +773,10 @@ Cloudflare JS challenge, so for Sage, OUP, Taylor & Francis, Emerald,
 and similar CF-gated publishers, a Playwright-driven Chromium opens
 visibly. The user passes the Cloudflare challenge once per publisher;
 the authenticated session then captures subsequent downloads
-automatically. `--legacy-browser` is the rollback path to the pre-v0.3
-handler in `scripts/pipelines/legacy/fetch_pdfs_browser.py` — use only
-if the refactored browser cascade regresses.
+automatically. First-time use needs a one-time browser install:
+`uvx playwright install chromium` (the setup wizard pre-approves
+this command). If the browser cascade regresses, file an issue and
+attach the run log (`--log-csv`) so the failure can be reproduced.
 
 > **Run the browser cascade in your own terminal — not via the
 > Bash tool.** The Playwright window opens visibly and prompts you

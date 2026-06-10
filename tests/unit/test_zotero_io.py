@@ -1127,3 +1127,23 @@ def test_api_base_url_matches_library_type() -> None:
         api_key="k", group_id="5591", library_type="user",
     )
     assert user_zc.api_base_url() == "https://api.zotero.org/users/5591"
+
+
+def test_pyzotero_clients_match_library_type() -> None:
+    """Regression: `local` / `cloud` hardcoded "group", so a
+    `library_type="user"` client queried /groups/<user_id>/ on both
+    transports — every personal-library (`--user`) read/write 404'd."""
+    user_zc = zotero_io.ZoteroClient(
+        api_key="k", group_id="5591", library_type="user",
+    )
+    assert user_zc.local.library_type == "users"
+    assert user_zc.cloud.library_type == "users"
+    # Local Zotero serves the personal library only as users/0 (the
+    # logged-in user); the cloud client keeps the real user ID.
+    assert str(user_zc.local.library_id) == "0"
+    assert str(user_zc.cloud.library_id) == "5591"
+
+    group_zc = zotero_io.ZoteroClient(api_key="k", group_id="12345")
+    assert group_zc.local.library_type == "groups"
+    assert group_zc.cloud.library_type == "groups"
+    assert str(group_zc.local.library_id) == "12345"

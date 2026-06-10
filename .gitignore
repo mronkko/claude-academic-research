@@ -31,6 +31,7 @@ editorial-tools/dist/
 htmlcov/
 .coverage
 coverage.xml
+.pytest-playwright-cache/
 
 # Pipeline output (CSV logs, PDF/fulltext caches, Chromium profile).
 # Safe to delete any time; scripts regenerate on next run.

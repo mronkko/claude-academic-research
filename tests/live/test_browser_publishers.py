@@ -1,20 +1,21 @@
-"""Live tests for Cloudflare-gated publishers via Playwright.
+"""Live tests for Cloudflare-gated publishers via the fetchers.browser handlers.
 
 Opt in with `pytest -m live_browser`. Opens a persistent Chromium
 session (shared across all tests in this file) and exercises each
-publisher's download flow from the pipeline script. User clicks
-through Cloudflare challenges and institutional SSO as prompted —
-once per publisher domain over the whole run.
+publisher handler's real `setup()` + `download()` flow — the same code
+path `enrich_pdfs.py --sources browser` drives in production. User
+clicks through Cloudflare challenges and institutional SSO as prompted
+— once per publisher domain over the whole run.
 
-Parametrized directly from `publishers.registry.DEFAULT_PUBLISHERS`,
-so a new publisher added there automatically gets a test here as long
-as `KNOWN_DOIS` also contains a DOI for it.
+Parametrized directly from `fetchers.browser.all_handlers()`, so a new
+handler added there automatically gets a test here as long as
+`KNOWN_DOIS` also contains a DOI for it.
 """
 
 from __future__ import annotations
 
-import importlib.util
-import sys
+import asyncio
+import time
 from pathlib import Path
 
 import pytest
@@ -24,90 +25,145 @@ from tests.live.conftest import KNOWN_DOIS
 pytestmark = pytest.mark.live_browser
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-# Legacy fetcher moved to scripts/pipelines/legacy/ in v0.3.1.
-FETCHER_PATH = (
-    REPO_ROOT / "scripts" / "pipelines" / "legacy" / "fetch_pdfs_browser.py"
-)
 
 
-def _fetcher():
-    """Load the legacy fetch_pdfs_browser.py by path; its sibling
-    imports (attach_pdfs, publishers.registry) need sys.path set to
-    both `scripts/` and `scripts/pipelines/legacy/` before loading."""
-    scripts_dir = str(REPO_ROOT / "scripts")
-    legacy_dir = str(REPO_ROOT / "scripts" / "pipelines" / "legacy")
-    pipelines_dir = str(REPO_ROOT / "scripts" / "pipelines")
-    for p in (scripts_dir, pipelines_dir, legacy_dir):
-        if p not in sys.path:
-            sys.path.insert(0, p)
-    spec = importlib.util.spec_from_file_location(
-        "fetch_pdfs_browser", FETCHER_PATH,
-    )
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["fetch_pdfs_browser"] = mod
-    spec.loader.exec_module(mod)
-    return mod
+def _handlers() -> list:
+    """Enumerate handler instances, for parametrize.
+
+    `fetchers.browser` is importable without playwright installed (the
+    playwright imports are TYPE_CHECKING-guarded), so collection works
+    everywhere; actually running a test requires playwright and is
+    gated by the fixture's importorskip.
+    """
+    from fetchers.browser import all_handlers
+    return all_handlers()
 
 
-def _publisher_keys() -> list[str]:
-    """Enumerate registry keys, for parametrize."""
-    scripts_dir = str(REPO_ROOT / "scripts")
-    if scripts_dir not in sys.path:
-        sys.path.insert(0, scripts_dir)
-    from publishers.registry import DEFAULT_PUBLISHERS
-    return sorted(DEFAULT_PUBLISHERS.keys())
+def _no_access_publishers() -> set[str]:
+    """Publishers persisted to `[library] no_access` in config.toml.
+
+    Same parsing as `enrich_pdfs.py`: the user answered [A]lways-skip
+    at a setup prompt, declaring their institution has no access. The
+    production pipeline short-circuits these straight to the Connector
+    fallback, so a failed download here is expected, not a bug.
+    """
+    from core.config_loader import load_config
+    raw = load_config().get("library", {}).get("no_access", [])
+    if isinstance(raw, str):
+        return {s.strip() for s in raw.split(",") if s.strip()}
+    if isinstance(raw, list):
+        return {str(s).strip() for s in raw if s}
+    return set()
 
 
-@pytest.mark.parametrize("publisher_key", _publisher_keys())
-def test_browser_publisher_downloads_pdf(publisher_key: str, browser_context, tmp_path) -> None:
-    """Every registry publisher downloads a `%PDF-` payload for its known DOI."""
+@pytest.fixture(scope="module")
+def browser_session():
+    """Module-scoped persistent Chromium driven on a private event loop.
+
+    Uses the production `launch_context()` (persistent profile under
+    `<cache_dir>/.chrome-profile`, built-in PDF viewer disabled), so CF
+    cookies and institutional SSO survive between tests and runs.
+    """
     pytest.importorskip(
-        "playwright.sync_api",
-        reason="live_browser tests need playwright installed",
+        "playwright.async_api",
+        reason="live_browser tests require `playwright` — install with "
+               "`uv pip install playwright && playwright install chromium`",
     )
-    if publisher_key not in KNOWN_DOIS:
+    from fetchers.browser import launch_context
+    from playwright.async_api import async_playwright
+
+    cache_dir = REPO_ROOT / ".pytest-playwright-cache"
+    cache_dir.mkdir(exist_ok=True)
+
+    print()
+    print("=" * 72)
+    print("  live_browser test session starting")
+    print("=" * 72)
+    print()
+    print("  A Chromium window will open on your desktop. For each publisher")
+    print("  domain the tests cover, you may need to:")
+    print()
+    print("    1. Solve a Cloudflare challenge (click the checkbox).")
+    print("    2. Sign in via your institution's SSO.")
+    print()
+    print("  The session is shared across all live_browser tests, so you only")
+    print("  see each challenge once per publisher domain for the whole run.")
+    print()
+    print("  Leave the terminal and the browser window open until done.")
+    print("=" * 72, flush=True)
+    print()
+
+    loop = asyncio.new_event_loop()
+    pw = loop.run_until_complete(async_playwright().start())
+    ctx = loop.run_until_complete(launch_context(pw, cache_dir))
+    yield loop, ctx, cache_dir
+    loop.run_until_complete(ctx.close())
+    loop.run_until_complete(pw.stop())
+    loop.close()
+
+
+@pytest.mark.parametrize("handler", _handlers(), ids=lambda h: h.name)
+def test_browser_publisher_downloads_pdf(handler, browser_session) -> None:
+    """Every registered handler downloads a `%PDF-` payload for its known DOI."""
+    if handler.name not in KNOWN_DOIS:
         pytest.skip(
-            f"No test DOI for publisher {publisher_key!r} in KNOWN_DOIS. "
+            f"No test DOI for publisher {handler.name!r} in KNOWN_DOIS. "
             f"Add one to tests/live/conftest.py."
         )
-
-    doi = KNOWN_DOIS[publisher_key]
-
-    fetcher = _fetcher()
-    publishers = fetcher.DEFAULT_PUBLISHERS
-    info = publishers[publisher_key]
-
-    # Use the session-scoped Chromium context; grab a page from it.
-    page = browser_context.pages[0] if browser_context.pages else browser_context.new_page()
-
-    url = info["url"].format(doi=doi)
-    out_path = tmp_path / (doi.replace("/", "_") + ".pdf")
-
-    print(f"\n  [{publisher_key}] navigating to {url}", flush=True)
-
-    # The pipeline's async handlers expect asyncio + Playwright's async API.
-    # The browser_context fixture uses sync Playwright (simpler for tests).
-    # For the live test, we reproduce the essential behaviour in sync form:
-    # navigate, wait for download, verify magic bytes.
-    try:
-        with page.expect_download(timeout=60000) as dl_info:
-            try:
-                page.goto(url, wait_until="commit", timeout=30000)
-            except Exception:
-                pass  # download event interrupts navigation
-        dl = dl_info.value
-        dl.save_as(str(out_path))
-    except Exception as e:
-        pytest.fail(
-            f"[{publisher_key}] no download event from {url}: {e}. "
-            f"Likely CF challenge unsolved or institutional access missing."
+    if handler.name in _no_access_publishers():
+        pytest.skip(
+            f"[{handler.name}] in [library] no_access (config.toml) — "
+            f"your institution has no access; the pipeline routes these "
+            f"items to the Connector fallback. Remove the entry from "
+            f"config.toml to test this publisher again."
         )
+    doi = KNOWN_DOIS[handler.name]
+    loop, ctx, cache_dir = browser_session
 
-    assert out_path.exists(), f"[{publisher_key}] download path missing"
-    with open(out_path, "rb") as f:
-        head = f.read(5)
-    assert head == b"%PDF-", (
-        f"[{publisher_key}] did not return a PDF for DOI {doi} "
-        f"(got {head!r}). Likely an HTML wrapper or access-denied page."
+    from fetchers.browser import Counter, cache_path_for, is_cached
+    from fetchers.browser.base import normalise_setup_result
+
+    # Force a real download — a cached PDF from a previous run would
+    # let download() short-circuit without exercising the flow.
+    cache_path_for(cache_dir, doi).unlink(missing_ok=True)
+
+    async def run():
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        outcome = normalise_setup_result(await handler.setup(page, doi))
+        if outcome != "proceed":
+            return outcome, None
+        result = await handler.download(
+            page, ctx, {"doi": doi, "title": f"live test {handler.name}"},
+            cache_dir, counter=Counter(), total=1, t_start=time.monotonic(),
+        )
+        return outcome, result
+
+    outcome, result = loop.run_until_complete(run())
+    if outcome == "always_skip":
+        # Honour the prompt's promise: persist to [library] no_access,
+        # exactly as the enrich_pdfs.py driver does, so future test
+        # runs (and pipeline runs) skip this publisher up front.
+        from core.config_writer import append_to_list
+        try:
+            append_to_list("library", "no_access", handler.name)
+            persisted = "persisted to [library] no_access"
+        except Exception as e:
+            persisted = f"could not persist to config.toml: {e}"
+        pytest.skip(
+            f"[{handler.name}] user chose always-skip at setup; "
+            f"{persisted}."
+        )
+    if outcome != "proceed":
+        pytest.skip(f"[{handler.name}] user chose {outcome!r} at setup.")
+    assert result is not None, (
+        f"[{handler.name}] download() returned None for DOI {doi} — the "
+        f"handler's ERROR line above has the specific reason. If your "
+        f"institution has no access to this publisher, answer "
+        f"[A]lways-skip at its setup prompt instead of [Y]es: that "
+        f"persists it to [library] no_access and this test will skip it."
+    )
+    path, _source_url = result
+    assert is_cached(path), (
+        f"[{handler.name}] {path} is missing or not a %PDF- payload. "
+        f"Likely an HTML wrapper or access-denied page."
     )

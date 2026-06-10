@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_ROOT = REPO_ROOT / "scripts"
 PIPELINES_ROOT = SCRIPTS_ROOT / "pipelines"
 
-# Make `publishers`, `sources`, `core` importable without the sys.path
+# Make `sources` and `core` importable without the sys.path
 # tricks the pipeline scripts do at runtime. Also add `scripts/pipelines`
 # so test modules can `import zotero_io` / `import http_client` directly,
 # mirroring the runtime path layout.

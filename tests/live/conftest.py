@@ -8,9 +8,10 @@ probe real external services. This module provides:
 - `http_get()` — plain urllib GET that returns (status, body, headers).
 - `classify_non_pdf_body()` — match the reference script's failure
   taxonomy (CF / paywall / no-subscription / HTML wrapper / other).
-- `browser_context` — session-scoped Playwright fixture shared by all
-  `@live_browser` tests so the user solves CF once per publisher
-  domain rather than once per test.
+
+The shared Playwright session for `@live_browser` tests lives in
+`test_browser_publishers.py` (module-scoped `browser_session` fixture
+driving the production `fetchers.browser` handlers).
 """
 
 from __future__ import annotations
@@ -19,7 +20,6 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -74,16 +74,20 @@ KNOWN_DOIS: dict[str, str] = {
     "wos_title_fallback_doi": "10.5465/19416520.2014.875669",
     "wos_title_fallback_title": "Putting Framing in Perspective: A Review of Framing and Frame Analysis",
 
-    # Browser-based publishers (CF-gated; require institutional access)
-    "sage":     "10.1177/1042258717725967",           # ETP 2018
-    "emerald":  "10.1108/IJEBR-08-2019-0513",         # IJEBR 2020
-    "tandf":    "10.1080/08985626.2020.1727096",      # Entrepreneurship & Regional Dev 2020
+    # Browser-based publishers (CF-gated; require institutional access).
+    # All DOIs verified registered (doi.org → 302) on 2026-06-10;
+    # `test_known_dois_resolve` re-checks them on every `-m live` run.
+    # Resolution only proves the DOI exists — whether the PDF downloads
+    # still depends on your institution's subscriptions.
+    "sage":     "10.1177/10422587241306872",          # ETP 2025
+    "emerald":  "10.1108/ijebr-05-2024-0509",         # IJEBR 2024
+    "tandf":    "10.1080/08985626.2024.2444907",      # Entrepreneurship & Regional Dev 2024
     "wiley":    "10.1002/smj.70090",                    # SMJ — Wiley browser fallback (ETP moved to Sage in 2022)
-    "aom":      "10.5465/amj.2014.0387",               # AMJ 2016
+    "aom":      "10.5465/amj.2021.0676",               # AMJ 2023
     "informs":  "10.1287/orsc.2017.1182",              # Org Science 2018
-    "apa":      "10.1037/0021-9010.93.3.481",          # JAP 2008
+    "apa":      "10.1037/apl0001090",                  # JAP 2023
     "oup":      "10.1093/jleo/ewaa004",                # J of Law, Econ & Org 2020
-    "aaa":      "10.2308/accr-52421",                  # Accounting Review 2019
+    "aaa":      "10.2308/tar-2023-0399",               # Accounting Review 2024
 }
 
 
@@ -136,67 +140,3 @@ def classify_non_pdf_body(body: bytes) -> str:
     if text.lstrip().startswith("<"):
         return f"HTML response ({len(body)} bytes)"
     return f"unknown non-PDF body ({len(body)} bytes)"
-
-
-# ---------------------------------------------------------------------------
-# Playwright session — shared across all @live_browser tests
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="session")
-def browser_context() -> Any:
-    """Session-scoped persistent Chromium. One CF challenge per domain total."""
-    pytest.importorskip(
-        "playwright.sync_api",
-        reason="live_browser tests require `playwright` — install with "
-               "`uv pip install playwright && playwright install chromium`",
-    )
-    import json
-
-    from playwright.sync_api import sync_playwright
-
-    # Prep persistent profile with built-in PDF viewer disabled so PDF URLs
-    # fire download events instead of opening inline.
-    user_data_dir = REPO_ROOT / ".pytest-playwright-profile"
-    user_data_dir.mkdir(exist_ok=True)
-    prefs_dir = user_data_dir / "Default"
-    prefs_dir.mkdir(exist_ok=True)
-    prefs_file = prefs_dir / "Preferences"
-    prefs: dict[str, Any] = {}
-    if prefs_file.exists():
-        try:
-            prefs = json.loads(prefs_file.read_text())
-        except Exception:
-            prefs = {}
-    prefs.setdefault("plugins", {})["always_open_pdf_externally"] = True
-    prefs_file.write_text(json.dumps(prefs))
-
-    # Loud pre-run banner so the user knows what is about to happen.
-    print()
-    print("=" * 72)
-    print("  live_browser test session starting")
-    print("=" * 72)
-    print()
-    print("  A Chromium window will open on your desktop. For each publisher")
-    print("  domain the tests cover, you may need to:")
-    print()
-    print("    1. Solve a Cloudflare challenge (click the checkbox).")
-    print("    2. Sign in via your institution's SSO.")
-    print()
-    print("  The session is shared across all live_browser tests, so you only")
-    print("  see each challenge once per publisher domain for the whole run.")
-    print()
-    print("  Leave the terminal and the browser window open until done.")
-    print("=" * 72, flush=True)
-    print()
-
-    with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            user_data_dir=str(user_data_dir),
-            headless=False,
-            accept_downloads=True,
-            viewport={"width": 1200, "height": 900},
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        yield ctx
-        ctx.close()

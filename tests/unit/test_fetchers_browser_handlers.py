@@ -98,9 +98,12 @@ def test_tandf_url_template() -> None:
 
 
 def test_wiley_url_template() -> None:
+    """pdfdirect serves the raw PDF; /doi/pdf/ redirects to Wiley's
+    e-reader viewer, which never fires a download event."""
     url = WileyHandler().url_template.format(doi="10.1002/smj.70090")
     assert url == (
-        "https://onlinelibrary.wiley.com/doi/pdf/10.1002/smj.70090?download=true"
+        "https://onlinelibrary.wiley.com/doi/pdfdirect/"
+        "10.1002/smj.70090?download=true"
     )
 
 
@@ -109,12 +112,25 @@ def test_aom_url_template() -> None:
     assert url == "https://journals.aom.org/doi/pdf/10.5465/amj.2014.0387?download=true"
 
 
-def test_aaa_url_template() -> None:
-    url = AaaHandler().url_template.format(doi="10.2308/accr-52421")
+def test_aaa_url_template_is_landing_page() -> None:
+    """AAA's Silverchair platform only resolves a bare DOI on the
+    article landing page; the PDF href (with its opaque article ID) is
+    extracted from there by the PdfLinkNavigationHandler flow."""
+    url = AaaHandler().url_template.format(doi="10.2308/tar-2023-0399")
     assert url == (
         "https://publications.aaahq.org/accounting-review/"
-        "article-pdf/doi/10.2308/accr-52421"
+        "article/doi/10.2308/tar-2023-0399"
     )
+
+
+def test_silverchair_handlers_share_pdf_link_flow() -> None:
+    """OUP and AAA (both Silverchair) use the shared extract-the-PDF-
+    href flow rather than direct PDF-URL navigation."""
+    from fetchers.browser import OupHandler, PdfLinkNavigationHandler
+    assert issubclass(OupHandler, PdfLinkNavigationHandler)
+    assert issubclass(AaaHandler, PdfLinkNavigationHandler)
+    for cls in (OupHandler, AaaHandler):
+        assert "article-pdf" in cls.pdf_link_selector
 
 
 # ---------------------------------------------------------------------------

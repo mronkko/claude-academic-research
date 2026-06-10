@@ -29,11 +29,6 @@ ALLOWED_FILES = {
     PIPELINES_ROOT / "bbt_client.py",
 }
 
-# `legacy/` is the pre-v0.3.0 rollback path; it is POSIX-only and not
-# under active development. Any new improvement must land in the
-# refactored `enrich_*.py` orchestrators, never in legacy.
-LEGACY_ROOT = PIPELINES_ROOT / "legacy"
-
 # Match the two Zotero data-paths the IRON RULE governs:
 #   - `/api/...`         (Zotero REST API)
 #   - `/better-bibtex/...` (Better BibTeX endpoints)
@@ -52,18 +47,13 @@ def _walk_pipeline_files() -> list[Path]:
     for p in PIPELINES_ROOT.rglob("*.py"):
         if p in ALLOWED_FILES:
             continue
-        try:
-            p.relative_to(LEGACY_ROOT)
-            continue  # under legacy/, skip
-        except ValueError:
-            pass
         out.append(p)
     return out
 
 
 def test_no_direct_localhost_zotero_outside_canonical_modules() -> None:
-    """Every file under scripts/pipelines/ (except zotero_io.py,
-    bbt_client.py, and legacy/) must be free of references to
+    """Every file under scripts/pipelines/ (except zotero_io.py and
+    bbt_client.py) must be free of references to
     127.0.0.1:23119 or localhost:23119. Direct HTTP calls steer
     Claude away from the canonical Zotero surface and break the
     "no improvised pipeline code" rule.
@@ -81,7 +71,7 @@ def test_no_direct_localhost_zotero_outside_canonical_modules() -> None:
         )
         raise AssertionError(
             "Direct Zotero localhost:23119 reference found outside "
-            "zotero_io.py / bbt_client.py / legacy/. Route the call "
+            "zotero_io.py / bbt_client.py. Route the call "
             "through the canonical helpers instead — see the IRON RULE "
             "in skills/zotero-operations/SKILL.md.\n"
             f"Offending lines:\n{formatted}"

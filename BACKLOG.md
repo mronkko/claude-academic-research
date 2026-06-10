@@ -250,20 +250,15 @@ directory — not checked in because it references machine-local paths).
 
 - **P9** — migrate `test_live_coverage.py` from `legacy/` to
   `fetchers/*.py`.
-  **Why deferred:** the live-coverage guard currently walks
-  `legacy/fetch_abstracts.py` and `legacy/attach_pdfs.py` for the
-  canonical list of sources ([tests/unit/test_live_coverage.py:103-110](tests/unit/test_live_coverage.py#L103-L110)).
-  The docstring itself flags this: "When the refactored `fetchers/*.py`
-  classes become the coverage source of truth, this function … should
-  walk them instead — then the legacy/ directory can be deleted."
-  This is load-bearing for any future `legacy/` cleanup: as long as
-  the guard reads from `legacy/`, we can't remove those scripts.
-  **What it would take:** rewrite the two guard functions to walk
-  `scripts/pipelines/fetchers/*.py` and enumerate
-  `AbstractFetcher` / `PdfFetcher` subclasses. Preserve the alias
-  mapping, or map subclass `name` attributes to test names. Keep the
-  test coverage strictness unchanged.
-  Files: [tests/unit/test_live_coverage.py](tests/unit/test_live_coverage.py).
+  **Status: done in the 0.6.0 legacy-deletion pass.** The coverage
+  guards now walk the `AbstractFetcher` / `PdfFetcher` subclass tree
+  (`_leaf_sources()` in `tests/unit/test_live_coverage.py`) and the
+  browser-publisher guard enumerates `fetchers.browser.all_handlers()`.
+  A capability diff confirmed nothing in `legacy/` was worth keeping,
+  so the whole directory was deleted in the same pass (along with
+  `scripts/publishers/registry.py`, whose only remaining consumers
+  were the legacy script and the tests now pointed at the handler
+  registry). Left here for the audit trail.
 
 ### Reference-project adoptions
 
@@ -321,9 +316,10 @@ directory — not checked in because it references machine-local paths).
   [fetchers/browser/connector.py:655](scripts/pipelines/fetchers/browser/connector.py#L655)
   (connector ping). Not worth a dedicated pass; tidy opportunistically
   if touching those files.
-- **P8** — CI guard that fails if `--legacy-browser` flag is removed
-  but `legacy/` directory still exists, or vice versa. Currently a
-  four-item checklist in `legacy/README.md` that nothing enforces.
+- **P8** — CI guard for `--legacy-browser` ↔ `legacy/` coherence.
+  **Closed as moot in the 0.6.0 legacy-deletion pass** — the flag and
+  the directory were removed together (see P9), so there is nothing
+  left to keep coherent. Left here for the audit trail.
 - **R4** — IRON RULE tables in long SKILL.mds
   (`systematic-review/SKILL.md` is >700 lines). Anti-pattern / Why
   it fails / Correct behaviour rows as an anti-context-rot device.

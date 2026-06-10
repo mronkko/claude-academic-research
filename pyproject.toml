@@ -29,15 +29,9 @@ target-version = "py311"
 select = ["E", "F", "W", "I", "B", "UP"]
 ignore = ["E501"]
 
-# Legacy pipeline scripts were copied over as working code. They use some
-# one-line `if: break` and `x += 1; continue` patterns that are stylistic,
-# not bugs. Don't gate CI on rewriting them.
-[tool.ruff.lint.per-file-ignores]
-"scripts/pipelines/*.py" = ["E701", "E702"]
-
 # IDE static analysis: pipeline scripts add `scripts/` to sys.path at runtime
-# so they can import sibling packages (publishers, sources, core). Tell the
-# analyzer about it so imports like `from publishers.registry import ...`
+# so they can import sibling packages (sources, core). Tell the
+# analyzer about it so imports like `from sources.predatory import ...`
 # resolve without warnings. `templates/` is on the list so the test
 # templates (`test_citations.py`, `test_empirical_integrity.py`, `test_systematic_review.py`)
 # can import their sibling `test_common.py` — they sit next to each other

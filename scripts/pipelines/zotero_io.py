@@ -343,8 +343,12 @@ class ZoteroClient:
     @property
     def local(self) -> zotero.Zotero:
         if self._local is None:
+            # Zotero Desktop's local API serves the personal library
+            # only as `users/0` ("the logged-in user") — the cloud
+            # user ID gets a 400 locally. Group IDs pass through.
+            lib_id = "0" if self.library_type == "user" else self.group_id
             self._local = zotero.Zotero(
-                self.group_id, "group", self.api_key, local=True,
+                lib_id, self.library_type, self.api_key, local=True,
             )
         return self._local
 
@@ -352,7 +356,7 @@ class ZoteroClient:
     def cloud(self) -> zotero.Zotero:
         if self._cloud is None:
             self._cloud = zotero.Zotero(
-                self.group_id, "group", self.api_key,
+                self.group_id, self.library_type, self.api_key,
             )
         return self._cloud
 

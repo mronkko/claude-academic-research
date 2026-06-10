@@ -44,13 +44,12 @@ CI (`.github/workflows/ci.yml`) runs `ruff check scripts tests` then `pytest tes
 
 ### Pipeline scripts
 
-`scripts/pipelines/` contains the full systematic-review pipeline — one orchestrator script per stage, roughly in dependency order: `search.py` (plus four `search_<db>.py` single-DB wrappers for piloting) → `import_to_zotero.py` → enrichment (`enrich_abstracts.py`, `enrich_pdfs.py`, `enrich_dois.py`) → `abstract_screen.py` → `fulltext_code.py` → `audit_zotero_library.py` → `export_coded_includes.py` → `generate_bib.py`. The three `enrich_*` scripts replaced the pre-v0.3.0 `attach_pdfs.py` / `fetch_*.py` monolith (now under `legacy/`). All of these orchestrators invoke:
+`scripts/pipelines/` contains the full systematic-review pipeline — one orchestrator script per stage, roughly in dependency order: `search.py` (plus four `search_<db>.py` single-DB wrappers for piloting) → `import_to_zotero.py` → enrichment (`enrich_abstracts.py`, `enrich_pdfs.py`, `enrich_dois.py`) → `abstract_screen.py` → `fulltext_code.py` → `audit_zotero_library.py` → `export_coded_includes.py` → `generate_bib.py`. The three `enrich_*` scripts replaced the pre-v0.3.0 `attach_pdfs.py` / `fetch_*.py` monolith (removed in v0.6.0). All of these orchestrators invoke:
 
 - `scripts/pipelines/fetchers/` — per-provider classes implementing `AbstractFetcher` / `PdfFetcher` ABCs in `fetchers/base.py`. Crossref / OpenAlex / ScienceDirect inherit both. `fetchers/browser/` hosts Playwright handlers for Cloudflare-gated publishers and requires `library_resolver.py` for SFX/OpenURL pre-flight.
 - `scripts/pipelines/searchers/` — per-database ABC implementations (Scopus, WoS, OpenAlex, Semantic Scholar) with a similar base-class pattern.
 - `scripts/pipelines/zotero_io.py` — `ZoteroClient` wrapping `pyzotero`. Every script that touches Zotero routes through it; `update_abstract` auto-retries on HTTP 412 (version conflict) via `tenacity`.
 - `scripts/pipelines/http_client.py` — shared `requests.Session` with `urllib3.Retry` + `tenacity` wrappers.
-- `scripts/pipelines/legacy/` — the pre-v0.3.0 orchestrators (`attach_pdfs.py`, `fetch_abstracts.py`, `fetch_pdfs_browser.py`, `fetch_pdfs_wiley_tdm.py`) kept as a rollback path. Skills and docs must point at the `enrich_*` orchestrators, not `legacy/`.
 
 ### Runtime model users see
 
@@ -69,7 +68,6 @@ Python 3.11/3.12/3.13`). A few conventions that keep it that way:
 - **Project-local artefacts**: scripts and skills write run-outputs under `.claude/<scope>/` for transient internals (e.g. `.claude/audit/`) and under top-level visible directories for outputs the user is expected to find and review (e.g. `critic-reviews/` for critic-loop iteration reports, `fact-check-reports/` for fact-check audits). The setup wizard adds `.claude/` to the project `.gitignore` if one exists; visible review directories like `critic-reviews/` and `fact-check-reports/` are deliberately *not* gitignored — users may want to commit them as part of their manuscript history.
 - **`os.chmod`**: always guard with `if sys.platform != "win32":`. Python's chmod on Windows only toggles the read-only bit; NTFS per-user ACLs already protect paths under `C:\Users\<user>\`.
 - **Skill pre-flight and bootstrap helpers**: when a skill needs to probe config / scaffold / deny-rules / database access, create a project-local directory, or copy templates into a project, invoke the cross-platform scripts in `scripts/setup/` (`check_configured.py`, `check_project_scaffold.py FILE...`, `check_deny_rules.py RULE...`, `check_database_access.py`, `ensure_dir.py DIR...`, `install_templates.py BASENAME:DEST...`). Do not use POSIX `test -f` / `mkdir -p`, shell `cp` chains, or inline `python -c`. None of those are covered by the wizard's `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/**)` allow rule, so they trigger a permission prompt at skill load time; the script paths are covered. `check_database_access.py` in particular is the out-of-process way to inspect `~/.config/academic-research/config.toml` — the Read tool is denied on that path to protect keys, but a subprocess script that emits only yes/no status is fine.
-- **Legacy scripts** (`scripts/pipelines/legacy/*.py`) are POSIX-only (one of them reads `/dev/tty`). Users on Windows use the refactored `enrich_*.py` scripts. Do not add new work to `legacy/`.
 
 ### Test suite shape
 

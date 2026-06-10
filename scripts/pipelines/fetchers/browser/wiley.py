@@ -18,12 +18,18 @@ class WileyHandler(PageNavigationHandler):
     display_name = "Wiley (fallback)"
     # Wiley prefixes: 10.1002 (most), 10.1111 (some), 10.1046 (legacy).
     doi_prefixes = ("10.1002/", "10.1111/", "10.1046/")
-    url_template = "https://onlinelibrary.wiley.com/doi/pdf/{doi}?download=true"
+    # `/doi/pdfdirect/` serves the raw PDF (same endpoint wiley-tdm
+    # uses), so navigation fires a download event. `/doi/pdf/` lands
+    # on Wiley's e-reader viewer page — a PDF icon with an Open button
+    # — which never fires the event and times the handler out.
+    url_template = (
+        "https://onlinelibrary.wiley.com/doi/pdfdirect/{doi}?download=true"
+    )
     # Open the article landing page during setup so the user can see
     # the abstract, the sign-in prompt, and the Cloudflare challenge.
-    # Opening `/doi/pdf/...?download=true` directly triggers an auto-
-    # download (Chromium profile has always_open_pdf_externally=true)
-    # and leaves the browser on about:blank before the user can act.
+    # Opening the pdfdirect URL directly triggers an auto-download
+    # (Chromium profile has always_open_pdf_externally=true) and
+    # leaves the browser on about:blank before the user can act.
     setup_url_template = "https://onlinelibrary.wiley.com/doi/{doi}"
     direct_access_domains = ("onlinelibrary.wiley.com", "wiley.com")
     concurrency = 1

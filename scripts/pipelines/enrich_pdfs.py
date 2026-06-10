@@ -11,6 +11,7 @@
 #     "pybliometrics>=3.6",
 #     "wiley-tdm>=0.2",
 #     "reportlab>=4.0",
+#     "playwright>=1.40",
 # ]
 # ///
 """Enrich Zotero items by downloading missing PDFs and attaching them.
@@ -22,7 +23,7 @@ have a PDF attached:
      `fetchers.pdf_sources`).
   2. Upload the first PDF found as a child attachment via
      `ZoteroClient.attach_pdf` (pyzotero's `attachment_simple`).
-  3. Log the outcome to a CSV (same schema as the legacy log).
+  3. Log the outcome to a CSV (`output/pdf_attach_log.csv`).
 
 Source selection via `--sources`:
 
@@ -34,9 +35,7 @@ Source selection via `--sources`:
 For `--sources browser`, this script drives the per-publisher
 `fetchers.browser` handlers directly — a visible Chromium opens, you
 solve Cloudflare once per publisher, and each handler's `download()`
-method downloads its items using the shared session. The legacy
-`fetch_pdfs_browser.py` is still invoked if `--legacy-browser` is
-passed, as a rollback option.
+method downloads its items using the shared session.
 """
 
 from __future__ import annotations
@@ -45,7 +44,6 @@ import argparse
 import asyncio
 import csv
 import os
-import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -68,12 +66,22 @@ from core.config_loader import get, require  # noqa: E402
 
 DEFAULT_LOG_CSV = os.path.join("output", "pdf_attach_log.csv")
 DEFAULT_CACHE_DIR = os.path.join("output", "pdf_cache")
-# Structured failure log (T4-3). Sibling to the legacy attach log;
+# Structured failure log (T4-3). Sibling to the attach log above;
 # audit_zotero_library reads it to group failures by cause and suggest
 # FE codes. Same `output/` dir so users see both files together.
 DEFAULT_FAILURE_LOG_CSV = os.path.join("output", "pdf_fetch_log.csv")
 
 LOG_FIELDS = ["run_date", "item_key", "doi", "title", "status", "source"]
+
+_PLAYWRIGHT_MISSING_MSG = (
+    "ERROR: the playwright package is not installed.\n"
+    "  - Invoke this script via `uv run` so its inline dependencies\n"
+    "    (including playwright) are resolved automatically, or\n"
+    "    `pip install playwright` into your environment.\n"
+    "  - Then install the browser binary once:\n"
+    "    `uvx playwright install chromium` (or `playwright install chromium`\n"
+    "    if the CLI is on your PATH)."
+)
 
 
 @dataclass
@@ -116,27 +124,6 @@ def _load_done_dois(path: str) -> set[str]:
             for r in csv.DictReader(f)
             if r.get("status") == "attached"
         }
-
-
-def _run_browser_legacy(args: argparse.Namespace) -> int:
-    """Rollback path: delegate to the legacy `fetch_pdfs_browser.py`
-    under `legacy/` (moved there in v0.3.1).
-
-    Opt-in via `--legacy-browser`. Kept as a fallback while the new
-    in-process handlers prove themselves on production libraries.
-    """
-    cmd = [
-        sys.executable,
-        str(SCRIPT_DIR / "legacy" / "fetch_pdfs_browser.py"),
-        "--log-csv", args.log_csv,
-        "--cache-dir", args.cache_dir,
-    ]
-    if args.publisher:
-        cmd.extend(["--publisher", args.publisher])
-    if args.filter_keys_file:
-        cmd.extend(["--filter-keys-file", args.filter_keys_file])
-    print(f"Delegating to fetch_pdfs_browser.py: {' '.join(cmd)}", flush=True)
-    return subprocess.call(cmd)
 
 
 async def _drive_handler(
@@ -182,7 +169,7 @@ async def _drive_handler(
     try:
         from playwright.async_api import async_playwright
     except ImportError:
-        print("ERROR: playwright not installed. Run via `uv run`.", file=sys.stderr)
+        print(_PLAYWRIGHT_MISSING_MSG, file=sys.stderr)
         return
 
     display = handler.display_name or handler.name
@@ -414,8 +401,7 @@ async def _drive_connector(
     try:
         from playwright.async_api import async_playwright
     except ImportError:
-        print("ERROR: playwright not installed. Run via `uv run`.",
-              file=sys.stderr)
+        print(_PLAYWRIGHT_MISSING_MSG, file=sys.stderr)
         return
 
     display = handler.display_name or handler.name
@@ -1312,12 +1298,6 @@ def main() -> int:
     )
     zotero_io.add_library_args(parser)
     parser.add_argument(
-        "--legacy-browser", action="store_true",
-        help="(browser mode) Delegate to the legacy fetch_pdfs_browser.py "
-             "subprocess instead of the new in-process handlers. Rollback "
-             "option while the new handlers prove themselves.",
-    )
-    parser.add_argument(
         "--on-first-failure", default="",
         choices=("", "keep", "skip", "always_skip"),
         help="Answer for the per-publisher failure prompt in non-interactive "
@@ -1351,10 +1331,6 @@ def main() -> int:
         return 2
 
     source_names = [s.strip() for s in args.sources.split(",") if s.strip()]
-
-    # Rollback path: old subprocess-based browser fetcher.
-    if source_names == ["browser"] and args.legacy_browser:
-        return _run_browser_legacy(args)
 
     os.makedirs(args.cache_dir, exist_ok=True)
     run_date = date.today().isoformat()

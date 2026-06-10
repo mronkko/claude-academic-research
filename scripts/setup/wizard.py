@@ -897,8 +897,12 @@ def _permission_categories() -> tuple[list[PermissionCategory], list[str]]:
                  "Direct script execution when shebang resolves"),
                 ("Bash(playwright install chromium)",
                  "One-time browser install for browser PDF fetch"),
+                ("Bash(uvx playwright install chromium)",
+                 "Same install via uvx (no playwright CLI on PATH)"),
                 ("Bash(playwright install-deps)",
                  "One-time system dependencies for Playwright"),
+                ("Bash(uvx playwright install-deps)",
+                 "Same system-deps install via uvx"),
             ),
         ),
         PermissionCategory(

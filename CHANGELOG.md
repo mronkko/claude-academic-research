@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-06-10
+
+### Removed — legacy pipeline scripts and `--legacy-browser`
+
+One Playwright workflow, not two. A capability diff confirmed every
+behaviour in the pre-v0.3.0 scripts has an equivalent (or better) in
+the refactored path, so the rollback copies are gone:
+
+- `scripts/pipelines/legacy/` (`attach_pdfs.py`, `fetch_abstracts.py`,
+  `fetch_pdfs_browser.py`, `fetch_pdfs_wiley_tdm.py`) is deleted. The
+  `enrich_*.py` orchestrators and `fetchers/` sources are the single
+  workflow: Wiley TDM → `enrich_pdfs.py --sources wiley`, browser
+  cascade → `enrich_pdfs.py --sources browser`, abstract cascade →
+  `enrich_abstracts.py` (GROBID XML caching included).
+- **BREAKING**: `enrich_pdfs.py --legacy-browser` (and the legacy-only
+  `--publishers-json` override) no longer exist. Scripts that passed
+  the flag now exit 2 (unrecognized argument); drop the flag.
+- `scripts/publishers/registry.py` is deleted; the handler classes in
+  `scripts/pipelines/fetchers/browser/` are the single publisher
+  registry. The live-coverage guards now walk the
+  `AbstractFetcher` / `PdfFetcher` subclass tree and
+  `fetchers.browser.all_handlers()` instead of parsing legacy sources,
+  and `tests/live/test_browser_publishers.py` drives the real async
+  handler `setup()`/`download()` flows.
+
+### Fixed — browser mode is installable again
+
+- `enrich_pdfs.py` now declares `playwright>=1.40` in its PEP 723
+  block. The dependency was lost in the v0.3 browser refactor (only
+  the legacy script declared it), so the documented
+  `uv run … --sources browser` invocation failed with a circular
+  "run via uv run" error.
+- Missing-playwright and missing-Chromium errors now print the actual
+  remedy (`uvx playwright install chromium`); the wizard pre-approves
+  the `uvx` install forms, and the `systematic-review` /
+  `zotero-operations` skills document the one-time browser install.
+- AAA handler: navigating the bare `/article-pdf/doi/{doi}` path
+  returns Silverchair's "action has resulted in an error" page (the
+  PDF URL embeds an opaque article ID). AAA now uses the same
+  extract-the-PDF-href flow as OUP, generalised into a shared
+  `PdfLinkNavigationHandler` base.
+- Wiley browser handler: `/doi/pdf/` now lands on Wiley's e-reader
+  viewer (an Open button, no download event); switched to
+  `/doi/pdfdirect/`, the raw-PDF endpoint wiley-tdm uses.
+- Six of the nine browser-publisher test DOIs in `KNOWN_DOIS` were
+  unregistered placeholders; replaced with verified DOIs, and a new
+  `tests/live/test_known_dois.py` guard checks every entry against
+  the doi.org handle API on `-m live` runs.
+- New `tests/live/test_zotero_connector.py` (`-m live_browser`)
+  pre-flights the Connector fallback end-to-end: extension unpacked
+  on disk, Zotero Desktop reachable, the extension's service worker
+  booting inside the bundled Chromium, and a full Connector
+  save→poll→sync→merge round-trip against an open-access article
+  (defaults to My Library; stub item auto-deleted afterwards).
+- `ZoteroClient.local` / `.cloud` hardcoded the "group" library type,
+  so personal-library clients (`--user`, `for_user_library`) queried
+  `/groups/<user_id>/` on both transports and failed. Both now follow
+  `library_type`, and local personal-library reads use the `users/0`
+  alias Zotero Desktop's API requires (the cloud user ID gets a 400
+  locally).
+
 ## [0.5.0] — unreleased
 
 ### DOI validation and missing-DOI search

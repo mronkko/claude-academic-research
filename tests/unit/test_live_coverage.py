@@ -1,9 +1,9 @@
 """Guard test: every publisher / KeySpec / source has a matching live test.
 
-Runs on every `pytest` invocation (no marker). If a new entry is
-added to `publishers.registry.DEFAULT_PUBLISHERS`, a new `KeySpec`
-added to `scripts/setup/wizard.py:KEYS`, or a new `fetch_from_*`
-function added to `scripts/pipelines/legacy/fetch_abstracts.py`
+Runs on every `pytest` invocation (no marker). If a new browser
+handler is added to `fetchers.browser.all_handlers()`, a new `KeySpec`
+added to `scripts/setup/wizard.py:KEYS`, or a new `AbstractFetcher` /
+`PdfFetcher` subclass added under `scripts/pipelines/fetchers/`
 without a matching live test being added at the same time, this
 test fails with an actionable message.
 
@@ -29,6 +29,35 @@ if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
 
+def _leaf_sources() -> list[type]:
+    """Every concrete fetcher class registered via `fetchers/__init__.py`.
+
+    Walks `Source.__subclasses__()` recursively (importing `fetchers`
+    registers every source module); a class counts as a leaf when it
+    declares `name` in its own `__dict__`. Interactive sources
+    (BrowserSource) are covered by the browser-publisher guard instead.
+
+    Deliberately NOT based on `fetchers.pdf_sources()` — that function
+    default-excludes `wiley` and `browser`, and a coverage guard must
+    see every source, selected or not.
+    """
+    import fetchers  # noqa: F401 — importing registers all source modules
+    from fetchers.base import Source
+
+    seen: set[type] = set()
+    stack = list(Source.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        if cls in seen:
+            continue  # dual-ABC classes are reached via both parents
+        seen.add(cls)
+        stack.extend(cls.__subclasses__())
+    return [
+        cls for cls in seen
+        if cls.__dict__.get("name") and not cls.interactive
+    ]
+
+
 def _load_wizard():
     spec = importlib.util.spec_from_file_location(
         "wizard", SCRIPTS_ROOT / "setup" / "wizard.py",
@@ -50,9 +79,9 @@ def _read(path: Path) -> str:
 
 
 def test_every_publisher_in_registry_has_a_known_doi() -> None:
-    """test_browser_publishers.py is parametrized from the registry; the
-    corresponding DOI must exist in KNOWN_DOIS."""
-    from publishers.registry import DEFAULT_PUBLISHERS
+    """test_browser_publishers.py is parametrized from the handler
+    registry; the corresponding DOI must exist in KNOWN_DOIS."""
+    from fetchers.browser import all_handlers
 
     conftest = _read(REPO / "tests" / "live" / "conftest.py")
     # Parse KNOWN_DOIS keys from conftest source (not importable without
@@ -60,11 +89,11 @@ def test_every_publisher_in_registry_has_a_known_doi() -> None:
     known_keys = set(re.findall(r"[\"']([a-zA-Z_0-9]+)[\"']\s*:\s*\"10\.", conftest))
 
     missing = []
-    for pub_key in DEFAULT_PUBLISHERS:
-        if pub_key not in known_keys:
-            missing.append(pub_key)
+    for handler in all_handlers():
+        if handler.name not in known_keys:
+            missing.append(handler.name)
     assert not missing, (
-        f"Registry publishers without a KNOWN_DOIS entry: {missing}. "
+        f"Browser handlers without a KNOWN_DOIS entry: {missing}. "
         f"Add DOIs to tests/live/conftest.py so test_browser_publishers.py "
         f"can exercise them."
     )
@@ -100,43 +129,40 @@ def test_every_keyspec_has_an_auth_test() -> None:
 # ---------------------------------------------------------------------------
 
 
+# Source `name` → live-test function names in test_abstract_endpoints.py.
+# Update this mapping when you add or rename a source or its test.
+ABSTRACT_LIVE_TESTS: dict[str, list[str]] = {
+    "crossref": ["test_crossref_abstract"],
+    "semantic_scholar": ["test_semantic_scholar_abstract"],
+    "scopus": ["test_scopus_abstract"],
+    "wos": ["test_wos_abstract_direct_doi", "test_wos_title_fallback_on_doi_alias"],
+    "sciencedirect": ["test_sciencedirect_abstract"],
+    "openalex": ["test_openalex_grobid_abstract"],
+}
+
+
 def test_every_abstract_source_has_a_live_test() -> None:
-    """Each `fetch_from_*` function in legacy/fetch_abstracts.py has a matching test.
+    """Each `AbstractFetcher` subclass has a matching live test."""
+    from fetchers.base import AbstractFetcher
 
-    The legacy script moved to `scripts/pipelines/legacy/` in v0.3.1.
-    When the refactored `fetchers/*.py` classes become the coverage
-    source of truth, this function (and `test_every_pdf_source_...`
-    below) should walk them instead — then the legacy/ directory can
-    be deleted.
-    """
-    fetch_source = _read(
-        REPO / "scripts" / "pipelines" / "legacy" / "fetch_abstracts.py"
+    sources = sorted(
+        cls.name for cls in _leaf_sources() if issubclass(cls, AbstractFetcher)
     )
-    sources = set(re.findall(r"^def (fetch_from_\w+)\s*\(", fetch_source, re.MULTILINE))
-
     abstract_tests = _read(REPO / "tests" / "live" / "test_abstract_endpoints.py")
 
-    # Known aliases between source-function names and test names.
-    # Update this mapping when you rename a source or its test.
-    alias: dict[str, str] = {
-        "fetch_from_crossref": "test_crossref_abstract",
-        "fetch_from_semantic_scholar": "test_semantic_scholar_abstract",
-        "fetch_from_semantic_scholar_by_title": "test_semantic_scholar_abstract",
-        "fetch_from_scopus": "test_scopus_abstract",
-        "fetch_from_sciencedirect": "test_sciencedirect_abstract",
-        "fetch_from_openalex_grobid": "test_openalex_grobid_abstract",
-    }
-
     missing = []
-    for src in sorted(sources):
-        expected_test = alias.get(src)
-        if expected_test is None:
+    for name in sources:
+        expected_tests = ABSTRACT_LIVE_TESTS.get(name)
+        if expected_tests is None:
             missing.append(
-                f"{src} (no alias — add one to test_live_coverage.py or "
-                f"rename the source)"
+                f"{name} (no entry in ABSTRACT_LIVE_TESTS — add one plus a "
+                f"live test)"
             )
-        elif expected_test not in abstract_tests:
-            missing.append(f"{src} → expected {expected_test}")
+            continue
+        missing.extend(
+            f"{name} → expected {t}" for t in expected_tests
+            if t not in abstract_tests
+        )
     assert not missing, (
         f"Abstract sources without a matching live test: {missing}. "
         f"Add a corresponding test to tests/live/test_abstract_endpoints.py."
@@ -148,45 +174,49 @@ def test_every_abstract_source_has_a_live_test() -> None:
 # ---------------------------------------------------------------------------
 
 
+# Source `name` → live-test function names in test_pdf_endpoints.py.
+# OpenAlex maps to two tests — the Content API and the OA-metadata URL
+# are distinct endpoints behind one fetcher class.
+PDF_LIVE_TESTS: dict[str, list[str]] = {
+    "sciencedirect": ["test_elsevier_sciencedirect_reachable"],
+    "springer": ["test_springer_reachable"],
+    "crossref": ["test_crossref_tdm_link_present"],
+    "pubmed_central": ["test_pmc_doi_to_pmcid_resolves"],
+    "openalex": [
+        "test_openalex_content_api_returns_pdf_bytes",
+        "test_openalex_oa_url_present",
+    ],
+    "unpaywall": ["test_unpaywall_returns_pdf_url"],
+    "wiley": ["test_wiley_tdm_downloads_pdf"],
+}
+
+
 def test_every_pdf_source_has_a_live_test() -> None:
-    """Each `fetch_*_pdf` function in legacy/attach_pdfs.py has a matching test.
+    """Each non-interactive `PdfFetcher` subclass has a matching live test.
 
-    See note in `test_every_abstract_source_has_a_live_test` about the
-    migration path; this function is the PDF-cascade counterpart.
+    `BrowserSource` (interactive) is excluded here; its per-publisher
+    handlers are covered by `test_every_publisher_in_registry_has_a_known_doi`.
     """
-    attach_source = _read(
-        REPO / "scripts" / "pipelines" / "legacy" / "attach_pdfs.py"
-    )
-    sources = set(re.findall(r"^def (fetch_\w+_pdf)\s*\(", attach_source, re.MULTILINE))
+    from fetchers.base import PdfFetcher
 
+    sources = sorted(
+        cls.name for cls in _leaf_sources() if issubclass(cls, PdfFetcher)
+    )
     pdf_tests = _read(REPO / "tests" / "live" / "test_pdf_endpoints.py")
 
-    # Source-function → expected test name. The test may also cover the
-    # source indirectly; we accept any test mentioning the source label.
-    alias: dict[str, str] = {
-        "fetch_elsevier_pdf": "test_elsevier_sciencedirect_reachable",
-        "fetch_springer_pdf": "test_springer_reachable",  # not yet implemented
-        "fetch_crossref_tdm_pdf": "test_crossref_tdm_link_present",
-        "fetch_pmc_pdf": "test_pmc_doi_to_pmcid_resolves",
-        "fetch_pdf_from_url": None,  # generic helper, not a source
-        "fetch_unpaywall_pdf": "test_unpaywall_returns_pdf_url",
-        "fetch_openalex_content_pdf": "test_openalex_content_api_returns_pdf_bytes",
-        "fetch_openalex_pdf": "test_openalex_oa_url_present",
-    }
-
     missing = []
-    for src in sorted(sources):
-        if src not in alias:
+    for name in sources:
+        expected_tests = PDF_LIVE_TESTS.get(name)
+        if expected_tests is None:
             missing.append(
-                f"{src} (no alias — add one to test_live_coverage.py or "
-                f"write a matching test)"
+                f"{name} (no entry in PDF_LIVE_TESTS — add one plus a "
+                f"live test)"
             )
             continue
-        expected_test = alias[src]
-        if expected_test is None:
-            continue  # explicitly not a source
-        if expected_test not in pdf_tests:
-            missing.append(f"{src} → expected {expected_test}")
+        missing.extend(
+            f"{name} → expected {t}" for t in expected_tests
+            if t not in pdf_tests
+        )
     assert not missing, (
         f"PDF sources without a matching live test: {missing}. "
         f"Add a corresponding test to tests/live/test_pdf_endpoints.py."

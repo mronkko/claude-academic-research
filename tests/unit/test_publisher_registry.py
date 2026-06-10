@@ -1,49 +1,69 @@
-"""Schema checks on the Publisher registry."""
+"""Schema checks on the browser handler registry.
+
+`fetchers/browser/base.py:__init_subclass__` already enforces that
+leaf handlers set `name` and `doi_prefixes`; these tests guard the
+shape invariants it does not — placeholder syntax in URL templates,
+DOI-prefix form, prefix uniqueness across handlers, and sane
+concurrency/rate-limit values.
+"""
 
 from __future__ import annotations
 
-from publishers.registry import DEFAULT_PUBLISHERS
-
-REQUIRED_KEYS = {"match", "url", "name", "concurrency", "delay_s"}
+from fetchers.browser import all_handlers
 
 
-def test_every_publisher_has_required_keys() -> None:
-    for slug, entry in DEFAULT_PUBLISHERS.items():
-        missing = REQUIRED_KEYS - entry.keys()
-        assert not missing, f"publisher '{slug}' missing keys: {sorted(missing)}"
+def test_every_handler_has_required_attrs() -> None:
+    for h in all_handlers():
+        assert h.name, f"handler {type(h).__name__} has empty name"
+        assert h.display_name, f"handler '{h.name}' has empty display_name"
+        assert h.doi_prefixes, f"handler '{h.name}' has empty doi_prefixes"
 
 
-def test_publisher_url_templates_include_doi_placeholder() -> None:
-    for slug, entry in DEFAULT_PUBLISHERS.items():
-        assert "{doi}" in entry["url"], (
-            f"publisher '{slug}' URL template must contain '{{doi}}' placeholder"
+def test_handler_url_templates_include_doi_placeholder() -> None:
+    # url_template may be empty for handlers that build URLs dynamically
+    # (e.g. OUP reads the PDF href from the landing page) — only check
+    # templates that are set.
+    for h in all_handlers():
+        for attr in ("url_template", "setup_url_template"):
+            template = getattr(h, attr)
+            if template:
+                assert "{doi}" in template, (
+                    f"handler '{h.name}' {attr} must contain '{{doi}}' "
+                    f"placeholder"
+                )
+
+
+def test_handler_prefixes_are_doi_prefixes() -> None:
+    for h in all_handlers():
+        for prefix in h.doi_prefixes:
+            assert prefix.startswith("10."), (
+                f"handler '{h.name}' non-DOI prefix: {prefix!r}"
+            )
+
+
+def test_no_duplicate_doi_prefixes_across_handlers() -> None:
+    seen: dict[str, str] = {}
+    for h in all_handlers():
+        for prefix in h.doi_prefixes:
+            assert prefix not in seen, (
+                f"DOI prefix {prefix} claimed by both '{seen[prefix]}' "
+                f"and '{h.name}'"
+            )
+            seen[prefix] = h.name
+
+
+def test_concurrency_and_delay_are_sane() -> None:
+    for h in all_handlers():
+        assert isinstance(h.concurrency, int) and h.concurrency >= 1, (
+            f"handler '{h.name}' concurrency invalid: {h.concurrency!r}"
+        )
+        assert h.delay_s >= 0, (
+            f"handler '{h.name}' delay_s invalid: {h.delay_s!r}"
         )
 
 
-def test_publisher_match_prefixes_non_empty() -> None:
-    for slug, entry in DEFAULT_PUBLISHERS.items():
-        assert entry["match"], f"publisher '{slug}' has empty match list"
-        for prefix in entry["match"]:
-            assert prefix.startswith("10."), f"publisher '{slug}' non-DOI prefix: {prefix!r}"
-
-
-def test_no_duplicate_doi_prefixes_across_publishers() -> None:
-    seen: dict[str, str] = {}
-    for slug, entry in DEFAULT_PUBLISHERS.items():
-        for prefix in entry["match"]:
-            assert prefix not in seen, (
-                f"DOI prefix {prefix} claimed by both '{seen[prefix]}' and '{slug}'"
-            )
-            seen[prefix] = slug
-
-
-def test_concurrency_is_positive_int() -> None:
-    for slug, entry in DEFAULT_PUBLISHERS.items():
-        c = entry["concurrency"]
-        assert isinstance(c, int) and c >= 1, f"publisher '{slug}' concurrency invalid: {c!r}"
-
-
-def test_aom_publisher_is_registered() -> None:
-    """AoM is listed in the plan as the canonical login-required publisher."""
-    assert "aom" in DEFAULT_PUBLISHERS
-    assert "10.5465/" in DEFAULT_PUBLISHERS["aom"]["match"]
+def test_aom_handler_is_registered() -> None:
+    """AoM is the canonical login-required publisher."""
+    by_name = {h.name: h for h in all_handlers()}
+    assert "aom" in by_name
+    assert "10.5465/" in by_name["aom"].doi_prefixes

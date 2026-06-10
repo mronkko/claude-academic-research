@@ -23,6 +23,7 @@ from .apa import ApaHandler
 from .base import (
     Counter,
     PageNavigationHandler,
+    PdfLinkNavigationHandler,
     PublisherHandler,
     RequestHandler,
     cache_path_for,
@@ -144,6 +145,7 @@ __all__ = [
     "InformsHandler",
     "OupHandler",
     "PageNavigationHandler",
+    "PdfLinkNavigationHandler",
     "PublisherHandler",
     "RequestHandler",
     "SageHandler",

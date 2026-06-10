@@ -167,13 +167,23 @@ async def launch_context(
             f"--disable-extensions-except={paths}",
             f"--load-extension={paths}",
         ])
-    return await playwright.chromium.launch_persistent_context(
-        user_data_dir=str(user_data_dir),
-        headless=False,
-        accept_downloads=True,
-        viewport={"width": 1200, "height": 900},
-        args=args,
-    )
+    try:
+        return await playwright.chromium.launch_persistent_context(
+            user_data_dir=str(user_data_dir),
+            headless=False,
+            accept_downloads=True,
+            viewport={"width": 1200, "height": 900},
+            args=args,
+        )
+    except Exception as e:
+        if "Executable doesn't exist" in str(e):
+            raise RuntimeError(
+                "Playwright's Chromium binary is not installed. Run the "
+                "one-time install: `uvx playwright install chromium` "
+                "(or `playwright install chromium` if the CLI is on your "
+                "PATH), then retry."
+            ) from e
+        raise
 
 
 def _wait_for_user(prompt: str) -> None:
@@ -561,3 +571,105 @@ class PageNavigationHandler(PublisherHandler):
             flush=True,
         )
         return out, url
+
+
+# ---------------------------------------------------------------------------
+# PdfLinkNavigationHandler — landing page → extract PDF href → download.
+# ---------------------------------------------------------------------------
+class PdfLinkNavigationHandler(PublisherHandler):
+    """Handler for platforms whose PDF URL can't be built from the DOI.
+
+    Silverchair sites (OUP's academic.oup.com, AAA's
+    publications.aaahq.org) put an opaque numeric article ID in the
+    PDF path, so `url_template` points at the article *landing page*
+    instead. The flow:
+
+      1. Navigate to the landing page (`url_template`).
+      2. Extract the PDF anchor's href (`pdf_link_selector`).
+      3. Navigate to that href; `plugins.always_open_pdf_externally`
+         turns the navigation into a download event. (`ctx.request`
+         returns 403 — CF rejects non-browser requests.)
+    """
+
+    _is_intermediate_base = True
+
+    # CSS selector(s) probed for the PDF anchor on the landing page.
+    pdf_link_selector: str = (
+        "a[href*='article-pdf'][href*='.pdf'], a[href*='/pdf/'][href$='.pdf']"
+    )
+    # How long to poll for the PDF anchor. The article toolbar renders
+    # client-side after domcontentloaded; a fixed short wait proved
+    # flaky on slow loads, so we poll up to this budget instead.
+    pdf_link_timeout_ms: int = 15000
+
+    async def download(
+        self, page, ctx, item, cache_dir,
+        *, counter: Counter, total: int, t_start: float,
+    ) -> tuple[Path, str] | None:
+        del ctx
+        doi = item["doi"]
+        out = cache_path_for(cache_dir, doi)
+        if is_cached(out):
+            counter.cached += 1
+            return out, f"cache://{out}"
+
+        url = self.url_template.format(doi=doi)
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            try:
+                await page.wait_for_selector(
+                    self.pdf_link_selector, state="attached",
+                    timeout=self.pdf_link_timeout_ms,
+                )
+            except Exception:
+                raise RuntimeError(
+                    f"PDF link not found on "
+                    f"{self.display_name or self.name} landing page within "
+                    f"{self.pdf_link_timeout_ms // 1000}s"
+                ) from None
+            # `a.href` (not get_attribute) so relative hrefs come back
+            # absolute.
+            pdf_href = await page.locator(
+                self.pdf_link_selector,
+            ).first.evaluate("a => a.href")
+
+            async with page.expect_download(timeout=30000) as dl_info:
+                try:
+                    await page.goto(pdf_href, wait_until="commit", timeout=15000)
+                except Exception:
+                    pass  # download event interrupts navigation
+            dl = await dl_info.value
+            out.parent.mkdir(parents=True, exist_ok=True)
+            await dl.save_as(str(out))
+        except Exception as e:
+            counter.failed += 1
+            print(
+                f"  {progress_tag(counter, total, t_start)} "
+                f"ERROR: {str(e)[:100]}",
+                flush=True,
+            )
+            return None
+
+        if not is_cached(out):
+            try:
+                out.unlink(missing_ok=True)
+            except Exception:
+                pass
+            counter.failed += 1
+            title = (item.get("title") or "")[:45]
+            print(
+                f"  {progress_tag(counter, total, t_start)} "
+                f"not a PDF {title}",
+                flush=True,
+            )
+            return None
+
+        counter.ok += 1
+        size = out.stat().st_size
+        title = (item.get("title") or "")[:50]
+        print(
+            f"  {progress_tag(counter, total, t_start)} "
+            f"ok ({size // 1024}KB) {title}",
+            flush=True,
+        )
+        return out, pdf_href
