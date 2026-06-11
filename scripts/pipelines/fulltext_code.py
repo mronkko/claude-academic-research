@@ -774,6 +774,7 @@ def main() -> int:
                     f"[UPDATE-FIELDS:{','.join(sorted(target_fields))}] "
                     + existing.get("reason", "")
                 )[:500]
+                merged_row["timestamp"] = datetime.now(UTC).isoformat()
                 note_html = _build_slr_coding_note_html(
                     merged_row, fields, prompt_version,
                 )
@@ -791,6 +792,7 @@ def main() -> int:
                 row = merged_row
             else:
                 # No existing note: create fresh (same as normal include path).
+                row["timestamp"] = datetime.now(UTC).isoformat()
                 note_html = _build_slr_coding_note_html(row, fields, prompt_version)
                 try:
                     zot.upsert_child_note(
@@ -825,7 +827,8 @@ def main() -> int:
                     csv_io.upsert_by_item_key(output_path, row, csv_columns)
 
                 title = row.get("title", "")[:60]
-                print(f"[{done_count}/{total}] {title:<60} → updated",
+                outcome = "updated" if decision not in ("error",) else decision
+                print(f"[{done_count}/{total}] {title:<60} → {outcome}",
                       flush=True)
 
         print(f"\n{'=' * 60}")
