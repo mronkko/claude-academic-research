@@ -384,13 +384,39 @@ the template's three starter entries unmodified? Has the user
 approved the schema in the current session? If any answer is no or
 yes-still-template, STOP and run the procedure.
 
-**Revision during coding.** A truly new field added mid-run means
-every prior paper gets re-coded (the old rows have a missing
-column). Treat a schema-widening request as a major version bump
-(`v1 → v2`), ask the user to confirm they accept the re-coding
-cost, bump `FULLTEXT_CODING_PROMPT_VERSION`, and re-run affected
-items with `--rerun`. Field **reordering** is free; field
-**renaming** needs a data migration the user has to sign off on.
+**Revision during coding.** Two revision paths exist — choose based
+on scope:
+
+- **Add or revise specific fields (`--update-fields`)** — preferred for
+  additive schema changes (new field) or guideline rewrites for 1–3 fields.
+  This mode selects items already tagged `fulltext:include`, calls the LLM for
+  all fields (using the updated config), then merges only the named fields into
+  the existing `SLR Coding` note without touching any other field values or the
+  screening decision. Adjudicator edits to the *targeted* fields are
+  overwritten (warn the user); adjudicator edits to all other fields are
+  preserved. Bump `FULLTEXT_CODING_PROMPT_VERSION` before invoking so the log
+  records which config version produced the update.
+
+  ```bash
+  uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/fulltext_code.py \
+      --group <id> --collection <key> --config ./screening_config.py \
+      --pdf-dir ./pdfs --update-fields method,theories_and_references
+  ```
+
+  Combine with `--only-keys K1,K2,...` to limit to a specific subset.
+
+- **Full schema overhaul (`--full-recode`)** — for major version changes
+  where every field needs a fresh extraction under the new prompt. This
+  removes all `fulltext:*` tags, backs up the CSV log, and re-codes from
+  scratch. Any adjudicator-edited field values in `SLR Coding` notes are
+  lost. Treat as a `v1 → v2` bump and ask the user to confirm they accept
+  the re-coding cost.
+
+Field **reordering** in `FULLTEXT_CODING_FIELDS` is free (it only affects
+column order in the export CSV and note rendering). Field **renaming** needs
+a data migration: the old name stays in existing notes' JSON payloads; use
+`--update-fields <new_name>` as a one-pass migration that populates the new
+field name, then rename it in config and regenerate.
 
 ---
 
@@ -640,6 +666,7 @@ single-item debugging).
 | Import deduplicated search CSV into Zotero | `import_to_zotero.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/import_to_zotero.py --group <id> --input <search.csv> [--collection <key>]` |
 | Abstract screening (Claude Haiku on title+abstract) | `abstract_screen.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/abstract_screen.py --group <id> --collection <key> --config ./screening_config.py` |
 | Full-text screening + structured coding (Claude Sonnet) | `fulltext_code.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs` |
+| Update specific coding fields on already-coded items | `fulltext_code.py --update-fields` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs --update-fields FIELD1,FIELD2` |
 | Summarise screening / coding decisions across passes | `screening_report.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/screening_report.py <log.csv> [--list <decision>] [--list-rescreened]` |
 | Fetch missing abstracts (multi-source cascade) | `enrich_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_abstracts.py --filter-keys-file <keys>` |
 | Attach missing PDFs (multi-source cascade) | `enrich_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --filter-keys-file <keys>` |
