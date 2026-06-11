@@ -188,6 +188,41 @@ def _merge_fields_into_payload(
     return result
 
 
+def _items_for_update_mode(
+    items: list[dict],
+    only_keys: set[str] | None,
+) -> list[dict]:
+    """Return items eligible for --update-fields: those already tagged
+    `fulltext:include`. Optional `only_keys` narrows further."""
+    eligible = [
+        it for it in items
+        if any(
+            t.get("tag", "") == "fulltext:include"
+            for t in it.get("data", {}).get("tags", [])
+        )
+    ]
+    if only_keys is not None:
+        eligible = [it for it in eligible if it["key"] in only_keys]
+    return eligible
+
+
+def _fetch_existing_payload(
+    zot: zotero_io.ZoteroClient,
+    item_key: str,
+) -> dict | None:
+    """Fetch the SLR Coding child note for item_key and return its parsed
+    JSON payload, or None if the item has no SLR Coding note yet."""
+    children = zot.cloud.children(item_key)
+    for child in children:
+        body = (child.get("data", {}).get("note") or "").lstrip()
+        if "SLR_CODING_DATA" not in body:
+            continue
+        payload = zotero_io.parse_slr_coding_note(body)
+        if payload is not None:
+            return payload
+    return None
+
+
 def _load_screening_config(path: str):
     spec = importlib.util.spec_from_file_location("screening_config", path)
     assert spec is not None and spec.loader is not None, (
@@ -513,6 +548,12 @@ def main() -> int:
                              "deployments: read CSV decisions and apply "
                              "matching fulltext:* tags for items that don't "
                              "have one yet. Makes no LLM calls; exits after.")
+    parser.add_argument("--update-fields", default="",
+                        help="Comma-separated field names to selectively update "
+                             "in existing SLR Coding notes without changing "
+                             "screening decisions. Targets items already tagged "
+                             "fulltext:include. Other fields in each note are "
+                             "preserved. Use --only-keys to restrict to a subset.")
     args = parser.parse_args()
 
     prompt_template, fields, model, prompt_version = _load_screening_config(
@@ -653,6 +694,139 @@ def main() -> int:
     # Re-running on the same item replaces the prior row instead of
     # appending; recovers cleanly from partial / interrupted runs.
     log_lock = threading.Lock()
+
+    # --update-fields mode: re-code specific fields on fulltext:include items.
+    if args.update_fields:
+        target_fields = {
+            f.strip() for f in args.update_fields.split(",") if f.strip()
+        }
+        known_names = {f["name"] for f in fields}
+        unknown = target_fields - known_names
+        if unknown:
+            sys.exit(
+                f"ERROR: --update-fields names unknown field(s): {unknown}. "
+                f"Known fields from config: {known_names}"
+            )
+        only_keys: set[str] | None = None
+        if args.only_keys:
+            only_keys = {k.strip() for k in args.only_keys.split(",") if k.strip()}
+        to_update = _items_for_update_mode(items, only_keys)
+        if args.limit and args.limit < len(to_update):
+            to_update = to_update[:args.limit]
+        print(
+            f"  --update-fields mode: updating field(s) {sorted(target_fields)} "
+            f"on {len(to_update)} fulltext:include item(s).",
+            flush=True,
+        )
+        print(
+            "  WARNING: adjudicator edits to these fields in Zotero will be "
+            "overwritten. All other fields are preserved.",
+            flush=True,
+        )
+        if not to_update:
+            print("Nothing to update.", flush=True)
+            return 0
+
+        counts: dict[str, int] = {"updated": 0, "no_pdf": 0, "error": 0}
+        done_count = 0
+        total = len(to_update)
+
+        def update_worker(item: dict) -> dict:
+            pdf_path = _find_pdf_path(
+                item, atts_by_parent,
+                pdf_dir=pdf_dir,
+                zotero_storage=zotero_storage,
+            )
+            d = item.get("data", {})
+            item_key = d.get("key", item.get("key", ""))
+            base: dict = {
+                "item_key": item_key,
+                "doi": (d.get("DOI") or "").strip(),
+                "title": (d.get("title") or "")[:200],
+                "year": (d.get("date") or "")[:4],
+                "journal": d.get("publicationTitle", "") or "",
+                "model": model,
+            }
+            if pdf_path is None:
+                return {**base, "pdf_path": "", "fulltext_chars": 0,
+                        "truncated": "false", "decision": "error",
+                        "exclusion_code": "", "reason": "no PDF attachment found",
+                        **{f["name"]: "" for f in fields}}
+            row = _code_one(item, pdf_path, client, model, rendered_prompt, fields)
+            existing = _fetch_existing_payload(zot, item_key)
+            if existing is not None:
+                merged_payload = _merge_fields_into_payload(
+                    existing, row, target_fields,
+                )
+                merged_row = dict(row)
+                merged_row.update(merged_payload.get("fields", {}))
+                merged_row["decision"] = existing["decision"]
+                merged_row["exclusion_code"] = existing.get("exclusion_code", "")
+                merged_row["reason"] = (
+                    f"[UPDATE-FIELDS:{','.join(sorted(target_fields))}] "
+                    + existing.get("reason", "")
+                )[:500]
+                note_html = _build_slr_coding_note_html(
+                    merged_row, fields, prompt_version,
+                )
+                try:
+                    zot.upsert_child_note(
+                        item_key,
+                        marker=SLR_CODING_NOTE_MARKER,
+                        note_html=note_html,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    merged_row["reason"] = (
+                        merged_row.get("reason", "") +
+                        f" [NOTE UPDATE FAILED: {e}]"
+                    )[:500]
+                row = merged_row
+            else:
+                # No existing note: create fresh (same as normal include path).
+                note_html = _build_slr_coding_note_html(row, fields, prompt_version)
+                try:
+                    zot.upsert_child_note(
+                        item_key,
+                        marker=SLR_CODING_NOTE_MARKER,
+                        note_html=note_html,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    row["reason"] = (
+                        row.get("reason", "") + f" [NOTE WRITE FAILED: {e}]"
+                    )[:500]
+            return row
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=args.workers
+        ) as pool:
+            futures = {pool.submit(update_worker, it): it for it in to_update}
+            for fut in concurrent.futures.as_completed(futures):
+                row = fut.result()
+                done_count += 1
+                decision = row.get("decision", "error")
+                if "no PDF attachment found" in row.get("reason", ""):
+                    counts["no_pdf"] += 1
+                elif decision == "error":
+                    counts["error"] += 1
+                else:
+                    counts["updated"] += 1
+
+                row["timestamp"] = datetime.now(UTC).isoformat()
+                row["prompt_version"] = prompt_version
+                with log_lock:
+                    csv_io.upsert_by_item_key(output_path, row, csv_columns)
+
+                title = row.get("title", "")[:60]
+                print(f"[{done_count}/{total}] {title:<60} → updated",
+                      flush=True)
+
+        print(f"\n{'=' * 60}")
+        print(f"Done. Updated {total} item(s).")
+        for k in ("updated", "error", "no_pdf"):
+            if counts.get(k, 0):
+                print(f"  {k}: {counts[k]}")
+        print(f"Log: {output_path}")
+        return 0
 
     counts = {"include": 0, "exclude": 0, "error": 0, "no_pdf": 0}
     done_count = 0

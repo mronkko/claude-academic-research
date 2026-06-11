@@ -1,10 +1,5 @@
 """Unit tests for fulltext_code._merge_fields_into_payload."""
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "pipelines"))
-
-from fulltext_code import _merge_fields_into_payload
+from fulltext_code import _items_for_update_mode, _merge_fields_into_payload
 
 
 def _make_payload(fields: dict, decision: str = "include") -> dict:
@@ -61,3 +56,33 @@ def test_does_not_mutate_existing():
     original_fields = dict(existing["fields"])
     _merge_fields_into_payload(existing, {"key_findings": "new"}, {"key_findings"})
     assert existing["fields"] == original_fields
+
+
+def _make_item(key: str, tags: list) -> dict:
+    return {
+        "key": key,
+        "data": {
+            "key": key,
+            "tags": [{"tag": t} for t in tags],
+        },
+    }
+
+
+def test_update_mode_selects_fulltext_include():
+    items = [
+        _make_item("A", ["fulltext:include"]),
+        _make_item("B", ["fulltext:exclude"]),
+        _make_item("C", []),
+        _make_item("D", ["fulltext:include", "abstract:include"]),
+    ]
+    result = _items_for_update_mode(items, only_keys=None)
+    assert {it["key"] for it in result} == {"A", "D"}
+
+
+def test_update_mode_respects_only_keys():
+    items = [
+        _make_item("A", ["fulltext:include"]),
+        _make_item("B", ["fulltext:include"]),
+    ]
+    result = _items_for_update_mode(items, only_keys={"A"})
+    assert [it["key"] for it in result] == ["A"]
