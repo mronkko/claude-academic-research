@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] — 2026-06-11
+
+### Selective coding updates (`--update-fields`)
+
+`fulltext_code.py` gains a new `--update-fields FIELD1,FIELD2` flag for
+updating an in-progress coding run without re-coding everything from scratch.
+Two common scenarios it covers:
+
+- **Add a new field mid-run.** After adding an entry to
+  `FULLTEXT_CODING_FIELDS` in `screening_config.py`, run
+  `--update-fields <new_field>` to populate that field across all
+  already-included papers. Existing field values and the original screening
+  decision are untouched.
+- **Revise coding guidelines for specific fields.** After rewording a
+  field's `description`, run `--update-fields <field>` to re-extract only
+  those fields under the new prompt. Other fields (including any the
+  adjudicator edited directly in Zotero) are preserved.
+
+Behaviour: the flag selects items already tagged `fulltext:include`, calls
+the LLM with the full current prompt, then merges only the named fields into
+the existing `SLR Coding` child note. The `fulltext:*` tag and all other
+coding fields are left unchanged. Items with no existing `SLR Coding` note
+fall through to normal note creation. Combine with `--only-keys K1,K2,...`
+to limit to a subset.
+
+The existing `--full-recode` flag remains the right tool for major schema
+overhauls where every field needs a fresh extraction.
+
+Bump `FULLTEXT_CODING_PROMPT_VERSION` before invoking either flag so the
+CSV log records which config version produced the update.
+
+The `systematic-review` skill's *Revision during coding* section and
+Pipeline-scripts table are updated to document both revision paths and when
+to use each.
+
 ## [0.6.0] — 2026-06-10
 
 ### Removed — legacy pipeline scripts and `--legacy-browser`
