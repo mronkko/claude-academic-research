@@ -382,7 +382,7 @@ fixed before coding starts.
 unpopulated placeholders? Does `FULLTEXT_CODING_FIELDS` still hold
 the template's three starter entries unmodified? Has the user
 approved the schema in the current session? If any answer is no or
-yes-still-template, STOP and run the procedure.
+yes-still-template, STOP and run the procedure. If only 1–3 fields were revised and prior adjudicator edits on other fields must be preserved, use `--update-fields` rather than a full re-code — see *Revision during coding* below.
 
 **Revision during coding.** Two revision paths exist — choose based
 on scope:
@@ -408,9 +408,8 @@ on scope:
 - **Full schema overhaul (`--full-recode`)** — for major version changes
   where every field needs a fresh extraction under the new prompt. This
   removes all `fulltext:*` tags, backs up the CSV log, and re-codes from
-  scratch. Any adjudicator-edited field values in `SLR Coding` notes are
-  lost. Treat as a `v1 → v2` bump and ask the user to confirm they accept
-  the re-coding cost.
+  scratch. `SLR Coding` notes for items that re-include are overwritten unconditionally; adjudicator edits to those notes are lost. Notes on items that re-exclude are left untouched. Treat as a `v1 → v2` bump and ask the user to confirm they accept
+  the re-coding cost. Bump `FULLTEXT_CODING_PROMPT_VERSION` before invoking.
 
 Field **reordering** in `FULLTEXT_CODING_FIELDS` is free (it only affects
 column order in the export CSV and note rendering). Field **renaming** needs
@@ -622,7 +621,7 @@ set is updated atomically:
 
 | Note title | Attached to | Written by | Purpose |
 |---|---|---|---|
-| `SLR Coding` | Every item with `fulltext:include` | `fulltext_code.py` after each coding decision | Structured coding fields (constructs, method, findings — see `screening_config.py:FULLTEXT_CODING_FIELDS`). The adjudicator reads this note directly in Zotero; the CSV row is parallel provenance. |
+| `SLR Coding` | Every item with `fulltext:include` | `fulltext_code.py` after each coding decision | Structured coding fields (constructs, method, findings — see `screening_config.py:FULLTEXT_CODING_FIELDS`). The adjudicator reads this note directly in Zotero; the CSV row is parallel provenance. Overwritten on `--full-recode`; selectively updated on `--update-fields`. |
 
 A `SLR Coding` note is **created on first code**, **overwritten on
 re-code** (via `--full-recode`), and **never deleted automatically**.
