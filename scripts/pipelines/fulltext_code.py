@@ -165,6 +165,29 @@ def _build_slr_coding_note_html(
     return "\n".join(parts)
 
 
+def _merge_fields_into_payload(
+    existing_payload: dict,
+    new_row: dict,
+    target_fields: set[str],
+) -> dict:
+    """Merge target_fields from new_row into existing_payload.
+
+    Only the named field values (inside payload['fields']) are updated.
+    Decision, reason, exclusion_code, model, prompt_version, and timestamp
+    are not touched — the screening decision is authoritative and update
+    mode must not silently flip it.
+
+    Returns a new dict; existing_payload is not mutated.
+    """
+    result = dict(existing_payload)
+    result["fields"] = dict(existing_payload.get("fields") or {})
+    for fname in target_fields:
+        new_val = new_row.get(fname)
+        if new_val is not None:
+            result["fields"][fname] = new_val
+    return result
+
+
 def _load_screening_config(path: str):
     spec = importlib.util.spec_from_file_location("screening_config", path)
     assert spec is not None and spec.loader is not None, (
