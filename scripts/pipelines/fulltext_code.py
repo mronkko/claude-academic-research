@@ -214,7 +214,10 @@ def _fetch_existing_payload(
     JSON payload, or None if the item has no SLR Coding note yet."""
     children = zot.cloud.children(item_key)
     for child in children:
-        body = (child.get("data", {}).get("note") or "").lstrip()
+        cdata = child.get("data", {})
+        if cdata.get("itemType") != "note":
+            continue
+        body = (cdata.get("note") or "").lstrip()
         if "SLR_CODING_DATA" not in body:
             continue
         payload = zotero_io.parse_slr_coding_note(body)
@@ -753,7 +756,12 @@ def main() -> int:
                         "exclusion_code": "", "reason": "no PDF attachment found",
                         **{f["name"]: "" for f in fields}}
             row = _code_one(item, pdf_path, client, model, rendered_prompt, fields)
-            existing = _fetch_existing_payload(zot, item_key)
+            try:
+                existing = _fetch_existing_payload(zot, item_key)
+            except Exception as e:  # noqa: BLE001
+                row["decision"] = "error"
+                row["reason"] = f"fetch_children failed: {e}"[:300]
+                return row
             if existing is not None:
                 merged_payload = _merge_fields_into_payload(
                     existing, row, target_fields,
