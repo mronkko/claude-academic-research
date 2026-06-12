@@ -115,20 +115,43 @@ def test_upsert_collapses_pre_existing_duplicates_on_replace(tmp_path: Path) -> 
 
 
 def test_upsert_raises_on_schema_mismatch(tmp_path: Path) -> None:
-    """If the file on disk uses a different header (e.g. a stale
-    schema from before a column was added), refuse to write and
-    surface both schemas in the error. Auto-rewriting a header would
-    silently mix two writers' columns, which is the bug we're trying
-    to prevent."""
+    """If the file on disk uses a genuinely incompatible header (e.g.
+    reordered, renamed, or deleted columns), refuse to write and
+    raise SchemaMismatchError."""
     target = tmp_path / "screening.csv"
-    target.write_text("item_key,decision,reason\nAAAA0001,include,early\n", encoding="utf-8")
+    # 'model' and 'reason' reordered relative to SCHEMA
+    target.write_text("item_key,decision,model,reason\nAAAA0001,include,haiku,early\n", encoding="utf-8")
     with pytest.raises(csv_io.SchemaMismatchError) as exc_info:
         csv_io.upsert_by_item_key(target, {
             "item_key": "AAAA0002", "decision": "exclude",
             "reason": "later", "model": "haiku",
         }, SCHEMA)
     assert exc_info.value.expected == SCHEMA
-    assert exc_info.value.actual == ["item_key", "decision", "reason"]
+    assert exc_info.value.actual == ["item_key", "decision", "model", "reason"]
+
+
+def test_upsert_auto_migrates_schema_widening(tmp_path: Path) -> None:
+    """If the file on disk uses a narrower schema that is a stable subset
+    of the new schema, migrate in place and pad existing rows."""
+    target = tmp_path / "screening.csv"
+    target.write_text("item_key,decision,reason\nAAAA0001,include,early\n", encoding="utf-8")
+    csv_io.upsert_by_item_key(target, {
+        "item_key": "AAAA0002", "decision": "exclude",
+        "reason": "later", "model": "haiku",
+    }, SCHEMA)
+    
+    rows = _read_rows(target)
+    assert len(rows) == 2
+    # Row 1 padded with empty string for new column 'model'
+    assert rows[0] == {
+        "item_key": "AAAA0001", "decision": "include",
+        "reason": "early", "model": "",
+    }
+    # Row 2 successfully added with all columns
+    assert rows[1] == {
+        "item_key": "AAAA0002", "decision": "exclude",
+        "reason": "later", "model": "haiku",
+    }
 
 
 def test_upsert_requires_key_field_in_schema() -> None:

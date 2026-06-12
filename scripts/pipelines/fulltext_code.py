@@ -56,6 +56,7 @@ import concurrent.futures
 import csv
 import importlib.util
 import os
+import re
 import shutil
 import sys
 import threading
@@ -479,7 +480,12 @@ def _code_one(item: dict, pdf_path: Path, client, model: str, prompt: str,
     try:
         text = client.generate(
             model=model,
-            max_tokens=3500,
+            # Scale output budget with the coding schema: a fixed 3500
+            # overflowed once configs grew past the 12-field template
+            # (truncated JSON -> parse error; in --update-fields mode this
+            # surfaced as silently empty fields at temperature 0).
+            # ~400 tokens/field of headroom, floor 4000 for small schemas.
+            max_tokens=max(4000, 2000 + 400 * len(fields)),
             temperature=0.0,
             system=prompt,
             prompt=user_msg,
@@ -514,6 +520,11 @@ def _code_one(item: dict, pdf_path: Path, client, model: str, prompt: str,
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(line_buffering=True)
+        except Exception:
+            pass
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="./screening_config.py",
                         help="Path to screening_config.py (default: "
@@ -607,6 +618,46 @@ def main() -> int:
         output_path.unlink()
         print(f"Backed up existing log to {backup}; rebuilding.", flush=True)
 
+    # Pre-flight schema validation/migration before any API calls are made.
+    if output_path.exists() and output_path.stat().st_size > 0:
+        try:
+            with output_path.open(newline="", encoding="utf-8") as fh:
+                reader = csv.DictReader(fh)
+                actual_header = list(reader.fieldnames or [])
+                if actual_header != csv_columns:
+                    if set(actual_header).issubset(set(csv_columns)) and [c for c in csv_columns if c in actual_header] == actual_header:
+                        print(
+                            f"  Migrating CSV schema at {output_path} (widening from "
+                            f"{len(actual_header)} to {len(csv_columns)} columns)...",
+                            flush=True,
+                        )
+                        existing_rows = list(reader)
+                        import tempfile
+                        tmp_fd, tmp_path = tempfile.mkstemp(
+                            prefix=f".{output_path.name}.", suffix=".tmp", dir=str(output_path.parent)
+                        )
+                        try:
+                            with os.fdopen(tmp_fd, "w", newline="", encoding="utf-8") as out_fh:
+                                writer = csv.DictWriter(out_fh, fieldnames=csv_columns, extrasaction="ignore")
+                                writer.writeheader()
+                                for r in existing_rows:
+                                    writer.writerow({col: r.get(col, "") for col in csv_columns})
+                            os.replace(tmp_path, output_path)
+                        except Exception:
+                            try:
+                                os.unlink(tmp_path)
+                            except OSError:
+                                pass
+                            raise
+                    else:
+                        sys.exit(
+                            f"ERROR: CSV schema mismatch at {output_path}.\n"
+                            f"  Expected: {csv_columns}\n"
+                            f"  Actual:   {actual_header}"
+                        )
+        except Exception as e:
+            sys.exit(f"ERROR: Failed to validate/migrate CSV schema: {e}")
+
     zot = zotero_io.ZoteroClient.from_args(args, api_key=api_key or "dummy")
     print(f"Fetching items from Zotero ({zot.describe_library()}, "
           f"collection={args.collection})...", flush=True)
@@ -646,51 +697,52 @@ def main() -> int:
             wanted = {k.strip() for k in args.only_keys.split(",") if k.strip()}
             items = [it for it in items if it["key"] in wanted]
 
-    # Resume: skip items already carrying fulltext:include / fulltext:exclude.
-    tagged = _already_tagged(items)
-    last = _load_last_decisions(output_path)
-    to_code: list[dict] = []
-    for it in items:
-        if it["key"] in tagged:
-            continue
-        last_decision = last.get(it["key"], "")
-        # CSV-only: an 'error' row not yet tagged — usually the
-        # screening-time tag write failed OR pre-Zotero-as-truth state.
-        # Only retry if --rerun.
-        if last_decision == "error" and not args.rerun:
-            continue
-        to_code.append(it)
+    if not args.update_fields:
+        # Resume: skip items already carrying fulltext:include / fulltext:exclude.
+        tagged = _already_tagged(items)
+        last = _load_last_decisions(output_path)
+        to_code: list[dict] = []
+        for it in items:
+            if it["key"] in tagged:
+                continue
+            last_decision = last.get(it["key"], "")
+            # CSV-only: an 'error' row not yet tagged — usually the
+            # screening-time tag write failed OR pre-Zotero-as-truth state.
+            # Only retry if --rerun.
+            if last_decision == "error" and not args.rerun:
+                continue
+            to_code.append(it)
 
-    # Warn on tag/CSV drift (CSV decision exists but no tag yet).
-    drift_count = sum(
-        1 for k, d in last.items()
-        if d in STAGE_TAG_VALUES and k not in tagged
-    )
-    if drift_count:
-        print(
-            f"  WARNING: {drift_count} item(s) in CSV log lack fulltext:* "
-            f"tags in Zotero. Run with --csv-backfill to apply tags from "
-            f"CSV decisions.",
-            flush=True,
+        # Warn on tag/CSV drift (CSV decision exists but no tag yet).
+        drift_count = sum(
+            1 for k, d in last.items()
+            if d in STAGE_TAG_VALUES and k not in tagged
         )
+        if drift_count:
+            print(
+                f"  WARNING: {drift_count} item(s) in CSV log lack fulltext:* "
+                f"tags in Zotero. Run with --csv-backfill to apply tags from "
+                f"CSV decisions.",
+                flush=True,
+            )
 
-    if args.limit and args.limit < len(to_code):
-        to_code = to_code[:args.limit]
+        if args.limit and args.limit < len(to_code):
+            to_code = to_code[:args.limit]
 
-    print(f"  To code: {len(to_code)} items", flush=True)
-    if not to_code:
-        print("Nothing to code.", flush=True)
-        return 0
+        print(f"  To code: {len(to_code)} items", flush=True)
+        if not to_code:
+            print("Nothing to code.", flush=True)
+            return 0
 
-    if args.dry_run:
-        first = to_code[0].get("data", {})
-        print("\n=== RENDERED SYSTEM PROMPT ===")
-        print(rendered_prompt)
-        print("\n=== USER MESSAGE TEMPLATE ===")
-        print(f"TITLE: {first.get('title', '')}\n\nFULL TEXT: <{pdf_dir}/...>")
-        print(f"\n[DRY RUN] Would code {len(to_code)} items with {model}",
-              flush=True)
-        return 0
+        if args.dry_run:
+            first = to_code[0].get("data", {})
+            print("\n=== RENDERED SYSTEM PROMPT ===")
+            print(rendered_prompt)
+            print("\n=== USER MESSAGE TEMPLATE ===")
+            print(f"TITLE: {first.get('title', '')}\n\nFULL TEXT: <{pdf_dir}/...>")
+            print(f"\n[DRY RUN] Would code {len(to_code)} items with {model}",
+                  flush=True)
+            return 0
 
     client = llm_provider.get_provider(model)
     # Schema-stable + idempotent writes via csv_io.upsert_by_item_key.
@@ -730,6 +782,31 @@ def main() -> int:
             print("Nothing to update.", flush=True)
             return 0
 
+        # Update mode targets items whose include decision is already final
+        # (often via human adjudication), and the merge preserves that
+        # decision. The prompt must therefore not re-adjudicate: without
+        # this override, the LLM may re-decide "exclude" and — per the
+        # output rules — return empty strings for every coding field,
+        # silently blanking the targeted fields while the decision stays
+        # "include". Same override pattern as adjudicated re-coding.
+        update_prompt = rendered_prompt + (
+            "\n\nUPDATE-MODE OVERRIDE: This paper has ALREADY passed "
+            "full-text screening and its include decision is final — do "
+            "NOT re-adjudicate it. Always output decision=include with an "
+            "empty exclusion_code, and provide substantive content for "
+            "EVERY coding field."
+        )
+
+        if args.dry_run:
+            first = to_update[0].get("data", {}) if to_update else {}
+            print("\n=== RENDERED SYSTEM PROMPT ===")
+            print(update_prompt)
+            print("\n=== USER MESSAGE TEMPLATE ===")
+            print(f"TITLE: {first.get('title', '')}\n\nFULL TEXT: <{pdf_dir}/...>")
+            print(f"\n[DRY RUN] Would update {len(to_update)} item(s) with {model}",
+                  flush=True)
+            return 0
+
         counts: dict[str, int] = {"updated": 0, "no_pdf": 0, "error": 0}
         done_count = 0
         total = len(to_update)
@@ -755,7 +832,13 @@ def main() -> int:
                         "truncated": "false", "decision": "error",
                         "exclusion_code": "", "reason": "no PDF attachment found",
                         **{f["name"]: "" for f in fields}}
-            row = _code_one(item, pdf_path, client, model, rendered_prompt, fields)
+            row = _code_one(item, pdf_path, client, model, update_prompt, fields)
+            if row.get("decision") == "error":
+                # Surface the failure instead of merging an empty update
+                # into the note (which would destroy the error reason and
+                # poison the note with blank fields). The note is left
+                # untouched so a re-run retries cleanly.
+                return row
             try:
                 existing = _fetch_existing_payload(zot, item_key)
             except Exception as e:  # noqa: BLE001
@@ -770,10 +853,10 @@ def main() -> int:
                 merged_row.update(merged_payload.get("fields", {}))
                 merged_row["decision"] = existing["decision"]
                 merged_row["exclusion_code"] = existing.get("exclusion_code", "")
-                merged_row["reason"] = (
-                    f"[UPDATE-FIELDS:{','.join(sorted(target_fields))}] "
-                    + existing.get("reason", "")
-                )[:500]
+                existing_reason = existing.get("reason", "")
+                prefix = f"[UPDATE-FIELDS:{','.join(sorted(target_fields))}] "
+                cleaned_reason = re.sub(r'^(?:\[UPDATE-FIELDS:[^\]]*\]\s*)+', '', existing_reason)
+                merged_row["reason"] = (prefix + cleaned_reason)[:500]
                 merged_row["timestamp"] = datetime.now(UTC).isoformat()
                 note_html = _build_slr_coding_note_html(
                     merged_row, fields, prompt_version,

@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed (`fulltext_code.py --update-fields`, found in production use)
+
+- **Update mode no longer re-adjudicates.** The update prompt now carries a
+  no-readjudication override: previously, papers the model would re-decide
+  as `exclude` (e.g., human-adjudicated includes) came back with empty
+  strings for every coding field per the prompt's exclude rule, and the
+  merge silently wrote those blanks into the note while keeping
+  `decision=include`.
+- **Error rows are no longer merged into notes.** A `_code_one` failure in
+  update mode previously overwrote the error reason with
+  `[UPDATE-FIELDS:...]` + the old reason and wrote a blank-fielded note;
+  the error row is now surfaced as-is in the CSV and the note is left
+  untouched for a clean retry.
+- **LLM output budget scales with the coding schema**
+  (`max(4000, 2000 + 400 * len(fields))`, previously hardcoded 3500,
+  which large schemas would truncate).
+- **Prevent CSV schema-widening crashes.** Added automatic CSV schema migration
+  and pre-flight CSV validation prior to LLM worker execution to prevent API spend.
+- **Fix `--update-fields` + `--only-keys` silent no-op.** The script now bypasses
+  the normal-mode resume/early-exit calculations when `--update-fields` is requested.
+- **Fix misleading dry-run counts in update mode.** A dedicated dry-run check inside
+  the update block reports the correct update target counts and prompt override.
+- **Prevent stacking reason prefixes.** The update mode now uses regex to strip any
+  pre-existing `[UPDATE-FIELDS:...]` prefixes from the reason field before prepending
+  the new one.
+- **Enable stdout line buffering.** Added `sys.stdout.reconfigure(line_buffering=True)`
+  at script startup to prevent invisible progress under piped output streams.
+
 ## [0.6.1] — 2026-06-11
 
 ### Selective coding updates (`--update-fields`)

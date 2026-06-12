@@ -80,8 +80,12 @@ def upsert_by_item_key(
             reader = csv.DictReader(fh)
             actual_header = list(reader.fieldnames or [])
             if actual_header != schema:
-                raise SchemaMismatchError(csv_path, schema, actual_header)
-            existing_rows = list(reader)
+                if set(actual_header).issubset(set(schema)) and [c for c in schema if c in actual_header] == actual_header:
+                    existing_rows = list(reader)
+                else:
+                    raise SchemaMismatchError(csv_path, schema, actual_header)
+            else:
+                existing_rows = list(reader)
 
     # Normalise the new row to the schema, empty-fill any missing fields.
     new_row = {col: str(row.get(col, "")) for col in schema}

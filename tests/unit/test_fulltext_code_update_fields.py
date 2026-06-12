@@ -86,3 +86,16 @@ def test_update_mode_respects_only_keys():
     ]
     result = _items_for_update_mode(items, only_keys={"A"})
     assert [it["key"] for it in result] == ["A"]
+
+
+def test_reason_prefix_regex_cleaning():
+    import re
+    def clean(reason):
+        return re.sub(r'^(?:\[UPDATE-FIELDS:[^\]]*\]\s*)+', '', reason)
+
+    assert clean("original reason") == "original reason"
+    assert clean("[UPDATE-FIELDS:ai_role] original reason") == "original reason"
+    assert clean("[UPDATE-FIELDS:ai_role] [UPDATE-FIELDS:another] original reason") == "original reason"
+    assert clean("[UPDATE-FIELDS:ai_role]\n[UPDATE-FIELDS:another] original reason") == "original reason"
+    assert clean("something else [UPDATE-FIELDS:ai_role]") == "something else [UPDATE-FIELDS:ai_role]"
+
