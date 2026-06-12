@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file gives Claude Code the context it needs to work on this
+This file gives Claude Code and Antigravity the context they need to work on this
 systematic review without re-discovering the layout every session.
 Adapt placeholders in angle brackets for your project.
 
@@ -90,7 +90,7 @@ canonical record is here.
 All API keys (`ZOTERO_API_KEY`, `ANTHROPIC_API_KEY`,
 `ELSEVIER_API_KEY`, `WOS_API_KEY_EXTENDED`, etc.) live in
 `~/.config/academic-research/config.toml` — never read or inspect
-that file from Claude Code.
+that file from Claude Code or Antigravity.
 
 ## Screening defaults
 

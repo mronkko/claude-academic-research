@@ -25,7 +25,7 @@ only to give them the command and confirm when they are done. Do not
 run any tool calls — no Bash, no Read, no probes. All the information
 needed is already known:
 
-- **Wizard path:** `${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py` (or project-relative `./scripts/setup/wizard.py` if not running inside Claude Code)
+- **Wizard path:** `${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py` (or project-relative `./scripts/setup/wizard.py` if not running inside Claude Code or Antigravity)
   — The active plugin version's absolute path (or project-relative fallback if `${CLAUDE_PLUGIN_ROOT}` is not defined) is used, so the user has a concrete path to run.
 - **Config written to:** `~/.config/academic-research/config.toml` (mode 0600).
 - **Settings patched:** `~/.claude/settings.json` (backed up as `.bak-wizard`, bypassed silently if not running under Claude).

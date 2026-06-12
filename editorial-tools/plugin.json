@@ -1,0 +1,5 @@
+{
+  "name": "editorial-tools",
+  "description": "Editorial workflows for journal editors and associate editors. Ships the suggesting-reviewers skill: given a manuscript abstract, propose peer reviewers from a journal's editorial board (eligibility-filtered) plus live external experts, grounded in publication records and tilted toward early-to-mid-career scholars.",
+  "disabled": false
+}

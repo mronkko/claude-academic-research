@@ -1,7 +1,7 @@
 [project]
 name = "claude-academic-research"
 version = "0.3.1"
-description = "Dev/test tooling for the claude-academic-research Claude Code plugin. Runtime scripts use uv + PEP 723 inline deps and do not depend on this pyproject."
+description = "Dev/test tooling for the claude-academic-research plugin (compatible with Claude Code and Antigravity). Runtime scripts use uv + PEP 723 inline deps and do not depend on this pyproject."
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Mikko Rönkkö", email = "mikko.ronkko@jyu.fi" }]

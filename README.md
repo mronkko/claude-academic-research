@@ -1,10 +1,12 @@
 # claude-academic-research
 
-Claude Code plugin for academic research: MCP-grounded citations, empirical
+Academic research plugins for Claude Code and Antigravity: MCP-grounded citations, empirical
 integrity, systematic reviews, Zotero operations, and parallel-critic manuscript
 revision.
 
-## Install
+## Install and Load
+
+### Claude Code
 
 Inside the Claude Code chat (Desktop or CLI):
 
@@ -16,9 +18,23 @@ Inside the Claude Code chat (Desktop or CLI):
 After install, run `/setup` once to configure API keys, MCP servers, and
 permission rules. The wizard is chat-driven — no terminal required.
 
+### Antigravity
+
+Inside the Antigravity session/CLI (or terminal):
+
+```bash
+# Install the main academic-research plugin
+agy plugin install "https://github.com/mronkko/claude-academic-research.git"
+
+# (Optional) Install the editorial-tools sub-plugin
+agy plugin install "https://github.com/mronkko/claude-academic-research.git/editorial-tools"
+```
+
 Works on Windows, macOS, and Linux. Windows users do **not** need WSL or
 Git Bash — native `cmd` and PowerShell are supported, and CI verifies
 every commit against `windows-latest`.
+
+
 
 ## What's in the plugin
 

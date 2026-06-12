@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file gives Claude Code the context it needs to edit this research
+This file gives Claude Code and Antigravity the context they need to edit this research
 report without re-discovering the layout every session. Adapt
 placeholders in angle brackets for your project.
 

@@ -6,7 +6,7 @@ Deferred development ideas — things consciously not done yet but worth revisit
 
 ## What this repo is
 
-A Claude Code **plugin** — not an application. It ships skills (prose rule-books), pipeline scripts, and templates for academic-research workflows. End users install via `/plugin marketplace add mronkko/claude-academic-research`. Anything you change here is consumed by downstream Claude Code instances in user projects.
+An academic research **plugin** for Claude Code and Antigravity — not an application. It ships skills (prose rule-books), pipeline scripts, and templates for academic-research workflows. Claude Code users install via `/plugin marketplace add mronkko/claude-academic-research`, while Antigravity users install via `agy plugin install <url>`. Anything you change here is consumed by downstream agentic instances in user projects.
 
 **The repo is a marketplace hosting more than one plugin.** `.claude-plugin/marketplace.json` lists them. The main plugin, `academic-research`, is sourced at the repo root (`./`) and is what most of this CLAUDE.md describes. A second, smaller plugin, `editorial-tools`, lives under `editorial-tools/` with its own `.claude-plugin/plugin.json` and `skills/` — it ships the `suggesting-reviewers` skill (peer-reviewer suggestion for journal editors/AEs, with a bundled ORM editorial-board roster). The two are independent installs: the root plugin only scans `./skills/`, so `editorial-tools/` does not leak into it, and users who install only `academic-research` never load the editorial skill. Do not assume one-plugin-per-repo.
 
