@@ -17,7 +17,7 @@ from .browser import BrowserSource
 from .crossref import CrossrefSource
 from .openalex import OpenAlexSource
 from .pmc import PmcSource
-from .sciencedirect import ScienceDirectSource
+from .sciencedirect import TDM_RECOVERED_TAG, ScienceDirectSource, is_tdm_recovered_path
 from .scopus import ScopusSource
 from .semantic_scholar import SemanticScholarSource
 from .springer import SpringerSource
@@ -91,8 +91,10 @@ __all__ = [
     "AbstractFetcher",
     "PdfFetcher",
     "Source",
+    "TDM_RECOVERED_TAG",
     "abstract_sources",
     "pdf_sources",
+    "is_tdm_recovered_path",
     "BrowserSource",
     "CrossrefSource",
     "OpenAlexSource",

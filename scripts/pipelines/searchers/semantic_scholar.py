@@ -15,12 +15,17 @@ higher tier and is strongly recommended for systematic searches.
 
 from __future__ import annotations
 
-import os
 import time
 
 import requests
 
-from .base import SearchContext, SearchSource, empty_row
+from .base import (
+    CREDENTIAL_OPTIONAL,
+    SearchContext,
+    SearchSource,
+    empty_row,
+    resolve_credential,
+)
 
 BULK_ENDPOINT = "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
 PER_PAGE = 1000          # bulk-search max
@@ -45,7 +50,10 @@ class SemanticScholarSearch(SearchSource):
         if not blocks:
             return []
 
-        api_key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "")
+        # Optional: a key lifts the rate limit, but anonymous calls work.
+        api_key, _ = resolve_credential(
+            "SEMANTIC_SCHOLAR_API_KEY", mode=CREDENTIAL_OPTIONAL,
+        )
         issn_set = {i.strip() for i in ctx.issns if i.strip()}
 
         rows: list[dict] = []

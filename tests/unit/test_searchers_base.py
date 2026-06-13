@@ -11,6 +11,8 @@ from __future__ import annotations
 import pytest
 from searchers import (
     ALL_SOURCE_CLASSES,
+    CREDENTIAL_OPTIONAL,
+    CREDENTIAL_REQUIRED,
     SEARCH_ROW_FIELDS,
     OpenAlexSearch,
     ScopusSearch,
@@ -19,6 +21,7 @@ from searchers import (
     SemanticScholarSearch,
     WosSearch,
     empty_row,
+    resolve_credential,
     searchers_by_name,
 )
 
@@ -135,6 +138,62 @@ def test_wos_reports_missing_credentials(monkeypatch) -> None:
     err = WosSearch().credentials_error(ctx)
     assert err is not None
     assert "WOS_API_KEY_EXTENDED" in err
+
+
+def test_wos_run_raises_clear_error_without_key(monkeypatch) -> None:
+    """Regression for P5: `run()` must raise a descriptive RuntimeError,
+    not a bare KeyError from `os.environ[...]`."""
+    monkeypatch.delenv("WOS_API_KEY_EXTENDED", raising=False)
+    ctx = SearchContext(from_year=2020, to_year=2024, issns=[])
+    with pytest.raises(RuntimeError) as exc:
+        WosSearch().run(config=object(), ctx=ctx)
+    assert "WOS_API_KEY_EXTENDED" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# resolve_credential helper (P5)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_credential_required_missing(monkeypatch) -> None:
+    monkeypatch.delenv("SOME_KEY", raising=False)
+    value, err = resolve_credential(
+        "SOME_KEY", mode=CREDENTIAL_REQUIRED, label="Some Source",
+        hint="Get one at example.com.",
+    )
+    assert value == ""
+    assert err is not None
+    assert "Some Source" in err
+    assert "SOME_KEY" in err
+    assert "example.com" in err
+
+
+def test_resolve_credential_required_present_strips(monkeypatch) -> None:
+    monkeypatch.setenv("SOME_KEY", "  secret  ")
+    value, err = resolve_credential("SOME_KEY", mode=CREDENTIAL_REQUIRED)
+    assert value == "secret"
+    assert err is None
+
+
+def test_resolve_credential_optional_missing_is_not_an_error(monkeypatch) -> None:
+    monkeypatch.delenv("SOME_KEY", raising=False)
+    value, err = resolve_credential("SOME_KEY", mode=CREDENTIAL_OPTIONAL)
+    assert value == ""
+    assert err is None
+
+
+def test_resolve_credential_optional_present(monkeypatch) -> None:
+    monkeypatch.setenv("SOME_KEY", "k")
+    value, err = resolve_credential("SOME_KEY", mode=CREDENTIAL_OPTIONAL)
+    assert value == "k"
+    assert err is None
+
+
+def test_resolve_credential_label_defaults_to_env_var(monkeypatch) -> None:
+    monkeypatch.delenv("SOME_KEY", raising=False)
+    _, err = resolve_credential("SOME_KEY", mode=CREDENTIAL_REQUIRED)
+    assert err is not None
+    assert err.startswith("SOME_KEY:")
 
 
 def test_scopus_reports_missing_credentials(monkeypatch, tmp_path) -> None:

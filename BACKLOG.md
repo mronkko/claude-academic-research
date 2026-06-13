@@ -35,12 +35,41 @@ directory — not checked in because it references machine-local paths).
   `af3022d`. Skill-level wiring (MCP can't be called from headless
   scripts). Both `zotero-operations` and `systematic-review` gained
   a post-audit / post-coding retraction-check step.
-- **R6 (partial)** — batch tag updates in `--csv-backfill`. Status:
-  done in commit `9156489`. New `zotero_io.batch_update_tags()` using
-  pyzotero's `update_items` multi-item PATCH. Wired into both
-  `--csv-backfill` paths. **Steady-state parallel screening path
-  deliberately left on per-item `update_tags()` with tenacity retry
-  — see Tier 2 below for the remaining scope.**
+- **R6** — batch tag updates. Status: `--csv-backfill` done in commit
+  `9156489`; steady-state `abstract_screen.py` done in this pass.
+  `batch_update_tags()` (pyzotero multi-item PATCH) is now fed by a
+  main-loop buffer that flushes every `--tag-batch-size` decisions
+  (default 50; `1` restores per-item writes), with a final flush in a
+  `finally` so Ctrl+C still tags partial progress. CSV is written first,
+  so a tag write that never lands is recoverable (a re-run re-screens
+  untagged items). **`fulltext_code.py` deliberately stays on per-item
+  `update_tags()`**: every `fulltext:include` already requires its own
+  child-note PATCH, so batching the tag write there removes no round-trip
+  — the note write is the floor. This matches the "show a real bottleneck
+  before paying the complexity" caution the steady-state entry carried.
+
+## Tier 2 — shipped in this pass (audit trail)
+
+- **R9** — Zotero MCP `[scite,semantic]` extras. The wizard now installs
+  `zotero-mcp-server[scite,semantic]` (and the `skills/setup` doc matches),
+  so Scite retraction checks (R5's dependency) and semantic search are
+  present by default instead of silently absent.
+- **P1** — shared enrich-orchestrator run-log helpers extracted to
+  `scripts/pipelines/shared_orchestrators.py` (`open_log`,
+  `load_done_keys`, `LogManager`). The three `enrich_*` scripts now
+  delegate instead of each re-implementing `_open_log` / `_already_done`
+  / `_load_done_dois`.
+- **P5** — `searchers/base.py` gained `resolve_credential()` with
+  required / optional modes. `wos.py` no longer raises a bare `KeyError`
+  from `os.environ[...]`; `semantic_scholar.py` and `scopus.py` route
+  through the same helper.
+- **P7** — enrich-log column lists moved into `log_schemas.py`
+  (`ABSTRACT_FETCH_FIELDS`, `PDF_FETCH_FIELDS`, `DOI_ENRICH_FIELDS`),
+  joining the screening/coding schemas already there. Adding a column is
+  now a one-file edit.
+- **R1 + R2 + R3** — `critic-loop/SKILL.md` gained the Concession
+  Threshold Protocol (R1), frame-lock detection (R2), and an explicit
+  read-only constraint on critic subagents (R3).
 
 ## Re-evaluation candidates
 
@@ -65,188 +94,7 @@ directory — not checked in because it references machine-local paths).
 
 ## Tier 2 — medium impact, medium effort (needs approval)
 
-### Skills
-
-- **S3** — add an explicit "Companion skills" section to
-  `critic-loop`.
-  **Why deferred:** the skill body already references
-  `empirical-integrity` in prose (five mentions in
-  `skills/critic-loop/SKILL.md` — e.g. line 141 on the Step 1 test
-  gate), but there is no dedicated structural section anchoring the
-  companion relationships. Tier 1 pass scoped this out to avoid
-  drifting off S1.
-  **What it would take:** ~10 lines in `skills/critic-loop/SKILL.md`
-  — a "Companion skills" section enumerating the dependency on
-  `empirical-integrity` (test gate), `grounded-citations` (write-time
-  rule-book), and `manuscript-revision` (doctrine).
-  Files: [skills/critic-loop/SKILL.md](skills/critic-loop/SKILL.md).
-
-- **S4** — add reverse cross-link from `manuscript-revision` to
-  `academic-style`.
-  **Why deferred:** `academic-style/SKILL.md:3,22` already delegates
-  to `manuscript-revision`; only the reverse direction is missing.
-  Users who skip `academic-style` incur extra critic iterations.
-  **What it would take:** one short paragraph in
-  `skills/manuscript-revision/SKILL.md` naming `academic-style` as
-  the "before the loop" companion.
-  Files: [skills/manuscript-revision/SKILL.md](skills/manuscript-revision/SKILL.md).
-
-- **R9** — document `zotero-mcp-server[scite,semantic]` optional
-  extras in the setup wizard.
-  **Why deferred:** users install the base package and never discover
-  semantic search or retraction alerts. R5 (done) depends on Scite
-  being available — the wizard could install the extra automatically
-  or at least surface the option.
-  **What it would take:** one pass through `scripts/setup/wizard.py`
-  at the MCP-registration step; add a prompt or auto-enable the
-  extras. Tests: extend `tests/unit/test_setup_wizard.py`.
-  Files: [scripts/setup/wizard.py](scripts/setup/wizard.py).
-
 ### Scripts
-
-- **P1** — extract shared `LogManager` for the three `enrich_*`
-  orchestrators.
-  **Why deferred:** `core.config_loader` already handles the
-  config-loading side (all three scripts import `get` / `require`
-  from it). What remains reimplemented in each of
-  `enrich_abstracts.py`, `enrich_pdfs.py`, `enrich_dois.py` is
-  CSV-log initialization (`_open_log`), "already-done" tracking
-  (`_already_done` / `_load_done_dois` — note the status-filter
-  string differs: `"updated"` vs `"attached"`), and the per-file
-  `LOG_FIELDS` list. Adding a field to the log still means editing
-  three files in sync.
-  **What it would take:** new
-  `scripts/pipelines/shared_orchestrators.py` with a `LogManager`
-  class (append-only CSV with last-row-wins reduction, parametric
-  status filter). Refactor the three scripts to use it. Existing
-  tests should drive this — no behaviour change.
-  Files: [scripts/pipelines/enrich_abstracts.py](scripts/pipelines/enrich_abstracts.py), [scripts/pipelines/enrich_pdfs.py](scripts/pipelines/enrich_pdfs.py), [scripts/pipelines/enrich_dois.py](scripts/pipelines/enrich_dois.py).
-
-- **P5** — shared credential-check helper for searchers.
-  **Why deferred:** each of `scopus.py`, `wos.py`, `openalex.py`,
-  `semantic_scholar.py` re-implements "API key missing → raise"
-  logic with inconsistent error regimes. Concrete cases to cover:
-  `wos.py` uses `os.environ["WOS_API_KEY_EXTENDED"]` (raises bare
-  `KeyError` with a useless message); `semantic_scholar.py` uses
-  `os.environ.get(..., "")` (silently empties — the API accepts
-  anon calls with lower quota); `openalex.py` doesn't need a key.
-  The helper must accommodate "required", "optional", and
-  "unauthenticated-allowed" modes.
-  **What it would take:** add `require_config_key()` helper or
-  `@requires_credential` decorator to `searchers/base.py`; refactor
-  each searcher to use it.
-  Files: [scripts/pipelines/searchers/base.py](scripts/pipelines/searchers/base.py), [scripts/pipelines/searchers/](scripts/pipelines/searchers/).
-
-- **P7** — shared log-CSV schemas.
-  **Why deferred:** log schemas are defined inline in each orchestrator
-  but downstream templates (e.g. `test_systematic_review.py`) expect
-  specific columns. Adding a column risks silent template drift.
-  **What it would take:** new
-  `scripts/pipelines/log_schemas.py` with
-  `ABSTRACT_LOG_FIELDS`, `FULLTEXT_LOG_FIELDS`, etc. Imported by
-  orchestrators and templates. Consider generating the test template's
-  `LOG_FIELDS` assertion from the same source.
-  Files: [scripts/pipelines/](scripts/pipelines/), [templates/](templates/).
-
-- **R6 (steady-state)** — batch tag writes during parallel screening.
-  **Why deferred:** the Tier 1 pass landed batch writes on the
-  `--csv-backfill` path only. Steady-state parallel workers still
-  call per-item `update_tags()` after each decision. Benefit of
-  batching: fewer API calls, lower 412-retry pressure. Cost:
-  threading complexity (shared buffer, flusher thread, clean
-  shutdown on Ctrl+C, partial-batch error handling). Tenacity
-  retries already handle 412s correctly; benchmarks would need to
-  show a real bottleneck before paying the complexity.
-  **What it would take:** add a buffered-flusher class that takes
-  decisions from the ThreadPoolExecutor completion loop and calls
-  `batch_update_tags()` every N items or on exit. Atexit handler
-  for partial flush on SIGINT. Thread-safety tests.
-  Files: [scripts/pipelines/abstract_screen.py](scripts/pipelines/abstract_screen.py), [scripts/pipelines/fulltext_code.py](scripts/pipelines/fulltext_code.py), [scripts/pipelines/zotero_io.py](scripts/pipelines/zotero_io.py).
-
-- **P12** — Setup wizard paste-in command breaks when two plugin
-  versions are cached side-by-side.
-  **Why deferred:** ergonomic failure on a happy-path command — it
-  bites whenever Claude Code keeps an older plugin version cached
-  alongside the new one (common after `/plugin marketplace
-  upgrade`). The skill emits this paste-in line:
-
-      python3 ~/.claude/plugins/cache/mronkko/academic-research/*/scripts/setup/wizard.py
-
-  The literal `*` is a shell glob; with two versions present it
-  expands to two paths and `python3` aborts with "can't open file:
-  ambiguous arguments". Surfaced in the real-session log
-  (gitignored `logs/b1ecdc14-c827-414a-a772-7050633ffc7b.jsonl`
-  line 4 — IDE-selected by the user when reporting this).
-  Three call sites use the broken pattern:
-  [skills/setup/SKILL.md:13](skills/setup/SKILL.md#L13) (Wizard
-  path callout), [skills/setup/SKILL.md:42](skills/setup/SKILL.md#L42)
-  (the literal pasted command), and
-  [scripts/core/config_loader.py:61](scripts/core/config_loader.py#L61)
-  (runtime error message inside `require()`).
-  **What it would take:**
-  1. Skill prose: replace the glob with
-     `${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py`. Claude Code
-     resolves `${CLAUDE_PLUGIN_ROOT}` to the active version's
-     absolute path before the model emits text, so the user pastes
-     a concrete path. This is already the canonical pattern in
-     CLAUDE.md and is allow-listed under
-     `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/**)`.
-  2. `config_loader.py:require()`: `${CLAUDE_PLUGIN_ROOT}` is
-     unresolved at user-terminal time, so the same trick won't
-     work. Compute the wizard path from `__file__` instead:
-     `(Path(__file__).resolve().parent.parent / "setup" /
-     "wizard.py")`. Points to the same version currently running,
-     by construction.
-  3. Regression guard: a unit test that greps `skills/setup/SKILL.md`
-     for stray `*` globs in fenced code blocks. One assertion —
-     prevents future drift back to the broken pattern.
-  Files: [skills/setup/SKILL.md](skills/setup/SKILL.md), [scripts/core/config_loader.py](scripts/core/config_loader.py), [tests/unit/](tests/unit/).
-
-- **P11** — Elsevier ScienceDirect PDF fetcher silently caches
-  1-page previews when entitlement is partial.
-  **Why deferred:** silent correctness failure, not a crash —
-  surfaced only because the user noticed 39 papers with <10K
-  extracted chars after full-text coding had already started.
-  [fetchers/sciencedirect.py:106](scripts/pipelines/fetchers/sciencedirect.py#L106)
-  validates only `status_code == 200` and `%PDF` magic bytes;
-  Elsevier signals partial entitlement via the response header
-  `x-els-status: WARNING - Response limited to first page because
-  requestor not entitled to resource`, which the fetcher receives
-  but never inspects. The 1-page preview is a valid PDF and passes
-  both checks, so it gets cached and propagates to coding. JYU's
-  TDM license grants this **per-article**, not per-journal — same
-  journal/year mixes entitled and non-entitled papers, so a
-  prefix/journal denylist is not a fix.
-  **Evidence in real-session log** (gitignored
-  `logs/b1ecdc14-c827-414a-a772-7050633ffc7b.jsonl`): the warning
-  header appears 8 times — diagnostic message at line 1742,
-  empirical comparison of PDF vs XML endpoints at lines 1760-1770
-  (preview returns SIZE=234516 / Pages=1 with WARNING; XML returns
-  full body with `x-els-status: OK`), root-cause writeup at
-  lines 2339-2340, and the session-memory summary at line 2931.
-  The user's improvised remediation (downstream
-  `scripts/fetch_elsevier_xml_pdfs.py`, not in this repo) confirms
-  the fix shape — but per the standing "no improvised pipeline
-  code" rule it must be lifted into the plugin.
-  **What it would take:**
-  1. In `ScienceDirectSource.fetch_pdf`, after the `resp` check,
-     reject the PDF when `resp.headers.get("x-els-status",
-     "").startswith("WARNING")`. Fall through, do not cache.
-  2. Add an XML fallback at the same URL with
-     `Accept: text/xml`. On `x-els-status: OK`, parse the
-     `<body>` element, render a text-only archival PDF via
-     `reportlab`, cache that. Document the provenance in the
-     cache filename or sidecar so the audit script can tell a
-     real PDF from a TDM-recovered one.
-  3. Distinguish "preview blocked, XML also empty" (truly
-     unrecoverable → FE6) from "PDF preview but XML succeeded"
-     (recovered) so
-     [audit_zotero_library.py](scripts/pipelines/audit_zotero_library.py)
-     can flag the former before coding starts rather than after.
-  4. Live test under `tests/live/` using one known-blocked Elsevier
-     DOI (per the "every source has a live test" rule). The XML
-     fallback path also needs its own live coverage entry.
-  Files: [scripts/pipelines/fetchers/sciencedirect.py](scripts/pipelines/fetchers/sciencedirect.py), [scripts/pipelines/audit_zotero_library.py](scripts/pipelines/audit_zotero_library.py), [tests/live/](tests/live/).
 
 - **P9** — migrate `test_live_coverage.py` from `legacy/` to
   `fetchers/*.py`.
@@ -259,18 +107,6 @@ directory — not checked in because it references machine-local paths).
   `scripts/publishers/registry.py`, whose only remaining consumers
   were the legacy script and the tests now pointed at the handler
   registry). Left here for the audit trail.
-
-### Reference-project adoptions
-
-- **R1 + R2 + R3** — Concession Threshold Protocol, frame-lock
-  detection, and explicit read-only constraint on critic subagents
-  (from `Imbad0202/academic-research-skills`).
-  **Why deferred:** R1 directly targets the sycophancy failure mode
-  our four-critic loop is vulnerable to. R2 is a one-line rule. R3
-  formalizes behaviour we already rely on.
-  **What it would take:** ~50 lines of prose in
-  `skills/critic-loop/SKILL.md` — one new section per item.
-  Files: [skills/critic-loop/SKILL.md](skills/critic-loop/SKILL.md).
 
 ---
 

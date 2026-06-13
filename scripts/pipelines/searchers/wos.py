@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
-import os
 import time
 
 import requests
 
-from .base import SearchContext, SearchSource, empty_row
+from .base import (
+    CREDENTIAL_REQUIRED,
+    SearchContext,
+    SearchSource,
+    empty_row,
+    resolve_credential,
+)
 
 WOS_ENDPOINT = "https://api.clarivate.com/api/wos"
+
+_WOS_KEY_HINT = (
+    "The Starter API does not support IS= ISSN filters, so it is not a "
+    "substitute — formal searches need the Expanded tier."
+)
 
 
 class WosSearch(SearchSource):
@@ -18,14 +28,19 @@ class WosSearch(SearchSource):
     supports_block_queries = False
 
     def credentials_error(self, ctx: SearchContext) -> str | None:
-        if os.environ.get("WOS_API_KEY_EXTENDED"):
-            return None
-        return ("WoS Expanded: WOS_API_KEY_EXTENDED env var not set. "
-                "The Starter API does not support IS= ISSN filters, so it is "
-                "not a substitute — formal searches need the Expanded tier.")
+        _, err = resolve_credential(
+            "WOS_API_KEY_EXTENDED", mode=CREDENTIAL_REQUIRED,
+            label="WoS Expanded", hint=_WOS_KEY_HINT,
+        )
+        return err
 
     def run(self, config, ctx: SearchContext) -> list[dict]:
-        api_key = os.environ["WOS_API_KEY_EXTENDED"]
+        api_key, err = resolve_credential(
+            "WOS_API_KEY_EXTENDED", mode=CREDENTIAL_REQUIRED,
+            label="WoS Expanded", hint=_WOS_KEY_HINT,
+        )
+        if err:
+            raise RuntimeError(err)
         rows: list[dict] = []
         for label, _scopus_core, wos_core in config.QUERY_DEFS:
             q = self._full_query(wos_core, ctx)

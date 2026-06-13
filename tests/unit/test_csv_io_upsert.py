@@ -139,7 +139,7 @@ def test_upsert_auto_migrates_schema_widening(tmp_path: Path) -> None:
         "item_key": "AAAA0002", "decision": "exclude",
         "reason": "later", "model": "haiku",
     }, SCHEMA)
-    
+
     rows = _read_rows(target)
     assert len(rows) == 2
     # Row 1 padded with empty string for new column 'model'

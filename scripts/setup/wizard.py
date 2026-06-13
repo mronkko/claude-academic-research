@@ -38,6 +38,9 @@ CONFIG_DIR = Path.home() / ".config" / "academic-research"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 
+AGY_HOME = Path.home() / ".gemini"
+AGY_MCP_CONFIG_PATH = AGY_HOME / "config" / "mcp_config.json"
+
 PLUGIN_ROOT_ENV = "${CLAUDE_PLUGIN_ROOT}"
 
 # MCP server connection statuses, parsed from `claude mcp list` output.
@@ -272,7 +275,8 @@ KEYS: tuple[KeySpec, ...] = (
         "GEMINI_API_KEY", "gemini", "api_key", "Gemini API key",
         required=False, hidden=True,
         what="Google is the company that builds Gemini. This API key lets the "
-             "plugin's screening and coding scripts call Gemini (Antigravity) directly.",
+             "plugin's screening and coding scripts call Gemini directly — separate "
+             "from Antigravity's own Google sign-in.",
         used_by="systematic-review (Gemini-driven abstract screening, full-text "
                 "screening, and structured coding of included papers).",
         impact="Systematic-review screening pipelines will fail if you configure them "
@@ -439,9 +443,12 @@ EXPECTED_MCP: tuple[McpServerSpec, ...] = (
         purpose="Reference manager — full-text retrieval, notes, citation keys.",
         add_args=("-s", "user", "zotero", "--", "zotero-mcp"),
         homepage="https://github.com/54yyyu/zotero-mcp",
-        install_cmd="uv tool install zotero-mcp-server",
-        install_note="After install, run: zotero-mcp setup. "
-                     "PyPI alt: pip install zotero-mcp-server.",
+        install_cmd='uv tool install "zotero-mcp-server[scite,semantic]"',
+        install_note="Installs the [scite,semantic] extras: scite powers the "
+                     "retraction-check step the systematic-review and "
+                     "zotero-operations skills run; semantic enables semantic "
+                     "library search. After install, run: zotero-mcp setup. "
+                     'PyPI alt: pip install "zotero-mcp-server[scite,semantic]".',
         tier=MCP_TIER_REQUIRED,
     ),
     McpServerSpec(
@@ -1407,7 +1414,101 @@ def _format_register_command(spec: McpServerSpec) -> str:
     return "claude mcp add " + " ".join(spec.add_args)
 
 
-def _print_mcp_offer(spec: McpServerSpec, status: str) -> None:
+def _mcp_spec_to_agy_entry(spec: McpServerSpec) -> dict:
+    """Convert a `claude mcp add` argv (`spec.add_args`) into an Antigravity
+    `mcpServers` entry (`~/.gemini/config/mcp_config.json`).
+
+    `-s user <name>` scope flags have no Antigravity equivalent — that
+    config is already a flat, user-level dict — so everything before `--`
+    is dropped except any `-e KEY=VAL` pairs, which become `env`.
+    """
+    args = list(spec.add_args)
+    env: dict[str, str] = {}
+    i = 0
+    while i < len(args):
+        if args[i] == "-e" and i + 1 < len(args):
+            key, _, value = args[i + 1].partition("=")
+            env[key] = value
+            del args[i:i + 2]
+            continue
+        i += 1
+
+    sep = args.index("--")
+    command, *rest = args[sep + 1:]
+    entry: dict = {"command": command, "args": rest}
+    if env:
+        entry["env"] = env
+    return entry
+
+
+def _merge_mcp_status(claude_status: dict[str, str], agy_status: dict[str, str]) -> dict[str, str]:
+    """Combine Claude-CLI and Antigravity MCP status maps.
+
+    A server counts as connected if *either* surface reports it connected —
+    an Antigravity-only user shouldn't see "not connected" for a server
+    `claude mcp list` doesn't know about, and vice versa.
+    """
+    merged: dict[str, str] = {}
+    for name in set(claude_status) | set(agy_status):
+        c = claude_status.get(name, MCP_STATUS_MISSING)
+        a = agy_status.get(name, MCP_STATUS_MISSING)
+        if c == MCP_STATUS_CONNECTED or a == MCP_STATUS_CONNECTED:
+            merged[name] = MCP_STATUS_CONNECTED
+        elif c != MCP_STATUS_MISSING:
+            merged[name] = c
+        else:
+            merged[name] = a
+    return merged
+
+
+def _agy_available() -> bool:
+    """True if Antigravity (`agy`) appears to be installed on this machine."""
+    return AGY_HOME.exists() or shutil.which("agy") is not None
+
+
+def _check_agy_mcp_servers() -> dict[str, str]:
+    """Read `~/.gemini/config/mcp_config.json` and return {name: status}.
+
+    This reflects what's *configured*, not a live connectivity check (agy
+    has no `mcp list` equivalent we can shell out to). An entry present and
+    not `disabled` is reported as MCP_STATUS_CONNECTED; `disabled: true` or
+    a missing/unreadable file is reported as MCP_STATUS_MISSING / `{}`.
+    """
+    if not AGY_MCP_CONFIG_PATH.exists():
+        return {}
+    try:
+        data = json.loads(AGY_MCP_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    servers = data.get("mcpServers", {})
+    return {
+        name: MCP_STATUS_MISSING if entry.get("disabled") else MCP_STATUS_CONNECTED
+        for name, entry in servers.items()
+    }
+
+
+def _load_agy_mcp_config() -> dict:
+    """Load `~/.gemini/config/mcp_config.json`, backing up first if it
+    exists. Mirrors `_patch_settings`'s read-backup-merge-write pattern."""
+    if not AGY_MCP_CONFIG_PATH.exists():
+        return {}
+    try:
+        data = json.loads(AGY_MCP_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"  ERROR: cannot parse {AGY_MCP_CONFIG_PATH}: {e}", file=sys.stderr)
+        print("  Back up your mcp_config.json, then re-run the wizard.", file=sys.stderr)
+        sys.exit(3)
+    backup = AGY_MCP_CONFIG_PATH.with_suffix(".json.bak-wizard")
+    shutil.copy2(AGY_MCP_CONFIG_PATH, backup)
+    return data
+
+
+def _write_agy_mcp_config(data: dict) -> None:
+    AGY_MCP_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    AGY_MCP_CONFIG_PATH.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _print_mcp_offer(spec: McpServerSpec, status: str, register_line: str | None = None) -> None:
     if status == MCP_STATUS_MISSING:
         headline = f"{spec.name} — not registered"
     elif status == MCP_STATUS_NEEDS_AUTH:
@@ -1429,7 +1530,7 @@ def _print_mcp_offer(spec: McpServerSpec, status: str) -> None:
     print(_wrap_labeled("Install:", install_line))
     if spec.install_note:
         print(_wrap_labeled("", spec.install_note))
-    print(_wrap_labeled("Register:", _format_register_command(spec)))
+    print(_wrap_labeled("Register:", register_line if register_line is not None else _format_register_command(spec)))
     print()
 
 
@@ -1534,6 +1635,53 @@ def _offer_register_mcp(
                     print(_wrap_labeled("", spec.install_note))
                 print(_wrap_body("Then re-run this wizard.", indent=4))
             updated[spec.name] = updated.get(spec.name, MCP_STATUS_MISSING)
+
+    return registered, updated
+
+
+def _offer_register_agy_mcp(
+    specs: tuple[McpServerSpec, ...],
+    current: dict[str, str],
+    interactive: bool,
+) -> tuple[int, dict[str, str]]:
+    """For each spec not currently connected in `~/.gemini/config/mcp_config.json`,
+    offer to add it.
+
+    Mirrors `_offer_register_mcp`, but merges a JSON entry into Antigravity's
+    `mcpServers` config instead of shelling out to `claude mcp add`. Returns
+    (registered_count, updated_status_map).
+    """
+    updated = dict(current)
+    if not interactive:
+        return 0, updated
+
+    registered = 0
+    for spec in specs:
+        status = current.get(spec.name, MCP_STATUS_MISSING)
+        if status == MCP_STATUS_CONNECTED:
+            continue
+
+        _print_mcp_offer(spec, status, register_line=f"add to {AGY_MCP_CONFIG_PATH}")
+
+        try:
+            answer = input("    Register now? [Y/n] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            print("    Skipped (input ended).")
+            continue
+
+        if answer not in ("", "y", "yes"):
+            print("    Skipped.")
+            continue
+
+        config = _load_agy_mcp_config()
+        servers = config.setdefault("mcpServers", {})
+        servers[spec.name] = _mcp_spec_to_agy_entry(spec)
+        _write_agy_mcp_config(config)
+
+        print(f"    ✓ Registered {spec.name}.")
+        updated[spec.name] = MCP_STATUS_CONNECTED
+        registered += 1
 
     return registered, updated
 
@@ -1660,12 +1808,33 @@ def main() -> int:
             # Re-poll so the final summary reflects post-registration state.
             current_mcp = _check_mcp_servers() or current_mcp
 
+    # MCP registration only — Antigravity has no per-project permission/allow-list
+    # file analogous to `~/.claude/settings.json` for `_patch_settings` to target.
+    agy_available = _agy_available()
+    agy_mcp: dict[str, str] = {}
+    agy_registered = 0
+    if agy_available:
+        agy_mcp = _check_agy_mcp_servers()
+        if interactive:
+            print()
+            print(_wrap_body(
+                "Antigravity detected. Registering the same MCP servers in "
+                f"{AGY_MCP_CONFIG_PATH} so they're available there too.",
+            ))
+            agy_registered, agy_mcp = _offer_register_agy_mcp(
+                EXPECTED_MCP, agy_mcp, interactive=True,
+            )
+
+    current_mcp = _merge_mcp_status(current_mcp, agy_mcp)
+
     print()
     print("  Setup complete.")
     print(f"    Config:   {CONFIG_PATH} (mode 0600)")
     print(f"    Settings: {SETTINGS_PATH} (+{allow_added} allow, +{deny_added} deny)")
     if gitignore_updated is not None:
         print(f"    Gitignore: added .claude/ entry to {gitignore_updated}")
+    if agy_available:
+        print(f"    Antigravity MCP: {AGY_MCP_CONFIG_PATH} (+{agy_registered} registered)")
     glyph = "✓" if zotero_local_status == ZOTERO_LOCAL_STATUS_OK else "✗"
     print(f"    Zotero local API: {glyph} {zotero_local_message}")
     bbt_glyph = "✓" if zotero_bbt_status == ZOTERO_BBT_STATUS_OK else "✗"

@@ -16,8 +16,49 @@ merges and deduplicates across sources.
 
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+
+# Credential requirement modes for `resolve_credential`.
+CREDENTIAL_REQUIRED = "required"   # missing key → hard error, source can't run
+CREDENTIAL_OPTIONAL = "optional"   # key raises quota, but anon calls still work
+
+
+def resolve_credential(
+    env_var: str,
+    *,
+    mode: str = CREDENTIAL_REQUIRED,
+    label: str = "",
+    hint: str = "",
+) -> tuple[str, str | None]:
+    """Resolve an API credential from the environment, uniformly.
+
+    Returns `(value, error)`:
+
+    - The credential is read from `os.environ[env_var]` and stripped.
+    - If present, returns `(value, None)`.
+    - If absent and `mode == CREDENTIAL_OPTIONAL`, returns `("", None)` —
+      the caller proceeds unauthenticated (lower quota).
+    - If absent and `mode == CREDENTIAL_REQUIRED`, returns `("", message)`
+      where `message` names `label` (default: the env var), the missing
+      env var, and any `hint`.
+
+    This replaces the per-searcher hand-rolled checks — `wos.py`'s bare
+    `os.environ[...]` KeyError, `semantic_scholar.py`'s silent
+    `get(..., "")` — with one regime that `credentials_error()` and
+    `run()` can both call.
+    """
+    value = os.environ.get(env_var, "").strip()
+    if value:
+        return value, None
+    if mode == CREDENTIAL_OPTIONAL:
+        return "", None
+    label = label or env_var
+    message = f"{label}: {env_var} env var not set."
+    if hint:
+        message = f"{message} {hint}"
+    return "", message
 
 # Common row schema every source emits. Fields not applicable to a
 # source must still be present as empty strings / zero; downstream CSV

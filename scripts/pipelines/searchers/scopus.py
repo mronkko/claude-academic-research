@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import os
 
-from .base import SearchContext, SearchSource, empty_row
+from .base import (
+    CREDENTIAL_REQUIRED,
+    SearchContext,
+    SearchSource,
+    empty_row,
+    resolve_credential,
+)
 
 
 class ScopusSearch(SearchSource):
@@ -17,7 +23,10 @@ class ScopusSearch(SearchSource):
         # The env var is an optional fallback for some installs. Accept
         # either — init() below will fail clearly if neither is set.
         cfg = os.path.expanduser("~/.config/pybliometrics.cfg")
-        if os.path.exists(cfg) or os.environ.get("SCOPUS_API_KEY"):
+        if os.path.exists(cfg):
+            return None
+        _, err = resolve_credential("SCOPUS_API_KEY", mode=CREDENTIAL_REQUIRED)
+        if err is None:
             return None
         return ("Scopus: neither ~/.config/pybliometrics.cfg nor "
                 "SCOPUS_API_KEY is set")

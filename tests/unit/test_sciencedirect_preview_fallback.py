@@ -23,9 +23,11 @@ from unittest.mock import MagicMock
 
 import pytest
 from fetchers.sciencedirect import (
+    TDM_RECOVERED_TAG,
     ScienceDirectSource,
     _extract_xml_body,
     _is_preview_warning,
+    is_tdm_recovered_path,
 )
 
 # ---------------------------------------------------------------------------
@@ -223,3 +225,22 @@ def test_fetch_pdf_skips_when_doi_prefix_not_elsevier(tmp_path: Path) -> None:
     src = _make_source()
     src.http.get.side_effect = AssertionError("should not be called for non-Elsevier DOI")
     assert src.fetch_pdf("10.48550/arxiv.2401.01234", cache_dir=tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# is_tdm_recovered_path / TDM_RECOVERED_TAG — P11 item 3
+# ---------------------------------------------------------------------------
+
+
+def test_is_tdm_recovered_path_true_for_recovered_suffix(tmp_path: Path) -> None:
+    path = tmp_path / "10.1016_j.example.2020.01.001-tdm-recovered.pdf"
+    assert is_tdm_recovered_path(path) is True
+
+
+def test_is_tdm_recovered_path_false_for_native_pdf(tmp_path: Path) -> None:
+    path = tmp_path / "10.1016_j.example.2020.01.001.pdf"
+    assert is_tdm_recovered_path(path) is False
+
+
+def test_tdm_recovered_tag_is_pdf_namespaced() -> None:
+    assert TDM_RECOVERED_TAG == "pdf:tdm-recovered"

@@ -49,12 +49,18 @@ if str(SCRIPTS_ROOT) not in sys.path:
 
 from core.config_loader import require  # noqa: E402
 
+# Tag enrich_pdfs.py applies when a PDF's text was recovered from
+# Elsevier's XML TDM fallback rather than the publisher's native PDF.
+# Canonical definition: fetchers.sciencedirect.TDM_RECOVERED_TAG.
+TDM_RECOVERED_TAG = "pdf:tdm-recovered"
+
 
 def _classify(items: list[dict], attachments_by_parent: dict[str, list[dict]]) -> dict:
     missing_abstract: list[dict] = []
     missing_pdf: list[dict] = []
     missing_doi: list[dict] = []
     empty_stubs: list[dict] = []
+    tdm_recovered: list[dict] = []
     have_pdf = 0
 
     for it in items:
@@ -73,6 +79,10 @@ def _classify(items: list[dict], attachments_by_parent: dict[str, list[dict]]) -
 
         if not (d.get("abstractNote") or "").strip():
             missing_abstract.append(identifier)
+
+        tags = {t.get("tag", "") for t in d.get("tags", []) if t.get("tag")}
+        if TDM_RECOVERED_TAG in tags:
+            tdm_recovered.append(identifier)
 
         # Missing DOI check — cheap (Zotero data only, no Crossref).
         # Feeds enrich_dois.py --find-missing via audit.missing_doi.keys.
@@ -104,10 +114,12 @@ def _classify(items: list[dict], attachments_by_parent: dict[str, list[dict]]) -
         "empty_stub_count": len(empty_stubs),
         "missing_abstract_count": len(missing_abstract),
         "missing_doi_count": len(missing_doi),
+        "tdm_recovered_count": len(tdm_recovered),
         "missing_abstract": missing_abstract,
         "missing_pdf": missing_pdf,
         "missing_doi": missing_doi,
         "empty_stubs": empty_stubs,
+        "tdm_recovered": tdm_recovered,
     }
 
 
@@ -357,7 +369,8 @@ def main() -> int:
     # stages can consume them via --filter-keys-file without any jq step.
     stem = out_path.with_suffix("")  # strip .json
     keys_files: dict[str, Path] = {}
-    for category in ("missing_abstract", "missing_pdf", "missing_doi", "empty_stubs"):
+    for category in ("missing_abstract", "missing_pdf", "missing_doi", "empty_stubs",
+                     "tdm_recovered"):
         keys_path = Path(f"{stem}.{category}.keys")
         keys_path.write_text(
             "\n".join(entry["key"] for entry in report.get(category, [])) + "\n"
@@ -374,9 +387,11 @@ def main() -> int:
     print(f"  Empty PDF stubs:            {report['empty_stub_count']}")
     print(f"  Missing abstract:           {report['missing_abstract_count']}")
     print(f"  Missing DOI:                {report['missing_doi_count']}")
+    print(f"  TDM-recovered PDFs:         {report['tdm_recovered_count']}")
     print(f"  Details written to:         {out_path}")
     print(f"  Keys files written to:      "
-          f"{stem}.{{missing_abstract,missing_pdf,missing_doi,empty_stubs}}.keys")
+          f"{stem}.{{missing_abstract,missing_pdf,missing_doi,empty_stubs,"
+          f"tdm_recovered}}.keys")
     print()
     print("Next steps — feed the .keys files directly into pipeline stages:")
     if report["missing_doi_count"]:
@@ -391,6 +406,11 @@ def main() -> int:
     if report["empty_stub_count"]:
         print(f"  # {report['empty_stub_count']} empty stubs to delete; see "
               f"{keys_files['empty_stubs']}")
+    if report["tdm_recovered_count"]:
+        print(f"  # {report['tdm_recovered_count']} PDFs were XML-recovered "
+              f"(tagged '{TDM_RECOVERED_TAG}') — full text may be less "
+              f"complete than a native PDF; review before/during coding. "
+              f"See {keys_files['tdm_recovered']}")
 
     # PDF-fetch failure-cause grouping (T4-3). Reads the structured log
     # written by enrich_pdfs and groups items by why the cascade gave

@@ -27,6 +27,13 @@ to actually run it, with CLI flags, Agent prompts, and file schemas.
 Read `critic-loop` for the executable details; everything below is the
 justification for that procedure's shape.
 
+**Before the loop:** `academic-style` governs prose conventions
+(topic sentences, active voice, hedging, term definitions) at drafting
+time. Applying it before the first `critic-loop` run reduces how many
+MAJOR/MINOR style issues the argument critic raises — fewer iterations
+to convergence. This skill and `critic-loop` cover *when* and *why* to
+revise; `academic-style` covers *how the prose should read* throughout.
+
 ## Why a loop, not a pass
 
 A single critic produces a shallow pass. Four differently-framed critics

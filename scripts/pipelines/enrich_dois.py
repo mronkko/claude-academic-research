@@ -45,7 +45,6 @@ Write policy:
 from __future__ import annotations
 
 import argparse
-import csv
 import os
 import sys
 from dataclasses import dataclass
@@ -58,6 +57,7 @@ for _p in (str(SCRIPT_DIR), str(SCRIPTS_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
 from core.config_loader import get, require  # noqa: E402
 from fetchers._title_match import matches as title_matches  # noqa: E402
@@ -67,16 +67,12 @@ from fetchers.doi_resolver import (  # noqa: E402
     _extract_resolution,
     resolve_doi,
 )
+from log_schemas import DOI_ENRICH_FIELDS  # noqa: E402
 
 DEFAULT_LOG_CSV = os.path.join("output", "doi_enrich_log.csv")
 DEFAULT_CACHE_DIR = os.path.join("output", "pdf_cache")
 
-LOG_FIELDS = [
-    "run_date", "item_key",
-    "zotero_doi", "zotero_title", "zotero_year",
-    "crossref_doi", "crossref_title", "crossref_authors",
-    "status",
-]
+LOG_FIELDS = DOI_ENRICH_FIELDS
 
 
 @dataclass
@@ -91,13 +87,7 @@ def _load_config() -> Config:
 
 
 def _open_log(path: str):
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    is_new = not os.path.exists(path)
-    fh = open(path, "a", newline="", encoding="utf-8")
-    writer = csv.DictWriter(fh, fieldnames=LOG_FIELDS)
-    if is_new:
-        writer.writeheader()
-    return fh, writer
+    return shared_orchestrators.open_log(path, LOG_FIELDS)
 
 
 # ---------------------------------------------------------------------------

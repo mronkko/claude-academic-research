@@ -32,6 +32,22 @@ Execute the editing loop documented in the `manuscript-revision` skill.
 This skill is the *procedure*; that skill is the *doctrine*. Read it
 first if you have not recently.
 
+## Companion skills
+
+- **`manuscript-revision`** — the doctrine this skill executes as
+  procedure. Read it first if you have not recently; it covers the
+  editing philosophy this loop's adjudication step (Step 4) relies on.
+- **`empirical-integrity`** — owns the Step 1 test gate via
+  `test_empirical_integrity.py`. A failure there is an
+  empirical-integrity regression, not a critic-loop bug — fix the
+  underlying claim/source mismatch per that skill's rules, then re-run
+  the gate.
+- **`grounded-citations`** — the write-time rule-book for any new
+  citation a critic's suggested edit introduces. If adjudication (Step
+  4) adds a claim that needs a source, follow `grounded-citations`
+  when inserting the `[@BBT_KEY]`, then let the evidence critic verify
+  it next iteration.
+
 ## Relationship to `fact-check`
 
 `fact-check` is the standalone citation / claim audit. The evidence
@@ -153,6 +169,10 @@ while iter <= MAX_ITER:
   Single message, multiple Agent tool calls — one per critic. Each Agent call
   uses subagent_type="general-purpose" (model="sonnet" is a reasonable default)
   and receives the generic prompt preamble below plus the perspective prompt.
+  Critics are READ-ONLY (see the preamble's read-only clause): they inspect and
+  flag, they never edit the manuscript. All editing happens in Step 5, done by
+  the main agent. If a critic returns edited files instead of a flag report,
+  discard the edits and keep only the flags.
 
   Save each Agent's returned text to critic-reviews/iter-{N}/critic-<name>.md.
 
@@ -197,6 +217,55 @@ while iter <= MAX_ITER:
   iter += 1
 ```
 
+## Adjudication discipline — the Concession Threshold Protocol
+
+Step 4 is where the loop is most vulnerable to sycophancy: the cheapest
+way to make a critic's MAJOR item "go away" is to mark it `rejected` or
+`deferred` and exit. The Concession Threshold Protocol sets the bar a
+concession must clear before you may downgrade a MAJOR.
+
+**You may only `reject` a critic's MAJOR item if one of these holds:**
+
+1. **Verifiable refutation** — a concrete, checkable basis shows the
+   critic is wrong (e.g. an MCP lookup confirms the "missing" seminal
+   work is in fact cited; the results file confirms the number the
+   critic called inconsistent). Record the check in `decisions.md`.
+2. **User-approved scope decision** — the user has explicitly placed the
+   item out of scope. Record who decided and when.
+
+"The author addressed the spirit of it", "this is close enough", "the
+revision clearly tried", and "I don't think a reviewer would care" do
+**not** clear the threshold. If you cannot meet (1) or (2), the item is
+either `applied` this iteration or escalated to the user — never silently
+`rejected`.
+
+**`deferred` requires a named blocker** — needs user input, needs new
+data, or needs a pipeline re-run the loop can't do. "Defer to later" with
+no blocker is a disguised rejection and is not allowed.
+
+**The protocol binds the critics too.** A critic must not withdraw a
+MAJOR it raised in a previous iteration unless the *specific* defect it
+named is concretely gone in the rendered diff. A verdict that improves
+from BLOCK to SHIP with no corresponding applied edits is an
+anti-sycophancy violation (see Red flags) — re-prompt or discard that
+critic's output for the iteration.
+
+## Frame-lock detection
+
+The four critics all review *within* the manuscript's own framing — its
+research question, its choice of theory, its unit of analysis. None is
+asked "is this the right frame at all?", so a manuscript can pass every
+critic while resting on an unexamined premise. That is **frame-lock**.
+
+**Rule:** if across two consecutive iterations every issue raised is
+within-frame polish (wording, evidence, method detail) and no critic ever
+questions the manuscript's core framing or a foundational assumption,
+flag a frame-lock in `decisions.md` and surface it to the user once: name
+the load-bearing assumption the manuscript never defends and ask whether
+it is deliberate. Do not auto-resolve it — challenging the frame is a
+judgment call only the author can make. One frame-lock notice per loop is
+enough; do not re-flag every iteration.
+
 ## Generic prompt preamble (all critics)
 
 Append the perspective-specific prompt below this preamble:
@@ -225,6 +294,14 @@ Anti-sycophancy — STRICT:
   because you are tired of flagging.
 
 Your role: FLAG issues, do NOT rewrite. The author will adjudicate and apply.
+
+Read-only — STRICT:
+  You are a read-only reviewer. Inspect the manuscript and its sources with
+  read and search tools (Read, Grep, Glob, and MCP citation lookups). Do NOT
+  edit, write, move, or delete any file, and do NOT run commands that mutate
+  the repository (no Edit/Write, no `git commit`, no pipeline re-runs). If a
+  fix requires changing a file, describe it in "Suggested revision" — applying
+  it is the main agent's job in Step 5, never yours.
 
 <perspective-specific prompt — see Perspective prompts section>
 
@@ -512,7 +589,15 @@ reports into the chat — point to the files under `critic-reviews/`.
   claims.
 - Treating a critic that returned BLOCK as SHIP-WITH-REVISIONS to force exit.
 - Reaching MAX_ITER with unresolved MAJORs and calling the loop done.
+- Rejecting a critic's MAJOR without meeting the Concession Threshold
+  Protocol — no verifiable refutation, no user-approved scope call, just
+  "close enough". Deferring a MAJOR with no named blocker is the same
+  violation in disguise.
+- Every iteration polishing within the frame while no critic ever
+  questions the manuscript's core premise — a frame-lock that was never
+  surfaced to the user.
 - Letting a critic rewrite prose directly (the contract is flag-only).
+  Critics are read-only; if one returns edited files, discard the edits.
 - A critic that flagged MAJORs in iter N-1 now returns SHIP in iter N
   despite minimal visible revision — anti-sycophancy violation; re-prompt
   or discard that iteration's critic output.

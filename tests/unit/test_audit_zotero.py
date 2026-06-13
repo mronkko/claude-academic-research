@@ -19,10 +19,11 @@ def _load():
 
 
 def _item(key: str, abstract: str = "", item_type: str = "journalArticle",
-          title: str = "", doi: str = "") -> dict:
+          title: str = "", doi: str = "", tags: list[str] | None = None) -> dict:
     return {"data": {"key": key, "itemType": item_type,
                      "abstractNote": abstract, "title": title,
-                     "DOI": doi}}
+                     "DOI": doi,
+                     "tags": [{"tag": t} for t in (tags or [])]}}
 
 
 def _pdf_attachment(parent: str, md5: str | None = "deadbeef") -> dict:
@@ -49,6 +50,19 @@ def test_classify_item_with_pdf_and_abstract() -> None:
     assert r["have_pdf"] == 1
     assert r["missing_pdf_count"] == 0
     assert r["missing_abstract_count"] == 0
+
+
+def test_classify_flags_tdm_recovered_items() -> None:
+    mod = _load()
+    items = [
+        _item("A1", abstract="x", title="Recovered", tags=["pdf:tdm-recovered"]),
+        _item("A2", abstract="x", title="Native"),
+    ]
+    atts = {"A1": [_pdf_attachment("A1")], "A2": [_pdf_attachment("A2")]}
+    r = mod._classify(items, atts)
+    assert r["tdm_recovered_count"] == 1
+    assert r["tdm_recovered"][0]["key"] == "A1"
+    assert r["have_pdf"] == 2
 
 
 def test_classify_item_missing_abstract() -> None:

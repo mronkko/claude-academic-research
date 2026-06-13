@@ -174,6 +174,37 @@ def _run_csv_backfill(
     return 0 if stats["failed"] == 0 else 1
 
 
+def _stage_tag_op(decision: str) -> dict:
+    """The `batch_update_tags` / `update_tags` op that records a stage
+    decision: add `abstract:<decision>`, clearing any prior `abstract:*`."""
+    return {
+        "add": [f"{STAGE_TAG_PREFIX}{decision}"],
+        "remove_prefixed": [STAGE_TAG_PREFIX],
+    }
+
+
+def _flush_tag_buffer(zot, buffer: list[tuple[str, dict]]) -> dict[str, int]:
+    """Apply and clear a buffer of `(item_key, op)` stage-tag writes via a
+    single multi-item PATCH (R6 steady-state batching).
+
+    Failed writes leave those items untagged — Zotero tags are the resume
+    source of truth, so a re-run re-screens any item whose tag did not
+    land. A warning is printed at batch granularity since per-item failure
+    annotation isn't available on the batch path.
+    """
+    if not buffer:
+        return {"applied": 0, "unchanged": 0, "failed": 0}
+    stats = zot.batch_update_tags(buffer)
+    if stats.get("failed"):
+        print(
+            f"  WARNING: {stats['failed']} tag write(s) failed this batch; "
+            f"those items stay untagged and a re-run will re-screen them.",
+            flush=True,
+        )
+    buffer.clear()
+    return stats
+
+
 def _load_doi_to_query(search_csv: Path | None) -> dict[str, str]:
     if not search_csv or not search_csv.exists():
         return {}
@@ -205,6 +236,13 @@ def main() -> int:
                         help="Screen a random sample of N items (0 = all).")
     parser.add_argument("--workers", type=int, default=8,
                         help="Parallel API workers (default: 8).")
+    parser.add_argument("--tag-batch-size", type=int, default=50,
+                        help="Write abstract:* tags to Zotero in batches of "
+                             "this many decisions via one multi-item PATCH "
+                             "(default: 50) — fewer API calls and less 412 "
+                             "pressure than per-item writes. Use 1 for strict "
+                             "per-item writes. Failed tag writes leave items "
+                             "untagged; a re-run re-screens them.")
     parser.add_argument("--csv-backfill", action="store_true",
                         help="One-time migration from pre-Zotero-as-truth "
                              "deployments: read CSV decisions and apply "
@@ -321,49 +359,56 @@ def main() -> int:
             decision = "error"
             reason = str(e)[:200]
 
-        # Apply stage tag to Zotero. Non-fatal — if tag write fails
-        # (network, version conflict after retries), the decision still
-        # lands in the CSV and a subsequent re-run will detect the
-        # untagged item and re-screen it.
-        if decision in VALID_DECISIONS:
-            try:
-                zot.update_tags(
-                    key,
-                    add=[f"{STAGE_TAG_PREFIX}{decision}"],
-                    remove_prefixed=[STAGE_TAG_PREFIX],
-                )
-            except Exception as tag_exc:  # noqa: BLE001
-                reason = f"{reason} [TAG WRITE FAILED: {tag_exc}]"[:400]
-
+        # The stage tag is applied by the main loop, batched (R6). The
+        # CSV row is written first there, so a tag write that never lands
+        # is recoverable: Zotero tags are the resume source of truth and a
+        # re-run re-screens any item left untagged.
         return key, doi, title, source, query, decision, reason
 
     print(f"Screening with {args.workers} parallel workers (model={model})...",
           flush=True)
 
+    # Stage-tag writes are buffered and flushed via one multi-item PATCH
+    # every `tag_batch_size` decisions, instead of one PATCH per item.
+    tag_batch_size = max(1, args.tag_batch_size)
+    tag_buffer: list[tuple[str, dict]] = []
+
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = {pool.submit(screen_one, item): item for item in to_screen}
-        for future in as_completed(futures):
-            key, doi, title, source, query, decision, reason = future.result()
-            done_count += 1
-            counts[decision] = counts.get(decision, 0) + 1
+        try:
+            for future in as_completed(futures):
+                key, doi, title, source, query, decision, reason = future.result()
+                done_count += 1
+                counts[decision] = counts.get(decision, 0) + 1
 
-            row = {
-                "timestamp": datetime.now(UTC).isoformat(),
-                "item_key": key,
-                "doi": doi,
-                "title": title,
-                "source": source,
-                "query": query,
-                "decision": decision,
-                "reason": reason,
-                "model": model,
-                "prompt_version": prompt_version,
-            }
-            with log_lock:
-                csv_io.upsert_by_item_key(output_path, row, ABSTRACT_SCREENING_FIELDS)
+                row = {
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "item_key": key,
+                    "doi": doi,
+                    "title": title,
+                    "source": source,
+                    "query": query,
+                    "decision": decision,
+                    "reason": reason,
+                    "model": model,
+                    "prompt_version": prompt_version,
+                }
+                # CSV first (source of truth), then enqueue the tag write.
+                with log_lock:
+                    csv_io.upsert_by_item_key(
+                        output_path, row, ABSTRACT_SCREENING_FIELDS)
 
-            print(f"[{done_count}/{total}] {title[:70]:<70} → {decision}",
-                  flush=True)
+                if decision in VALID_DECISIONS:
+                    tag_buffer.append((key, _stage_tag_op(decision)))
+                    if len(tag_buffer) >= tag_batch_size:
+                        _flush_tag_buffer(zot, tag_buffer)
+
+                print(f"[{done_count}/{total}] {title[:70]:<70} → {decision}",
+                      flush=True)
+        finally:
+            # Flush whatever is left, including on Ctrl+C — partial progress
+            # gets tagged so a resume doesn't re-screen already-decided items.
+            _flush_tag_buffer(zot, tag_buffer)
 
     print(f"\n{'=' * 60}")
     print(f"Done. Screened {total} items.")

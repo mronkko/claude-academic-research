@@ -85,6 +85,12 @@ All pipeline scripts take `--group <id>` (group library) or `--user`
 explicit CLI flags. Do not set `ZOTERO_GROUP` as an env var — the
 canonical record is here.
 
+For Zotero housekeeping on a *different* library or group than the
+one above — adding abstracts, attaching PDFs, fixing BBT keys, finding
+duplicates, etc. — use the `zotero-operations` skill. It runs the same
+pipeline scripts, parameterized by `--group <id>` or `--user`,
+independent of this project's configured library.
+
 ## API keys
 
 All API keys (`ZOTERO_API_KEY`, `ANTHROPIC_API_KEY`,

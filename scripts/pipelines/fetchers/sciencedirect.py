@@ -49,6 +49,13 @@ _ELSEVIER_PREFIXES = (
 # distinctly from natively-fetched PDFs.
 _TDM_RECOVERED_SUFFIX = "-tdm-recovered"
 
+# Zotero tag applied to items whose attached PDF is XML-recovered
+# text rather than the publisher's native PDF (see _TDM_RECOVERED_SUFFIX
+# above). Follows the `<noun>:<status>` warning-tag convention used by
+# `predatory:flag` / `retracted:flag` — surfaced by audit_zotero_library.py
+# so users can review extraction quality before/during full-text coding.
+TDM_RECOVERED_TAG = "pdf:tdm-recovered"
+
 
 def _doi_safe(doi: str) -> str:
     return doi.replace("/", "_").replace(":", "_")
@@ -57,6 +64,12 @@ def _doi_safe(doi: str) -> str:
 def _cache_pdf_path(cache_dir: str | Path, doi: str, *, recovered: bool = False) -> Path:
     suffix = _TDM_RECOVERED_SUFFIX if recovered else ""
     return Path(cache_dir) / f"{_doi_safe(doi)}{suffix}.pdf"
+
+
+def is_tdm_recovered_path(path: str | Path) -> bool:
+    """True when `path` is a cache file produced by the XML-fallback
+    recovery path (filename ends with `_TDM_RECOVERED_SUFFIX`)."""
+    return Path(path).stem.endswith(_TDM_RECOVERED_SUFFIX)
 
 
 def _is_preview_warning(els_status: str) -> bool:

@@ -29,6 +29,7 @@ needed is already known:
   — The active plugin version's absolute path (or project-relative fallback if `${CLAUDE_PLUGIN_ROOT}` is not defined) is used, so the user has a concrete path to run.
 - **Config written to:** `~/.config/academic-research/config.toml` (mode 0600).
 - **Settings patched:** `~/.claude/settings.json` (backed up as `.bak-wizard`, bypassed silently if not running under Claude).
+- **Antigravity MCP config:** if Antigravity (`agy`) is detected, the same MCP servers are also registered into `~/.gemini/config/mcp_config.json` (backed up as `.bak-wizard`). Permission rules are not patched for Antigravity — only Claude Code's `~/.claude/settings.json` is.
 - **Wizard is idempotent:** re-running updates or adds keys without
   clobbering existing ones.
 
@@ -97,8 +98,10 @@ problem:
   there, fix manually, or delete and re-run.
 - **MCP register fails with "command not found"**: the underlying MCP
   binary is not installed. The wizard prints the project's homepage and
-  the exact install command (`uv tool install zotero-mcp-server`,
-  `uv tool install scopus-mcp`, or "requires Node.js + npm" for the
+  the exact install command (`uv tool install
+  "zotero-mcp-server[scite,semantic]"` — the extras add Scite
+  retraction checks and semantic search; `uv tool install scopus-mcp`,
+  or "requires Node.js + npm" for the
   npx-based servers). Install it, then re-run the wizard — it's
   idempotent and picks up where it left off.
 - **Wizard exits with code 4**: Zotero MCP is not connected. No

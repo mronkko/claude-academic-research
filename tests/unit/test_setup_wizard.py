@@ -8,7 +8,10 @@ and module import.
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
+
+import pytest
 
 WIZARD = Path(__file__).resolve().parents[2] / "scripts" / "setup" / "wizard.py"
 
@@ -462,8 +465,23 @@ def test_offer_register_mcp_prints_install_hint_on_missing_binary(
     registered, _ = mod._offer_register_mcp((zotero,), {}, interactive=True)
     out = capsys.readouterr().out
     assert registered == 0
-    assert "uv tool install zotero-mcp-server" in out
+    assert "zotero-mcp-server[scite,semantic]" in out
     assert "isn't on your PATH" in out
+
+
+def test_zotero_install_includes_scite_semantic_extras() -> None:
+    """R9: the wizard must install the [scite,semantic] extras so the
+    Scite retraction-check (R5) and semantic search are available — base
+    `zotero-mcp-server` ships neither."""
+    mod = _load()
+    zotero = next(s for s in mod.EXPECTED_MCP if s.name == "zotero")
+    assert "zotero-mcp-server[scite,semantic]" in zotero.install_cmd
+    # The note must explain what the extras buy, not just name them.
+    assert "scite" in zotero.install_note.lower()
+    assert "retraction" in zotero.install_note.lower()
+    assert "semantic" in zotero.install_note.lower()
+    # PyPI alternative must also carry the extras.
+    assert "zotero-mcp-server[scite,semantic]" in zotero.install_note
 
 
 def test_offer_register_mcp_no_claude_cli_is_no_op(monkeypatch) -> None:
@@ -492,6 +510,285 @@ def test_format_register_command_is_copy_pasteable() -> None:
     zotero = next(s for s in mod.EXPECTED_MCP if s.name == "zotero")
     cmd = mod._format_register_command(zotero)
     assert cmd == "claude mcp add -s user zotero -- zotero-mcp"
+
+
+# ---------------------------------------------------------------------------
+# Antigravity (agy) MCP config support
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_spec_to_agy_entry_simple_command() -> None:
+    mod = _load()
+    zotero = next(s for s in mod.EXPECTED_MCP if s.name == "zotero")
+    assert mod._mcp_spec_to_agy_entry(zotero) == {
+        "command": "zotero-mcp", "args": [],
+    }
+
+
+def test_mcp_spec_to_agy_entry_multi_arg_command() -> None:
+    mod = _load()
+    semantic_scholar = next(
+        s for s in mod.EXPECTED_MCP if s.name == "semantic-scholar"
+    )
+    assert mod._mcp_spec_to_agy_entry(semantic_scholar) == {
+        "command": "npx", "args": ["-y", "aira-semanticscholar"],
+    }
+
+
+def test_mcp_spec_to_agy_entry_paper_search_long_args() -> None:
+    mod = _load()
+    paper_search = next(s for s in mod.EXPECTED_MCP if s.name == "paper-search")
+    assert mod._mcp_spec_to_agy_entry(paper_search) == {
+        "command": "uvx",
+        "args": ["--from", "paper-search-mcp", "python", "-m",
+                 "paper_search_mcp.server"],
+    }
+
+
+def test_mcp_spec_to_agy_entry_extracts_env_vars() -> None:
+    mod = _load()
+    spec = mod.McpServerSpec(
+        name="example",
+        purpose="Example server with an env var.",
+        add_args=("-s", "user", "example", "-e", "FOO=bar", "--", "example-mcp"),
+        homepage="https://example.invalid",
+        install_cmd="",
+        install_note="",
+        tier=mod.MCP_TIER_OPTIONAL,
+    )
+    assert mod._mcp_spec_to_agy_entry(spec) == {
+        "command": "example-mcp", "args": [], "env": {"FOO": "bar"},
+    }
+
+
+def test_check_agy_mcp_servers_missing_file_returns_empty(monkeypatch, tmp_path) -> None:
+    mod = _load()
+    monkeypatch.setattr(mod, "AGY_MCP_CONFIG_PATH", tmp_path / "mcp_config.json")
+    assert mod._check_agy_mcp_servers() == {}
+
+
+def test_check_agy_mcp_servers_reads_configured_entries(monkeypatch, tmp_path) -> None:
+    mod = _load()
+    config_path = tmp_path / "mcp_config.json"
+    config_path.write_text(json.dumps({
+        "mcpServers": {
+            "zotero": {"command": "zotero-mcp", "args": []},
+            "scopus": {"command": "scopus-mcp", "args": [], "disabled": True},
+        }
+    }), encoding="utf-8")
+    monkeypatch.setattr(mod, "AGY_MCP_CONFIG_PATH", config_path)
+
+    parsed = mod._check_agy_mcp_servers()
+    assert parsed["zotero"] == mod.MCP_STATUS_CONNECTED
+    assert parsed["scopus"] == mod.MCP_STATUS_MISSING
+
+
+def test_check_agy_mcp_servers_malformed_json_fails_open(monkeypatch, tmp_path) -> None:
+    mod = _load()
+    config_path = tmp_path / "mcp_config.json"
+    config_path.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(mod, "AGY_MCP_CONFIG_PATH", config_path)
+    assert mod._check_agy_mcp_servers() == {}
+
+
+def test_load_agy_mcp_config_missing_file_returns_empty_dict(monkeypatch, tmp_path) -> None:
+    mod = _load()
+    monkeypatch.setattr(mod, "AGY_MCP_CONFIG_PATH", tmp_path / "mcp_config.json")
+    assert mod._load_agy_mcp_config() == {}
+
+
+def test_load_agy_mcp_config_backs_up_existing_file(monkeypatch, tmp_path) -> None:
+    mod = _load()
+    config_path = tmp_path / "mcp_config.json"
+    config_path.write_text(json.dumps({"mcpServers": {"zotero": {"command": "zotero-mcp"}}}),
+                            encoding="utf-8")
+    monkeypatch.setattr(mod, "AGY_MCP_CONFIG_PATH", config_path)
+
+    data = mod._load_agy_mcp_config()
+    assert data == {"mcpServers": {"zotero": {"command": "zotero-mcp"}}}
+    backup = config_path.with_suffix(".json.bak-wizard")
+    assert backup.exists()
+
+
+def test_load_agy_mcp_config_malformed_json_exits(monkeypatch, tmp_path) -> None:
+    mod = _load()
+    config_path = tmp_path / "mcp_config.json"
+    config_path.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(mod, "AGY_MCP_CONFIG_PATH", config_path)
+
+    with pytest.raises(SystemExit) as exc_info:
+        mod._load_agy_mcp_config()
+    assert exc_info.value.code == 3
+
+
+def test_write_agy_mcp_config_creates_parent_dirs(monkeypatch, tmp_path) -> None:
+    mod = _load()
+    config_path = tmp_path / "nested" / "config" / "mcp_config.json"
+    monkeypatch.setattr(mod, "AGY_MCP_CONFIG_PATH", config_path)
+
+    mod._write_agy_mcp_config({"mcpServers": {"zotero": {"command": "zotero-mcp", "args": []}}})
+
+    written = json.loads(config_path.read_text(encoding="utf-8"))
+    assert written == {"mcpServers": {"zotero": {"command": "zotero-mcp", "args": []}}}
+
+
+def test_offer_register_agy_mcp_writes_config(monkeypatch, tmp_path) -> None:
+    mod = _load()
+    config_path = tmp_path / "mcp_config.json"
+    monkeypatch.setattr(mod, "AGY_MCP_CONFIG_PATH", config_path)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: "y")
+
+    registered, updated = mod._offer_register_agy_mcp(
+        mod.EXPECTED_MCP, {}, interactive=True,
+    )
+
+    assert registered == len(mod.EXPECTED_MCP)
+    assert all(updated[s.name] == mod.MCP_STATUS_CONNECTED for s in mod.EXPECTED_MCP)
+
+    written = json.loads(config_path.read_text(encoding="utf-8"))
+    assert written["mcpServers"]["zotero"] == {"command": "zotero-mcp", "args": []}
+    assert written["mcpServers"]["semantic-scholar"] == {
+        "command": "npx", "args": ["-y", "aira-semanticscholar"],
+    }
+
+
+def test_offer_register_agy_mcp_skips_when_already_connected(monkeypatch, tmp_path) -> None:
+    mod = _load()
+    config_path = tmp_path / "mcp_config.json"
+    monkeypatch.setattr(mod, "AGY_MCP_CONFIG_PATH", config_path)
+
+    def boom(*_a, **_kw):
+        raise AssertionError("must not prompt when already connected")
+    monkeypatch.setattr("builtins.input", boom)
+
+    current = {s.name: mod.MCP_STATUS_CONNECTED for s in mod.EXPECTED_MCP}
+    registered, updated = mod._offer_register_agy_mcp(
+        mod.EXPECTED_MCP, current, interactive=True,
+    )
+
+    assert registered == 0
+    assert updated == current
+    assert not config_path.exists()
+
+
+def test_offer_register_agy_mcp_respects_non_interactive(monkeypatch, tmp_path) -> None:
+    mod = _load()
+    config_path = tmp_path / "mcp_config.json"
+    monkeypatch.setattr(mod, "AGY_MCP_CONFIG_PATH", config_path)
+
+    def boom(*_a, **_kw):
+        raise AssertionError("must not prompt in non-interactive mode")
+    monkeypatch.setattr("builtins.input", boom)
+
+    registered, updated = mod._offer_register_agy_mcp(
+        mod.EXPECTED_MCP, {}, interactive=False,
+    )
+
+    assert registered == 0
+    assert updated == {}
+    assert not config_path.exists()
+
+
+def test_offer_register_agy_mcp_preserves_unrelated_entries(monkeypatch, tmp_path) -> None:
+    mod = _load()
+    config_path = tmp_path / "mcp_config.json"
+    config_path.write_text(json.dumps({
+        "mcpServers": {"my-other-server": {"command": "my-other-mcp", "args": []}}
+    }), encoding="utf-8")
+    monkeypatch.setattr(mod, "AGY_MCP_CONFIG_PATH", config_path)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: "y")
+
+    zotero = next(s for s in mod.EXPECTED_MCP if s.name == "zotero")
+    mod._offer_register_agy_mcp((zotero,), {}, interactive=True)
+
+    written = json.loads(config_path.read_text(encoding="utf-8"))
+    assert written["mcpServers"]["my-other-server"] == {
+        "command": "my-other-mcp", "args": [],
+    }
+    assert written["mcpServers"]["zotero"] == {"command": "zotero-mcp", "args": []}
+
+
+def test_offer_register_agy_mcp_skipped_answer_does_not_write(monkeypatch, tmp_path) -> None:
+    mod = _load()
+    config_path = tmp_path / "mcp_config.json"
+    monkeypatch.setattr(mod, "AGY_MCP_CONFIG_PATH", config_path)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: "n")
+
+    zotero = next(s for s in mod.EXPECTED_MCP if s.name == "zotero")
+    registered, updated = mod._offer_register_agy_mcp((zotero,), {}, interactive=True)
+
+    assert registered == 0
+    assert updated == {}
+    assert not config_path.exists()
+
+
+def test_agy_available_true_when_agy_home_exists(monkeypatch, tmp_path) -> None:
+    mod = _load()
+    agy_home = tmp_path / ".gemini"
+    agy_home.mkdir()
+    monkeypatch.setattr(mod, "AGY_HOME", agy_home)
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
+
+    assert mod._agy_available() is True
+
+
+def test_agy_available_true_when_agy_binary_on_path(monkeypatch, tmp_path) -> None:
+    mod = _load()
+    monkeypatch.setattr(mod, "AGY_HOME", tmp_path / "does-not-exist")
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/local/bin/agy" if name == "agy" else None)
+
+    assert mod._agy_available() is True
+
+
+def test_agy_available_false_when_neither(monkeypatch, tmp_path) -> None:
+    mod = _load()
+    monkeypatch.setattr(mod, "AGY_HOME", tmp_path / "does-not-exist")
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
+
+    assert mod._agy_available() is False
+
+
+def test_merge_mcp_status_connected_if_either_connected() -> None:
+    mod = _load()
+    claude_status = {"zotero": mod.MCP_STATUS_MISSING}
+    agy_status = {"zotero": mod.MCP_STATUS_CONNECTED}
+
+    merged = mod._merge_mcp_status(claude_status, agy_status)
+
+    assert merged["zotero"] == mod.MCP_STATUS_CONNECTED
+
+
+def test_merge_mcp_status_prefers_claude_status_when_neither_connected() -> None:
+    mod = _load()
+    claude_status = {"zotero": mod.MCP_STATUS_NEEDS_AUTH}
+    agy_status = {"zotero": mod.MCP_STATUS_MISSING}
+
+    merged = mod._merge_mcp_status(claude_status, agy_status)
+
+    assert merged["zotero"] == mod.MCP_STATUS_NEEDS_AUTH
+
+
+def test_merge_mcp_status_uses_agy_when_claude_missing_entry() -> None:
+    mod = _load()
+    claude_status = {}
+    agy_status = {"zotero": mod.MCP_STATUS_CONNECTED}
+
+    merged = mod._merge_mcp_status(claude_status, agy_status)
+
+    assert merged["zotero"] == mod.MCP_STATUS_CONNECTED
+
+
+def test_merge_mcp_status_includes_all_keys_from_both_maps() -> None:
+    mod = _load()
+    claude_status = {"zotero": mod.MCP_STATUS_CONNECTED}
+    agy_status = {"scopus": mod.MCP_STATUS_CONNECTED}
+
+    merged = mod._merge_mcp_status(claude_status, agy_status)
+
+    assert merged == {
+        "zotero": mod.MCP_STATUS_CONNECTED,
+        "scopus": mod.MCP_STATUS_CONNECTED,
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -55,17 +55,17 @@ def test_marketplace_owner_present() -> None:
 def test_antigravity_academic_research_plugin_manifest() -> None:
     ag_path = REPO / "plugin.json"
     claude_path = REPO / ".claude-plugin" / "plugin.json"
-    
+
     assert ag_path.is_file(), "Antigravity plugin.json manifest missing at root"
     assert claude_path.is_file(), "Claude Code plugin.json manifest missing at .claude-plugin/"
-    
+
     ag_manifest = json.loads(ag_path.read_text(encoding="utf-8"))
     claude_manifest = json.loads(claude_path.read_text(encoding="utf-8"))
-    
+
     # Assert exact keys for Antigravity manifest schema
     assert set(ag_manifest.keys()) == {"name", "description", "disabled"}
     assert ag_manifest["disabled"] is False
-    
+
     # Bidirectional sync validation
     assert ag_manifest["name"] == claude_manifest["name"], "Plugin 'name' mismatch between manifests"
     assert ag_manifest["description"] == claude_manifest["description"], "Plugin 'description' mismatch between manifests"
@@ -74,17 +74,17 @@ def test_antigravity_academic_research_plugin_manifest() -> None:
 def test_antigravity_editorial_tools_plugin_manifest() -> None:
     ag_path = REPO / "editorial-tools" / "plugin.json"
     claude_path = REPO / "editorial-tools" / ".claude-plugin" / "plugin.json"
-    
+
     assert ag_path.is_file(), "Antigravity plugin.json manifest missing in editorial-tools/"
     assert claude_path.is_file(), "Claude Code plugin.json manifest missing in editorial-tools/.claude-plugin/"
-    
+
     ag_manifest = json.loads(ag_path.read_text(encoding="utf-8"))
     claude_manifest = json.loads(claude_path.read_text(encoding="utf-8"))
-    
+
     # Assert exact keys for Antigravity manifest schema
     assert set(ag_manifest.keys()) == {"name", "description", "disabled"}
     assert ag_manifest["disabled"] is False
-    
+
     # Bidirectional sync validation
     assert ag_manifest["name"] == claude_manifest["name"], "Editorial tools 'name' mismatch between manifests"
     assert ag_manifest["description"] == claude_manifest["description"], "Editorial tools 'description' mismatch between manifests"

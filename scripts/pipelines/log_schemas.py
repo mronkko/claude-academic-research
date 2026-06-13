@@ -45,3 +45,29 @@ def fulltext_screening_fields(coding_field_names: list[str]) -> list[str]:
     metadata trailers.
     """
     return FULLTEXT_BASE_FIELDS + list(coding_field_names) + FULLTEXT_TRAILING_FIELDS
+
+
+# --- Enrichment run-logs ---------------------------------------------
+#
+# The three enrich_* orchestrators each append a run-log CSV (and the
+# resumable ones read it back to skip done items). These used to be
+# inline `LOG_FIELDS` lists, one per script — adding a column meant
+# editing every script in sync. They live here so the shared
+# `shared_orchestrators` helpers and the scripts share one definition.
+
+ABSTRACT_FETCH_FIELDS: list[str] = [
+    "run_date", "item_key", "doi", "title", "source", "status",
+]
+
+# Note the column order differs from ABSTRACT_FETCH_FIELDS (status before
+# source); kept as-is so existing `pdf_fetch_log.csv` files stay readable.
+PDF_FETCH_FIELDS: list[str] = [
+    "run_date", "item_key", "doi", "title", "status", "source",
+]
+
+DOI_ENRICH_FIELDS: list[str] = [
+    "run_date", "item_key",
+    "zotero_doi", "zotero_title", "zotero_year",
+    "crossref_doi", "crossref_title", "crossref_authors",
+    "status",
+]

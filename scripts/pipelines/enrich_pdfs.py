@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import csv
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -61,8 +60,10 @@ for _p in (str(SCRIPT_DIR), str(SCRIPTS_ROOT)):
 import fetchers  # noqa: E402
 import http_client  # noqa: E402
 import pdf_fetch_log  # noqa: E402
+import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
 from core.config_loader import get, require  # noqa: E402
+from log_schemas import PDF_FETCH_FIELDS  # noqa: E402
 
 DEFAULT_LOG_CSV = os.path.join("output", "pdf_attach_log.csv")
 DEFAULT_CACHE_DIR = os.path.join("output", "pdf_cache")
@@ -71,7 +72,7 @@ DEFAULT_CACHE_DIR = os.path.join("output", "pdf_cache")
 # FE codes. Same `output/` dir so users see both files together.
 DEFAULT_FAILURE_LOG_CSV = os.path.join("output", "pdf_fetch_log.csv")
 
-LOG_FIELDS = ["run_date", "item_key", "doi", "title", "status", "source"]
+LOG_FIELDS = PDF_FETCH_FIELDS
 
 _PLAYWRIGHT_MISSING_MSG = (
     "ERROR: the playwright package is not installed.\n"
@@ -106,24 +107,13 @@ def _load_config() -> Config:
 
 
 def _open_log(path: str):
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    is_new = not os.path.exists(path)
-    fh = open(path, "a", newline="", encoding="utf-8")
-    writer = csv.DictWriter(fh, fieldnames=LOG_FIELDS)
-    if is_new:
-        writer.writeheader()
-    return fh, writer
+    return shared_orchestrators.open_log(path, LOG_FIELDS)
 
 
 def _load_done_dois(path: str) -> set[str]:
-    if not os.path.exists(path):
-        return set()
-    with open(path, newline="", encoding="utf-8") as f:
-        return {
-            (r.get("doi") or "").strip().lower()
-            for r in csv.DictReader(f)
-            if r.get("status") == "attached"
-        }
+    return shared_orchestrators.load_done_keys(
+        path, statuses="attached", key_field="doi",
+    )
 
 
 async def _drive_handler(
@@ -1240,6 +1230,8 @@ def _run_api_cascade(
             continue
         try:
             zot.attach_pdf(key, str(path))
+            if fetchers.is_tdm_recovered_path(path):
+                zot.update_tags(key, add=[fetchers.TDM_RECOVERED_TAG])
             print("→ attached", flush=True)
             log_writer.writerow({
                 "run_date": run_date, "item_key": key, "doi": doi,

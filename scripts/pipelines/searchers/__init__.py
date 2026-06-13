@@ -11,7 +11,15 @@ Add a new database by subclassing `SearchSource`, implementing
 
 from __future__ import annotations
 
-from .base import SEARCH_ROW_FIELDS, SearchContext, SearchSource, empty_row
+from .base import (
+    CREDENTIAL_OPTIONAL,
+    CREDENTIAL_REQUIRED,
+    SEARCH_ROW_FIELDS,
+    SearchContext,
+    SearchSource,
+    empty_row,
+    resolve_credential,
+)
 from .openalex import OpenAlexSearch
 from .scopus import ScopusSearch
 from .semantic_scholar import SemanticScholarSearch
@@ -29,10 +37,13 @@ def searchers_by_name() -> dict[str, SearchSource]:
 
 
 __all__ = (
+    "CREDENTIAL_OPTIONAL",
+    "CREDENTIAL_REQUIRED",
     "SEARCH_ROW_FIELDS",
     "SearchContext",
     "SearchSource",
     "empty_row",
+    "resolve_credential",
     "OpenAlexSearch",
     "ScopusSearch",
     "SemanticScholarSearch",
