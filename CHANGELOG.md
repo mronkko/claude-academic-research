@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-06-13
+
+### Added
+
+- **Setup wizard installs the Zotero MCP `[scite,semantic]` extras** so
+  Scite retraction checks and semantic library search are available by
+  default instead of silently absent (R9).
+- **Antigravity (`agy`) MCP registration.** The wizard now also registers
+  the plugin's MCP servers in `~/.gemini/config/mcp_config.json`, so they
+  are available to Antigravity users, not just Claude Code.
+- **ScienceDirect partial-entitlement handling.** Preview-only PDFs
+  (Elsevier `x-els-status: WARNING`) are detected rather than cached as if
+  complete; the full text is recovered via the XML endpoint, and the audit
+  flags genuinely unrecoverable cases.
+- **`abstract_screen.py --tag-batch-size`** batches `abstract:*` stage-tag
+  writes into one multi-item PATCH per N decisions (default 50; `1` keeps
+  strict per-item writes), cutting API calls and 412-retry pressure during
+  steady-state screening.
+
+### Changed
+
+- **critic-loop** gains the Concession Threshold Protocol (a critic MAJOR
+  may only be rejected with a verifiable refutation or a user-approved
+  scope call), frame-lock detection, an explicit read-only constraint on
+  critic subagents, and a Companion-skills section (R1–R3, S3).
+- **manuscript-revision** now cross-links `academic-style` as the
+  before-the-loop companion (S4).
+- **Internal refactors (no behaviour change).** Shared enrich-orchestrator
+  run-log helpers (`shared_orchestrators.py`), centralized log-CSV schemas
+  (`log_schemas.py`), and a shared searcher credential resolver
+  (`resolve_credential`) that replaces `wos.py`'s bare `KeyError` and
+  unifies the optional/required key regimes (P1, P5, P7).
+
 ### Fixed (`fulltext_code.py --update-fields`, found in production use)
 
 - **Update mode no longer re-adjudicates.** The update prompt now carries a
