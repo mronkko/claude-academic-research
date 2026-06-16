@@ -14,7 +14,7 @@
     {
       "name": "editorial-tools",
       "source": "./editorial-tools",
-      "description": "Editorial workflows for journal editors and associate editors: peer-reviewer suggestion from an abstract against pre-built editorial-board profiles plus live external-expert search."
+      "description": "Editorial workflows for journal editors and associate editors: from an abstract, suggest peer reviewers (editorial-board profiles plus live external-expert search) or recommend a handling associate editor from the journal's sitting AEs."
     }
   ]
 }

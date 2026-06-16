@@ -1,14 +1,29 @@
 ---
 name: suggesting-reviewers
-description: Use when an editor or associate editor needs to identify peer reviewers for a manuscript from its abstract — matching the paper's topics and methodology to editorial-board members and external experts and excluding ineligible editors. Trigger phrases "suggest reviewers", "find reviewers for this paper", "who could review this", "recommend referees", "reviewer candidates". Do NOT use for writing or revising the manuscript — use `academic-research:critic-loop` / `manuscript-revision`. Do NOT use to verify a draft's citations — use `academic-research:fact-check`.
+description: Use when an editor needs to identify peer reviewers OR an associate editor (AE) to handle a manuscript from its abstract — matching the paper's topics and methodology to editorial-board members, associate editors, and external experts and excluding ineligible people. Trigger phrases "suggest reviewers", "find reviewers for this paper", "who could review this", "recommend referees", "reviewer candidates", "suggest an AE", "assign an associate editor", "who should handle this paper", "recommend an AE", "select an associate editor". Do NOT use for writing or revising the manuscript — use `academic-research:critic-loop` / `manuscript-revision`. Do NOT use to verify a draft's citations — use `academic-research:fact-check`.
 ---
 
-# Suggesting reviewers
+# Suggesting reviewers or associate editors
 
-Given a manuscript abstract, propose peer reviewers and explain each one's
-fit. Two pools: **editorial-board members** (filtered by eligibility, matched
-against pre-built profiles) and **external experts** (found live from the
-abstract's topics). Default journal: *Organizational Research Methods* (ORM).
+Given a manuscript abstract, propose either **peer reviewers** or an
+**associate editor (AE)** to handle the paper, and explain each candidate's
+fit. Default journal: *Organizational Research Methods* (ORM).
+
+## Mode — reviewer vs. AE
+
+Detect the mode from the request and announce which one you are running.
+
+- **Reviewer mode** (default — "suggest reviewers", "find referees", …). Two
+  pools: **editorial-board members** (filtered by eligibility, matched against
+  pre-built profiles) and **external experts** (found live from the abstract's
+  topics).
+- **AE mode** ("suggest an AE", "assign an associate editor", "who should
+  handle this paper", …). One pool: the journal's **current associate
+  editors**. No external search — an AE must be a sitting board officer.
+
+The two modes share everything below except the two steps that explicitly
+branch (Step 2 eligibility, Step 4 candidate lists). If the request is
+ambiguous, ask which is wanted before proceeding.
 
 ## Core principle — combine knowledge with retrieval
 
@@ -44,6 +59,8 @@ equivalent `rosters/<journal>/` directory.
 
 ## Step 2 — Apply eligibility (deterministic)
 
+**Reviewer mode.**
+
 - **Exclude** every member tagged `eligible: no` — current Editor(s)-in-Chief
   and Associate Editors. They assign reviews; they are never suggested.
 - **Eligible pool** = every member tagged `eligible: yes` (past editors still
@@ -51,6 +68,13 @@ equivalent `rosters/<journal>/` directory.
 
 If an excluded editor is the obvious topical match, do **not** suggest them —
 note the exclusion in a transparency line at the end instead.
+
+**AE mode.** The pool inverts: candidates are exactly the members whose
+`role` is **Associate Editor**. Editors-in-Chief, the Outreach Officer,
+past/founding editors, and plain Editorial Board members are **not** AE
+candidates — only sitting AEs assign and handle papers. (If a specific AE is
+the submitting author or is otherwise conflicted and the user supplied that
+information, drop them and note it; otherwise leave conflicts to the assigner.)
 
 ## Step 3 — Read the abstract → methodology + topics
 
@@ -64,7 +88,18 @@ substantive topics. This drives a **hard methods filter**:
 
 When the paper itself is genuinely mixed, both orientations are in scope.
 
-## Step 4 — Build the two candidate lists
+## Step 4 — Build the candidate list(s)
+
+**AE mode — read this first.** Build a **single** list from the AE pool of
+Step 2 and **skip the external search entirely** (an AE must be a sitting
+board officer). Match and ground each AE exactly as Step 4 describes for board
+reviewers below — methods filter (Step 3), topical fit against the profile's
+topics / representative method papers / `## ORM publications`, drilling into
+`mcp__openalex__get_author_works` only when a profile is thin or stale. AE
+profiles are built the **same way as ERB profiles** (see "Full profile build"
+under Step 5/Refresh); if a sitting AE has no profile yet, build one on first
+use and commit it. Then go to Step 5 (AE output). The career-stage tilt and
+the rest of this step apply to **reviewer mode**.
 
 **Career-stage tilt (both pools):** rank credible **early-to-mid-career**
 scholars first — these are the people the editor is least likely to already
@@ -93,7 +128,8 @@ handles conflicts).
 
 ## Step 5 — Output
 
-Two ranked markdown tables — **Editorial board** and **External** — columns:
+**Reviewer mode.** Two ranked markdown tables — **Editorial board** and
+**External** — columns:
 
 | Name | Affiliation | ERB role / External | Career stage | Methods | Representative method paper(s) | Fit |
 
@@ -102,6 +138,12 @@ within the junior tilt. After the tables, add any transparency note for a
 strong-but-ineligible board match, and state explicitly which suggestions are
 grounded in a retrieved record vs. flagged as training-recall only (there
 should be none of the latter for junior/unfamiliar names).
+
+**AE mode.** One ranked markdown table — **Associate editors** — same columns
+(the role column reads "Associate Editor"), ranked by topical/methods fit. No
+junior tilt and no external/transparency lines for ineligible board matches
+(every candidate is a sitting AE). Still state which suggestions are grounded
+in a retrieved record.
 
 ## Refreshing the roster and profiles
 
@@ -192,7 +234,12 @@ articles, newest first) written by the journal sweep.
 
 ## Red flags — stop
 
-- About to suggest a current EIC/AE (`eligible: no`) → drop; they're excluded.
+- **Reviewer mode:** about to suggest a current EIC/AE (`eligible: no`) → drop;
+  they're excluded.
+- **AE mode:** about to suggest a non-AE (EIC, Outreach Officer, past/founding
+  editor, plain Editorial Board member) → drop; only sitting AEs qualify.
+- **AE mode:** running an external search or applying the junior tilt → stop;
+  AE mode is the AE pool only, ranked by fit.
 - A junior/unfamiliar name with no retrieved record behind it → drop or ground.
 - An opposite-orientation scholar slipping past the methods filter → remove.
 - A candidate below the competence floor → remove.
