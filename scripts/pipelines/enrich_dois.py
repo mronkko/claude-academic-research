@@ -211,7 +211,15 @@ def _prompt_confirm(
     zot_item: dict, zot_title: str, zot_year: str,
     cr: DoiResolution, cr_doi: str,
 ) -> bool:
-    """Show the proposed match and return True on user confirm."""
+    """Show the proposed match and return True on user confirm.
+
+    Reads from `/dev/tty` when available (POSIX) so a piped stdin
+    doesn't swallow the answer; falls back to `sys.stdin` when
+    `/dev/tty` can't be opened — always the case on Windows, which
+    has no `/dev/tty`. The caller only reaches here after
+    `sys.stdin.isatty()` passed (see the 2/3-match branch above), so
+    on Windows the fallback is reading a real terminal, not a pipe.
+    """
     cr_authors = ", ".join(cr.author_surnames[:3]) or "(no authors)"
     print(
         f"\n  Proposed DOI for: {zot_title[:70]}\n"
@@ -222,10 +230,14 @@ def _prompt_confirm(
         f"    DOI: {cr_doi}",
         flush=True,
     )
+    # Write the prompt before branching so both the /dev/tty path and
+    # the stdin fallback show it — the fallback used to read from
+    # stdin without ever printing "Apply? [y/N]" (always the case on
+    # Windows, where the /dev/tty open always fails).
+    sys.stdout.write("  Apply? [y/N] ")
+    sys.stdout.flush()
     try:
         with open("/dev/tty") as tty:
-            sys.stdout.write("  Apply? [y/N] ")
-            sys.stdout.flush()
             raw = tty.readline()
     except Exception:
         raw = sys.stdin.readline()
