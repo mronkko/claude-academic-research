@@ -878,6 +878,44 @@ def test_batch_update_tags_chunks_to_batch_size() -> None:
     assert fake_cloud.update_items.call_count == 3
 
 
+def test_batch_update_tags_handles_bool_true_return() -> None:
+    """Some pyzotero versions (e.g. 1.13.x) return a bare bool from
+    `update_items` instead of a `{success, unchanged, failed}` dict —
+    calling `.get()` on that bool used to raise AttributeError mid-batch.
+    A truthy bool means pyzotero's own `_post_check` didn't raise, so
+    the whole chunk of payloads is counted as applied."""
+    zc = _client()
+    fake_cloud = MagicMock()
+    fake_cloud.items.return_value = [
+        _data_item("A", 5, ["abstract:borderline"]),
+        _data_item("B", 7, []),
+    ]
+    fake_cloud.update_items.return_value = True
+    zc._cloud = fake_cloud
+
+    stats = zc.batch_update_tags([
+        ("A", {"add": ["abstract:include"],
+               "remove_prefixed": ["abstract:"]}),
+        ("B", {"add": ["abstract:exclude"]}),
+    ])
+
+    assert stats == {"applied": 2, "unchanged": 0, "failed": 0}
+
+
+def test_batch_update_tags_handles_bool_false_return() -> None:
+    """Defensive branch: a falsy non-dict return counts the chunk as
+    failed rather than raising or silently dropping it."""
+    zc = _client()
+    fake_cloud = MagicMock()
+    fake_cloud.items.return_value = [_data_item("A", 5, [])]
+    fake_cloud.update_items.return_value = False
+    zc._cloud = fake_cloud
+
+    stats = zc.batch_update_tags([("A", {"add": ["t1"]})])
+
+    assert stats == {"applied": 0, "unchanged": 0, "failed": 1}
+
+
 def test_batch_update_tags_falls_back_when_update_items_missing() -> None:
     """Older pyzotero without update_items should still work via the
     per-item fallback path."""
