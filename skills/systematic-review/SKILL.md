@@ -97,8 +97,12 @@ python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/install_templates.py" \
 
 Before any Zotero work in this skill: when reading or writing the
 user's library, the access hierarchy is **(1) MCP `mcp__zotero__*`
-tools → (2) `scripts/pipelines/zotero_io.py` and
-`scripts/pipelines/bbt_client.py` → (3) never direct HTTP**. A
+tools for reads → (2) `zotero-cli` for one-off writes outside a
+pipeline script → (3) `scripts/pipelines/zotero_io.py` and
+`scripts/pipelines/bbt_client.py` for bulk/pipeline reads and writes
+→ (4) never direct HTTP**. `zotero-cli` is not a substitute for
+`zotero_io.py` inside enrichment/screening/coding scripts — no
+batching, no `--json`, no 412 retry, ~1–2 s per-call startup. A
 direct `urllib.request.urlopen("http://127.0.0.1:23119/...")` or
 `curl localhost:23119` is a defect signal — propose adding the
 missing helper to `zotero_io.py` rather than working around it
@@ -662,6 +666,10 @@ single-item debugging).
 | Single-database piloting (Web of Science) | `search_wos.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/search_wos.py --config ./search_config.py` |
 | Single-database piloting (OpenAlex, free) | `search_openalex.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/search_openalex.py --config ./search_config.py` |
 | Single-database piloting (Semantic Scholar) | `search_semantic_scholar.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/search_semantic_scholar.py --config ./search_config.py` |
+| Summarise a pilot CSV — year-cutoff distribution | `pilot_analyze.py year-cutoff` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/pilot_analyze.py year-cutoff --csv pilot/search_results.csv` |
+| Summarise a pilot CSV — cross-DB DOI overlap | `pilot_analyze.py db-overlap` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/pilot_analyze.py db-overlap --csv pilot/search_results.csv` |
+| Summarise a pilot CSV — journal coverage (top-N) | `pilot_analyze.py journal-coverage` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/pilot_analyze.py journal-coverage --csv pilot/search_results.csv --top 25` |
+| Summarise a pilot CSV — hits by journals.json field code | `pilot_analyze.py field-breakdown` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/pilot_analyze.py field-breakdown --csv pilot/search_results.csv --journals journals.json` |
 | Filter / trim a search CSV (top-N by year, year range) | `filter_search_results.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/filter_search_results.py --input <csv> --output <csv> [--year-min Y] [--year-max Y] [--top-n N]` |
 | Import deduplicated search CSV into Zotero | `import_to_zotero.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/import_to_zotero.py --group <id> --input <search.csv> [--collection <key>]` |
 | Abstract screening (Claude Haiku on title+abstract) | `abstract_screen.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/abstract_screen.py --group <id> --collection <key> --config ./screening_config.py` |
@@ -736,6 +744,15 @@ acceptable for piloting (they are fast and session-scoped), and are
 the only way to probe Scopus / OpenAlex / Semantic Scholar without
 first spinning up the full scripted-search machinery. The formal run
 then uses the scripted searchers under `scripts/pipelines/`.
+
+Once a pilot search has produced a CSV (from any of the single-database
+piloting scripts above, or a trimmed formal-search export), run
+`pilot_analyze.py` on it instead of writing an ad-hoc `python3 -c
+"import csv; ..."` snippet — its four subcommands (`year-cutoff`,
+`db-overlap`, `journal-coverage`, `field-breakdown`) cover the standard
+questions a year cutoff, a single-vs-multi-DB decision, and a
+journal-scope sanity check need answered. See the table above for
+invocations; `--help` lists the full flag surface including `--plot`.
 
 **Source preference ordering.** Which databases to include depends on
 what the user's institution provides. Degrade gracefully rather than

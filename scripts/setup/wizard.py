@@ -1084,6 +1084,40 @@ def _permission_categories() -> tuple[list[PermissionCategory], list[str]]:
                  "Semantic search"),
             ),
         ),
+        PermissionCategory(
+            name="zotero-cli (read-only)",
+            purpose=(
+                "Auto-approves read-only zotero-cli subcommands. "
+                "zotero-cli ships with the zotero-mcp-server package "
+                "installed above and gives the agent a Bash-callable "
+                "path to Zotero for one-off operations MCP doesn't "
+                "cover (see the zotero-operations skill's IRON RULE). "
+                "Writes (edit, add, tags, notes, duplicates merge) "
+                "deliberately stay prompt-gated, matching the MCP "
+                "Zotero write policy above."
+            ),
+            skip_impact=(
+                "Every read-only zotero-cli call (search, get, "
+                "config, duplicates find) will trigger a permission "
+                "prompt."
+            ),
+            rules=(
+                ("Bash(zotero-cli search:*)",
+                 "Search the library (items, tag, citekey, semantic)"),
+                ("Bash(zotero-cli s:*)",
+                 "Short alias for search"),
+                ("Bash(zotero-cli get:*)",
+                 "Read metadata, collections, tags, recent, etc."),
+                ("Bash(zotero-cli g:*)",
+                 "Short alias for get"),
+                ("Bash(zotero-cli config)",
+                 "Show current Zotero configuration"),
+                ("Bash(zotero-cli duplicates find:*)",
+                 "Find duplicates (read-only; merge stays denied)"),
+                ("Bash(zotero-cli outline:*)",
+                 "Get a PDF's table of contents"),
+            ),
+        ),
     ]
 
     # Deny patterns for the config file. Claude Code's permission matcher
@@ -1385,6 +1419,60 @@ def _print_zotero_bbt_help() -> None:
     print("     'Install Add-on From File…' → pick the .xpi.")
     print("  3. Restart Zotero.")
     print("  4. Re-run this wizard to confirm.")
+
+
+ZOTERO_CLI_STATUS_OK = "ok"
+ZOTERO_CLI_STATUS_MISSING = "missing"
+ZOTERO_CLI_STATUS_STALE_SHADOW = "stale_shadow"
+
+
+def _check_zotero_cli() -> tuple[str, str]:
+    """Check whether `zotero-cli` resolves on PATH.
+
+    `zotero-cli` is the standalone CLI shipped inside the same
+    `zotero-mcp-server` package the `zotero` MCP entry installs (see
+    EXPECTED_MCP above) — no separate install step, just a PATH check.
+
+    One known trap: the *old* PyPI package was published under the
+    plain name `zotero-mcp` (last released 0.1.6, well before the CLI
+    existed). A `uv tool install zotero-mcp` from stale instructions
+    or muscle memory silently shadows the real `zotero-mcp` console
+    script from `zotero-mcp-server` without providing `zotero-cli` at
+    all. We can't fully distinguish the two packages from PATH alone,
+    so we detect the likely case (zotero-mcp present, zotero-cli
+    absent) and name it explicitly rather than just saying "missing".
+    """
+    if shutil.which("zotero-cli"):
+        return ZOTERO_CLI_STATUS_OK, "zotero-cli found on PATH"
+    if shutil.which("zotero-mcp"):
+        return (
+            ZOTERO_CLI_STATUS_STALE_SHADOW,
+            "zotero-mcp is on PATH but zotero-cli is not — likely the "
+            "stale PyPI package `zotero-mcp` (0.1.6) rather than "
+            "`zotero-mcp-server`",
+        )
+    return ZOTERO_CLI_STATUS_MISSING, "zotero-cli not found on PATH"
+
+
+def _print_zotero_cli_help(status: str) -> None:
+    """Print the actionable message when zotero-cli isn't usable.
+
+    zotero-cli is optional — every skill degrades to MCP tools and
+    zotero_io.py without it — so this is informational, not a hard
+    failure gate like the local-API / BBT checks above.
+    """
+    print("  *** NOTE: zotero-cli is not available ***")
+    if status == ZOTERO_CLI_STATUS_STALE_SHADOW:
+        print("  Found `zotero-mcp` on PATH, but not `zotero-cli`. This")
+        print("  usually means the stale PyPI package `zotero-mcp` (0.1.6,")
+        print("  no CLI) is installed instead of `zotero-mcp-server`.")
+        print("  Fix:")
+        print("    uv tool uninstall zotero-mcp   # if present")
+        print('    uv tool install "zotero-mcp-server[scite,semantic]"')
+    else:
+        print('  Install: uv tool install "zotero-mcp-server[scite,semantic]"')
+    print("  Optional — zotero-operations and systematic-review fall back")
+    print("  to MCP tools and zotero_io.py without it.")
 
 
 def _check_mcp_servers() -> dict[str, str]:
@@ -1792,6 +1880,8 @@ def main() -> int:
             "skipped — Zotero local API not reachable",
         )
 
+    zotero_cli_status, zotero_cli_message = _check_zotero_cli()
+
     current_mcp = _check_mcp_servers()
     if interactive:
         print()
@@ -1839,6 +1929,8 @@ def main() -> int:
     print(f"    Zotero local API: {glyph} {zotero_local_message}")
     bbt_glyph = "✓" if zotero_bbt_status == ZOTERO_BBT_STATUS_OK else "✗"
     print(f"    Better BibTeX:    {bbt_glyph} {zotero_bbt_message}")
+    cli_glyph = "✓" if zotero_cli_status == ZOTERO_CLI_STATUS_OK else "○"
+    print(f"    zotero-cli:       {cli_glyph} {zotero_cli_message}")
     zotero_missing, all_search_dbs_missing = _print_mcp_summary(current_mcp)
 
     if zotero_local_status != ZOTERO_LOCAL_STATUS_OK:
@@ -1847,6 +1939,10 @@ def main() -> int:
     elif zotero_bbt_status == ZOTERO_BBT_STATUS_MISSING:
         print()
         _print_zotero_bbt_help()
+
+    if zotero_cli_status != ZOTERO_CLI_STATUS_OK:
+        print()
+        _print_zotero_cli_help(zotero_cli_status)
 
     if zotero_missing:
         print()

@@ -35,8 +35,9 @@ def abstract_sources(
 ) -> list[AbstractFetcher]:
     """Priority-ordered abstract sources.
 
-    Order matches the cascade in fetch_abstracts.py:12-18:
-        Crossref → Semantic Scholar → Scopus → ScienceDirect → OpenAlex GROBID
+    Cascade order:
+        Crossref → Semantic Scholar → Scopus → WoS → ScienceDirect
+        → OpenAlex GROBID
     """
     if http is None:
         return []
@@ -57,7 +58,7 @@ def pdf_sources(
 ) -> list[PdfFetcher]:
     """Priority-ordered PDF sources.
 
-    Default order matches the cascade in attach_pdfs.py:13-19:
+    Default cascade order:
         ScienceDirect (Elsevier) → Springer → Crossref TDM → PMC
         → OpenAlex (Content + OA) → Unpaywall
 

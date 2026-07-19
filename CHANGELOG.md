@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-07-19
+
+### Added
+
+- **`zotero-cli` access tier.** Evaluated the standalone `zotero-cli`
+  shipped by `zotero-mcp-server` v0.6.2 (the package the setup wizard
+  already installs) as a way to simplify Zotero handling. Adopted for
+  agent-initiated one-off writes MCP doesn't cover — documented as
+  tier 2 in the Zotero access hierarchy in `zotero-operations/SKILL.md`
+  and `systematic-review/SKILL.md`, with a read-only Bash allow-list
+  and a setup-wizard PATH check (`_check_zotero_cli`) that also flags
+  the stale PyPI `zotero-mcp` (0.1.6) package shadowing the real CLI.
+  Rejected for batch pipelines — measured ~1.5–2 s per-call startup,
+  no keyed batching, no `--json`, no 412 retry — so `zotero_io.py`
+  remains the pipeline-facing layer unchanged. See BACKLOG.md
+  House-keeping for the full evaluation writeup.
+- **`pilot_analyze.py` wired into `systematic-review/SKILL.md`.** The
+  script (year-cutoff, db-overlap, journal-coverage, field-breakdown
+  subcommands) existed and was tested but undocumented; it's now in
+  the pipeline-scripts table and the pilot-search narrative.
+
+### Fixed
+
+- **README.md** repo-layout diagram described `scripts/publishers/`
+  (deleted in v0.6.0) and misdescribed `scripts/sources/` /
+  `scripts/core/`; corrected to match the current tree and added
+  `fetchers/`, `searchers/`, and `editorial-tools/`. Skill count
+  corrected from "eight" to "nine" (plus the `verifying-citations`
+  sub-skill).
+- Stale in-code comments referencing scripts removed in v0.6.0
+  (`fetch_abstracts.py`, `attach_pdfs.py`) in
+  `scripts/pipelines/fetchers/__init__.py`,
+  `scripts/pipelines/zotero_io.py`, and
+  `scripts/pipelines/searchers/openalex.py`.
+- Removed the orphaned one-off diagnostic
+  `scripts/debug/inspect_scopus_abstract.py`.
+
 ## [0.7.0] — 2026-06-13
 
 ### Added

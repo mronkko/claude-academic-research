@@ -38,7 +38,7 @@ every commit against `windows-latest`.
 
 ## What's in the plugin
 
-Eight skills:
+Nine user-invocable skills:
 
 | Skill | Mode | Purpose |
 |---|---|---|
@@ -51,6 +51,10 @@ Eight skills:
 | `fact-check` | procedure (explicit) | Verify citations and quantitative claims against sources. |
 | `critic-loop` | procedure (explicit) | Run 4 parallel critics (evidence / method / argument / expert) until no MAJOR issues remain. |
 | `setup` | procedure (explicit) | Chat-driven configuration wizard for first-time install. |
+
+Plus one sub-skill, `verifying-citations` — not invoked directly by
+users; loaded by `fact-check` and `critic-loop`'s evidence critic to
+share one citation-verification rule-book between the two callers.
 
 ## Runtime model
 
@@ -71,11 +75,18 @@ Eight skills:
   marketplace.json         # self-hosted marketplace catalog
 skills/                    # SKILL.md per skill
 scripts/
-  core/                    # llm, http, pdf, zotero primitives
-  sources/                 # abstract/metadata sources (Crossref, Semantic Scholar, Scopus, ...)
-  publishers/              # per-publisher PDF retrieval (Wiley, Elsevier, ...)
-  pipelines/               # enrich_pdfs, enrich_abstracts, generate_bib, search, ...
-  setup/                   # first-run configuration helpers
+  core/                    # config loader/writer, llm provider primitives
+  sources/                 # predatory-journal (Beall's list) checks
+  pipelines/               # orchestrator scripts (search, enrich_*, abstract_screen,
+                            #   fulltext_code, generate_bib, ...) plus:
+    fetchers/               #   per-provider abstract/PDF fetchers (Crossref,
+                            #     OpenAlex, ScienceDirect, browser/ for
+                            #     Cloudflare-gated publishers)
+    searchers/              #   per-database search backends (Scopus, WoS,
+                            #     OpenAlex, Semantic Scholar)
+  setup/                   # first-run configuration wizard + scaffold helpers
+editorial-tools/           # second, independently-versioned plugin (peer-reviewer
+                            #   suggestion skill) — see Install and Load above
 tests/unit/                # pytest + responses mocks
 .github/workflows/ci.yml   # pytest + ruff on push/PR
 ```

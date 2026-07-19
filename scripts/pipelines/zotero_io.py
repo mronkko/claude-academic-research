@@ -906,7 +906,7 @@ class ZoteroClient:
         return bool(self.cloud.update_item(payload))
 
     def delete_item(self, item_key: str) -> bool:
-        """Delete an item (used by attach_pdfs to remove PDF stubs).
+        """Delete an item (used by enrich_pdfs.py to remove PDF stubs).
 
         pyzotero needs the current version for the If-Unmodified-Since
         header, so we fetch once before deleting.

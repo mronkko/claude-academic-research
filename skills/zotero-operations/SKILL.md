@@ -189,13 +189,34 @@ hierarchy is:
    `mcp__zotero__zotero_get_item_fulltext`, …). These cover most
    *reads* — item metadata, children, attachments, items lists,
    fulltext, annotations.
-2. **`scripts/pipelines/zotero_io.py` and `scripts/pipelines/bbt_client.py`**
-   for operations the MCP doesn't cover — Better BibTeX endpoints
+2. **`zotero-cli`** for one-off writes MCP doesn't expose — `zotero-cli
+   edit <key> --abstract/--add-tags/--doi/...`, `zotero-cli duplicates
+   find|merge`, `zotero-cli notes create|update`, `zotero-cli add
+   doi|bibtex|isbn|file`, `zotero-cli collections`, `zotero-cli tags`.
+   It ships with the `zotero-mcp-server` package the setup wizard
+   already installs — no separate install step. Use it for a single
+   interactive mutation, or from a subagent that has no MCP tools
+   registered. **Do not use it inside a pipeline script or any loop
+   over more than a handful of items** — each invocation is a fresh
+   process (~1–2 s startup), it has no batch-by-keys mode, no `--json`
+   output a script can parse reliably, and no retry/backoff on Zotero's
+   HTTP 412 version-conflict response. That is what tier 3 is for.
+3. **`scripts/pipelines/zotero_io.py` and `scripts/pipelines/bbt_client.py`**
+   for bulk/pipeline work — Better BibTeX endpoints
    (`get_bibtex_export`, `bbt_json_rpc`, `get_bbt_keys`,
-   `populate_missing_bbt_keys`), bulk transactional writes
-   (`batch_update_tags`, `upsert_child_note`, `merge_duplicate_item`),
-   and any other custom Zotero operation.
-3. **Direct HTTP** to `http://127.0.0.1:23119/...` is **not** a third
+   `populate_missing_bbt_keys`), keyed transactional writes with 412
+   retry (`batch_update_tags`, `upsert_child_note`, `update_abstract`),
+   the Connector dedup path (`merge_duplicate_item`, called from
+   `scripts/pipelines/fetchers/browser/connector.py` — keep this one
+   in `zotero_io.py` rather than shelling out, since the pipeline
+   consumes its structured `{moved, skipped_dupe_attachments,
+   tags_added, collections_added}` stats), and any other custom
+   Zotero operation a headless `uv run` script needs. MCP tools and
+   `zotero-cli` are both unusable here — MCP tools aren't reachable
+   from a headless process at all, and `zotero-cli`'s per-call
+   process cost and lack of batching make it unfit for hundreds or
+   thousands of items.
+4. **Direct HTTP** to `http://127.0.0.1:23119/...` is **not** a fourth
    option. It is a defect signal. If you find yourself writing
    `urllib.request.urlopen("http://127.0.0.1:23119/...")` or
    `curl localhost:23119`, that means the plugin is missing a helper.
@@ -284,7 +305,13 @@ must handle all three:
 3. **Post-import.** Always run `mcp__zotero__zotero_find_duplicates` at
    the end of the import. Pre-existing library items with incomplete
    metadata can slip past the first two checks; the post-check is the
-   safety net.
+   safety net. To merge what it finds, use `mcp__zotero__zotero_merge_duplicates`
+   or, equivalently, `zotero-cli duplicates find` / `zotero-cli
+   duplicates merge` from Bash — either is fine for this agent-driven,
+   one-item-at-a-time flow. This is separate from
+   `zotero_io.merge_duplicate_item`, which stays pipeline-only (see the
+   IRON RULE above) because `scripts/pipelines/fetchers/browser/connector.py`
+   depends on its structured return stats.
 
 **Fix the data, don't work around it.** If post-import surfaces duplicates,
 audit the upstream source first (search-API field mapping, manual

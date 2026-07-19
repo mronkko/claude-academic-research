@@ -104,6 +104,14 @@ problem:
   or "requires Node.js + npm" for the
   npx-based servers). Install it, then re-run the wizard — it's
   idempotent and picks up where it left off.
+- **`zotero-cli` missing or `zotero-mcp` found but not `zotero-cli`**:
+  installing `zotero-mcp-server` also puts the standalone `zotero-cli`
+  on PATH — no separate step. If the wizard's summary shows `zotero-mcp`
+  present but `zotero-cli` absent, the stale PyPI package `zotero-mcp`
+  (0.1.6, pre-dates the CLI) is shadowing it: `uv tool uninstall
+  zotero-mcp` then reinstall `zotero-mcp-server[scite,semantic]` as
+  above. `zotero-cli` is optional — every skill degrades to MCP tools
+  and `zotero_io.py` without it — so this never blocks setup.
 - **Wizard exits with code 4**: Zotero MCP is not connected. No
   academic-research skill works without it. The wizard's summary lists
   the install and registration commands; run them and re-run the

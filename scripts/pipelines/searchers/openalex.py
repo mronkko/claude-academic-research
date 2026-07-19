@@ -127,10 +127,10 @@ class OpenAlexSearch(SearchSource):
 
         Note: OpenAlex abstracts are often reconstructed from GROBID
         full-text parsing and may contain body-text fragments rather
-        than the paper's real abstract. Downstream `fetch_abstracts.py`
-        (or its successor) re-fetches proper abstracts from Crossref /
-        Semantic Scholar / Scopus; this is a best-effort starting
-        point for the search CSV only.
+        than the paper's real abstract. Downstream `enrich_abstracts.py`
+        re-fetches proper abstracts from Crossref / Semantic Scholar /
+        Scopus; this is a best-effort starting point for the search
+        CSV only.
         """
         if not inverted_index:
             return ""

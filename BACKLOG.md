@@ -118,10 +118,12 @@ directory — not checked in because it references machine-local paths).
   function costume. Hard to test in isolation.
   Files: [scripts/pipelines/enrich_pdfs.py](scripts/pipelines/enrich_pdfs.py).
 
-- **P3** — split `zotero_io.py` (978 LOC) into `zotero_io_api.py`
+- **P3** — split `zotero_io.py` (1156 LOC) into `zotero_io_api.py`
   (auth + pyzotero wrapping) and `zotero_io_slr.py`
   (`parse_slr_coding_note`, SLR-specific helpers). The module has
-  become a kitchen-sink.
+  become a kitchen-sink. Not addressed by the zotero-cli evaluation
+  in House-keeping below — that pass added a documentation tier
+  rather than restructuring the module; the split is still open.
   Files: [scripts/pipelines/zotero_io.py](scripts/pipelines/zotero_io.py).
 
 - **R10 + R11 (partial)** — finish the OA fallback chain from
@@ -162,13 +164,18 @@ directory — not checked in because it references machine-local paths).
 - **R7 (narrowed)** — port `find_duplicates` detection into
   `audit_zotero_library.py` so the audit report surfaces duplicate
   candidates offline. The merge half is already ported —
-  [zotero_io.py:830](scripts/pipelines/zotero_io.py#L830)
-  (`merge_duplicate_item`, adapted from zotero-mcp) — and the
-  find-duplicates doctrine is already wired into
-  [zotero-operations/SKILL.md:240](skills/zotero-operations/SKILL.md).
-  What remains is detection in the audit script itself (MCP
-  find/merge still can't be invoked from a headless script, but the
-  detection algorithm can be reimplemented locally).
+  [zotero_io.py:1008](scripts/pipelines/zotero_io.py#L1008)
+  (`merge_duplicate_item`, adapted from zotero-mcp) — and stays
+  pipeline-only: `scripts/pipelines/fetchers/browser/connector.py`
+  calls it directly and depends on its structured return stats, so
+  it is not a candidate for replacement by the `zotero-cli` tier
+  added below (no equivalent structured output from a shelled-out
+  CLI call). The find-duplicates doctrine is already wired into
+  [zotero-operations/SKILL.md](skills/zotero-operations/SKILL.md)
+  under "Import dedup". What remains is detection in the audit
+  script itself (MCP find/merge still can't be invoked from a
+  headless script, but the detection algorithm can be reimplemented
+  locally).
 - **R8** — `mcp__zotero__zotero_get_pdf_outline` in `fulltext_code.py`.
   Jump to coding-relevant sections without reading the whole PDF.
   Requires restructuring the LLM-input pipeline (currently sends the
@@ -208,3 +215,29 @@ directory — not checked in because it references machine-local paths).
   longer exist by those names (`mcp-research`, `academic-writing`);
   it was already gitignored (line 41 of `.gitignore`) and never
   tracked, so the delete is local-only — no follow-up needed.
+
+- **`zotero-cli` evaluation (2026-07-19)** — the upstream
+  `zotero-mcp-server` package (the wizard already installs it, see
+  `EXPECTED_MCP` in `scripts/setup/wizard.py`) ships a standalone
+  `zotero-cli` as of v0.6.2. Evaluated as a replacement for
+  `zotero_io.py`'s pyzotero wrapping; **rejected for batch pipelines,
+  adopted for one-off agent operations**. Measured `zotero-cli
+  config` startup at ~1.5–2 s per invocation (fresh Python process
+  each call); it also has no batch-by-item-keys mode, no reliable
+  `--json` output, and no HTTP-412 version-conflict retry — a
+  library-wide screening/coding run touches hundreds to thousands of
+  items and needs all three. `zotero_io.py` and `bbt_client.py`
+  remain the pipeline-facing layer. `zotero-cli` was added as tier 2
+  in the Zotero access hierarchy (`zotero-operations/SKILL.md`'s
+  IRON RULE, mirrored in `systematic-review/SKILL.md`) for
+  agent-initiated one-off writes — edits, tag/note mutations,
+  dedup-find, single-item add — replacing what would otherwise be
+  improvised inline Python or a defect-signal direct-HTTP call. The
+  setup wizard gained a PATH presence check (`_check_zotero_cli`)
+  that also detects the stale PyPI package `zotero-mcp` (0.1.6,
+  pre-dates the CLI) shadowing the real one, plus a read-only
+  permission-allow category for `zotero-cli search/get/config/
+  duplicates find`. `merge_duplicate_item` was considered for
+  deletion in favor of `zotero-cli duplicates merge` but kept — see
+  R7 (narrowed) above; it is a load-bearing pipeline call, not an
+  agent-facing convenience.
