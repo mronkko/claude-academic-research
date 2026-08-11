@@ -108,6 +108,56 @@ directory — not checked in because it references machine-local paths).
   were the legacy script and the tests now pointed at the handler
   registry). Left here for the audit trail.
 
+### Skills
+
+- **S8** — modular / stage-scoped invocation for `systematic-review`.
+  Right now the skill's Bootstrap section (SKILL.md:35-92) is an
+  all-or-nothing gate: using the skill for even one mechanical
+  capability — e.g. just `enrich_pdfs.py`'s PDF-source cascade
+  against an existing Zotero collection — first requires installing
+  the full canonical scaffold (`search_config.py`,
+  `screening_config.py`, 4 test templates, `manuscript.qmd`), and for
+  the search stage, an explicit `.claude/systematic-review/scope.md`
+  sign-off (SKILL.md:189-280).
+
+  Hit directly in the AI-literature-review-study project: it already
+  runs its own PRISMA-style pipeline (own Zotero collection, own tag
+  taxonomy, own phase-based script layout) and wanted only
+  `enrich_pdfs.py`'s Phase-1 PDF cascade for one batch of 244 items.
+  Reusing the skill for that meant either (a) bootstrapping
+  scaffold/config files the project will never populate or use, or
+  (b) bypassing `Skill`/SKILL.md entirely and reverse-engineering
+  `enrich_pdfs.py`'s actual requirements straight from source — which
+  turned out to need none of the scaffold, just
+  `ZOTERO_API_KEY`/`ZOTERO_GROUP`-style env vars via
+  `core.config_loader`. Path (b) works but throws away SKILL.md's
+  documentation/discoverability, and it only worked here because
+  reading ~1300 lines of `enrich_pdfs.py` source was on the table;
+  most users wouldn't find this out.
+
+  **What it would take:**
+  - Add a "standalone stage usage" note (Bootstrap section, or
+    per-row in the "Common workflows" table around SKILL.md:659-680)
+    stating which stages need zero scaffold beyond Zotero credentials
+    (`enrich_pdfs.py`, `enrich_abstracts.py`, `audit_zotero_library.py`
+    look like this already) vs. which genuinely need
+    `search_config.py`/`screening_config.py`/`scope.md` (`search.py`,
+    `abstract_screen.py`, `fulltext_code.py`).
+  - Sharpen the `description:` trigger framing — the existing "Do NOT
+    use for isolated Zotero enrichment without a screening pipeline —
+    use `zotero-operations`" clause doesn't cover a project running
+    its *own* partial pipeline that still wants one specific stage
+    (PDF enrichment, or full-text coding) without the rest.
+  - Maybe a `--minimal`/stage-scoped path in `check_configured.py` /
+    `check_project_scaffold.py` that checks only the credentials a
+    named stage needs, instead of the full four-test-file +
+    config-template list.
+
+  Files: [skills/systematic-review/SKILL.md](skills/systematic-review/SKILL.md)
+  (Bootstrap ~L35-92, scope gate ~L189-280, workflows table
+  ~L659-680), `scripts/setup/check_configured.py`,
+  `scripts/setup/check_project_scaffold.py`.
+
 ---
 
 ## Tier 3 — high effort, higher risk; only when touching the area
