@@ -670,10 +670,13 @@ class ZoteroClient:
         (Zotero's per-request limit).
 
         Returns `{applied, unchanged, failed}` counts across all
-        batches. Partial-batch failures are surfaced individually via
-        pyzotero's success / failed buckets; this method does not
-        retry on 412 (callers should re-invoke after fetching fresh
-        state).
+        batches. When pyzotero's `update_items` returns a dict,
+        partial-batch failures are surfaced individually via its
+        success / failed buckets; when it returns a bool (some
+        pyzotero versions report only whole-call success), the whole
+        chunk is counted as applied or failed accordingly. This
+        method does not retry on 412 (callers should re-invoke after
+        fetching fresh state).
         """
         if not updates:
             return {"applied": 0, "unchanged": 0, "failed": 0}
@@ -737,16 +740,31 @@ class ZoteroClient:
                         stats["failed"] += 1
                 continue
 
-            # pyzotero's update_items returns a dict
-            # `{success, unchanged, failed}` each keyed by batch index.
-            # pyright's stub mis-types it as bool; ignore at the
-            # boundary since the runtime contract is documented by
-            # Zotero's multi-item PATCH response shape.
-            resp: dict = self.cloud.update_items(payloads)  # type: ignore[assignment]
-            stats["applied"] += len(resp.get("success") or {})
-            stats["unchanged"] += len(resp.get("unchanged") or {})
-            failed = resp.get("failed") or resp.get("failure") or {}
-            stats["failed"] += len(failed)
+            # pyzotero's update_items return shape varies by version:
+            # some releases return a dict `{success, unchanged, failed}`
+            # each keyed by batch index, while others (e.g. 1.13.x,
+            # which just POSTs each chunk and raises on any non-2xx
+            # response) return a plain bool for the whole call. Branch
+            # on the actual runtime type rather than assuming one
+            # shape — a bare `.get()` on a bool blows up with
+            # AttributeError mid-batch.
+            resp = self.cloud.update_items(payloads)
+            if isinstance(resp, dict):
+                stats["applied"] += len(resp.get("success") or {})
+                stats["unchanged"] += len(resp.get("unchanged") or {})
+                failed = resp.get("failed") or resp.get("failure") or {}
+                stats["failed"] += len(failed)
+            else:
+                # Bool (or any other non-dict) result: treat it as an
+                # all-or-nothing signal for this chunk. pyzotero raises
+                # on a failed PATCH rather than returning False, so a
+                # truthy return here means the whole chunk of
+                # `payloads` succeeded; a falsy return is handled
+                # defensively as a whole-chunk failure.
+                if resp:
+                    stats["applied"] += len(payloads)
+                else:
+                    stats["failed"] += len(payloads)
 
         return stats
 
