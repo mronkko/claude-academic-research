@@ -211,7 +211,13 @@ def _prompt_confirm(
     zot_item: dict, zot_title: str, zot_year: str,
     cr: DoiResolution, cr_doi: str,
 ) -> bool:
-    """Show the proposed match and return True on user confirm."""
+    """Show the proposed match and return True on user confirm.
+
+    Reached only after the caller has confirmed `sys.stdin.isatty()`
+    (see the 2/3-match branch above) — stdin is already a real
+    terminal at that point, so there's no need to open `/dev/tty`
+    separately (which doesn't exist on Windows anyway).
+    """
     cr_authors = ", ".join(cr.author_surnames[:3]) or "(no authors)"
     print(
         f"\n  Proposed DOI for: {zot_title[:70]}\n"
@@ -222,13 +228,9 @@ def _prompt_confirm(
         f"    DOI: {cr_doi}",
         flush=True,
     )
-    try:
-        with open("/dev/tty") as tty:
-            sys.stdout.write("  Apply? [y/N] ")
-            sys.stdout.flush()
-            raw = tty.readline()
-    except Exception:
-        raw = sys.stdin.readline()
+    sys.stdout.write("  Apply? [y/N] ")
+    sys.stdout.flush()
+    raw = sys.stdin.readline()
     return (raw or "").strip().lower() in ("y", "yes")
 
 

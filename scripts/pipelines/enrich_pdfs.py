@@ -330,6 +330,12 @@ def _prompt_on_first_failure(
     entirely and returns the configured answer. Default for
     non-interactive is 'skip' — matches the interactive default on
     Enter, so piped runs don't block.
+
+    Reached only after confirming `sys.stdin.isatty()` above, so
+    stdin is already a real terminal — no need for the `/dev/tty`
+    dance `_wait_for_user`/`_read_user_line` use elsewhere (those are
+    reached without an isatty() guard, via `_has_interactive_surface()`
+    instead, so /dev/tty genuinely can differ from stdin there).
     """
     override = getattr(args, "on_first_failure", "")
     if override:
@@ -348,13 +354,9 @@ def _prompt_on_first_failure(
         f"future runs jump straight to the Connector fallback",
         flush=True,
     )
-    try:
-        with open("/dev/tty") as tty:
-            sys.stdout.write("> ")
-            sys.stdout.flush()
-            raw = tty.readline()
-    except Exception:
-        raw = sys.stdin.readline()
+    sys.stdout.write("> ")
+    sys.stdout.flush()
+    raw = sys.stdin.readline()
     answer = (raw or "").strip()
     if answer == "k" or answer.lower() == "keep":
         return "keep"

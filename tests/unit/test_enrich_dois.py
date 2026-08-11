@@ -566,3 +566,37 @@ def test_find_missing_year_tolerance() -> None:
         dry_run=False, no_prompt=False,
     )
     assert result.status == "applied_high_confidence"
+
+
+# ---------------------------------------------------------------------------
+# _prompt_confirm
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_confirm_shows_apply_prompt_and_reads_stdin(
+    monkeypatch, capsys,
+) -> None:
+    """`_prompt_confirm` is only reached after the caller has confirmed
+    `sys.stdin.isatty()`, so it must read stdin directly (no `/dev/tty`
+    detour that always fails on Windows and previously left the
+    "Apply?" prompt unprinted on that fallback path)."""
+    mod = _load()
+    item = _item_with_authors(
+        [("Smith", "A.")], title="A Study of Things", date="2014",
+    )
+    cr = mod.DoiResolution(
+        title="A Study of Things", author_surnames=["Smith"],
+        issued_year="2014",
+    )
+
+    stdin_mock = MagicMock()
+    stdin_mock.readline.return_value = "y\n"
+    monkeypatch.setattr(mod.sys, "stdin", stdin_mock)
+
+    result = mod._prompt_confirm(
+        item, "A Study of Things", "2014", cr, "10.1/new",
+    )
+
+    assert result is True
+    assert "Apply? [y/N]" in capsys.readouterr().out
+    stdin_mock.readline.assert_called_once()
