@@ -1,0 +1,32 @@
+name: zotero-mcp drift check
+
+# Installs zotero-mcp-server UNPINNED (latest from PyPI) and runs only
+# tests/unit/test_zotero_mcp_sync.py against it. The rest of CI pins
+# zotero-mcp-server>=0.9,<0.10 deliberately (see E3 in the batch-DOI-import
+# plan) so an unrelated upstream release doesn't redden every PR; this
+# workflow is what gives drift a week's lead time instead of surfacing as a
+# mystery failure in someone else's unrelated PR.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # every Monday, 06:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies (zotero-mcp-server unpinned)
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest zotero-mcp-server
+
+      - name: Run the zotero-mcp sync guard against the latest release
+        run: pytest tests/unit/test_zotero_mcp_sync.py -v
