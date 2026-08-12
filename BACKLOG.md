@@ -90,6 +90,68 @@ directory — not checked in because it references machine-local paths).
   `rollback` references; the rollback-mention concern evaporated,
   likely during the portability pass. Left here for audit trail.
 
+- **S10** — C3, replacing `_row_to_zotero_item`'s hand-rolled mapping
+  with `zotero_mcp.citation_import.csl_json_to_zotero` (part of the
+  batch-DOI-import work; C1 `_normalize_doi` and C2
+  `schema.valid_fields` pre-POST validation shipped, C3 did not).
+  **Skipped** — the plan's own escape hatch ("if the test churn
+  outweighs the gain, take only C1+C2") applied. Reasons: (1)
+  `csl_json_to_zotero` takes CSL-JSON, not our CSV's flat row shape,
+  so adopting it means *adding* a CSV→CSL adapter, not net-removing a
+  mapper. (2) Its main sophistication — CSL type→itemType dispatch,
+  multipart dates, per-type container-field selection — is moot here:
+  every search-CSV row is already a known `journalArticle` with a
+  plain year. (3) `template_fn` needs a live Zotero item-template GET,
+  which would put a network dependency into a path `main()` currently
+  runs even under `--dry-run`. (4) It touches a shipped path covered
+  by 15 tests in `test_import_to_zotero_canonicalize.py` for
+  uncertain gain. The one piece that might still be worth lifting in
+  isolation someday: `_looks_corporate` (`citation_import.py:118`),
+  a small self-contained corporate-author-name heuristic
+  `_parse_authors` (`import_to_zotero.py`) doesn't have — but search
+  results are almost always individual authors, so this is low
+  priority. Re-evaluate only if corporate-author mis-parsing shows up
+  as a real dedup/data-quality issue in practice.
+  Files: [scripts/pipelines/import_to_zotero.py](scripts/pipelines/import_to_zotero.py)
+  (`_row_to_zotero_item`, `_parse_authors`).
+
+- **S9** — file-format/architecture question for a DOI-resolve →
+  Zotero-import handoff (`resolve_dois.py` → `import_to_zotero.py`).
+  **Closed** — moot. `resolve_dois.py` was dropped during the
+  batch-DOI-import work (see S10 above): investigating the zotero-mcp
+  checkout found the 244-DOI crash was a zotero-mcp defect fixable at
+  source (upstream `feat/batch-doi-add`), not something needing a new
+  Zotero-import entry point. No CSV-vs-JSON handoff to design if
+  there's no new script writing one side of it.
+
+- **S11** — stray editable `zotero-mcp-server` install on this
+  machine's system Python, pointing at a *different* local checkout
+  (`~/Documents/GitHub/zotero-mcp-antigravity`, version 0.6.2 —
+  pre-dates the 0.9 tool-surface rename). It shadows the correct
+  `>=0.9,<0.10` package this plugin now requires, so
+  `tests/unit/test_zotero_mcp_sync.py` (and anything else importing
+  `zotero_mcp`) fails under plain `pytest` on PATH, even though it
+  passes cleanly under this project's own `.venv` (`uv sync`-managed,
+  isolated).
+  **Resolved (2026-08-12).** Investigation found the target directory
+  had already been renamed away (it was a linked git worktree of the
+  `~/Documents/GitHub/zotero-mcp` repo, physically renamed to
+  `zotero-mcp-indexing` outside of `git worktree move`), so the
+  editable install was fully dangling — `import zotero_mcp` under
+  system Python raised `ModuleNotFoundError` outright, and its
+  `zotero-mcp`/`zotero-cli` console scripts in system Python's `bin/`
+  were already shadowed on `PATH` by a separate, correctly-targeted
+  `uv tool install --editable ~/Documents/GitHub/zotero-mcp` (the
+  live checkout `zotero-mcp` this plugin actually depends on — see
+  CLAUDE.md's Reference projects section). No MCP config (Claude
+  Desktop, `~/.claude.json`) referenced the dangling path or the
+  system-Python interpreter. Confirmed by user, then removed via
+  `pip uninstall zotero-mcp-server` under
+  `/Library/Frameworks/Python.framework/Versions/3.12`; this repo's
+  own suite still passes under `uv run pytest`. Still true generally,
+  and worth keeping as house style: invoke this repo's tests via
+  `.venv/bin/pytest` / `uv run pytest`, not a bare `pytest` on `PATH`.
+
 ---
 
 ## Tier 2 — medium impact, medium effort (needs approval)
@@ -229,60 +291,6 @@ directory — not checked in because it references machine-local paths).
   (Bootstrap ~L35-92, scope gate ~L189-280, workflows table
   ~L659-680), `scripts/setup/check_configured.py`,
   `scripts/setup/check_project_scaffold.py`.
-
-- **S9** — file-format/architecture question for the DOI-resolve →
-  Zotero-import handoff (`resolve_dois.py` → `import_to_zotero.py`).
-
-  Surfaced while designing the batch-DOI-import work (see current
-  implementation, not deferred): should the handoff between resolving
-  DOI metadata and writing it to Zotero be (a) a CSV file, matching
-  `import_to_zotero.py`'s existing hard-coded input contract, (b) a
-  richer JSON/JSONL file, or (c) no intermediate file at all —
-  `resolve_dois.py` calling `import_to_zotero.py`'s functions
-  in-process on an in-memory list?
-
-  Key points from the discussion, kept here since the implementation
-  goes ahead with a default (CSV) rather than resolving this fully:
-  - The "CSV enables resumability across a crash" justification was
-    raised and retracted: a JSON DOI→metadata cache (mirroring
-    `doi_resolver.py`'s existing cache pattern) already provides that
-    on its own — a re-run checks the cache before re-querying
-    Crossref/OpenAlex regardless of whether a CSV was written. So CSV
-    isn't earning that benefit; its real justification is just
-    contract-reuse with `import_to_zotero.py`.
-  - JSON would better represent this data — a structured `creators`
-    list instead of `import_to_zotero.py`'s
-    `"Last, First; Last, First"` string-encoding in `_parse_authors()`
-    (`scripts/pipelines/import_to_zotero.py:143-160`), multiple ISSNs,
-    sparse optional fields (publisher, license) without committing to
-    fixed CSV columns — but none of that is realized unless
-    `import_to_zotero.py`'s input contract is *also* extended to
-    accept JSON, which is a separate, bigger decision (touches an
-    already-shipped, tested script).
-  - **Data-integrity risk with any exposed intermediate file:** a CSV
-    sitting on disk between resolve and import could be hand-edited
-    (by an agent "fixing" a value, or a user in Excel) before import,
-    with nothing to catch it — the same class of problem
-    `empirical-integrity` exists to prevent elsewhere (facts must
-    trace to a pipeline-generated source, never hand-edited), just
-    unguarded at this stage. Not unique to this new script —
-    `search_results.csv` between `search.py` and `import_to_zotero.py`
-    has the identical exposure today. No checksum/write-once precedent
-    exists anywhere in this repo; the codebase's idiom for this class
-    of risk is prose rules (e.g. "No improvised pipeline-style code",
-    `systematic-review/SKILL.md:426-480`) plus after-the-fact automated
-    detection, not cryptographic prevention.
-
-  **Revisit if:** the CSV default causes real friction (someone wants
-  the richer metadata JSON would preserve, or a hand-edit actually
-  corrupts an import) — at that point, reconsider extending
-  `import_to_zotero.py`'s input contract to JSON, or collapsing the
-  two scripts into one in-process call to remove the exposed file
-  entirely, and consider the prose "don't hand-edit a pipeline CSV"
-  rule for both this handoff and `search_results.csv`.
-
-  Files: `scripts/pipelines/import_to_zotero.py`,
-  `scripts/pipelines/fetchers/doi_resolver.py`, `scripts/pipelines/csv_io.py`.
 
 ---
 
