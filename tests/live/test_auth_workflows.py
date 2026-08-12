@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.live.conftest import require_config
+from tests.live.conftest import http_get, require_config
 
 pytestmark = pytest.mark.live
 
@@ -125,4 +125,17 @@ def test_auth_gemini() -> None:
     key = require_config("gemini", "api_key", env="GEMINI_API_KEY")
     ok, msg, _ = _wizard()._verify_gemini(key)
     assert ok, f"Gemini auth failed: {msg}"
+
+
+def test_auth_library_openurl_base() -> None:
+    """openurl_base is a plain URL, not a credential — there's no auth
+    to verify. This confirms whatever endpoint the user configured
+    actually responds; the real getFullTxt behavior (SFX vs. Alma
+    shape, real coverage answers) is exercised institution-specifically
+    by test_library_resolver_alma.py, since every library's holdings
+    and endpoint flavor differ.
+    """
+    base = require_config("library", "openurl_base", env="LIBRARY_OPENURL_BASE")
+    status, _body, _headers = http_get(base)
+    assert status != 0, f"{base} unreachable (network/DNS error)"
 

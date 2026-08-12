@@ -109,59 +109,76 @@ directory — not checked in because it references machine-local paths).
   registry). Left here for the audit trail.
 
 - **P11** — Alma/Primo library-resolver follow-ups (issue #6).
-  The minimal fix (flavor detection, `svc_dat=CTO`, and Alma
+  The original minimal fix (flavor detection, `svc_dat=CTO`, and Alma
   `<context_service>`/`<resolution_url>` parsing in
-  `fetchers/library_resolver.py`) stays DOI-only and is verified
-  against Aalto's live Alma instance
-  (`tests/live/test_library_resolver_alma.py`), where a DOI-only query
-  already returns full coverage. Deferred scope, confirmed still open
-  after that fix:
-  - **ISSN+date+volume fallback.** The issue's reporting institution's
-    Alma deployment returns zero `getFullTxt` matches on a DOI-only
-    query — only `rft.issn`+`rft.date`+`rft.volume` works there. A
-    DOI-only fix leaves that institution with a confident false
-    negative (silently skips items the library actually has access
-    to). Needs optional `issn`/`pub_date`/`volume` kwargs threaded
-    through `has_fulltext_access` / `sfx_lookup_dual` /
-    `first_fulltext_target_preferred` / `_build_query_url`, with an
-    automatic retry using those fields when a DOI-only Alma query
-    comes back empty. Fields are already in scope at the
-    `sfx_lookup_dual` call site (`enrich_pdfs.py` ~L934, via
-    `zot_item["data"]`) but dropped before the
-    `first_fulltext_target_preferred` call site (~L1027, only
-    `doi`/`item_key`/`title` survive Pass 1's `entry` dict into Pass
-    3) — carrying them forward is the main plumbing cost. Also worth
-    checking before implementing: live testing against Aalto found
-    `rft.date`/`rft.volume` don't act as filters there at all (results
-    were identical across correct, wrong, and missing date/volume) —
-    unlike SFX, where the existing `sfx.ignore_date_threshold` dual
-    query relies on real date filtering. The SFX-style
-    in_range/any_range (Case 1/2/3) distinction may not have a clean
-    Alma equivalent; confirm behavior at a second Alma institution
-    before assuming Aalto's is representative.
-  - **Platform-priority / `required_domains` matching for Alma
-    targets.** `_effective_host()` / `_target_matches_domains()` /
-    `_platform_rank()` operate on the target URL's hostname; Alma's
+  `fetchers/library_resolver.py`) shipped DOI-only. Two of its three
+  deferred items have since shipped too:
+
+  - **Done — ISSN+date+volume fallback.** `has_fulltext_access` /
+    `sfx_lookup_dual` / `first_fulltext_target_preferred` /
+    `_build_query_url` / `_query_target_urls` all gained optional
+    `issn`/`pub_date`/`volume` kwargs (default `None`, fully backward
+    compatible). `_query_target_urls` retries once via the new
+    `_build_issn_query_url` (`rft.issn`+`rft.date`+`rft.volume`, no
+    `rft_id`) when a DOI-keyed Alma query returns zero targets — the
+    exact false negative the issue's reporting institution hits.
+    `enrich_pdfs.py` extracts `ISSN`/`date`/`volume` from
+    `zot_item["data"]` into `entry` at creation time (~L841), which
+    already flows unchanged into both call sites (`sfx_lookup_dual`
+    ~L959, `first_fulltext_target_preferred` ~L1056) — no extra
+    plumbing needed once the fields were added there, since `entry`
+    is the same dict object referenced through Pass 1 → Pass 2/3.
+    Verified live against Aalto with a deliberately-engineered
+    reproduction of the reporting institution's scenario (a DOI Alma
+    will never link, paired with a real, licensed ISSN) in
+    `tests/live/test_library_resolver_alma.py`'s
+    `test_alma_uresolver_issn_fallback_*` tests — both pass. Note for
+    whoever next touches this: live testing found `rft.date`/
+    `rft.volume` don't act as filters at Aalto's Alma deployment at
+    all (identical results across correct, wrong, and missing
+    date/volume) — unlike SFX's `sfx.ignore_date_threshold` dual
+    query, which relies on real date filtering. Don't assume Aalto's
+    behavior generalizes to other Alma institutions.
+  - **Done — wizard support + discovery docs.** `scripts/setup/
+    wizard.py:KEYS` gained a `LIBRARY_OPENURL_BASE` → `[library]
+    openurl_base` `KeySpec` (optional, not hidden — it's a URL, not a
+    secret; `verify=_verify_none`, matching `WILEY_TDM_TOKEN`/
+    `OPENALEX_API_KEY`'s pattern for fields with no cheap live check).
+    Its `where=` field carries the SFX/Alma discovery recipes already
+    written into `library_resolver.py`'s module docstring. Fixed a
+    latent gap found while wiring this in: `load_from_config()` built
+    the env-var-aware test fixtures expected `LIBRARY_OPENURL_BASE` to
+    take precedence over `config.toml` (see
+    `test_load_from_config_env_var_overrides_toml`) but never actually
+    passed `env=` to `config_loader.get()` — silently dead code before
+    this fix. `tests/live/test_auth_workflows.py` gained
+    `test_auth_library_openurl_base` (a reachability probe, not an
+    auth check — `openurl_base` has no credential to verify) to
+    satisfy `test_live_coverage.py`'s per-`KeySpec` guard.
+  - **Still open — platform-priority / `required_domains` matching
+    for Alma targets.** `_effective_host()` / `_target_matches_domains()`
+    / `_platform_rank()` operate on the target URL's hostname; Alma's
     `resolution_url` always hosts on the Alma redirector domain
     (e.g. `aalto.alma.exlibrisgroup.com`), never the real publisher,
     so `SFX_PLATFORM_PRIORITY` ranking and `required_domains`
     filtering silently degrade to "unranked"/"no match" for Alma
-    targets instead of raising. Doesn't regress the current caller
+    targets instead of raising. Deliberately left deferred (confirmed
+    with the user 2026-08-12) — doesn't regress the current caller
     (`enrich_pdfs.py`'s `first_fulltext_target_preferred` call site
-    doesn't pass `required_domains`), but a real fix needs
-    text-matching against Alma's `package_name`/`interface_name` keys
-    (e.g. `"EBSCOhost"`) instead of a URL host — a different mechanism
-    from SFX's.
-  - **No wizard support, no discovery docs.** The setup wizard never
-    prompts for `[library] openurl_base` (no `KeySpec` entry in
-    `scripts/setup/wizard.py`), and there's no `config.toml` template
-    — a user must already know the key exists and hand-edit the file.
-    `library_resolver.py`'s module docstring now documents how to
-    *find* the value for SFX and Alma institutions (added alongside
-    the issue #6 fix), but nothing prompts a new user to go add it.
+    doesn't pass `required_domains`), and a real fix is a bigger,
+    riskier change than the two items above: it needs
+    `_fulltext_target_urls` to return structured `(url, platform_name)`
+    data instead of a flat `list[str]`, which ripples into the on-disk
+    cache format (currently `{"urls": [...]}`) and needs a migration
+    path for existing cached entries, mirroring the precedent already
+    set for legacy `{has_access, targets}` entries. Text-match target
+    against Alma's `package_name`/`interface_name` keys (e.g.
+    `"EBSCOhost"`) instead of a URL host — a different mechanism from
+    SFX's.
   Files: [scripts/pipelines/fetchers/library_resolver.py](scripts/pipelines/fetchers/library_resolver.py),
   [scripts/pipelines/enrich_pdfs.py](scripts/pipelines/enrich_pdfs.py)
-  (~L934, ~L1027), `scripts/setup/wizard.py`.
+  (~L841, ~L959, ~L1056), `scripts/setup/wizard.py`,
+  `tests/live/test_auth_workflows.py`.
 
 ### Skills
 

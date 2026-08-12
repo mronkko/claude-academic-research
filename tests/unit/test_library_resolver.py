@@ -22,6 +22,7 @@ from fetchers.library_resolver import (
     LibraryResolverConfig,
     SfxCache,
     SfxDualResult,
+    _build_issn_query_url,
     _build_query_url,
     _count_fulltext_targets,
     _effective_host,
@@ -324,6 +325,178 @@ def test_build_query_url_omits_svc_dat_for_sfx() -> None:
         session=MagicMock(),
     )
     assert "svc_dat" not in _build_query_url("10.1/x", cfg)
+
+
+# ---------------------------------------------------------------------------
+# _build_issn_query_url — Alma ISSN+date+volume fallback (BACKLOG.md P11)
+# ---------------------------------------------------------------------------
+
+
+def test_build_issn_query_url_has_no_rft_id() -> None:
+    """The fallback query is keyed by journal identity, not the DOI —
+    some Alma deployments only link holdings at journal level."""
+    cfg = LibraryResolverConfig(
+        openurl_base="https://eu03.alma.exlibrisgroup.com/view/uresolver/358AALTO_INST/openurl",
+        session=MagicMock(),
+    )
+    url = _build_issn_query_url(cfg, issn="1042-2587")
+    assert "rft_id" not in url
+    assert "rft.issn=1042-2587" in url
+    assert "svc_dat=CTO" in url
+
+
+def test_build_issn_query_url_includes_date_and_volume_when_given() -> None:
+    cfg = LibraryResolverConfig(
+        openurl_base="https://eu03.alma.exlibrisgroup.com/view/uresolver/358AALTO_INST/openurl",
+        session=MagicMock(),
+    )
+    url = _build_issn_query_url(
+        cfg, issn="1042-2587", pub_date="2024", volume="48",
+    )
+    assert "rft.date=2024" in url
+    assert "rft.volume=48" in url
+
+
+def test_build_issn_query_url_omits_date_and_volume_when_absent() -> None:
+    cfg = LibraryResolverConfig(
+        openurl_base="https://eu03.alma.exlibrisgroup.com/view/uresolver/358AALTO_INST/openurl",
+        session=MagicMock(),
+    )
+    url = _build_issn_query_url(cfg, issn="1042-2587")
+    assert "rft.date" not in url
+    assert "rft.volume" not in url
+
+
+# ---------------------------------------------------------------------------
+# Alma ISSN+date+volume fallback behavior (issue #6 / BACKLOG.md P11)
+# ---------------------------------------------------------------------------
+
+
+def _alma_fallback_session(*, doi_urls: list[str], issn_urls: list[str]):
+    """Mock session whose `.get` returns `doi_urls` for a DOI-keyed
+    query (`rft_id=` present) and `issn_urls` for the ISSN-keyed
+    fallback (`rft.issn=` present, no `rft_id`). Returns (session,
+    calls) so tests can assert how many requests actually fired."""
+    calls: list[str] = []
+
+    def fake_get(url, **_kw):
+        calls.append(url)
+        resp = MagicMock()
+        resp.status_code = 200
+        if "rft_id=" in url:
+            resp.text = _synthetic_alma_xml(doi_urls)
+        else:
+            resp.text = _synthetic_alma_xml(issn_urls)
+        return resp
+
+    sess = MagicMock()
+    sess.get.side_effect = fake_get
+    return sess, calls
+
+
+def test_has_fulltext_access_recovers_via_issn_fallback_when_doi_empty() -> None:
+    """The exact scenario from issue #6: this Alma deployment doesn't
+    link the DOI to a holdings record (0 targets), but the journal is
+    licensed and ISSN+date+volume finds it."""
+    sess, calls = _alma_fallback_session(
+        doi_urls=[],
+        issn_urls=["https://aalto.alma.exlibrisgroup.com/view/action/uresolver.do?x"],
+    )
+    cfg = LibraryResolverConfig(
+        openurl_base="https://eu03.alma.exlibrisgroup.com/view/uresolver/358AALTO_INST/openurl",
+        session=sess,
+    )
+    assert has_fulltext_access(
+        "10.1/unlinked", cfg,
+        issn="1042-2587", pub_date="2024", volume="48",
+    ) is True
+    assert len(calls) == 2  # DOI query, then the ISSN fallback.
+
+
+def test_has_fulltext_access_skips_fallback_without_issn() -> None:
+    """No issn given → no fallback attempted, even against Alma with
+    an empty DOI result."""
+    sess, calls = _alma_fallback_session(
+        doi_urls=[],
+        issn_urls=["https://aalto.alma.exlibrisgroup.com/view/action/uresolver.do?x"],
+    )
+    cfg = LibraryResolverConfig(
+        openurl_base="https://eu03.alma.exlibrisgroup.com/view/uresolver/358AALTO_INST/openurl",
+        session=sess,
+    )
+    assert has_fulltext_access("10.1/unlinked", cfg) is False
+    assert len(calls) == 1
+
+
+def test_has_fulltext_access_skips_fallback_for_sfx() -> None:
+    """SFX endpoints ignore issn/pub_date/volume entirely — the
+    fallback is Alma-only."""
+    xml = _synthetic_sfx_xml([])
+    session = MagicMock()
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.text = xml
+    session.get.return_value = fake_resp
+    cfg = LibraryResolverConfig(
+        openurl_base="https://example.org/sfx",
+        session=session,
+    )
+    assert has_fulltext_access(
+        "10.1/x", cfg, issn="1042-2587", pub_date="2024", volume="48",
+    ) is False
+    assert session.get.call_count == 1
+
+
+def test_has_fulltext_access_skips_fallback_when_doi_query_already_found_something() -> None:
+    """The primary DOI query already succeeded — no reason to spend a
+    second request on the fallback."""
+    sess, calls = _alma_fallback_session(
+        doi_urls=["https://aalto.alma.exlibrisgroup.com/view/action/uresolver.do?y"],
+        issn_urls=["https://aalto.alma.exlibrisgroup.com/view/action/uresolver.do?x"],
+    )
+    cfg = LibraryResolverConfig(
+        openurl_base="https://eu03.alma.exlibrisgroup.com/view/uresolver/358AALTO_INST/openurl",
+        session=sess,
+    )
+    assert has_fulltext_access(
+        "10.1/linked", cfg, issn="1042-2587",
+    ) is True
+    assert len(calls) == 1
+
+
+def test_sfx_lookup_dual_applies_fallback_to_both_queries() -> None:
+    """The in_range and any_range queries each get their own
+    independent fallback attempt when empty."""
+    sess, calls = _alma_fallback_session(
+        doi_urls=[],
+        issn_urls=["https://aalto.alma.exlibrisgroup.com/view/action/uresolver.do?x"],
+    )
+    cfg = LibraryResolverConfig(
+        openurl_base="https://eu03.alma.exlibrisgroup.com/view/uresolver/358AALTO_INST/openurl",
+        session=sess,
+    )
+    result = sfx_lookup_dual("10.1/unlinked", cfg, issn="1042-2587")
+    assert result.query_ok
+    assert len(result.in_range) == 1
+    assert len(result.any_range) == 1
+    # 2 DOI queries (in_range + any_range) + 2 ISSN fallbacks.
+    assert len(calls) == 4
+
+
+def test_first_fulltext_target_preferred_uses_issn_fallback() -> None:
+    sess, _ = _alma_fallback_session(
+        doi_urls=[],
+        issn_urls=["https://aalto.alma.exlibrisgroup.com/view/action/uresolver.do?x"],
+    )
+    cfg = LibraryResolverConfig(
+        openurl_base="https://eu03.alma.exlibrisgroup.com/view/uresolver/358AALTO_INST/openurl",
+        session=sess,
+    )
+    target = first_fulltext_target_preferred(
+        "10.1/unlinked", cfg, issn="1042-2587", pub_date="2024", volume="48",
+    )
+    assert target is not None
+    assert "uresolver.do" in target
 
 
 # ---------------------------------------------------------------------------
@@ -881,3 +1054,21 @@ def test_load_from_config_returns_config_when_present(monkeypatch, tmp_path) -> 
     assert cfg is not None
     assert cfg.openurl_base == "https://example.org/sfx"
     assert cfg.cache is not None
+
+
+def test_load_from_config_env_var_overrides_toml(monkeypatch) -> None:
+    """LIBRARY_OPENURL_BASE (set by the setup wizard's KeySpec entry)
+    takes precedence over config.toml, matching every other key."""
+    from core import config_loader
+    monkeypatch.setattr(config_loader, "load_config", lambda: {
+        "library": {"openurl_base": "https://example.org/sfx"}
+    })
+    monkeypatch.setenv(
+        "LIBRARY_OPENURL_BASE",
+        "https://eu03.alma.exlibrisgroup.com/view/uresolver/358AALTO_INST/openurl",
+    )
+    cfg = load_from_config(MagicMock())
+    assert cfg is not None
+    assert cfg.openurl_base == (
+        "https://eu03.alma.exlibrisgroup.com/view/uresolver/358AALTO_INST/openurl"
+    )

@@ -43,6 +43,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -114,6 +115,23 @@ def _load_done_dois(path: str) -> set[str]:
     return shared_orchestrators.load_done_keys(
         path, statuses="attached", key_field="doi",
     )
+
+
+def _year_from_zotero_date(date_str: str) -> str | None:
+    """Extract a 4-digit year from Zotero's free-text `date` field
+    ("2024", "2024-05-15", "May 2024", ...) for the Alma ISSN-fallback
+    query's `rft.date` (see library_resolver.py's `_query_target_urls`
+    / BACKLOG.md P11). None when no year-shaped substring is found."""
+    match = re.search(r"\b(1[89]\d{2}|20\d{2})\b", date_str or "")
+    return match.group(1) if match else None
+
+
+def _first_issn(issn_field: str) -> str | None:
+    """Zotero's ISSN field may hold multiple values (print + electronic,
+    comma-separated, e.g. "1042-2587, 1540-6520"); the Alma ISSN
+    fallback query wants a single value, so take the first."""
+    first = (issn_field or "").split(",")[0].strip()
+    return first or None
 
 
 async def _drive_handler(
@@ -821,13 +839,20 @@ def _run_browser_in_process(
         )
 
     for zot_item in to_process:
-        doi = (zot_item.get("data", {}).get("DOI") or "").strip().lower()
+        item_data = zot_item.get("data", {})
+        doi = (item_data.get("DOI") or "").strip().lower()
         if not doi:
             continue
+        # issn/pub_date/volume feed the Alma ISSN-fallback query in
+        # library_resolver.py when a DOI-only lookup comes back empty
+        # (BACKLOG.md P11) — harmless no-ops against SFX endpoints.
         entry = {
             "doi": doi,
             "item_key": zot_item.get("key", ""),
-            "title": zot_item.get("data", {}).get("title", ""),
+            "title": item_data.get("title", ""),
+            "issn": _first_issn(item_data.get("ISSN", "")),
+            "pub_date": _year_from_zotero_date(item_data.get("date", "")),
+            "volume": (item_data.get("volume") or "").strip() or None,
         }
 
         if connector_only:
@@ -931,7 +956,11 @@ def _run_browser_in_process(
 
         # Classify Case 1 / 2 / 3 via dual SFX lookup.
         if resolver_cfg is not None:
-            dual = sfx_lookup_dual(doi, resolver_cfg)
+            dual = sfx_lookup_dual(
+                doi, resolver_cfg,
+                issn=entry["issn"], pub_date=entry["pub_date"],
+                volume=entry["volume"],
+            )
             domains = direct.direct_access_domains
             if domains:
                 in_range = any(
@@ -1028,6 +1057,8 @@ def _run_browser_in_process(
                 it["doi"], resolver_cfg,
                 priority=SFX_PLATFORM_PRIORITY,
                 in_range_only=True,
+                issn=it.get("issn"), pub_date=it.get("pub_date"),
+                volume=it.get("volume"),
             )
         if target:
             connector_items.append({**it, "sfx_target_url": target})

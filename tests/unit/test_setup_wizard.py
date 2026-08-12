@@ -242,7 +242,7 @@ def test_env_var_names_match_user_convention() -> None:
         "WOS_API_KEY_EXTENDED", "WOS_API_KEY",
         "ELSEVIER_API_KEY", "SCOPUS_API_KEY",
         "SEMANTIC_SCHOLAR_API_KEY", "CROSSREF_MAILTO",
-        "WILEY_TDM_TOKEN", "OPENALEX_API_KEY",
+        "WILEY_TDM_TOKEN", "OPENALEX_API_KEY", "LIBRARY_OPENURL_BASE",
     }
     assert env_names == expected, f"env var schema drift: {env_names ^ expected}"
 

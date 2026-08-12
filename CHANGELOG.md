@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-08-12
+
+### Added
+
+- **Alma ISSN+date+volume fallback and setup-wizard support for the
+  library resolver.** Follow-up to 0.8.1's Alma/Primo fix (BACKLOG.md
+  P11). Some Alma deployments link holdings only at journal level and
+  return zero `getFullTxt` matches on a DOI-only query even when they
+  license the journal; `has_fulltext_access` / `sfx_lookup_dual` /
+  `first_fulltext_target_preferred` now accept optional `issn`/
+  `pub_date`/`volume` and retry once via `rft.issn`/`rft.date`/
+  `rft.volume` when a DOI-keyed Alma query comes back empty.
+  `enrich_pdfs.py` feeds these from the Zotero item's own metadata.
+  Verified live against Aalto with a deliberately-engineered
+  reproduction of the failure (a DOI Alma won't link, paired with a
+  real licensed ISSN). Separately, `[library] openurl_base` now has a
+  setup-wizard prompt (`LIBRARY_OPENURL_BASE`) with the SFX/Alma
+  discovery guidance from 0.8.1's docstring update, and its env-var
+  override — already expected by existing tests, never actually
+  wired — now works.
+
 ## [0.8.1] — 2026-08-12
 
 ### Fixed

@@ -409,6 +409,30 @@ KEYS: tuple[KeySpec, ...] = (
               "high-volume PDF retrieval.",
         verify=_verify_none,
     ),
+    KeySpec(
+        "LIBRARY_OPENURL_BASE", "library", "openurl_base",
+        "Library link-resolver base URL",
+        required=False, hidden=False,
+        what="Your institutional library's link-resolver endpoint — either an "
+             "SFX/OpenURL base URL, or (for Ex Libris Alma/Primo libraries, now "
+             "the majority) the Alma `uresolver` URL. Not an API key: a plain "
+             "URL, safe to paste in view.",
+        used_by="Browser-fetch PDF stage (zotero-operations, systematic-review): "
+                "a pre-flight check that skips items your library has no "
+                "full-text route to, before opening a browser for them.",
+        impact="No pre-flight check — the browser handler tries every item, "
+               "including ones with no library access, which is slower but not "
+               "broken. Every other skill is unaffected.",
+        where="SFX: your library's existing OpenURL/citation-manager "
+              "documentation, or ask your library. Alma: open a Primo VE "
+              "\"Get it\"/\"View it\" link for any item and read the outbound "
+              "request in your browser's Network tab — it's the "
+              "`.../view/uresolver/<inst_code>/openurl` URL up to the `?`. "
+              "Your library's electronic-resources staff usually has this "
+              "handy (it's shared for LibKey Nomad / Lean Library / similar "
+              "integrations).",
+        verify=_verify_none,
+    ),
 )
 
 
