@@ -466,14 +466,20 @@ EXPECTED_MCP: tuple[McpServerSpec, ...] = (
     McpServerSpec(
         name="zotero",
         purpose="Reference manager — full-text retrieval, notes, citation keys.",
-        add_args=("-s", "user", "zotero", "--", "zotero-mcp"),
-        homepage="https://github.com/54yyyu/zotero-mcp",
-        install_cmd='uv tool install "zotero-mcp-server[scite,semantic]"',
+        add_args=("-s", "user", "zotero",
+                  "-e", "ZOTERO_MCP_TOOLSETS=libraries,search-admin,pdf-geometry,duplicates,scite",
+                  "--", "zotero-mcp"),
+        homepage="https://github.com/mronkko/zotero-mcp",
+        install_cmd='uv tool install "zotero-mcp-server[scite,semantic]>=0.9"',
         install_note="Installs the [scite,semantic] extras: scite powers the "
                      "retraction-check step the systematic-review and "
                      "zotero-operations skills run; semantic enables semantic "
                      "library search. After install, run: zotero-mcp setup. "
-                     'PyPI alt: pip install "zotero-mcp-server[scite,semantic]".',
+                     'PyPI alt: pip install "zotero-mcp-server[scite,semantic]>=0.9". '
+                     "ZOTERO_MCP_TOOLSETS above adds duplicates/scite to the "
+                     "package's own default profile (libraries, search-admin, "
+                     "pdf-geometry) — dropping the env var narrows back to just "
+                     "those three.",
         tier=MCP_TIER_REQUIRED,
     ),
     McpServerSpec(
@@ -1046,19 +1052,17 @@ def _permission_categories() -> tuple[list[PermissionCategory], list[str]]:
         PermissionCategory(
             name="MCP Zotero (read-only)",
             purpose=(
-                "Auto-approves Zotero queries (fetch, search, list, "
-                "get_*). Zotero WRITES are deliberately NOT auto-"
-                "approved — your library is user-owned data and "
-                "write tools (add, update, delete, merge) keep "
-                "prompting so you see every change before it lands."
+                "Auto-approves Zotero queries (search, list, get_*). "
+                "Zotero WRITES are deliberately NOT auto-approved — "
+                "your library is user-owned data and write tools "
+                "(add, update, delete, merge) keep prompting so you "
+                "see every change before it lands."
             ),
             skip_impact=(
                 "Every metadata read, search, and listing of your "
                 "Zotero library will trigger a prompt."
             ),
             rules=(
-                ("mcp__zotero__fetch", "Generic fetch helper"),
-                ("mcp__zotero__search", "Generic search helper"),
                 ("mcp__zotero__scite_check_retractions",
                  "Check for retractions via Scite (read-only)"),
                 ("mcp__zotero__zotero_advanced_search",
@@ -1071,18 +1075,14 @@ def _permission_categories() -> tuple[list[PermissionCategory], list[str]]:
                  "Items in a collection"),
                 ("mcp__zotero__zotero_get_collections",
                  "List collections"),
-                ("mcp__zotero__zotero_get_feed_items",
-                 "Items in a feed"),
                 ("mcp__zotero__zotero_get_item_children",
-                 "Children of an item"),
+                 "Children of an item, one key or many in one call"),
                 ("mcp__zotero__zotero_get_item_fulltext",
                  "Full-text of an item (if attached)"),
                 ("mcp__zotero__zotero_get_item_metadata",
                  "Metadata for an item"),
-                ("mcp__zotero__zotero_get_items_children",
-                 "Bulk children fetch"),
                 ("mcp__zotero__zotero_get_notes",
-                 "Notes on items"),
+                 "List notes on items, or search note text with query="),
                 ("mcp__zotero__zotero_get_pdf_outline",
                  "Table of contents of a PDF"),
                 ("mcp__zotero__zotero_get_recent",
@@ -1091,8 +1091,6 @@ def _permission_categories() -> tuple[list[PermissionCategory], list[str]]:
                  "Search index status"),
                 ("mcp__zotero__zotero_get_tags",
                  "All tags in the library"),
-                ("mcp__zotero__zotero_list_feeds",
-                 "List subscribed feeds"),
                 ("mcp__zotero__zotero_list_libraries",
                  "List accessible libraries (you + groups)"),
                 ("mcp__zotero__zotero_search_by_citation_key",
@@ -1103,8 +1101,6 @@ def _permission_categories() -> tuple[list[PermissionCategory], list[str]]:
                  "Search collection names"),
                 ("mcp__zotero__zotero_search_items",
                  "Search items"),
-                ("mcp__zotero__zotero_search_notes",
-                 "Search notes"),
                 ("mcp__zotero__zotero_semantic_search",
                  "Semantic search"),
             ),
@@ -1493,9 +1489,9 @@ def _print_zotero_cli_help(status: str) -> None:
         print("  no CLI) is installed instead of `zotero-mcp-server`.")
         print("  Fix:")
         print("    uv tool uninstall zotero-mcp   # if present")
-        print('    uv tool install "zotero-mcp-server[scite,semantic]"')
+        print('    uv tool install "zotero-mcp-server[scite,semantic]>=0.9"')
     else:
-        print('  Install: uv tool install "zotero-mcp-server[scite,semantic]"')
+        print('  Install: uv tool install "zotero-mcp-server[scite,semantic]>=0.9"')
     print("  Optional — zotero-operations and systematic-review fall back")
     print("  to MCP tools and zotero_io.py without it.")
 

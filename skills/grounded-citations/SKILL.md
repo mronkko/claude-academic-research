@@ -51,9 +51,8 @@ of these requirements. They are conjunctive — failing any one means the
 citation may not be made.
 
 1. **In Zotero.** The paper is in the project's Zotero library. If not,
-   add it via `mcp__zotero__zotero_add_by_doi` (or
-   `mcp__zotero__zotero_add_by_url` when no DOI exists) before the
-   citation is written.
+   add it via `mcp__zotero__zotero_add_item` (`source_type="doi"`, or
+   `"url"` when no DOI exists) before the citation is written.
 2. **BBT key.** The `[@citekey]` in prose is the Better BibTeX key fetched
    from Zotero via `mcp__zotero__zotero_get_item_metadata` with
    `format="bibtex"`. Never hand-craft keys (`Smith2019`-style); never
@@ -90,7 +89,7 @@ Ranked by strength:
 
 **Recommended pattern** for papers cited repeatedly: the first time
 the agent reads the paper, write a Zotero child note summarising the
-relevant passage via `mcp__zotero__zotero_create_note`. That note
+relevant passage via `mcp__zotero__zotero_manage_note` (`action="create"`). That note
 becomes the durable consultation artifact for every subsequent citation
 — no re-fetch needed, no context-recall gamble.
 

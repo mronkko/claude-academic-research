@@ -28,6 +28,17 @@ Running the setup skill/wizard is the required first step.
 
 If the result is `configured`, proceed.
 
+Also check the installed `zotero-mcp-server` version — a stale pre-0.9
+install silently loses the tool names this skill documents:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/check_zotero_mcp_version.py"
+```
+
+A `WARNING` line means the user should upgrade before relying on
+`mcp__zotero__*` tools; it is informational, not a hard gate — proceed
+if `zotero-cli` and `zotero_io.py` still cover what you need.
+
 ---
 
 ## Relationship to `systematic-review` — who owns enrichment?
@@ -188,7 +199,22 @@ hierarchy is:
    `mcp__zotero__zotero_get_item_children`, `mcp__zotero__zotero_search_items`,
    `mcp__zotero__zotero_get_item_fulltext`, …). These cover most
    *reads* — item metadata, children, attachments, items lists,
-   fulltext, annotations.
+   fulltext, annotations. `mcp__zotero__zotero_add_item` (`source_type=
+   "doi"`/`"url"`/`"isbn"`, batchable) is the one *write* that belongs
+   here, but know its cost before reaching for it on more than a
+   handful of DOIs: each identifier pays one Crossref/metadata lookup,
+   one item-template GET, one create POST, and — as currently
+   published — a PDF download-and-upload too, all serialized under
+   zotero-mcp's process-wide API lock. `attach_mode="none"` does not
+   yet suppress that PDF step outside the arXiv path, so a
+   screening-scale batch (dozens to hundreds of DOIs) can wedge the
+   lock and crash Zotero Desktop's local server — this is exactly what
+   happened before this sentence existed. A handful of DOIs is fine;
+   anything screening-scale goes through `import_to_zotero.py`
+   (tier 3) instead. (A fix that batches creates, narrows the lock,
+   and makes `attach_mode="none"` actually skip the PDF step is in
+   progress upstream — once it ships and the wizard's version floor
+   moves past it, revisit these numbers.)
 2. **`zotero-cli`** for one-off writes MCP doesn't expose — `zotero-cli
    edit <key> --abstract/--add-tags/--doi/...`, `zotero-cli duplicates
    find|merge`, `zotero-cli notes create|update`, `zotero-cli add
@@ -334,8 +360,8 @@ reviewable in Zotero itself:
 
 ## Adding to Zotero (one-off)
 
-- Use `mcp__zotero__zotero_add_by_doi` when a DOI exists (preferred).
-- Use `mcp__zotero__zotero_add_by_url` only when no DOI exists.
+- Use `mcp__zotero__zotero_add_item` with `source_type="doi"` when a DOI
+  exists (preferred), or `source_type="url"` only when no DOI exists.
 - After adding, retrieve the BBT key via
   `mcp__zotero__zotero_get_item_metadata` with `format="bibtex"`. The
   key is the first argument of the BibTeX entry.

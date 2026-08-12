@@ -961,7 +961,8 @@ Evaluators run as `Agent` calls in the main session — they cannot
 write to Zotero themselves. The main agent takes each flag the
 evaluators return and applies the appropriate `qa-*` tag via
 `mcp__zotero__zotero_update_item` (with an `add_tags` parameter) or
-`mcp__zotero__zotero_batch_update_tags` for the bulk case.
+`mcp__zotero__zotero_batch_update` (with `item_keys` + `add_tags`) for
+the bulk case.
 
 See *Zotero tag and note conventions* above for the full tag
 vocabulary — `qa-flag`, `qa-hard`, `qa-soft-include`,
