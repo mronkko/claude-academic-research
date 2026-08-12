@@ -279,3 +279,18 @@ def test_resolve_doi_normalises_doi_to_lowercase_for_cache(tmp_path: Path) -> No
     assert resolve_doi(
         "10.1111/etap.12254", crossref=cr2, cache=cache,
     ) is not None
+
+
+def test_resolve_doi_normalises_url_form_to_bare_doi_for_cache(tmp_path: Path) -> None:
+    """A URL-form DOI (`https://doi.org/...`) and the bare form must share
+    one cache entry — without stripping the prefix, they hash to different
+    keys and a second call re-queries Crossref for the same work."""
+    cache = DoiResolverCache(tmp_path)
+    cr = _crossref({"URL": "https://journals.sagepub.com/x"})
+    resolve_doi("https://doi.org/10.1111/etap.12254", crossref=cr, cache=cache)
+
+    cr2 = MagicMock()
+    cr2.works.side_effect = AssertionError("must not re-query Crossref")
+    assert resolve_doi(
+        "10.1111/etap.12254", crossref=cr2, cache=cache,
+    ) is not None

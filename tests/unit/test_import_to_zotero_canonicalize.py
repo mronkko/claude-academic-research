@@ -180,4 +180,84 @@ def test_journal_aliases_csv_loads_without_errors() -> None:
     # Spot-check a few entries we ship.
     assert imp._JOURNAL_ALIAS_BY_NAME["strat manag j"] == "Strategic Management Journal"
     assert imp._JOURNAL_ALIAS_BY_ISSN["0143-2095"] == "Strategic Management Journal"
+
+
+# ---------------------------------------------------------------------------
+# _normalize_doi_key (C1 — fixes a real dedup bug: a library item stored as
+# https://doi.org/10.1234/abc must match a CSV row of bare 10.1234/abc)
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_doi_key_strips_https_doi_org_prefix() -> None:
+    assert imp._normalize_doi_key("https://doi.org/10.1234/abc") == "10.1234/abc"
+
+
+def test_normalize_doi_key_strips_dx_doi_org_prefix() -> None:
+    assert imp._normalize_doi_key("http://dx.doi.org/10.1234/abc") == "10.1234/abc"
+
+
+def test_normalize_doi_key_strips_doi_colon_prefix() -> None:
+    assert imp._normalize_doi_key("doi:10.1234/abc") == "10.1234/abc"
+
+
+def test_normalize_doi_key_lowercases_for_case_insensitive_match() -> None:
+    assert imp._normalize_doi_key("10.1234/ABC") == "10.1234/abc"
+
+
+def test_normalize_doi_key_returns_empty_for_empty_input() -> None:
+    assert imp._normalize_doi_key("") == ""
+    assert imp._normalize_doi_key(None) == ""
+
+
+def test_normalize_doi_key_url_and_bare_form_match() -> None:
+    """The actual bug: a URL-form DOI and a bare-DOI CSV row must produce
+    the same dedup key, or a duplicate item gets created."""
+    url_form = imp._normalize_doi_key("https://doi.org/10.1234/abc")
+    bare_form = imp._normalize_doi_key("10.1234/abc")
+    assert url_form == bare_form == "10.1234/abc"
+
+
+# ---------------------------------------------------------------------------
+# _filter_valid_fields (C2 — one invalid field fails the whole 50-item
+# create batch server-side with an opaque error; filter per row instead)
+# ---------------------------------------------------------------------------
+
+
+def test_filter_valid_fields_keeps_recognized_journal_article_fields() -> None:
+    item = {
+        "itemType": "journalArticle",
+        "title": "A Paper",
+        "DOI": "10.1234/abc",
+        "date": "2020",
+    }
+    filtered, rejected = imp._filter_valid_fields(item)
+    assert filtered == item
+    assert rejected == []
+
+
+def test_filter_valid_fields_drops_unrecognized_field() -> None:
+    item = {
+        "itemType": "journalArticle",
+        "title": "A Paper",
+        "notAZoteroField": "oops",
+    }
+    filtered, rejected = imp._filter_valid_fields(item)
+    assert "notAZoteroField" not in filtered
+    assert filtered["title"] == "A Paper"
+    assert rejected == ["notAZoteroField"]
+
+
+def test_filter_valid_fields_keeps_structural_keys_not_in_field_schema() -> None:
+    """creators/tags/collections/relations aren't in the per-type field
+    list (they're universal item-object keys) — must never be dropped."""
+    item = {
+        "itemType": "journalArticle",
+        "title": "A Paper",
+        "creators": [{"creatorType": "author", "lastName": "Smith"}],
+        "tags": [{"tag": "reviewed"}],
+        "collections": ["ABCD1234"],
+    }
+    filtered, rejected = imp._filter_valid_fields(item)
+    assert filtered == item
+    assert rejected == []
     assert imp._JOURNAL_ALIAS_BY_NAME["res policy"] == "Research Policy"

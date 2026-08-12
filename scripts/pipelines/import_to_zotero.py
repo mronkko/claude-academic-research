@@ -6,6 +6,7 @@
 #     "requests>=2.31",
 #     "tenacity>=8.0",
 #     "httpx>=0.25",
+#     "zotero-mcp-server>=0.9,<0.10",
 # ]
 # ///
 """Import a deduplicated search-results CSV into a Zotero group library.
@@ -60,6 +61,8 @@ except ImportError:
     )
 
 import zotero_io  # noqa: E402
+from zotero_mcp.schema import valid_fields  # noqa: E402
+from zotero_mcp.tools._helpers import _normalize_doi  # noqa: E402
 
 BATCH_SIZE = 50  # Zotero write API max
 
@@ -73,6 +76,19 @@ _DATA_DIR = SCRIPT_DIR / "data"
 _JOURNAL_ALIAS_BY_NAME: dict[str, str] = {}
 _JOURNAL_ALIAS_BY_ISSN: dict[str, str] = {}
 _JOURNAL_ALIASES_LOADED = False
+
+
+def _normalize_doi_key(raw: str) -> str:
+    """Canonical dedup key for a DOI string.
+
+    Wraps zotero-mcp's ``_normalize_doi`` (strips ``doi:``/URL prefixes and
+    trailing punctuation) plus lowercasing for case-insensitive comparison,
+    so a library item stored as ``https://doi.org/10.1234/ABC`` and a CSV
+    row of bare ``10.1234/abc`` match instead of creating a duplicate.
+    Returns ``""`` (falsy) for empty/malformed input, matching the
+    `if doi and doi in doi_map` pattern callers already use.
+    """
+    return (_normalize_doi(raw) or "").lower()
 
 
 def _canonicalize_issn(issn: str) -> str:
@@ -243,7 +259,7 @@ def _fetch_existing_items(
     for item in items:
         d = item.get("data", {})
         key = d.get("key", item.get("key", ""))
-        doi = (d.get("DOI") or "").strip().lower()
+        doi = _normalize_doi_key(d.get("DOI") or "")
         if doi:
             doi_map[doi] = key
         tk = _title_author_key(d.get("title", ""), d.get("creators", []))
@@ -299,10 +315,49 @@ def _patch_existing_items(
         time.sleep(0.15)
 
 
+# Universal item-object keys that aren't part of a type's field schema
+# (zotero_mcp.schema.valid_fields() only covers scalar metadata fields like
+# title/DOI/date) — always kept regardless of itemType.
+_ITEM_STRUCTURAL_KEYS = frozenset({"itemType", "creators", "tags", "collections", "relations"})
+
+
+def _filter_valid_fields(item: dict) -> tuple[dict, list[str]]:
+    """Drop fields the item's itemType schema doesn't recognize.
+
+    The Zotero write API fails the WHOLE batch on one invalid field key
+    with an opaque error, and `_create_new_items` posts up to 50 items per
+    call. `zotero_mcp.schema.valid_fields` is stdlib-only (on-disk cache or
+    a vendored floor, no network), so filtering per item here is cheap and
+    turns a batch-wide 400 into a per-row warning instead.
+
+    Returns ``(filtered_item, rejected_field_names)``.
+    """
+    valid = valid_fields(item.get("itemType", ""))
+    filtered: dict = {}
+    rejected: list[str] = []
+    for key, value in item.items():
+        if key in _ITEM_STRUCTURAL_KEYS or key in valid:
+            filtered[key] = value
+        else:
+            rejected.append(key)
+    return filtered, rejected
+
+
 def _create_new_items(
     to_create: list[dict],
     zot: zotero_io.ZoteroClient,
 ) -> tuple[int, int]:
+    filtered_to_create = []
+    for item in to_create:
+        filtered, rejected = _filter_valid_fields(item)
+        if rejected:
+            label = item.get("title") or "(no title)"
+            print(f"  WARNING: dropping unrecognized field(s) {rejected} "
+                  f"from '{label}' (itemType={item.get('itemType', '?')})",
+                  flush=True)
+        filtered_to_create.append(filtered)
+    to_create = filtered_to_create
+
     base_url = zot.api_base_url()
     headers = {
         "Zotero-API-Key": zot.api_key,
@@ -363,7 +418,7 @@ def main() -> int:
     dropped_within_batch = 0
 
     for row in rows:
-        doi = (row.get("doi") or "").strip().lower()
+        doi = _normalize_doi_key(row.get("doi") or "")
         abstract = (row.get("abstract") or "").strip()
 
         if doi and doi in doi_map:

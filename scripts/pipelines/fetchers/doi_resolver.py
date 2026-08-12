@@ -31,6 +31,36 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Same literal prefixes enrich_dois.py's own _normalise_doi strips
+# (scripts/pipelines/enrich_dois.py:_DOI_PREFIX_STRIPS) — kept in sync
+# rather than imported, for the same "don't pull a top-level orchestrator
+# script into a lower-level fetcher module" reason _normalize_doi_key
+# below isn't imported from zotero_mcp either.
+_DOI_PREFIX_STRIPS = (
+    "https://doi.org/",
+    "http://doi.org/",
+    "https://dx.doi.org/",
+    "http://dx.doi.org/",
+    "doi:",
+)
+
+
+def _normalize_doi_key(raw: str) -> str:
+    """Canonical cache/query key for a DOI string: strips URL/``doi:``
+    prefixes, then lowercases. Without this, a caller passing
+    ``https://doi.org/10.1234/ABC`` misses the cache entry for a prior
+    ``10.1234/abc`` lookup and re-queries Crossref for the same work under
+    a different key. Returns ``""`` (falsy) for empty input.
+    """
+    if not raw:
+        return ""
+    s = raw.strip()
+    for prefix in _DOI_PREFIX_STRIPS:
+        if s.lower().startswith(prefix):
+            s = s[len(prefix):].strip()
+            break
+    return s.lower()
+
 
 @dataclass
 class DoiResolution:
@@ -173,7 +203,7 @@ def resolve_doi(
     Returns None only on hard errors — network failure, non-ok
     status, malformed response. Never raises.
     """
-    doi_key = (doi or "").strip().lower()
+    doi_key = _normalize_doi_key(doi or "")
     if not doi_key:
         return None
 
