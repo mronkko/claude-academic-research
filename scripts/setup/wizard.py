@@ -7,9 +7,10 @@ Runs in the user's terminal. Prompts for API keys with hidden input
 ~/.claude/settings.json with the permission rules the plugin needs,
 and reports status.
 
-API keys entered here NEVER pass through Claude's context — the wizard
-is a normal process reading the terminal directly. Claude only sees
-the final summary line.
+API keys entered here NEVER pass through the invoking AI assistant's
+context (Claude Code or Antigravity) — the wizard is a normal process
+reading the terminal directly. The assistant only sees the final
+summary line.
 
 Usage:
     python3 wizard.py               # interactive; re-run to update keys
@@ -573,7 +574,7 @@ def _print_header() -> None:
     print(f"    3. Patch {SETTINGS_PATH} with permission rules")
     print()
     print("  Your keys stay on this machine. They do not pass through")
-    print("  Claude's context at any point.")
+    print("  your AI assistant's context at any point.")
     print()
 
 
@@ -1911,8 +1912,8 @@ def main() -> int:
         print()
         print(_wrap_body(
             "Checking MCP (Model Context Protocol) servers. These are small "
-            "helper programs that let Claude read your Zotero library, "
-            "search citation databases, and fetch PDFs. The plugin uses "
+            "helper programs that let your AI assistant read your Zotero "
+            "library, search citation databases, and fetch PDFs. The plugin uses "
             "five of them and offers to register any that are missing.",
         ))
         registered, current_mcp = _offer_register_mcp(
@@ -1981,8 +1982,14 @@ def main() -> int:
         print("  scopus, semantic-scholar, openalex. Other skills (e.g.")
         print("  critic-loop, fact-check on existing items) still work.")
 
+    claude_code_available = (Path.home() / ".claude").exists()
     print()
-    print("  Return to your Claude Code session and tell Claude setup is done.")
+    if claude_code_available and agy_available:
+        print("  Return to your Claude Code or Antigravity session and tell it setup is done.")
+    elif agy_available:
+        print("  Return to your Antigravity session and tell Gemini setup is done.")
+    else:
+        print("  Return to your Claude Code session and tell Claude setup is done.")
     print()
     return 4 if zotero_missing else 0
 
