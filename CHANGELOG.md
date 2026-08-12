@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-08-12
+
+### Fixed
+
+- **Ex Libris Alma/Primo support in the library-resolver pre-flight
+  check.** `library_resolver.py` assumed an SFX-style OpenURL
+  responder; Alma/Primo institutions (now the majority of academic
+  libraries) got two silent failure modes instead of a working
+  pre-flight — a missing `svc_dat=CTO` param made Alma serve its HTML
+  discovery UI instead of XML (parse failure → fail-open → the check
+  became a no-op), and even with valid Alma XML, the parser only
+  recognized SFX's `<target>`/`<target_url>` shape, not Alma's
+  `<context_service service_type="getFullTxt">`/`<resolution_url>`
+  shape (→ confident false negatives, no fail-open safety net).
+  `_build_query_url` and `_fulltext_target_urls` now detect and handle
+  both shapes; verified against a live Alma instance in
+  `tests/live/test_library_resolver_alma.py`. The ISSN+date+volume
+  fallback some Alma deployments need (DOI-only queries return no
+  matches there) is deferred — see BACKLOG.md P11.
+
 ## [0.8.0] — 2026-07-19
 
 ### Added

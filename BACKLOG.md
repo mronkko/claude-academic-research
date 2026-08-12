@@ -108,6 +108,61 @@ directory — not checked in because it references machine-local paths).
   were the legacy script and the tests now pointed at the handler
   registry). Left here for the audit trail.
 
+- **P11** — Alma/Primo library-resolver follow-ups (issue #6).
+  The minimal fix (flavor detection, `svc_dat=CTO`, and Alma
+  `<context_service>`/`<resolution_url>` parsing in
+  `fetchers/library_resolver.py`) stays DOI-only and is verified
+  against Aalto's live Alma instance
+  (`tests/live/test_library_resolver_alma.py`), where a DOI-only query
+  already returns full coverage. Deferred scope, confirmed still open
+  after that fix:
+  - **ISSN+date+volume fallback.** The issue's reporting institution's
+    Alma deployment returns zero `getFullTxt` matches on a DOI-only
+    query — only `rft.issn`+`rft.date`+`rft.volume` works there. A
+    DOI-only fix leaves that institution with a confident false
+    negative (silently skips items the library actually has access
+    to). Needs optional `issn`/`pub_date`/`volume` kwargs threaded
+    through `has_fulltext_access` / `sfx_lookup_dual` /
+    `first_fulltext_target_preferred` / `_build_query_url`, with an
+    automatic retry using those fields when a DOI-only Alma query
+    comes back empty. Fields are already in scope at the
+    `sfx_lookup_dual` call site (`enrich_pdfs.py` ~L934, via
+    `zot_item["data"]`) but dropped before the
+    `first_fulltext_target_preferred` call site (~L1027, only
+    `doi`/`item_key`/`title` survive Pass 1's `entry` dict into Pass
+    3) — carrying them forward is the main plumbing cost. Also worth
+    checking before implementing: live testing against Aalto found
+    `rft.date`/`rft.volume` don't act as filters there at all (results
+    were identical across correct, wrong, and missing date/volume) —
+    unlike SFX, where the existing `sfx.ignore_date_threshold` dual
+    query relies on real date filtering. The SFX-style
+    in_range/any_range (Case 1/2/3) distinction may not have a clean
+    Alma equivalent; confirm behavior at a second Alma institution
+    before assuming Aalto's is representative.
+  - **Platform-priority / `required_domains` matching for Alma
+    targets.** `_effective_host()` / `_target_matches_domains()` /
+    `_platform_rank()` operate on the target URL's hostname; Alma's
+    `resolution_url` always hosts on the Alma redirector domain
+    (e.g. `aalto.alma.exlibrisgroup.com`), never the real publisher,
+    so `SFX_PLATFORM_PRIORITY` ranking and `required_domains`
+    filtering silently degrade to "unranked"/"no match" for Alma
+    targets instead of raising. Doesn't regress the current caller
+    (`enrich_pdfs.py`'s `first_fulltext_target_preferred` call site
+    doesn't pass `required_domains`), but a real fix needs
+    text-matching against Alma's `package_name`/`interface_name` keys
+    (e.g. `"EBSCOhost"`) instead of a URL host — a different mechanism
+    from SFX's.
+  - **No wizard support, no discovery docs.** The setup wizard never
+    prompts for `[library] openurl_base` (no `KeySpec` entry in
+    `scripts/setup/wizard.py`), and there's no `config.toml` template
+    — a user must already know the key exists and hand-edit the file.
+    `library_resolver.py`'s module docstring now documents how to
+    *find* the value for SFX and Alma institutions (added alongside
+    the issue #6 fix), but nothing prompts a new user to go add it.
+  Files: [scripts/pipelines/fetchers/library_resolver.py](scripts/pipelines/fetchers/library_resolver.py),
+  [scripts/pipelines/enrich_pdfs.py](scripts/pipelines/enrich_pdfs.py)
+  (~L934, ~L1027), `scripts/setup/wizard.py`.
+
 ### Skills
 
 - **S8** — modular / stage-scoped invocation for `systematic-review`.
@@ -157,6 +212,60 @@ directory — not checked in because it references machine-local paths).
   (Bootstrap ~L35-92, scope gate ~L189-280, workflows table
   ~L659-680), `scripts/setup/check_configured.py`,
   `scripts/setup/check_project_scaffold.py`.
+
+- **S9** — file-format/architecture question for the DOI-resolve →
+  Zotero-import handoff (`resolve_dois.py` → `import_to_zotero.py`).
+
+  Surfaced while designing the batch-DOI-import work (see current
+  implementation, not deferred): should the handoff between resolving
+  DOI metadata and writing it to Zotero be (a) a CSV file, matching
+  `import_to_zotero.py`'s existing hard-coded input contract, (b) a
+  richer JSON/JSONL file, or (c) no intermediate file at all —
+  `resolve_dois.py` calling `import_to_zotero.py`'s functions
+  in-process on an in-memory list?
+
+  Key points from the discussion, kept here since the implementation
+  goes ahead with a default (CSV) rather than resolving this fully:
+  - The "CSV enables resumability across a crash" justification was
+    raised and retracted: a JSON DOI→metadata cache (mirroring
+    `doi_resolver.py`'s existing cache pattern) already provides that
+    on its own — a re-run checks the cache before re-querying
+    Crossref/OpenAlex regardless of whether a CSV was written. So CSV
+    isn't earning that benefit; its real justification is just
+    contract-reuse with `import_to_zotero.py`.
+  - JSON would better represent this data — a structured `creators`
+    list instead of `import_to_zotero.py`'s
+    `"Last, First; Last, First"` string-encoding in `_parse_authors()`
+    (`scripts/pipelines/import_to_zotero.py:143-160`), multiple ISSNs,
+    sparse optional fields (publisher, license) without committing to
+    fixed CSV columns — but none of that is realized unless
+    `import_to_zotero.py`'s input contract is *also* extended to
+    accept JSON, which is a separate, bigger decision (touches an
+    already-shipped, tested script).
+  - **Data-integrity risk with any exposed intermediate file:** a CSV
+    sitting on disk between resolve and import could be hand-edited
+    (by an agent "fixing" a value, or a user in Excel) before import,
+    with nothing to catch it — the same class of problem
+    `empirical-integrity` exists to prevent elsewhere (facts must
+    trace to a pipeline-generated source, never hand-edited), just
+    unguarded at this stage. Not unique to this new script —
+    `search_results.csv` between `search.py` and `import_to_zotero.py`
+    has the identical exposure today. No checksum/write-once precedent
+    exists anywhere in this repo; the codebase's idiom for this class
+    of risk is prose rules (e.g. "No improvised pipeline-style code",
+    `systematic-review/SKILL.md:426-480`) plus after-the-fact automated
+    detection, not cryptographic prevention.
+
+  **Revisit if:** the CSV default causes real friction (someone wants
+  the richer metadata JSON would preserve, or a hand-edit actually
+  corrupts an import) — at that point, reconsider extending
+  `import_to_zotero.py`'s input contract to JSON, or collapsing the
+  two scripts into one in-process call to remove the exposed file
+  entirely, and consider the prose "don't hand-edit a pipeline CSV"
+  rule for both this handoff and `search_results.csv`.
+
+  Files: `scripts/pipelines/import_to_zotero.py`,
+  `scripts/pipelines/fetchers/doi_resolver.py`, `scripts/pipelines/csv_io.py`.
 
 ---
 

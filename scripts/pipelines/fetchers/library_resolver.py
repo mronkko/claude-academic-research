@@ -1,4 +1,5 @@
-"""Library link-resolver (SFX / OpenURL) pre-flight access check.
+"""Library link-resolver (SFX / OpenURL, and Ex Libris Alma `uresolver`)
+pre-flight access check.
 
 Runs inside the browser-fetch flow only. The cascade handlers use our
 own API keys and don't need institutional access; only the browser
@@ -11,6 +12,31 @@ how the library is configured to reach a given DOI. A target with
 licensed path to the full text. Zero such targets means the library
 has no full-text route — the browser handler would certainly fail, so
 we skip the item without opening Chromium.
+
+Alma/Primo institutions (the majority of academic libraries today)
+don't expose an SFX-shaped OpenURL endpoint — their public Primo
+openurl path redirects to the HTML discovery UI. Alma's `uresolver`
+endpoint (`https://<host>.alma.exlibrisgroup.com/view/uresolver/
+<inst_code>/openurl`) answers the same `getFullTxt` question in XML,
+just with a different element shape: `<context_service
+service_type="getFullTxt">` (an attribute, not a child element) with
+the resolvable link in a sibling `<resolution_url>` rather than SFX's
+`<target_url>`. Both shapes are recognized by `_fulltext_target_urls`
+below without needing to know in advance which one a response uses;
+only the query builder (`_build_query_url`) needs to know, since Alma
+requires an extra `svc_dat=CTO` param that SFX doesn't use.
+
+Finding your own institution's `openurl_base`:
+    - SFX: your library or its existing OpenURL/citation-manager
+      documentation usually has this already (often the base URL
+      handed to EndNote/RefWorks/Zotero's "institutional proxy").
+    - Alma: open a Primo VE "Get it"/"View it" link for any item and
+      read the outbound request in your browser's Network tab — it's
+      the `.../view/uresolver/<inst_code>/openurl` URL up to the `?`.
+      This URL is routinely shared for third-party integrations
+      (LibKey Nomad, Lean Library, browser extensions), so your
+      library's systems/electronic-resources staff can usually just
+      hand it to you.
 
 Usage:
     from fetchers.library_resolver import has_fulltext_access,
@@ -83,12 +109,32 @@ _OPENURL_STATIC_PARAMS: dict[str, str] = {
 
 # SFX's service_type value for "this target serves the full text (PDF/HTML)".
 # Other service types (getHolding, getAuthor, getDOI, getWebSearch, ...)
-# don't imply access.
+# don't imply access. Alma's uresolver reuses the same value, as the
+# service_type of a <context_service> element instead of a <target>'s
+# <service_type> child.
 _FULLTEXT_SERVICE_TYPE = "getFullTxt"
 
-# Timeout for a single SFX request. SFX is usually snappy (sub-second)
+# Alma's uresolver requires this to return the getFullTxt service
+# category as XML; without it, Alma serves its HTML discovery skin
+# instead (HTTP 200, but not parseable — see _build_query_url). SFX
+# ignores the param harmlessly, so it's only added when the configured
+# base looks like an Alma uresolver URL.
+_ALMA_SVC_DAT = "CTO"
+
+# Timeout for a single SFX/Alma request. Usually snappy (sub-second)
 # but can stall on slow targets; cap so we don't block a whole batch.
 _DEFAULT_TIMEOUT_S = 10
+
+
+def _is_alma_uresolver(openurl_base: str) -> bool:
+    """True when `openurl_base` looks like an Ex Libris Alma `uresolver`
+    endpoint rather than an SFX one.
+
+    `/view/uresolver/` is a fixed Alma product path, not something an
+    institution configures differently, so this is reliable without an
+    extra network round-trip to probe the response shape.
+    """
+    return "/view/uresolver/" in openurl_base
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +223,8 @@ def _build_query_url(
     params["sfx.sid"] = cfg.sid
     if ignore_date_threshold:
         params["sfx.ignore_date_threshold"] = "1"
+    if _is_alma_uresolver(cfg.openurl_base):
+        params["svc_dat"] = _ALMA_SVC_DAT
     return f"{cfg.openurl_base}?{urlencode(params)}"
 
 
@@ -187,41 +235,52 @@ def _local_name(el: ET.Element) -> str:
 
 
 def _fulltext_target_urls(xml_text: str) -> list[str] | None:
-    """Every `<target_url>` that accompanies a `<service_type>getFullTxt</...>`
-    in the SFX response.
+    """Every full-text target URL in the response.
 
     Returns a list (possibly empty) on success, None on parse failure —
     callers distinguish "no access" from "couldn't parse" by None.
 
-    SFX nests `<target_url>` inside a `<target>` element that also
-    contains `<service_type>`. We iterate any element that might be a
-    target container and emit the pair when the service_type matches.
+    Recognizes two response shapes in the same walk, since the caller
+    doesn't know in advance which one a given `openurl_base` returns:
+
+    - SFX nests `<target_url>` inside a `<target>` element that also
+      contains `<service_type>`. We iterate any element that might be
+      a target container and emit the pair when the service_type
+      matches. This is robust to variations in how deep `<target>`
+      lives inside the response (SFX wraps things in `<targets>` or
+      `<target_set>` depending on version).
+    - Alma's `uresolver` marks `<context_service service_type=
+      "getFullTxt">` as an XML attribute (not a child element) and
+      carries the resolvable link in a sibling `<resolution_url>`
+      rather than a `<target_url>` child.
     """
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as e:
-        logger.debug("SFX XML parse failed: %s", e)
+        logger.debug("SFX/Alma XML parse failed: %s", e)
         return None
 
     urls: list[str] = []
-    # Walk every element; treat any node that has BOTH a <service_type>
-    # child saying "getFullTxt" AND a <target_url> child as a full-text
-    # target. This is robust to variations in how deep `<target>` lives
-    # inside the response (SFX wraps things in `<targets>` or `<target_set>`
-    # depending on version).
     for el in root.iter():
-        if _local_name(el) != "target":
-            continue
-        service = None
-        target_url = None
-        for child in el:
-            name = _local_name(child)
-            if name == "service_type" and (child.text or "").strip() == _FULLTEXT_SERVICE_TYPE:
-                service = _FULLTEXT_SERVICE_TYPE
-            elif name == "target_url":
-                target_url = (child.text or "").strip()
-        if service == _FULLTEXT_SERVICE_TYPE and target_url:
-            urls.append(target_url)
+        name = _local_name(el)
+        if name == "target":
+            service = None
+            target_url = None
+            for child in el:
+                child_name = _local_name(child)
+                if child_name == "service_type" and (child.text or "").strip() == _FULLTEXT_SERVICE_TYPE:
+                    service = _FULLTEXT_SERVICE_TYPE
+                elif child_name == "target_url":
+                    target_url = (child.text or "").strip()
+            if service == _FULLTEXT_SERVICE_TYPE and target_url:
+                urls.append(target_url)
+        elif name == "context_service" and el.get("service_type") == _FULLTEXT_SERVICE_TYPE:
+            for child in el:
+                if _local_name(child) == "resolution_url":
+                    resolution_url = (child.text or "").strip()
+                    if resolution_url:
+                        urls.append(resolution_url)
+                    break
     return urls
 
 

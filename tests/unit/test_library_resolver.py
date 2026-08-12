@@ -26,6 +26,7 @@ from fetchers.library_resolver import (
     _count_fulltext_targets,
     _effective_host,
     _fulltext_target_urls,
+    _is_alma_uresolver,
     _target_matches_domains,
     first_fulltext_target_preferred,
     has_fulltext_access,
@@ -128,6 +129,55 @@ def test_fulltext_target_urls_pairs_service_and_url_within_target() -> None:
 
 def test_fulltext_target_urls_returns_none_on_parse_error() -> None:
     assert _fulltext_target_urls("not xml at all") is None
+
+
+# ---------------------------------------------------------------------------
+# _fulltext_target_urls — Alma `uresolver` shape (issue #6)
+# ---------------------------------------------------------------------------
+
+
+def _synthetic_alma_xml(resolution_urls: list[str]) -> str:
+    """Minimal Alma-uresolver-shaped XML listing the given URLs as
+    getFullTxt context_services. Mirrors _synthetic_sfx_xml but with
+    Alma's shape: service_type as an attribute, and the link in a
+    sibling <resolution_url> rather than a <target_url> child."""
+    services = "".join(
+        f'<context_service service_type="getFullTxt" context_service_id="1">'
+        f"<keys><key id=\"package_name\">Example</key></keys>"
+        f"<resolution_url>{u}</resolution_url>"
+        f"</context_service>"
+        for u in resolution_urls
+    )
+    return (
+        f"<uresolver_content><context_object><keys/></context_object>"
+        f"<context_services>{services}</context_services></uresolver_content>"
+    )
+
+
+def test_fulltext_target_urls_parses_alma_shape() -> None:
+    """Alma's <context_service service_type="getFullTxt"> with a
+    sibling <resolution_url> is recognized alongside SFX's shape."""
+    xml = _synthetic_alma_xml([
+        "https://aalto.alma.exlibrisgroup.com/view/action/uresolver.do"
+        "?operation=resolveService&amp;package_service_id=1",
+    ])
+    urls = _fulltext_target_urls(xml)
+    assert urls is not None
+    assert len(urls) == 1
+    assert "uresolver.do" in urls[0]
+
+
+def test_fulltext_target_urls_ignores_non_fulltext_alma_context_service() -> None:
+    """A context_service with a different service_type (e.g. getHolding)
+    must not contribute a URL."""
+    xml = (
+        "<uresolver_content><context_services>"
+        '<context_service service_type="getHolding" context_service_id="1">'
+        "<resolution_url>https://example.org/holding</resolution_url>"
+        "</context_service>"
+        "</context_services></uresolver_content>"
+    )
+    assert _fulltext_target_urls(xml) == []
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +295,38 @@ def test_build_query_url_carries_custom_sid() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _is_alma_uresolver / Alma svc_dat param (issue #6)
+# ---------------------------------------------------------------------------
+
+
+def test_is_alma_uresolver_detects_uresolver_path() -> None:
+    assert _is_alma_uresolver(
+        "https://eu03.alma.exlibrisgroup.com/view/uresolver/358AALTO_INST/openurl"
+    )
+
+
+def test_is_alma_uresolver_returns_false_for_sfx() -> None:
+    assert not _is_alma_uresolver("https://sfx.finna.fi/nelli09")
+    assert not _is_alma_uresolver("")
+
+
+def test_build_query_url_includes_svc_dat_for_alma() -> None:
+    cfg = LibraryResolverConfig(
+        openurl_base="https://eu03.alma.exlibrisgroup.com/view/uresolver/358AALTO_INST/openurl",
+        session=MagicMock(),
+    )
+    assert "svc_dat=CTO" in _build_query_url("10.1/x", cfg)
+
+
+def test_build_query_url_omits_svc_dat_for_sfx() -> None:
+    cfg = LibraryResolverConfig(
+        openurl_base="https://example.org/sfx",
+        session=MagicMock(),
+    )
+    assert "svc_dat" not in _build_query_url("10.1/x", cfg)
+
+
+# ---------------------------------------------------------------------------
 # has_fulltext_access — network mocked, fail-open on errors
 # ---------------------------------------------------------------------------
 
@@ -304,6 +386,42 @@ def test_has_fulltext_access_fail_open_on_malformed_xml() -> None:
     """Parse failure → unknown → proceed (fail-open)."""
     cfg = _cfg_with_response("this is not xml")
     assert has_fulltext_access("10.1/x", cfg) is True
+
+
+def test_has_fulltext_access_true_for_alma_response() -> None:
+    """End-to-end through an Alma-shaped mocked response — same
+    contract as the SFX end-to-end tests above, different XML shape."""
+    xml = _synthetic_alma_xml([
+        "https://aalto.alma.exlibrisgroup.com/view/action/uresolver.do"
+        "?operation=resolveService&amp;package_service_id=1",
+    ])
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.text = xml
+    session = MagicMock()
+    session.get.return_value = fake_resp
+    cfg = LibraryResolverConfig(
+        openurl_base="https://eu03.alma.exlibrisgroup.com/view/uresolver/358AALTO_INST/openurl",
+        session=session,
+    )
+    assert has_fulltext_access("10.1/x", cfg) is True
+    # svc_dat=CTO must actually have been sent on the wire.
+    sent_url = session.get.call_args[0][0]
+    assert "svc_dat=CTO" in sent_url
+
+
+def test_has_fulltext_access_false_for_alma_response_no_fulltext() -> None:
+    xml = _synthetic_alma_xml([])
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.text = xml
+    session = MagicMock()
+    session.get.return_value = fake_resp
+    cfg = LibraryResolverConfig(
+        openurl_base="https://eu03.alma.exlibrisgroup.com/view/uresolver/358AALTO_INST/openurl",
+        session=session,
+    )
+    assert has_fulltext_access("10.1/x", cfg) is False
 
 
 # ---------------------------------------------------------------------------
