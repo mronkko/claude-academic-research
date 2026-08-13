@@ -87,6 +87,12 @@ def test_auth_semantic_scholar() -> None:
     assert ok, f"Semantic Scholar auth failed: {msg}"
 
 
+def test_auth_core() -> None:
+    key = require_config("core", "api_key", env="CORE_API_KEY")
+    ok, msg, _ = _wizard()._verify_core(key)
+    assert ok, f"CORE auth failed: {msg}"
+
+
 def test_auth_crossref_mailto() -> None:
     mailto = require_config("crossref", "mailto", env="CROSSREF_MAILTO")
     ok, msg, _ = _wizard()._verify_crossref_mailto(mailto)

@@ -136,6 +136,34 @@ def test_unpaywall_returns_pdf_url() -> None:
     assert pdf_url, f"Unpaywall has no PDF URL for DOI {doi}"
 
 
+def test_core_search_returns_a_download_url() -> None:
+    """CORE resolves a DOI to a repository full-text `downloadUrl`.
+
+    Searched by DOI because CORE has no DOI-keyed endpoint. The DOI is
+    re-checked against the hit rather than trusting rank — CORE's search
+    is fuzzy, and attaching a near-miss would put another paper's full
+    text on the item.
+    """
+    key = require_config("core", "api_key", env="CORE_API_KEY")
+    doi = KNOWN_DOIS["core"]
+    status, body, _ = http_get(
+        f"https://api.core.ac.uk/v3/search/works?q=doi:%22{doi}%22&limit=3",
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    if status == 429:
+        pytest.skip("CORE rate limit hit; re-run later.")
+    assert status == 200, f"CORE returned {status}"
+    results = (json.loads(body) or {}).get("results") or []
+    matched = [
+        r for r in results
+        if (r.get("doi") or "").lower().strip() == doi.lower()
+    ]
+    assert matched, f"CORE has no record for DOI {doi}; update KNOWN_DOIS"
+    assert any(r.get("downloadUrl") for r in matched), (
+        f"CORE indexes DOI {doi} but exposes no downloadUrl for it"
+    )
+
+
 def test_semantic_scholar_open_access_pdf_url() -> None:
     """S2 exposes a downloadable OA copy via `openAccessPdf` for an OA DOI.
 

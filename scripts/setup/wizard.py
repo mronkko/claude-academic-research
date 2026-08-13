@@ -342,6 +342,24 @@ def _verify_semantic_scholar(key: str) -> tuple[bool, str, dict]:
     return True, "key valid; Semantic Scholar graph API reachable", {}
 
 
+def _verify_core(key: str) -> tuple[bool, str, dict]:
+    status, _, err = _http_json(
+        "https://api.core.ac.uk/v3/search/works?q=test&limit=1",
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    if status == 0:
+        return False, f"could not reach api.core.ac.uk ({err}) — saved anyway", {}
+    if status in (401, 403):
+        return False, f"CORE rejected the key (HTTP {status})", {}
+    if status == 429:
+        # CORE throttles hard on the free tier; a 429 proves the key was
+        # accepted, which is what this check is for.
+        return True, "key accepted (rate-limited on this request)", {}
+    if status != 200:
+        return False, f"CORE returned HTTP {status}", {}
+    return True, "key valid; CORE search API reachable", {}
+
+
 def _verify_wos_extended(key: str) -> tuple[bool, str, dict]:
     status, _, err = _http_json(
         "https://api.clarivate.com/api/wos?databaseId=WOK&usrQuery=TS%3Dtest&count=1&firstRecord=1",
@@ -611,6 +629,24 @@ KEYS: tuple[KeySpec, ...] = (
                "large jobs.",
         where="https://www.semanticscholar.org/product/api#api-key-form — free to request.",
         verify=_verify_semantic_scholar,
+    ),
+    KeySpec(
+        "CORE_API_KEY", "core", "api_key", "CORE (core.ac.uk) API key",
+        required=False, hidden=True,
+        what="CORE aggregates ~300M open-access papers harvested from "
+             "university and funder repositories (https://core.ac.uk). It "
+             "reaches author-deposited copies of articles that are paywalled "
+             "at the publisher.",
+        used_by="systematic-review and zotero-operations (PDF retrieval, last "
+                "in the cascade — tried only when no other source has a copy).",
+        impact="One fewer PDF source. It matters most for Sage, Academy of "
+               "Management and APA articles, which are Cloudflare-gated at the "
+               "publisher but often deposited in a repository. Note CORE "
+               "usually serves the accepted manuscript rather than the "
+               "published version, so attachments from it are tagged "
+               "`pdf:repository-copy`.",
+        where="https://core.ac.uk/services/api — free, self-service registration.",
+        verify=_verify_core,
     ),
     KeySpec(
         "CROSSREF_MAILTO", "crossref", "mailto", "Crossref polite-pool email",

@@ -14,6 +14,11 @@ from typing import TYPE_CHECKING, Any, cast
 
 from .base import AbstractFetcher, PdfFetcher, Source
 from .browser import BrowserSource
+from .core import (
+    REPOSITORY_COPY_TAG,
+    CoreSource,
+    is_repository_copy_path,
+)
 from .crossref import CrossrefSource
 from .openalex import OpenAlexSource
 from .pmc import PmcSource
@@ -60,13 +65,15 @@ def pdf_sources(
 
     Default cascade order:
         ScienceDirect (Elsevier) → Springer → Crossref TDM → PMC
-        → OpenAlex (Content + OA) → Unpaywall → Semantic Scholar
+        → OpenAlex (Content + OA) → Unpaywall → Semantic Scholar → CORE
 
-    Publisher-direct sources come first because they serve the version
-    of record. The two aggregators go last, and Semantic Scholar last of
-    those: it is the widest net and the least particular about which
-    copy it points at, so it should only answer for DOIs the others
-    could not.
+    Publisher-direct sources come first because they serve the version of
+    record. Aggregators follow, widest-net last. CORE is last of all
+    deliberately: it indexes institutional repositories, so what it
+    returns is usually the accepted manuscript rather than the published
+    article — right for screening and coding, wrong for page numbers, and
+    therefore only worth taking when nothing else answered. Attachments
+    from it carry `pdf:repository-copy` so that distinction survives.
 
     Wiley and Browser are included in the registry but excluded by the
     default selection — they require a specific auth contract (Wiley)
@@ -83,6 +90,7 @@ def pdf_sources(
         OpenAlexSource(http, config),
         UnpaywallSource(http, config),
         SemanticScholarSource(http, config),
+        CoreSource(http, config),
         WileySource(http, config),
         BrowserSource(http, config),
     ])
@@ -99,11 +107,14 @@ __all__ = [
     "AbstractFetcher",
     "PdfFetcher",
     "Source",
+    "REPOSITORY_COPY_TAG",
     "TDM_RECOVERED_TAG",
     "abstract_sources",
     "pdf_sources",
+    "is_repository_copy_path",
     "is_tdm_recovered_path",
     "BrowserSource",
+    "CoreSource",
     "CrossrefSource",
     "OpenAlexSource",
     "PmcSource",

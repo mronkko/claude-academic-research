@@ -243,6 +243,9 @@ def test_env_var_names_match_user_convention() -> None:
         "ELSEVIER_API_KEY", "SCOPUS_API_KEY",
         "SEMANTIC_SCHOLAR_API_KEY", "CROSSREF_MAILTO",
         "WILEY_TDM_TOKEN", "OPENALEX_API_KEY", "LIBRARY_OPENURL_BASE",
+        # CORE (core.ac.uk) — repository-aggregated OA full text, last
+        # in the PDF cascade.
+        "CORE_API_KEY",
         # Not a credential: points the screening pipelines at an
         # Anthropic-compatible endpoint (local models — issue #1).
         "ANTHROPIC_BASE_URL",

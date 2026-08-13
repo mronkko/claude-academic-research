@@ -120,6 +120,7 @@ class Config:
     openalex_api_key: str = ""
     wiley_tdm_token: str = ""
     semantic_scholar_api_key: str = ""
+    core_api_key: str = ""
     crossref_mailto: str = ""
 
 
@@ -131,6 +132,7 @@ def _load_config() -> Config:
         semantic_scholar_api_key=get(
             "semantic_scholar", "api_key", env="SEMANTIC_SCHOLAR_API_KEY",
         ),
+        core_api_key=get("core", "api_key", env="CORE_API_KEY"),
         crossref_mailto=get("crossref", "mailto", env="CROSSREF_MAILTO"),
     )
 
@@ -455,9 +457,15 @@ def _attach_and_log(
         return False
 
     # Attached. Everything below is best-effort annotation.
-    if fetchers.is_tdm_recovered_path(pdf_path):
+    provenance_tags = [
+        tag for predicate, tag in (
+            (fetchers.is_tdm_recovered_path, fetchers.TDM_RECOVERED_TAG),
+            (fetchers.is_repository_copy_path, fetchers.REPOSITORY_COPY_TAG),
+        ) if predicate(pdf_path)
+    ]
+    if provenance_tags:
         try:
-            zot.update_tags(item_key, add=[fetchers.TDM_RECOVERED_TAG])
+            zot.update_tags(item_key, add=provenance_tags)
         except Exception as exc:
             print(f"  WARN: attached, but tagging failed: {_failure_detail(exc)}",
                   flush=True)
