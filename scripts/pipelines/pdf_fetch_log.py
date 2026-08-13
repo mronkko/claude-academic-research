@@ -46,10 +46,26 @@ class FailureCause(StrEnum):
     user just doesn't have access via the paths the fetcher tried.
     Suggested action: flag for institutional ILL — not an exclusion."""
 
+    BROWSER_REQUIRED = "BROWSER_REQUIRED"
+    """The DOI resolves to a publisher this plugin has a browser handler
+    for, and that handler has not been run for this item.
+
+    Cloudflare-gated publishers (Sage, Academy of Management, APA,
+    Emerald, INFORMS, OUP, Taylor & Francis, AAA) block the plain-HTTP
+    cascade before any API key matters, so the automated pass returns
+    either a 403 or nothing at all. Both used to land in ACCESS_BLOCKED
+    or UNAVAILABLE, whose suggested actions ("flag for ILL", "FE6, no
+    fulltext available") are *wrong* here: the PDF is reachable, it just
+    needs `enrich_pdfs.py --sources browser`.
+
+    This is not an exclusion and must never be adjudicated as one until
+    the browser pass has actually been tried."""
+
     UNAVAILABLE = "UNAVAILABLE"
     """No fetcher matched (DOI not in any provider) or every provider
-    returned 404 / 5xx. The PDF probably doesn't exist online in any
-    form the pipeline can reach. Suggested FE code: FE6 (no fulltext
+    returned 404 / 5xx, *and* no untried browser handler covers the
+    publisher. The PDF probably doesn't exist online in any form the
+    pipeline can reach. Suggested FE code: FE6 (no fulltext
     available)."""
 
     NETWORK_ERROR = "NETWORK_ERROR"
@@ -61,15 +77,26 @@ class FailureCause(StrEnum):
 # CSV schema for pdf_fetch_log.csv. `attempt` is the cascade pass
 # number (1-based) so a later retry pass surfaces independently.
 # `source` is the fetcher name ("elsevier", "openalex", "browser_sage", …).
+# `publisher` is the human-readable publisher behind the DOI, resolved
+# from `doi_resolver_cache.json` — the dimension a triage report needs
+# and the one thing the old schema could not express.
 FAILURE_FIELDS: list[str] = [
     "timestamp", "item_key", "doi", "item_type",
-    "attempt", "source", "http_status", "cause",
+    "attempt", "source", "publisher", "http_status", "cause",
 ]
 
-# The CSV is keyed by item_key for upsert idempotency. Re-runs replace
-# the prior row instead of appending. (For multi-source per-item logs,
-# the latest attempt per item wins — earlier attempts are visible only
-# in version control / log file backups, which is the right trade.)
+# Keyed by (item_key, source): one row per item *per attempt*.
+#
+# This used to be item_key alone, which collapsed the ladder — the
+# browser attempt overwrote the Crossref attempt, so "we tried the API
+# and it 404'd, and we have never run the browser handler" was
+# indistinguishable from "we tried everything". Triage needs both rows.
+# Old single-key files still read fine: their rows simply have distinct
+# `source` values already, or an empty one.
+FAILURE_KEY_FIELDS: tuple[str, ...] = ("item_key", "source")
+
+#: Deprecated alias for the pre-composite key. Kept so an out-of-tree
+#: caller doesn't break; new code uses FAILURE_KEY_FIELDS.
 FAILURE_KEY_FIELD = "item_key"
 
 
@@ -87,25 +114,44 @@ def classify_failure(
     http_status: int | None = None,
     *,
     scope_types: frozenset[str] | None = None,
+    untried_browser_handler: str = "",
 ) -> FailureCause:
     """Classify a PDF-fetch failure based on item type and HTTP response.
 
     Resolution order:
       1. Item type in `scope_types` (default: book / thesis / preprint
-         / report / manuscript / blog) → OUT_OF_SCOPE.
-      2. http_status in (401, 402, 403) → ACCESS_BLOCKED.
-      3. http_status in (404, 410) → UNAVAILABLE.
-      4. http_status >= 500 (server error) → NETWORK_ERROR (treat as
+         / report / manuscript / blog) → OUT_OF_SCOPE. Item type wins
+         over everything: a book chapter behind Cloudflare is still a
+         book chapter.
+      2. `untried_browser_handler` non-empty → BROWSER_REQUIRED. This
+         outranks both ACCESS_BLOCKED and UNAVAILABLE deliberately —
+         a Cloudflare 403 and a silent miss are the *same situation*
+         when a handler for that publisher exists and has not been run,
+         and in both cases the right next step is the browser pass, not
+         an ILL request or an FE6 exclusion.
+      3. http_status in (401, 402, 403) → ACCESS_BLOCKED.
+      4. http_status in (404, 410) → UNAVAILABLE.
+      5. http_status >= 500 (server error) → NETWORK_ERROR (treat as
          transient — server may recover).
-      5. http_status is None and no exception info → UNAVAILABLE
+      6. http_status is None and no exception info → UNAVAILABLE
          (every fetcher returned None without raising; PDF probably
          doesn't exist).
+
+    `untried_browser_handler` is the *caller's* judgement, not a lookup
+    done here: only the orchestrator knows which pass it is in and
+    therefore whether the handler has already had its turn. Passing a
+    handler name that was already tried and failed would relabel a true
+    negative as recoverable. `pdf_fetch_log` stays free of any
+    `fetchers.browser` import for the same reason this function is
+    documented as pure.
 
     Pure function — safe to call from any thread / fetcher.
     """
     out_of_scope = scope_types if scope_types is not None else DEFAULT_OUT_OF_SCOPE_TYPES
     if item_type and item_type in out_of_scope:
         return FailureCause.OUT_OF_SCOPE
+    if untried_browser_handler:
+        return FailureCause.BROWSER_REQUIRED
     if http_status in (401, 402, 403):
         return FailureCause.ACCESS_BLOCKED
     if http_status in (404, 410):
@@ -123,19 +169,26 @@ def log_failure(
     item_type: str = "",
     attempt: int = 1,
     source: str = "",
+    publisher: str = "",
     http_status: int | None = None,
     cause: FailureCause | None = None,
+    untried_browser_handler: str = "",
 ) -> FailureCause:
     """Append a row to `pdf_fetch_log.csv` describing why this fetch failed.
 
     Returns the resolved cause (computed via `classify_failure` if not
-    supplied). Schema-stable + upserted by `item_key` via
-    `csv_io.upsert_by_item_key` so re-runs replace, never duplicate.
+    supplied). Schema-stable + upserted by `(item_key, source)` via
+    `csv_io.upsert_by_item_key`, so re-running the same source on the
+    same item replaces its row while a *different* source adds one.
 
     `log_path` is created if missing. Parent dirs are auto-created.
     """
     if cause is None:
-        cause = classify_failure(item_type=item_type, http_status=http_status)
+        cause = classify_failure(
+            item_type=item_type,
+            http_status=http_status,
+            untried_browser_handler=untried_browser_handler,
+        )
     row = {
         "timestamp": datetime.now(UTC).isoformat(),
         "item_key": item_key,
@@ -143,11 +196,12 @@ def log_failure(
         "item_type": item_type,
         "attempt": str(attempt),
         "source": source,
+        "publisher": publisher,
         "http_status": "" if http_status is None else str(http_status),
         "cause": cause.value,
     }
     csv_io.upsert_by_item_key(
-        log_path, row, FAILURE_FIELDS, key_field=FAILURE_KEY_FIELD,
+        log_path, row, FAILURE_FIELDS, key_field=FAILURE_KEY_FIELDS,
     )
     return cause
 
@@ -169,12 +223,56 @@ def group_by_cause(failures: list[dict[str, str]]) -> dict[str, list[dict[str, s
     return out
 
 
+def latest_per_item(failures: list[dict[str, str]]) -> dict[str, dict[str, str]]:
+    """Collapse per-source rows to one verdict per item, worst-first.
+
+    With a composite key the log holds several rows per item — one per
+    source tried. Triage wants a single answer per item, and the answer
+    that matters is the most *actionable* one: an item with a
+    BROWSER_REQUIRED row is recoverable regardless of how many API
+    sources returned 404 alongside it.
+    """
+    priority = {
+        FailureCause.OUT_OF_SCOPE.value: 0,
+        FailureCause.BROWSER_REQUIRED.value: 1,
+        FailureCause.ACCESS_BLOCKED.value: 2,
+        FailureCause.NETWORK_ERROR.value: 3,
+        FailureCause.UNAVAILABLE.value: 4,
+    }
+    best: dict[str, dict[str, str]] = {}
+    for row in failures:
+        key = row.get("item_key", "")
+        if not key:
+            continue
+        current = best.get(key)
+        if current is None or priority.get(row.get("cause", ""), 9) < priority.get(
+            current.get("cause", ""), 9
+        ):
+            best[key] = row
+    return best
+
+
 # Mapping from FailureCause → suggested FE / action label, for the
 # audit-time adjudication report. The user can override per-item, but
 # these are the defaults the report displays.
+#
+# Note BROWSER_REQUIRED's entry is deliberately NOT an FE code: it is an
+# instruction to try harder. Handing an FE code to a recoverable item is
+# the exact defect this cause was added to fix.
 SUGGESTED_FE_CODE: dict[str, str] = {
     FailureCause.OUT_OF_SCOPE.value: "FE2 / FE3 (out of scope: non-journal item type)",
+    FailureCause.BROWSER_REQUIRED.value:
+        "Not an exclusion — run enrich_pdfs.py --sources browser",
     FailureCause.ACCESS_BLOCKED.value: "Flag for ILL — paywall, full text exists",
     FailureCause.UNAVAILABLE.value: "FE6 (no fulltext available)",
     FailureCause.NETWORK_ERROR.value: "Retry next run (transport error, not an exclusion)",
 }
+
+#: Causes that must never be adjudicated as a full-text exclusion —
+#: the item is reachable, the pipeline just has not reached it yet.
+#: `audit_zotero_library` and the systematic-review skill both gate on
+#: this rather than re-deriving the list.
+RECOVERABLE_CAUSES: frozenset[str] = frozenset({
+    FailureCause.BROWSER_REQUIRED.value,
+    FailureCause.NETWORK_ERROR.value,
+})

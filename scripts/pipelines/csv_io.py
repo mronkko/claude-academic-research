@@ -22,7 +22,7 @@ from __future__ import annotations
 import csv
 import os
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 
@@ -50,26 +50,41 @@ def upsert_by_item_key(
     row: Mapping[str, object],
     schema: list[str],
     *,
-    key_field: str = "item_key",
+    key_field: str | Sequence[str] = "item_key",
 ) -> None:
     """Insert or replace a row in `csv_path` keyed by `row[key_field]`.
 
     `schema` is the canonical column list (from `log_schemas`). Every
     row written has every column; values not present in `row` become
-    empty strings. Existing rows with the same `item_key` are replaced.
+    empty strings. Existing rows with the same key are replaced.
+
+    `key_field` may name one column or a sequence of them. A composite
+    key is what lets a log keep one row *per attempt* rather than one
+    row per item: `pdf_fetch_log.csv` keys on `(item_key, source)` so a
+    retry ladder can see that Crossref returned 404 *and* the browser
+    handler was never run, instead of the second attempt silently
+    overwriting the first.
 
     File is created on first write. Concurrent writers must serialize
     externally — this function is not thread-safe and not multi-process
     safe. (Pipeline orchestrators already serialize on a `log_lock` per
     `csv_path`; this helper inherits that contract.)
     """
-    if key_field not in schema:
+    key_fields: tuple[str, ...] = (
+        (key_field,) if isinstance(key_field, str) else tuple(key_field)
+    )
+    if not key_fields:
+        raise ValueError("key_field must name at least one column")
+    missing = [f for f in key_fields if f not in schema]
+    if missing:
         raise ValueError(
-            f"key_field {key_field!r} must be present in schema; got {schema!r}"
+            f"key_field {missing!r} must be present in schema; got {schema!r}"
         )
-    key_value = str(row.get(key_field, "")).strip()
-    if not key_value:
-        raise ValueError(f"row is missing a non-empty {key_field!r}: {dict(row)!r}")
+    key_value = tuple(str(row.get(f, "")).strip() for f in key_fields)
+    if not key_value[0]:
+        raise ValueError(
+            f"row is missing a non-empty {key_fields[0]!r}: {dict(row)!r}"
+        )
 
     csv_path = Path(csv_path)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -94,7 +109,7 @@ def upsert_by_item_key(
     replaced = False
     out_rows: list[dict[str, str]] = []
     for r in existing_rows:
-        if r.get(key_field) == key_value:
+        if tuple(r.get(f, "") for f in key_fields) == key_value:
             if not replaced:
                 out_rows.append(new_row)
                 replaced = True

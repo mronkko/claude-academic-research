@@ -225,3 +225,58 @@ def test_upsert_pads_old_rows_to_current_schema_when_columns_match(
         "item_key": "AAAA0001", "decision": "include",
         "reason": "first", "model": "",
     }
+
+
+# ---------------------------------------------------------------------------
+# Composite keys
+# ---------------------------------------------------------------------------
+
+_MULTI = ["item_key", "source", "cause"]
+
+
+def test_composite_key_replaces_only_the_matching_pair(tmp_path: Path) -> None:
+    target = tmp_path / "multi.csv"
+    for source, cause in (("crossref", "UNAVAILABLE"), ("sage", "BROWSER_REQUIRED")):
+        csv_io.upsert_by_item_key(
+            target, {"item_key": "A", "source": source, "cause": cause},
+            _MULTI, key_field=("item_key", "source"),
+        )
+    # Re-running one of the two sources replaces just that row.
+    csv_io.upsert_by_item_key(
+        target, {"item_key": "A", "source": "crossref", "cause": "NETWORK_ERROR"},
+        _MULTI, key_field=("item_key", "source"),
+    )
+    rows = _read_rows(target)
+    assert len(rows) == 2
+    assert {r["source"]: r["cause"] for r in rows} == {
+        "crossref": "NETWORK_ERROR", "sage": "BROWSER_REQUIRED",
+    }
+
+
+def test_composite_key_still_requires_the_first_field(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="item_key"):
+        csv_io.upsert_by_item_key(
+            tmp_path / "multi.csv", {"item_key": "", "source": "sage"},
+            _MULTI, key_field=("item_key", "source"),
+        )
+
+
+def test_composite_key_rejects_a_field_outside_the_schema(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="publisher"):
+        csv_io.upsert_by_item_key(
+            tmp_path / "multi.csv", {"item_key": "A", "publisher": "Sage"},
+            _MULTI, key_field=("item_key", "publisher"),
+        )
+
+
+def test_string_key_field_still_works(tmp_path: Path) -> None:
+    """The single-key callers (screening / coding logs) are untouched."""
+    target = tmp_path / "single.csv"
+    for cause in ("UNAVAILABLE", "ACCESS_BLOCKED"):
+        csv_io.upsert_by_item_key(
+            target, {"item_key": "A", "source": "crossref", "cause": cause},
+            _MULTI, key_field="item_key",
+        )
+    rows = _read_rows(target)
+    assert len(rows) == 1
+    assert rows[0]["cause"] == "ACCESS_BLOCKED"
