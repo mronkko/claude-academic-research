@@ -287,6 +287,26 @@ KEYS: tuple[KeySpec, ...] = (
         verify=_verify_anthropic,
     ),
     KeySpec(
+        "ANTHROPIC_BASE_URL", "anthropic", "base_url",
+        "Anthropic-compatible endpoint URL",
+        required=False, hidden=False,
+        what="An alternative endpoint speaking the Anthropic Messages API, "
+             "instead of api.anthropic.com. Open WebUI and LM Studio both "
+             "expose one, so this is how you point screening at a locally "
+             "hosted model. Not a secret: a plain URL, safe to paste in view. "
+             "Leave blank to use Anthropic's own API.",
+        used_by="systematic-review (abstract screening and full-text coding, "
+                "via the --model flag on abstract_screen.py / "
+                "fulltext_code.py).",
+        impact="None if blank — the pipelines call api.anthropic.com as "
+               "usual. When set, ANTHROPIC_API_KEY becomes optional, since "
+               "local endpoints generally do not check it.",
+        where="LM Studio: Developer tab → server URL (default "
+              "http://localhost:1234). Open WebUI: your instance's base URL. "
+              "Give the base only — the SDK appends /v1/messages itself.",
+        verify=_verify_none,
+    ),
+    KeySpec(
         "GEMINI_API_KEY", "gemini", "api_key", "Gemini API key",
         required=False, hidden=True,
         what="Google is the company that builds Gemini. This API key lets the "

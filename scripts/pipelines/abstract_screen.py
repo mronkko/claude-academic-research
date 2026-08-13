@@ -68,6 +68,11 @@ import screening_common  # noqa: E402
 import zotero_io  # noqa: E402
 from core import llm_provider  # noqa: E402
 from core.config_loader import require  # noqa: E402
+from core.models import (  # noqa: E402
+    DEFAULT_ABSTRACT_SCREENING_MODEL,
+    effective_model,
+    model_flag_help,
+)
 from log_schemas import ABSTRACT_SCREENING_FIELDS  # noqa: E402
 
 # Re-export under the legacy name so any external consumer (or test
@@ -83,7 +88,7 @@ def _load_screening_config(path: str):
     )
     return (
         mod.ABSTRACT_SCREENING_SYSTEM_PROMPT,
-        getattr(mod, "ABSTRACT_SCREENING_MODEL", "claude-haiku-4-5-20251001"),
+        getattr(mod, "ABSTRACT_SCREENING_MODEL", DEFAULT_ABSTRACT_SCREENING_MODEL),
         getattr(mod, "ABSTRACT_SCREENING_PROMPT_VERSION", ""),
     )
 
@@ -191,6 +196,10 @@ def main() -> int:
     parser.add_argument("--output", default="screening/abstract_screening.csv",
                         help="Append-only log path "
                              "(default: screening/abstract_screening.csv).")
+    parser.add_argument("--model", default="",
+                        help=model_flag_help(
+                            "ABSTRACT_SCREENING_MODEL from screening_config.py, "
+                            f"else {DEFAULT_ABSTRACT_SCREENING_MODEL}"))
     parser.add_argument("--dry-run", action="store_true",
                         help="Print first item's prompt; no API calls.")
     parser.add_argument("--sample", type=int, default=0,
@@ -211,15 +220,17 @@ def main() -> int:
                              "have one yet. Makes no LLM calls; exits after.")
     args = parser.parse_args()
 
-    system_prompt, model, prompt_version = _load_screening_config(args.config)
+    system_prompt, config_model, prompt_version = _load_screening_config(args.config)
+    # Resolve before the provider pre-flight below — that branches on the
+    # model name to decide which API key to require.
+    model = effective_model(
+        args.model, config_model, stage="ABSTRACT_SCREENING_MODEL",
+    )
 
     api_key = "" if args.dry_run else require("zotero", "api_key",
                                               env="ZOTERO_API_KEY")
     if not args.dry_run and not args.csv_backfill:
-        if model.lower().startswith("gemini-"):
-            require("gemini", "api_key", env="GEMINI_API_KEY")
-        else:
-            require("anthropic", "api_key", env="ANTHROPIC_API_KEY")
+        llm_provider.require_credentials(model)
 
 
     output_path = Path(args.output)

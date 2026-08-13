@@ -127,6 +127,21 @@ def test_auth_gemini() -> None:
     assert ok, f"Gemini auth failed: {msg}"
 
 
+def test_auth_anthropic_base_url() -> None:
+    """ANTHROPIC_BASE_URL is a plain URL, not a credential — there is no
+    auth to verify. This confirms the endpoint the user configured is
+    reachable and speaks the Anthropic Messages API well enough to answer.
+
+    Skips when unset, which is the normal case: blank means "use
+    api.anthropic.com", already covered by test_auth_anthropic.
+    """
+    base = require_config("anthropic", "base_url", env="ANTHROPIC_BASE_URL")
+    status, _body, _headers = http_get(base.rstrip("/") + "/v1/models")
+    assert status != 0, f"{base} unreachable (network/DNS error)"
+    # 401/404 are acceptable — they prove something is listening and
+    # routing. Only a transport failure (0) means the URL is wrong.
+
+
 def test_auth_library_openurl_base() -> None:
     """openurl_base is a plain URL, not a credential — there's no auth
     to verify. This confirms whatever endpoint the user configured

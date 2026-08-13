@@ -77,6 +77,11 @@ from core.llm import (  # noqa: E402
     extract_json_from_response,
     extract_pdf_text,
 )
+from core.models import (  # noqa: E402
+    DEFAULT_FULLTEXT_CODING_MODEL,
+    effective_model,
+    model_flag_help,
+)
 from log_schemas import fulltext_screening_fields  # noqa: E402
 
 # Soft cap on full-text chars sent to Sonnet (~180k tokens at 4 chars/token;
@@ -241,7 +246,7 @@ def _load_screening_config(path: str):
     return (
         mod.FULLTEXT_CODING_SYSTEM_PROMPT,
         mod.FULLTEXT_CODING_FIELDS,
-        getattr(mod, "FULLTEXT_CODING_MODEL", "claude-sonnet-4-6"),
+        getattr(mod, "FULLTEXT_CODING_MODEL", DEFAULT_FULLTEXT_CODING_MODEL),
         getattr(mod, "FULLTEXT_CODING_PROMPT_VERSION", ""),
     )
 
@@ -511,6 +516,10 @@ def main() -> int:
                              "$ZOTERO_DATA_DIR or ~/Zotero.")
     parser.add_argument("--output", default="screening/fulltext_screening.csv",
                         help="Append-only log path.")
+    parser.add_argument("--model", default="",
+                        help=model_flag_help(
+                            "FULLTEXT_CODING_MODEL from screening_config.py, "
+                            f"else {DEFAULT_FULLTEXT_CODING_MODEL}"))
     parser.add_argument("--dry-run", action="store_true",
                         help="Print first rendered prompt; no API calls.")
     parser.add_argument("--limit", type=int, default=0,
@@ -539,18 +548,20 @@ def main() -> int:
                              "preserved. Use --only-keys to restrict to a subset.")
     args = parser.parse_args()
 
-    prompt_template, fields, model, prompt_version = _load_screening_config(
+    prompt_template, fields, config_model, prompt_version = _load_screening_config(
         args.config)
+    # Resolve before the provider pre-flight below — that branches on the
+    # model name to decide which API key to require.
+    model = effective_model(
+        args.model, config_model, stage="FULLTEXT_CODING_MODEL",
+    )
     rendered_prompt = _render_prompt(prompt_template, fields)
     csv_columns = _csv_columns(fields)
 
     api_key = "" if args.dry_run else require("zotero", "api_key",
                                               env="ZOTERO_API_KEY")
     if not args.dry_run:
-        if model.lower().startswith("gemini-"):
-            require("gemini", "api_key", env="GEMINI_API_KEY")
-        else:
-            require("anthropic", "api_key", env="ANTHROPIC_API_KEY")
+        llm_provider.require_credentials(model)
 
 
     pdf_dir = Path(args.pdf_dir) if args.pdf_dir else None

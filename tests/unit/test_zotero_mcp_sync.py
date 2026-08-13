@@ -60,7 +60,17 @@ def _referenced_tool_names() -> dict[str, list[str]]:
         for path in sorted(root.glob(pattern)):
             if not path.is_file() or "logs" in path.parts:
                 continue
-            text = path.read_text(encoding="utf-8")
+            # `templates/**/*` is an unfiltered glob, so anything non-text
+            # that lands under a scan root would otherwise blow up the whole
+            # module with a UnicodeDecodeError instead of reporting on tool
+            # names. Bytecode caches are the realistic case: importing a
+            # template in another test drops one into `templates/__pycache__/`.
+            if "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
             for lineno, line in enumerate(text.splitlines(), start=1):
                 for m in TOOL_REF_RE.finditer(line):
                     hits.setdefault(m.group(1), []).append(

@@ -285,6 +285,44 @@ between scope.md and search_config.py.
 
 ---
 
+## Choosing the screening model
+
+`screening_config.py` sets the model for each stage
+(`ABSTRACT_SCREENING_MODEL`, `FULLTEXT_CODING_MODEL`). That is the
+project's committed default and belongs in git with the prompts.
+
+When the user names a model in conversation — "screen these with Haiku",
+"use Sonnet for the coding pass" — pass `--model` rather than editing
+`screening_config.py`:
+
+```bash
+uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/abstract_screen.py \
+    --group <id> --collection <key> --config ./screening_config.py \
+    --model haiku
+```
+
+`--model` accepts a short alias (`haiku`, `sonnet`, `opus`, `flash`,
+`pro`, `gemini`) or a full model ID. Unknown names pass through
+untouched, so an explicit ID or a locally-served model name both work.
+
+**Do NOT edit `screening_config.py` to satisfy a one-off request.** The
+config is what a reviewer reads to reconstruct the review; rewriting it
+per run destroys that record. The flag prints a banner when it overrides
+the config, and the effective model is written to the `model` column of
+every CSV log row — **that column, not the config file, is what the
+manuscript should cite** (see `empirical-integrity`).
+
+If the user wants the change to be permanent — "always use Sonnet for
+coding" — then edit `screening_config.py`, and say that you did.
+
+**Local / self-hosted models.** Setting `ANTHROPIC_BASE_URL` (via
+`/setup` or the environment) points the screening pipelines at any
+Anthropic-compatible endpoint, such as LM Studio or Open WebUI. With it
+set, `ANTHROPIC_API_KEY` becomes optional and `--model` takes whatever
+name that server serves.
+
+---
+
 ## Screening protocol (required before `abstract_screen.py`)
 
 The abstract-screening system prompt lives in `screening_config.py`
@@ -672,8 +710,8 @@ single-item debugging).
 | Summarise a pilot CSV — hits by journals.json field code | `pilot_analyze.py field-breakdown` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/pilot_analyze.py field-breakdown --csv pilot/search_results.csv --journals journals.json` |
 | Filter / trim a search CSV (top-N by year, year range) | `filter_search_results.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/filter_search_results.py --input <csv> --output <csv> [--year-min Y] [--year-max Y] [--top-n N]` |
 | Import deduplicated search CSV into Zotero | `import_to_zotero.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/import_to_zotero.py --group <id> --input <search.csv> [--collection <key>]` |
-| Abstract screening (Claude Haiku on title+abstract) | `abstract_screen.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/abstract_screen.py --group <id> --collection <key> --config ./screening_config.py` |
-| Full-text screening + structured coding (Claude Sonnet) | `fulltext_code.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs` |
+| Abstract screening (Claude Haiku on title+abstract) | `abstract_screen.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/abstract_screen.py --group <id> --collection <key> --config ./screening_config.py [--model <alias>]` |
+| Full-text screening + structured coding (Claude Sonnet) | `fulltext_code.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs [--model <alias>]` |
 | Update specific coding fields on already-coded items | `fulltext_code.py --update-fields` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs --update-fields FIELD1,FIELD2` |
 | Summarise screening / coding decisions across passes | `screening_report.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/screening_report.py <log.csv> [--list <decision>] [--list-rescreened]` |
 | Fetch missing abstracts (multi-source cascade) | `enrich_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_abstracts.py --filter-keys-file <keys>` |

@@ -22,6 +22,12 @@ Usage:
 # Model choice:
 #   Anthropic Claude: "claude-haiku-4-5-20251001" (default)
 #   Google Gemini:    "gemini-2.5-flash" (Antigravity)
+#
+# This is the project's committed default — keep it in git alongside the
+# prompt. For a one-off run with a different model, pass
+# `--model haiku|sonnet|opus|flash|pro` (or a full model ID) on the command
+# line instead of editing this file; the effective model is recorded in the
+# `model` column of the CSV log either way.
 ABSTRACT_SCREENING_MODEL = "claude-haiku-4-5-20251001"
 ABSTRACT_SCREENING_PROMPT_VERSION = "v1-2026-04-21"
 
@@ -72,6 +78,9 @@ REASON: <one sentence citing which criterion or exclusion code triggered the dec
 # Model choice:
 #   Anthropic Claude: "claude-sonnet-4-6" (default)
 #   Google Gemini:    "gemini-2.5-pro" (Antigravity)
+#
+# Same rule as ABSTRACT_SCREENING_MODEL above: `--model` overrides this for
+# a single run without touching the file.
 FULLTEXT_CODING_MODEL = "claude-sonnet-4-6"
 FULLTEXT_CODING_PROMPT_VERSION = "v1-2026-04-21"
 
