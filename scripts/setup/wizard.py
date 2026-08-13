@@ -35,6 +35,20 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Sibling import. Running wizard.py as a script puts its directory on
+# sys.path[0] automatically, but loading it by path (as the unit tests do,
+# via importlib.util.spec_from_file_location) does not.
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+
+from zotero_mcp_floor import (  # noqa: E402
+    PIP_INSTALL_CMD as ZOTERO_MCP_PIP_INSTALL_CMD,
+)
+from zotero_mcp_floor import (  # noqa: E402
+    UV_INSTALL_CMD as ZOTERO_MCP_INSTALL_CMD,
+)
+
 CONFIG_DIR = Path.home() / ".config" / "academic-research"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
@@ -470,12 +484,12 @@ EXPECTED_MCP: tuple[McpServerSpec, ...] = (
                   "-e", "ZOTERO_MCP_TOOLSETS=libraries,search-admin,pdf-geometry,duplicates,scite",
                   "--", "zotero-mcp"),
         homepage="https://github.com/mronkko/zotero-mcp",
-        install_cmd='uv tool install "zotero-mcp-server[scite,semantic]>=0.9"',
+        install_cmd=ZOTERO_MCP_INSTALL_CMD,
         install_note="Installs the [scite,semantic] extras: scite powers the "
                      "retraction-check step the systematic-review and "
                      "zotero-operations skills run; semantic enables semantic "
                      "library search. After install, run: zotero-mcp setup. "
-                     'PyPI alt: pip install "zotero-mcp-server[scite,semantic]>=0.9". '
+                     f"PyPI alt: {ZOTERO_MCP_PIP_INSTALL_CMD}. "
                      "ZOTERO_MCP_TOOLSETS above adds duplicates/scite to the "
                      "package's own default profile (libraries, search-admin, "
                      "pdf-geometry) — dropping the env var narrows back to just "
@@ -1489,9 +1503,9 @@ def _print_zotero_cli_help(status: str) -> None:
         print("  no CLI) is installed instead of `zotero-mcp-server`.")
         print("  Fix:")
         print("    uv tool uninstall zotero-mcp   # if present")
-        print('    uv tool install "zotero-mcp-server[scite,semantic]>=0.9"')
+        print(f"    {ZOTERO_MCP_INSTALL_CMD}")
     else:
-        print('  Install: uv tool install "zotero-mcp-server[scite,semantic]>=0.9"')
+        print(f"  Install: {ZOTERO_MCP_INSTALL_CMD}")
     print("  Optional — zotero-operations and systematic-review fall back")
     print("  to MCP tools and zotero_io.py without it.")
 
