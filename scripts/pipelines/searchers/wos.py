@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-import requests
+import http_client
 
 from .base import (
     CREDENTIAL_REQUIRED,
@@ -45,12 +45,12 @@ class WosSearch(SearchSource):
         for label, _scopus_core, wos_core in config.QUERY_DEFS:
             q = self._full_query(wos_core, ctx)
             print(f"  WoS    {label}: ", end="", flush=True)
-            data = self._fetch_page(api_key, q, first_record=1, count=1)
+            data = self._fetch_page(ctx, api_key, q, first_record=1, count=1)
             total = data.get("QueryResult", {}).get("RecordsFound", 0)
             first = 1
             page_size = 100
             while first <= total:
-                data = self._fetch_page(api_key, q, first_record=first,
+                data = self._fetch_page(ctx, api_key, q, first_record=first,
                                         count=page_size)
                 recs_data = (data.get("Data", {}).get("Records", {})
                              .get("records", ""))
@@ -71,9 +71,10 @@ class WosSearch(SearchSource):
         issn_part = " OR ".join(ctx.issns)
         return f"{core} AND IS=({issn_part}) AND PY={ctx.from_year}-{ctx.to_year}"
 
-    def _fetch_page(self, api_key: str, query: str, first_record: int,
-                    count: int = 100) -> dict:
-        resp = requests.get(
+    def _fetch_page(self, ctx: SearchContext, api_key: str, query: str,
+                    first_record: int, count: int = 100) -> dict:
+        data = http_client.get_json(
+            ctx.http(),
             WOS_ENDPOINT,
             headers={"X-ApiKey": api_key},
             params={
@@ -84,8 +85,14 @@ class WosSearch(SearchSource):
             },
             timeout=60,
         )
-        resp.raise_for_status()
-        return resp.json()
+        if data is None:
+            raise RuntimeError(
+                "WoS Expanded rejected the request (401/403 means the key "
+                "lacks Expanded entitlement; 400 means the query is "
+                "malformed), or its retries were exhausted. Query: "
+                f"{query}"
+            )
+        return data
 
     def _extract_record(self, rec: dict, label: str) -> dict:
         uid = rec.get("UID", "")

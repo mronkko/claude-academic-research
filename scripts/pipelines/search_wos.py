@@ -4,6 +4,8 @@
 # dependencies = [
 #     "pybliometrics>=3.6",
 #     "requests>=2.31",
+#     "urllib3>=2.0",
+#     "tenacity>=8.0",
 # ]
 # ///
 """Single-database wrapper around `searchers.wos` for piloting.

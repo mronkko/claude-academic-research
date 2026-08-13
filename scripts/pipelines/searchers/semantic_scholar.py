@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import time
 
-import requests
+import http_client
 
 from .base import (
     CREDENTIAL_OPTIONAL,
@@ -111,14 +111,21 @@ class SemanticScholarSearch(SearchSource):
             }
             if token:
                 params["token"] = token
-            resp = requests.get(BULK_ENDPOINT, params=params,
-                                headers=headers, timeout=60)
-            if resp.status_code == 429:
-                # Unauthenticated tier throttles aggressively; back off.
-                time.sleep(5)
-                continue
-            resp.raise_for_status()
-            data = resp.json()
+            # 429 is retried with exponential backoff by the shared
+            # session (Retry-After honoured), bounded at 5 attempts.
+            # A `None` here means the retries were exhausted or the
+            # request is malformed — either way, stop rather than spin.
+            data = http_client.get_json(
+                ctx.http(), BULK_ENDPOINT, headers=headers, params=params,
+                timeout=60,
+            )
+            if data is None:
+                raise RuntimeError(
+                    "Semantic Scholar bulk search failed after retries "
+                    "(throttled, or the query was rejected). Set "
+                    "SEMANTIC_SCHOLAR_API_KEY to leave the shared "
+                    "unauthenticated rate limit."
+                )
             batch = data.get("data") or []
             papers.extend(batch)
             token = data.get("token")

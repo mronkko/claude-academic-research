@@ -53,7 +53,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
 from core.config_loader import require  # noqa: E402
 
 try:
-    import requests
+    import requests  # noqa: F401  # imported for the availability check below
 except ImportError:
     sys.exit(
         "ERROR: dependencies not available. Run via `uv run`; the PEP 723 "
@@ -61,6 +61,7 @@ except ImportError:
     )
 
 import doi_utils  # noqa: E402
+import http_client  # noqa: E402
 import zotero_io  # noqa: E402
 from zotero_mcp.schema import valid_fields  # noqa: E402
 
@@ -368,10 +369,18 @@ def _create_new_items(
     }
     created = failed = 0
     n_batches = (len(to_create) + BATCH_SIZE - 1) // BATCH_SIZE
+    # Zotero asks clients to honour `Backoff` / `Retry-After` and returns
+    # 429 under load. A bare `requests.post` honours neither, so a single
+    # throttled batch used to abort the whole import; the shared session
+    # retries 429/5xx with exponential backoff instead. Retrying this POST
+    # is safe: Zotero rejects a throttled write outright rather than
+    # applying it, and the per-item `success`/`failed` maps below are what
+    # decide the outcome either way.
+    session = http_client.build_session()
     for batch_num, i in enumerate(range(0, len(to_create), BATCH_SIZE), 1):
         batch = to_create[i:i + BATCH_SIZE]
         print(f"  batch {batch_num}/{n_batches} ({len(batch)} items)...", flush=True)
-        resp = requests.post(
+        resp = session.post(
             f"{base_url}/items", headers=headers, json=batch, timeout=60,
         )
         resp.raise_for_status()

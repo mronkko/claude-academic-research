@@ -18,7 +18,11 @@ from __future__ import annotations
 
 import os
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import requests
 
 # Credential requirement modes for `resolve_credential`.
 CREDENTIAL_REQUIRED = "required"   # missing key → hard error, source can't run
@@ -105,11 +109,34 @@ class SearchContext:
       this; sources that don't use it for client-side post-filtering).
     - `mailto`: `CROSSREF_MAILTO` value if set; OpenAlex uses it for
       polite-pool identification.
+    - `session`: the shared `requests.Session` every HTTP-based source
+      must use — see `http()`.
     """
     from_year: int
     to_year: int
     issns: list[str]
     mailto: str = ""
+    session: Any = field(default=None, repr=False)
+
+    def http(self) -> requests.Session:
+        """The run's shared `requests.Session`, built on first use.
+
+        Every HTTP-based source routes through this rather than calling
+        `requests.get` directly, so the whole search stage inherits
+        `http_client`'s retry policy: exponential backoff on 429 / 5xx,
+        `Retry-After` honoured, and a bounded attempt count.
+
+        Built lazily rather than in `__post_init__` because a
+        `SearchContext` is cheap to construct in tests and in
+        `credentials_error()` pre-flight, neither of which makes a
+        request. The import is deferred for the same reason — nothing
+        that only inspects a context should have to import `requests`.
+        """
+        if self.session is None:
+            import http_client
+
+            self.session = http_client.build_session(mailto=self.mailto or None)
+        return self.session
 
 
 class SearchSource(ABC):

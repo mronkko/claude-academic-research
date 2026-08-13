@@ -3,6 +3,8 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "requests>=2.31",
+#     "urllib3>=2.0",
+#     "tenacity>=8.0",
 # ]
 # ///
 """Single-database wrapper around `searchers.openalex` for piloting.

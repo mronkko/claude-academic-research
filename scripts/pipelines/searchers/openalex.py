@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 
-import requests
+import http_client
 
 from .base import SearchContext, SearchSource, empty_row
 
@@ -38,7 +38,7 @@ class OpenAlexSearch(SearchSource):
         for label, terms in blocks:
             query = " OR ".join(f'"{t}"' for t in terms)
             print(f"  OpenAlex {label}: ", end="", flush=True)
-            works = self._fetch_all(query, filter_str, ctx.mailto)
+            works = self._fetch_all(query, filter_str, ctx)
             print(f"{len(works)} results", flush=True)
             for w in works:
                 rows.append(self._work_to_row(w, label))
@@ -52,12 +52,13 @@ class OpenAlexSearch(SearchSource):
             f"type:article"
         )
 
-    def _fetch_all(self, query: str, filter_str: str, mailto: str) -> list[dict]:
+    def _fetch_all(self, query: str, filter_str: str,
+                   ctx: SearchContext) -> list[dict]:
         all_works: list[dict] = []
         page = 1
         total: int | None = None
         while True:
-            data = self._fetch_page(query, filter_str, page, mailto)
+            data = self._fetch_page(query, filter_str, page, ctx)
             if total is None:
                 total = data["meta"]["count"]
             results = data.get("results", [])
@@ -71,7 +72,7 @@ class OpenAlexSearch(SearchSource):
         return all_works
 
     def _fetch_page(self, query: str, filter_str: str, page: int,
-                    mailto: str) -> dict:
+                    ctx: SearchContext) -> dict:
         params: dict = {
             "search": query,
             "filter": filter_str,
@@ -83,12 +84,19 @@ class OpenAlexSearch(SearchSource):
                 "primary_location", "open_access", "abstract_inverted_index",
             ]),
         }
-        if mailto:
-            params["mailto"] = mailto
-        resp = requests.get("https://api.openalex.org/works",
-                            params=params, timeout=60)
-        resp.raise_for_status()
-        return resp.json()
+        if ctx.mailto:
+            params["mailto"] = ctx.mailto
+        data = http_client.get_json(
+            ctx.http(), "https://api.openalex.org/works",
+            params=params, timeout=60,
+        )
+        if data is None:
+            raise RuntimeError(
+                f"OpenAlex rejected the request for page {page} (or its "
+                f"retries were exhausted). Check the filter expression: "
+                f"{filter_str}"
+            )
+        return data
 
     def _work_to_row(self, w: dict, label: str) -> dict:
         doi = (w.get("doi") or "").replace("https://doi.org/", "")
