@@ -291,6 +291,38 @@ def _csv_columns(coding_fields: list[dict]) -> list[str]:
 STAGE_TAG_PREFIX = "fulltext:"
 STAGE_TAG_VALUES = ("include", "exclude")
 
+# "No PDF to read" is not the same failure as "coding blew up", and the
+# distinction drives what you do next: find the PDF, versus re-run the
+# model. Both were logged as `decision=error` and told apart afterwards by
+# string-matching `reason`, so the CSV disagreed with the tally printed
+# beside it (`error: 0, no_pdf: 2` over two rows that both said `error`),
+# and verify reported "2 items still in error state" for items whose only
+# problem was a missing file. Neither is a *final* decision — both stay
+# untagged so a re-run picks them up — but they are different states.
+NO_PDF_DECISION = "no_pdf"
+NO_PDF_REASON = "no PDF attachment found"
+UNRESOLVED_DECISIONS = ("error", NO_PDF_DECISION)
+
+
+def no_pdf_row(base: dict, fields: list[dict]) -> dict:
+    """The log row for an item with no PDF to read.
+
+    Built identically by the coding and `--rerun` update paths; shared so
+    the two cannot drift into disagreeing about what a missing PDF looks
+    like in the log. `base` supplies the item's identity columns
+    (item_key, doi, title, year, journal, model).
+    """
+    return {
+        **base,
+        "pdf_path": "",
+        "fulltext_chars": 0,
+        "truncated": "false",
+        "decision": NO_PDF_DECISION,
+        "exclusion_code": "",
+        "reason": NO_PDF_REASON,
+        **{f["name"]: "" for f in fields},
+    }
+
 
 def _already_tagged(items: list[dict]) -> set[str]:
     """Items that already have `fulltext:include` or `fulltext:exclude`
@@ -879,10 +911,7 @@ def main() -> int:
                 "model": model,
             }
             if pdf_path is None:
-                return {**base, "pdf_path": "", "fulltext_chars": 0,
-                        "truncated": "false", "decision": "error",
-                        "exclusion_code": "", "reason": "no PDF attachment found",
-                        **{f["name"]: "" for f in fields}}
+                return no_pdf_row(base, fields)
             row = _code_one(item, pdf_path, client, model, update_prompt, fields)
             if row.get("decision") == "error":
                 # Surface the failure instead of merging an empty update
@@ -952,7 +981,7 @@ def main() -> int:
                     update_fatal.append(verdict)
                 done_count += 1
                 decision = row.get("decision", "error")
-                if "no PDF attachment found" in row.get("reason", ""):
+                if decision == NO_PDF_DECISION:
                     counts["no_pdf"] += 1
                 elif decision == "error":
                     counts["error"] += 1
@@ -965,7 +994,8 @@ def main() -> int:
                     csv_io.upsert_by_item_key(output_path, row, csv_columns)
 
                 title = row.get("title", "")[:60]
-                outcome = "updated" if decision not in ("error",) else decision
+                outcome = (decision if decision in UNRESOLVED_DECISIONS
+                           else "updated")
                 print(f"[{done_count}/{total}] {title:<60} → {outcome}",
                       flush=True)
 
@@ -996,21 +1026,14 @@ def main() -> int:
         )
         if pdf_path is None:
             d = item.get("data", {})
-            return {
+            return no_pdf_row({
                 "item_key": d.get("key", item.get("key", "")),
                 "doi": (d.get("DOI") or "").strip(),
                 "title": (d.get("title") or "")[:200],
                 "year": (d.get("date") or "")[:4],
                 "journal": d.get("publicationTitle", "") or "",
-                "pdf_path": "",
-                "fulltext_chars": 0,
-                "truncated": "false",
-                "decision": "error",
-                "exclusion_code": "",
-                "reason": "no PDF attachment found",
                 "model": model,
-                **{f["name"]: "" for f in fields},
-            }
+            }, fields)
         return _code_one(item, pdf_path, client, model, rendered_prompt, fields)
 
     print(f"Coding with {args.workers} parallel workers (model={model})...",
@@ -1029,10 +1052,7 @@ def main() -> int:
                 fatal.append(verdict)
             done_count += 1
             decision = row.get("decision", "error")
-            if row.get("reason") == "no PDF attachment found":
-                counts["no_pdf"] += 1
-            else:
-                counts[decision] = counts.get(decision, 0) + 1
+            counts[decision] = counts.get(decision, 0) + 1
 
             # Apply stage tag. Only include / exclude get tagged;
             # error / no_pdf stay untagged so a re-run picks them up.

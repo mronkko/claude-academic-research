@@ -227,11 +227,26 @@ def test_screening_config_constants_match_logs() -> None:
 
 
 def test_no_remaining_errors_in_fulltext_log() -> None:
-    """After `--rerun`, no live decision should be `error`."""
+    """After `--rerun`, no live decision should be unresolved.
+
+    Both `error` (coding failed) and `no_pdf` (nothing to read) are
+    listed. They are separate states so the log says which problem you
+    have — re-run the model, or go find the PDF — but neither is a
+    finished decision, and a review must not ship with either still open.
+    Matching only `error` here would let every missing-PDF item through
+    the moment those stopped being logged as errors.
+    """
     rows = read_csv(FULLTEXT_LOG)
     last = last_row_per_key(rows)
-    errors = [k for k, r in last.items() if r.get("decision") == "error"]
-    assert not errors, f"{len(errors)} items still in error state: {errors[:5]}"
+    unresolved = {
+        k: r.get("decision", "")
+        for k, r in last.items()
+        if r.get("decision") in ("error", "no_pdf")
+    }
+    assert not unresolved, (
+        f"{len(unresolved)} item(s) still unresolved: "
+        f"{list(unresolved.items())[:5]}"
+    )
 
 
 def _live_zotero_items() -> list[dict] | None:
