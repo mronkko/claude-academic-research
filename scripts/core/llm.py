@@ -174,20 +174,6 @@ def extract_pdf_text(pdf_path: str, *, verbose: bool = False) -> str:
     return plumber_text or pypdf_text
 
 
-def is_parseable_pdf(pdf_path: str) -> bool:
-    """True if extract_pdf_text() yields >=200 non-whitespace chars.
-
-    Use as a stronger cache-validity check than %PDF magic bytes alone:
-    some downloaders save partial/corrupted PDFs that pass the magic check
-    but fail to parse.
-    """
-    try:
-        text = extract_pdf_text(pdf_path)
-        return len(text.strip()) >= 200
-    except Exception:
-        return False
-
-
 # ── 3. Year extraction from freeform Zotero date ─────────────────────────────
 
 def extract_year_from_date(date_field: str) -> str:

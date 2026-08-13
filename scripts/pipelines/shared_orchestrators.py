@@ -10,13 +10,19 @@ it here means a schema or behaviour change happens in one place.
 
 The column lists themselves live in `log_schemas` (imported by both the
 scripts and any downstream template that has to read these CSVs).
+
+Deliberately functional, not a class. An earlier `LogManager` wrapper
+bundling the handle, a write lock, and the resume lookup was added here and
+never adopted by any orchestrator — `enrich_pdfs` opens its log across
+several phases and owns its own lock, and the other two want nothing more
+than these two functions. It was removed rather than left as an unused
+third way to do the same thing; don't re-add one without a caller.
 """
 
 from __future__ import annotations
 
 import csv
 import os
-import threading
 from collections.abc import Iterable
 from typing import TextIO
 
@@ -62,51 +68,3 @@ def load_done_keys(
             for r in csv.DictReader(f)
             if r.get("status") in wanted
         }
-
-
-class LogManager:
-    """Thread-safe wrapper bundling `open_log` + locked row writes.
-
-    Convenience for orchestrators that want one object to own the run-log
-    handle, its writer lock, and the resume-key lookup. The functional
-    helpers `open_log` / `load_done_keys` remain available for scripts
-    (like `enrich_pdfs`) that open the log in several phases and manage
-    their own lock.
-    """
-
-    def __init__(self, path: str, fieldnames: list[str]) -> None:
-        self.path = path
-        self.fieldnames = fieldnames
-        self._fh: TextIO | None = None
-        self._writer: csv.DictWriter | None = None
-        self._lock = threading.Lock()
-
-    def done_keys(
-        self,
-        statuses: str | Iterable[str],
-        key_field: str = "doi",
-    ) -> set[str]:
-        return load_done_keys(self.path, statuses=statuses, key_field=key_field)
-
-    def open(self) -> LogManager:
-        self._fh, self._writer = open_log(self.path, self.fieldnames)
-        return self
-
-    def write(self, row: dict) -> None:
-        if self._writer is None:
-            raise RuntimeError("LogManager.write called before open()")
-        with self._lock:
-            self._writer.writerow(row)
-
-    def close(self) -> None:
-        if self._fh is not None:
-            self._fh.close()
-            self._fh = None
-            self._writer = None
-
-    def __enter__(self) -> LogManager:
-        return self.open()
-
-    def __exit__(self, *exc: object) -> bool:
-        self.close()
-        return False

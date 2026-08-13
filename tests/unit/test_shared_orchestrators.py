@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import csv
 
-import pytest
 import shared_orchestrators as so
 from log_schemas import (
     ABSTRACT_FETCH_FIELDS,
@@ -109,29 +108,6 @@ def test_load_done_keys_custom_key_field(tmp_path) -> None:
     ) == {"abcd1234"}
 
 
-# --- LogManager ------------------------------------------------------
-
-
-def test_log_manager_context_writes_rows(tmp_path) -> None:
-    path = str(tmp_path / "log.csv")
-    with so.LogManager(path, ABSTRACT_FETCH_FIELDS) as lm:
-        lm.write({**{k: "" for k in ABSTRACT_FETCH_FIELDS}, "doi": "10.1/X",
-                  "status": "updated"})
-    with open(path, newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    assert rows[0]["doi"] == "10.1/X"
-
-
-def test_log_manager_done_keys_delegates(tmp_path) -> None:
-    path = str(tmp_path / "log.csv")
-    lm = so.LogManager(path, ABSTRACT_FETCH_FIELDS)
-    with lm:
-        lm.write({**{k: "" for k in ABSTRACT_FETCH_FIELDS}, "doi": "10.1/Y",
-                  "status": "updated"})
-    assert lm.done_keys("updated") == {"10.1/y"}
-
-
-def test_log_manager_write_before_open_raises(tmp_path) -> None:
-    lm = so.LogManager(str(tmp_path / "log.csv"), ABSTRACT_FETCH_FIELDS)
-    with pytest.raises(RuntimeError):
-        lm.write({"doi": "x"})
+# The `LogManager` class these tests used to cover was removed: it was
+# extracted alongside `open_log` / `load_done_keys` but no orchestrator ever
+# adopted it. See the module docstring in shared_orchestrators.py.

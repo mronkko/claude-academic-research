@@ -21,7 +21,6 @@ module-level globals.
 from __future__ import annotations
 
 import requests
-import urllib3
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -113,16 +112,3 @@ def get_bytes(
         return None
     response.raise_for_status()
     return response.content, response.headers.get("Content-Type", "")
-
-
-def silence_insecure_warnings() -> None:
-    """Disable urllib3's InsecureRequestWarning.
-
-    Some academic endpoints serve valid content behind mis-configured
-    TLS chains (wrong intermediate certs, etc.). Source modules that
-    knowingly call `session.get(url, verify=False)` should call this
-    once at import time to keep logs readable. The default `build_session`
-    keeps `verify=True` — the global ssl.CERT_NONE context used by the
-    legacy urllib code is intentionally NOT carried forward.
-    """
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
