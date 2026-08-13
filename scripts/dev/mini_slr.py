@@ -600,8 +600,58 @@ def stage_code(ctx: Ctx) -> None:
     _tally(ctx, "code", calls=n_coded, model=model)
 
 
+def _expected_fulltext_tags(ctx: Ctx) -> int:
+    """How many items `fulltext_code.py` should have tagged `fulltext:*`.
+
+    Only include/exclude get a stage tag — error and no_pdf stay untagged
+    so a re-run picks them up — so the expected count is the number of
+    include/exclude decisions in the log, not the number of coded items.
+    Last row per item wins, matching how the verify stage reads the log.
+    """
+    log_path = ctx.run_dir / "screening" / "fulltext_screening.csv"
+    if not log_path.is_file():
+        return 0
+    with log_path.open(newline="", encoding="utf-8") as f:
+        last = {r["item_key"]: r for r in csv.DictReader(f) if r.get("item_key")}
+    return sum(1 for r in last.values() if r.get("decision") in ("include", "exclude"))
+
+
 def stage_export(ctx: Ctx) -> None:
+    """Third sync wait, same cause as `stage_code`'s: `fulltext_code.py`
+    writes stage tags to the cloud, but `export_coded_includes.py` selects
+    on those tags through a client that prefers the local Zotero server.
+    Exporting straight after coding races that sync and silently writes a
+    short `coded_papers.csv` — 0 rows against 1 real include, in the run
+    that prompted this."""
     coll_key = _require_state(ctx, "collection_key", "collection")
+    total_expected = _expected_fulltext_tags(ctx)
+
+    if total_expected:
+        zot_local = _local_client(ctx.group_id)
+        deadline = time.monotonic() + SYNC_TIMEOUT_S
+        while True:
+            try:
+                items = zot_local.collection_items(
+                    str(coll_key), item_type="journalArticle")
+            except Exception as e:  # noqa: BLE001
+                print(f"  local read failed (will retry): {e}", flush=True)
+                items = []
+            tagged = [
+                it for it in items
+                if any(t.get("tag", "").startswith("fulltext:")
+                       for t in it.get("data", {}).get("tags", []))
+            ]
+            if len(tagged) >= total_expected:
+                break
+            if time.monotonic() > deadline:
+                sys.exit(
+                    f"ERROR: local sync of fulltext:* tags timed out after "
+                    f"{SYNC_TIMEOUT_S}s ({len(tagged)}/{total_expected})."
+                )
+            print(f"  waiting for local sync of fulltext:* tags... "
+                  f"({len(tagged)}/{total_expected})", flush=True)
+            time.sleep(SYNC_INTERVAL_S)
+
     out_path = ctx.run_dir / "analysis" / "results" / "coded_papers.csv"
     _uv_run(
         PIPELINES_DIR / "export_coded_includes.py",
