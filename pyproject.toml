@@ -6,11 +6,27 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Mikko Rönkkö", email = "mikko.ronkko@jyu.fi" }]
 
+# The single source of truth for what the test suite needs. CI installs
+# exactly this group (`pip install --group dev`); do not hand-list packages
+# in .github/workflows/ci.yml — that second list drifted out of sync and
+# left `uv sync` unable to collect 14 test modules.
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "responses>=0.25",
     "ruff>=0.6",
+    # zotero_io.py and http_client.py import tenacity at module scope; without
+    # it 14 test modules fail to collect.
+    "tenacity>=8.0",
+    # These three arrive transitively via zotero-mcp-server today. Declared
+    # explicitly so the suite does not silently depend on that package's
+    # dependency choices.
+    "pyzotero>=1.6",
+    "httpx>=0.25",
+    "requests>=2.31",
+    # Without reportlab, the XML-fallback rendering assertion in
+    # tests/unit/test_sciencedirect_preview_fallback.py silently pytest.skips.
+    "reportlab>=4.0",
     "zotero-mcp-server>=0.9,<0.10",
 ]
 

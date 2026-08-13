@@ -23,10 +23,15 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # Installs the `dev` dependency group from pyproject.toml (PEP 735).
+      # Deliberately NOT a hand-written package list: the previous list drifted
+      # from [dependency-groups] and left `uv sync` unable to collect 14 test
+      # modules. pyproject.toml is the one source of truth — the guard in
+      # tests/unit/test_ci_dependencies.py fails the build if this regresses.
       - name: Install dev dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest responses ruff tenacity pyzotero httpx anthropic google-genai "zotero-mcp-server>=0.9,<0.10"
+          pip install --group dev
 
       - name: Ruff lint
         run: ruff check scripts tests
