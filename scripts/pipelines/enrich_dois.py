@@ -57,6 +57,7 @@ for _p in (str(SCRIPT_DIR), str(SCRIPTS_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+import doi_utils  # noqa: E402
 import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
 from core.config_loader import get, require  # noqa: E402
@@ -95,16 +96,6 @@ def _open_log(path: str):
 # ---------------------------------------------------------------------------
 
 
-_DOI_PREFIX_STRIPS = (
-    "https://doi.org/",
-    "http://doi.org/",
-    "https://dx.doi.org/",
-    "http://dx.doi.org/",
-    "doi:",
-    "DOI:",
-)
-
-
 def _normalise_doi(raw: str) -> tuple[str, bool]:
     """Strip URL / `doi:` prefixes and whitespace from a DOI.
 
@@ -112,14 +103,12 @@ def _normalise_doi(raw: str) -> tuple[str, bool]:
     whenever we had to change anything (strip prefix or whitespace),
     so `--fix-malformed` can PATCH the Zotero field back to the
     canonical form.
+
+    Deliberately the *lenient* helper: this path repairs Zotero fields, so
+    a DOI that fails validation must still come back cleaned rather than
+    discarded. See `doi_utils` on why the strict form lives separately.
     """
-    s = (raw or "").strip()
-    original = s
-    for prefix in _DOI_PREFIX_STRIPS:
-        if s.lower().startswith(prefix.lower()):
-            s = s[len(prefix):].strip()
-            break
-    return s, s != original.strip() or s != raw
+    return doi_utils.strip_doi_prefixes(raw)
 
 
 # ---------------------------------------------------------------------------

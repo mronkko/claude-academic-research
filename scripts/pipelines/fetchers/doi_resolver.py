@@ -26,24 +26,12 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import doi_utils
+
 if TYPE_CHECKING:
     from habanero import Crossref
 
 logger = logging.getLogger(__name__)
-
-# Same literal prefixes enrich_dois.py's own _normalise_doi strips
-# (scripts/pipelines/enrich_dois.py:_DOI_PREFIX_STRIPS) — kept in sync
-# rather than imported, for the same "don't pull a top-level orchestrator
-# script into a lower-level fetcher module" reason _normalize_doi_key
-# below isn't imported from zotero_mcp either.
-_DOI_PREFIX_STRIPS = (
-    "https://doi.org/",
-    "http://doi.org/",
-    "https://dx.doi.org/",
-    "http://dx.doi.org/",
-    "doi:",
-)
-
 
 def _normalize_doi_key(raw: str) -> str:
     """Canonical cache/query key for a DOI string: strips URL/``doi:``
@@ -51,15 +39,13 @@ def _normalize_doi_key(raw: str) -> str:
     ``https://doi.org/10.1234/ABC`` misses the cache entry for a prior
     ``10.1234/abc`` lookup and re-queries Crossref for the same work under
     a different key. Returns ``""`` (falsy) for empty input.
+
+    Uses the *lenient* `doi_utils` helper, not the validating one: this is
+    a cache key, and a strict normaliser would map every non-conforming DOI
+    to ``""`` so they'd all collide on one entry and serve each other's
+    cached lookups.
     """
-    if not raw:
-        return ""
-    s = raw.strip()
-    for prefix in _DOI_PREFIX_STRIPS:
-        if s.lower().startswith(prefix):
-            s = s[len(prefix):].strip()
-            break
-    return s.lower()
+    return doi_utils.doi_cache_key(raw)
 
 
 @dataclass

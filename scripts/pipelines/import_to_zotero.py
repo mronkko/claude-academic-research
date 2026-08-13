@@ -60,9 +60,9 @@ except ImportError:
         "block at the top declares pyzotero + requests."
     )
 
+import doi_utils  # noqa: E402
 import zotero_io  # noqa: E402
 from zotero_mcp.schema import valid_fields  # noqa: E402
-from zotero_mcp.tools._helpers import _normalize_doi  # noqa: E402
 
 BATCH_SIZE = 50  # Zotero write API max
 
@@ -81,14 +81,16 @@ _JOURNAL_ALIASES_LOADED = False
 def _normalize_doi_key(raw: str) -> str:
     """Canonical dedup key for a DOI string.
 
-    Wraps zotero-mcp's ``_normalize_doi`` (strips ``doi:``/URL prefixes and
-    trailing punctuation) plus lowercasing for case-insensitive comparison,
-    so a library item stored as ``https://doi.org/10.1234/ABC`` and a CSV
-    row of bare ``10.1234/abc`` match instead of creating a duplicate.
-    Returns ``""`` (falsy) for empty/malformed input, matching the
-    `if doi and doi in doi_map` pattern callers already use.
+    The *strict* `doi_utils` helper: strips ``doi:``/URL prefixes and
+    trailing punctuation, validates the DOI shape, and lowercases for
+    case-insensitive comparison, so a library item stored as
+    ``https://doi.org/10.1234/ABC`` and a CSV row of bare ``10.1234/abc``
+    match instead of creating a duplicate. Returns ``""`` (falsy) for
+    empty/malformed input, matching the `if doi and doi in doi_map`
+    pattern callers already use — a malformed DOI must not dedup against
+    another malformed DOI.
     """
-    return (_normalize_doi(raw) or "").lower()
+    return doi_utils.doi_key(raw)
 
 
 def _canonicalize_issn(issn: str) -> str:
