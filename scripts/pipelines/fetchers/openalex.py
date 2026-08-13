@@ -25,6 +25,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from fetchers import _pdf_validate
 from fetchers.base import AbstractFetcher, PdfFetcher
 
 if TYPE_CHECKING:
@@ -157,7 +158,17 @@ class OpenAlexSource(AbstractFetcher, PdfFetcher):
         del bypass_prefix_filter          # not prefix-filtered
         path = _cache_pdf_path(cache_dir, doi)
         if path.exists():
-            return path, f"cache://{path}"
+            # Validate before serving. A cache entry written by an
+            # earlier, unvalidated run can be truncated, and returning it
+            # unchecked made the corruption permanent — every subsequent
+            # run short-circuited on the bad file and never re-fetched.
+            defect = _pdf_validate.file_defect(path)
+            if defect is None:
+                return path, f"cache://{path}"
+            logger.warning(
+                "openalex: discarding cached PDF for %s — %s", doi, defect,
+            )
+            path.unlink(missing_ok=True)
         self._ensure_configured()
 
         result = self._fetch_pdf_content_api(doi, path)
@@ -191,7 +202,13 @@ class OpenAlexSource(AbstractFetcher, PdfFetcher):
         except Exception as e:
             logger.debug("openalex content PDF %s failed: %s", doi, e)
             return None
-        if resp.status_code != 200 or resp.content[:4] != b"%PDF":
+        defect = _pdf_validate.response_defect(resp)
+        if defect is not None:
+            # Return None rather than raising so the cascade moves on to
+            # the next source. OpenAlex has served permanently-truncated
+            # copies (byte-identical across retries), so the next source
+            # is the only route that helps.
+            logger.warning("openalex content PDF %s rejected — %s", doi, defect)
             return None
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(resp.content)
@@ -217,7 +234,9 @@ class OpenAlexSource(AbstractFetcher, PdfFetcher):
         except Exception as e:
             logger.debug("openalex OA PDF %s failed: %s", pdf_url, e)
             return None
-        if resp.status_code != 200 or resp.content[:4] != b"%PDF":
+        defect = _pdf_validate.response_defect(resp)
+        if defect is not None:
+            logger.warning("openalex OA PDF %s rejected — %s", pdf_url, defect)
             return None
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(resp.content)

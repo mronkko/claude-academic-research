@@ -1004,6 +1004,8 @@ Then act by cause:
 | `BROWSER_REQUIRED` | A Cloudflare-gated publisher this plugin has a handler for, not yet run | Offer the browser pass. **Not an exclusion.** |
 | `ACCESS_BLOCKED` | Paywalled; the full text exists | Offer the ILL list. **Not an exclusion.** |
 | `NETWORK_ERROR` | Transport failure | Re-run. **Not an exclusion.** |
+| `CORRUPT_DOWNLOAD` | A source served bytes that are not a usable PDF — usually a truncated download | Retry via a *different* source, not the same one. **Not an exclusion.** |
+| `UPLOAD_FAILED` | The PDF was fetched but the Zotero attach failed | The file is already in the local cache; re-run `enrich_pdfs.py` and it attaches without re-downloading. **Not an exclusion.** |
 | `OUT_OF_SCOPE` | Book chapter, thesis, preprint | FE2 / FE3 — exclude on item type, not on retrieval |
 | `UNAVAILABLE` | Every route tried, nothing found | FE6 — the only cause that justifies a full-text-unavailable exclusion |
 

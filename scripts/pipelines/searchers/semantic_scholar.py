@@ -17,8 +17,6 @@ from __future__ import annotations
 
 import time
 
-import http_client
-
 from .base import (
     CREDENTIAL_OPTIONAL,
     SearchContext,
@@ -36,6 +34,12 @@ class SemanticScholarSearch(SearchSource):
     name = "semantic_scholar"
     supports_journal_scope = False   # no reliable API-level ISSN filter
     supports_block_queries = True
+
+    def __init__(self) -> None:
+        # Set once a 403 proves SEMANTIC_SCHOLAR_API_KEY is being rejected,
+        # so the second block query (run() calls _fetch_all twice) doesn't
+        # re-send the dead key and re-print the warning.
+        self._key_rejected = False
 
     def credentials_error(self, ctx: SearchContext) -> str | None:
         # Free tier works; key only recommended. Never a hard error.
@@ -94,7 +98,7 @@ class SemanticScholarSearch(SearchSource):
     def _fetch_all(self, query: str, ctx: SearchContext,
                    api_key: str) -> list[dict]:
         headers: dict = {}
-        if api_key:
+        if api_key and not self._key_rejected:
             headers["x-api-key"] = api_key
         papers: list[dict] = []
         token: str | None = None
@@ -111,21 +115,44 @@ class SemanticScholarSearch(SearchSource):
             }
             if token:
                 params["token"] = token
-            # 429 is retried with exponential backoff by the shared
-            # session (Retry-After honoured), bounded at 5 attempts.
-            # A `None` here means the retries were exhausted or the
-            # request is malformed — either way, stop rather than spin.
-            data = http_client.get_json(
-                ctx.http(), BULK_ENDPOINT, headers=headers, params=params,
-                timeout=60,
+            # Straight through the shared session rather than
+            # `http_client.get_json`, which collapses every 4xx to None —
+            # the 403 below has to be told apart from the rest. The
+            # session still carries the urllib3.Retry adapter, so 429 and
+            # 5xx are retried with exponential backoff and Retry-After
+            # honoured, bounded at 5 attempts. That is what replaced the
+            # unbounded `sleep(5); continue` loop this endpoint used to
+            # spin in against the throttled unauthenticated tier.
+            resp = ctx.http().get(
+                BULK_ENDPOINT, params=params, headers=headers, timeout=60,
             )
-            if data is None:
-                raise RuntimeError(
-                    "Semantic Scholar bulk search failed after retries "
-                    "(throttled, or the query was rejected). Set "
-                    "SEMANTIC_SCHOLAR_API_KEY to leave the shared "
-                    "unauthenticated rate limit."
+            if resp.status_code == 403 and headers.get("x-api-key"):
+                # A 403 on this endpoint with a key attached means the key
+                # itself is invalid/revoked (anonymous calls to the same
+                # endpoint succeed) — not a scope/plan restriction. Warn
+                # once and fall back to unauthenticated rather than
+                # failing the whole search.
+                print(
+                    "  WARNING: SEMANTIC_SCHOLAR_API_KEY was rejected (403 "
+                    "Forbidden) by the Semantic Scholar API — the key "
+                    "appears invalid or revoked. Continuing this search "
+                    "unauthenticated (lower, shared rate limit applies). "
+                    "Rotate the key via `/setup` when convenient.",
+                    flush=True,
                 )
+                self._key_rejected = True
+                headers.pop("x-api-key", None)
+                continue
+            if resp.status_code == 429:
+                # The adapter already retried this to exhaustion; spinning
+                # here would re-create the unbounded loop.
+                raise RuntimeError(
+                    "Semantic Scholar bulk search stayed rate-limited after "
+                    "retries. Set SEMANTIC_SCHOLAR_API_KEY to leave the "
+                    "shared unauthenticated rate limit."
+                )
+            resp.raise_for_status()
+            data = resp.json()
             batch = data.get("data") or []
             papers.extend(batch)
             token = data.get("token")

@@ -262,6 +262,15 @@ class PublisherHandler(ABC):
     direct_access_domains: tuple[str, ...] = ()
     concurrency: int = 1
     delay_s: float = 1.0
+    # True when a run against this publisher normally requires the user
+    # to clear a Cloudflare challenge or institutional SSO by hand
+    # before any download works. Purely declarative — the run behaves
+    # identically either way; this drives the up-front queue listing so
+    # the user is told which challenges to expect *before* walking away
+    # from the terminal. A live run silently under-reported this: the
+    # user was told to solve Sage and AoM, was never told APA was also
+    # queued, and 10 APA items were skipped without a single attempt.
+    needs_interactive_solve: bool = True
     # When True, the handler does not produce a local PDF file — it
     # attaches directly to Zotero via its own code path (the Zotero
     # Connector translator). The driver calls

@@ -106,9 +106,17 @@ def test_search_metadata_has_required_fields() -> None:
     with open(SEARCH_METADATA, encoding="utf-8") as f:
         meta = json.load(f)
     for key in ("search_date_start", "search_date_end", "databases",
-                "from_year", "to_year", "queries", "total_unique_records"):
+                "from_year", "to_year", "total_unique_records"):
         assert key in meta, f"search_metadata.json missing '{key}'"
-    assert meta["from_year"] < meta["to_year"]
+    # search.py writes `query_defs` (Scopus/WoS) and/or `block_a_terms` /
+    # `block_b_terms` (OpenAlex/Semantic Scholar) — whichever the project's
+    # search_config.py declares. At least one provenance block must be
+    # present; neither literal key is guaranteed on its own.
+    assert "query_defs" in meta or "block_a_terms" in meta, (
+        "search_metadata.json has neither 'query_defs' nor 'block_a_terms' — "
+        "no query provenance recorded"
+    )
+    assert meta["from_year"] <= meta["to_year"]
 
 
 def test_no_duplicate_dois_in_dedup_csv() -> None:

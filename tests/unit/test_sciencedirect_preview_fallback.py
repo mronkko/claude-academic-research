@@ -98,11 +98,19 @@ def _make_source(api_key: str = "fake-key") -> ScienceDirectSource:
     return src
 
 
-def _pdf_response(*, status: int = 200, content: bytes = b"%PDF-1.4 mock body",
+# A structurally plausible PDF: `_pdf_validate` now rejects bodies that
+# are too small or lack an %%EOF trailer, because a truncated download
+# passes a bare `%PDF` magic-byte check. Test fixtures have to look like
+# real files for the happy paths to stay happy.
+def _fake_pdf(marker: bytes = b"body") -> bytes:
+    return b"%PDF-1.4\n" + marker + b"\n" + b"0" * 2000 + b"\n%%EOF\n"
+
+
+def _pdf_response(*, status: int = 200, content: bytes | None = None,
                   els_status: str = "OK") -> MagicMock:
     resp = MagicMock()
     resp.status_code = status
-    resp.content = content
+    resp.content = _fake_pdf() if content is None else content
     resp.headers = {"x-els-status": els_status}
     return resp
 
@@ -208,7 +216,7 @@ def test_fetch_pdf_prefers_cached_recovered_pdf_over_fresh_call(
     src = _make_source()
     doi = "10.1016/j.cached.2020.01.001"
     cached = tmp_path / "10.1016_j.cached.2020.01.001-tdm-recovered.pdf"
-    cached.write_bytes(b"%PDF-1.4 cached recovered")
+    cached.write_bytes(_fake_pdf(b"cached recovered"))
     src.http.get.side_effect = AssertionError("should not be called on cache hit")
 
     result = src.fetch_pdf(doi, cache_dir=tmp_path)

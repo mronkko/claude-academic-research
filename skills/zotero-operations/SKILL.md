@@ -155,6 +155,8 @@ running these stages:**
    | `ACCESS_BLOCKED` (Wiley prefix, no token) | Configure `WILEY_TDM_TOKEN` via `/setup`, then `--sources wiley` |
    | `ACCESS_BLOCKED` (anything else) | Hand the user `retry.ill.keys` as an interlibrary-loan list |
    | `NETWORK_ERROR` | Re-run the same stage; the cause is transient |
+   | `CORRUPT_DOWNLOAD` | The source served a broken file (usually truncated). Re-running the *same* source returns the same bad bytes — escalate to a different one: the publisher TDM route, or `--sources browser`. |
+   | `UPLOAD_FAILED` | The PDF is already in the local cache and only the Zotero attach failed. Re-run `enrich_pdfs.py`; it attaches from cache with no new download. Cheapest rung on the ladder — always offer it first. |
    | `OUT_OF_SCOPE` | A book chapter, thesis, or preprint. No rung applies — the item is excluded on its type, not on retrieval, and chasing a PDF for it wastes the user's time. |
    | `UNAVAILABLE` | Genuinely unreachable. Only now is "not available" the honest report. |
 

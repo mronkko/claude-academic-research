@@ -24,6 +24,8 @@ This module:
 from __future__ import annotations
 
 import csv
+import os
+import tempfile
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -72,6 +74,23 @@ class FailureCause(StrEnum):
     """Transport-level failure (timeout, DNS, connection refused). Not
     an exclusion — retry next run. Captured for diagnostics so the
     user can spot persistent network issues."""
+
+    CORRUPT_DOWNLOAD = "CORRUPT_DOWNLOAD"
+    """A source returned bytes that are not a usable PDF — most often a
+    truncated download (correct header, missing tail). Not an exclusion
+    and not an access problem: the article exists and other sources may
+    serve it intact. A live run had OpenAlex hand back the same
+    truncated copy on every retry while the publisher's own TDM route
+    returned a perfect file, so the useful action is a different source,
+    not another attempt at the same one."""
+
+    UPLOAD_FAILED = "UPLOAD_FAILED"
+    """The PDF was fetched successfully but could not be attached to
+    Zotero. Categorically different from the four above: the full text
+    exists and is sitting in the local cache, so this must never map to
+    an exclusion code. Re-running attaches it from cache without
+    re-fetching. Added after a live run silently lost 48 downloaded
+    PDFs here and the audit had no way to see them."""
 
 
 # CSV schema for pdf_fetch_log.csv. `attempt` is the cascade pass
@@ -206,6 +225,46 @@ def log_failure(
     return cause
 
 
+def clear_failure(log_path: str | Path, item_key: str) -> bool:
+    """Drop `item_key`'s row from the failure log. True if one was removed.
+
+    The log is keyed one-row-per-item, so without this a resolved item
+    keeps its stale failure row forever and `audit_zotero_library.py`
+    goes on proposing an exclusion code for a PDF that is now attached.
+    Called on every successful attach.
+
+    Missing file or missing row is a no-op. Same serialization contract
+    as `csv_io.upsert_by_item_key` — caller holds the lock.
+    """
+    log_path = Path(log_path)
+    if not log_path.is_file():
+        return False
+    with log_path.open(newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        header = list(reader.fieldnames or [])
+        all_rows = list(reader)
+    rows = [r for r in all_rows if r.get("item_key") != item_key]
+    if not header or len(rows) == len(all_rows):
+        return False
+
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{log_path.name}.", suffix=".tmp", dir=str(log_path.parent),
+    )
+    try:
+        with os.fdopen(fd, "w", newline="", encoding="utf-8") as out:
+            writer = csv.DictWriter(out, fieldnames=header, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        os.replace(tmp_path, log_path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    return True
+
+
 def read_failures(log_path: str | Path) -> list[dict[str, str]]:
     """Read a pdf_fetch_log.csv into row dicts. Empty list if missing."""
     log_path = Path(log_path)
@@ -266,13 +325,28 @@ SUGGESTED_FE_CODE: dict[str, str] = {
     FailureCause.ACCESS_BLOCKED.value: "Flag for ILL — paywall, full text exists",
     FailureCause.UNAVAILABLE.value: "FE6 (no fulltext available)",
     FailureCause.NETWORK_ERROR.value: "Retry next run (transport error, not an exclusion)",
+    FailureCause.UPLOAD_FAILED.value:
+        "NOT an exclusion — PDF is in the local cache; re-run enrich_pdfs.py to attach it",
+    FailureCause.CORRUPT_DOWNLOAD.value:
+        "NOT an exclusion — the source served a broken file; retry via a "
+        "different source (publisher TDM route or --sources browser)",
 }
 
 #: Causes that must never be adjudicated as a full-text exclusion —
 #: the item is reachable, the pipeline just has not reached it yet.
 #: `audit_zotero_library` and the systematic-review skill both gate on
 #: this rather than re-deriving the list.
+#:
+#: `CORRUPT_DOWNLOAD` and `UPLOAD_FAILED` are here for the same reason
+#: the other two are, and their own docstrings say so: the article
+#: exists, and in the UPLOAD_FAILED case the PDF is already sitting in
+#: the local cache. They arrived with the run-report work while this set
+#: arrived with the triage work, and for a while nothing joined them —
+#: which understated the audit's "N are recoverable" line by exactly the
+#: items a re-run would have fixed for free.
 RECOVERABLE_CAUSES: frozenset[str] = frozenset({
     FailureCause.BROWSER_REQUIRED.value,
     FailureCause.NETWORK_ERROR.value,
+    FailureCause.CORRUPT_DOWNLOAD.value,
+    FailureCause.UPLOAD_FAILED.value,
 })

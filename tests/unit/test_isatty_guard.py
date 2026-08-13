@@ -61,8 +61,44 @@ def test_exit_no_interactive_surface_includes_copy_paste_command(
     msg = str(exc.value)
     assert "interactive terminal" in msg
     assert "${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py" in msg
-    assert "--browser" in msg
+    assert "--sources browser" in msg
     assert "--no-prompt" in msg
+    # This message previously suggested `--browser`, a flag that has
+    # never existed — pasting it produced "unrecognized arguments" at
+    # the exact moment the user was already stuck.
+    assert "--browser " not in msg and not msg.endswith("--browser")
+
+
+def test_exit_no_interactive_surface_command_actually_parses(
+    enrich, monkeypatch,
+) -> None:
+    """Every flag in the suggested command must be one `main()` accepts.
+
+    The point of the message is that the user pastes it verbatim, so a
+    stale flag here is a hard failure for them and silent for us. Parse
+    the emitted command with the real parser instead of trusting a
+    substring match.
+    """
+    args = argparse.Namespace(
+        publisher="sage", filter_keys_file="keys.txt", user=True, group="",
+    )
+    with pytest.raises(SystemExit) as exc:
+        enrich._exit_no_interactive_surface(args)
+
+    commands = [
+        line.strip()
+        for line in str(exc.value).splitlines()
+        if line.strip().startswith("uv run ")
+    ]
+    assert commands, "no paste-in command found in the message"
+
+    for command in commands:
+        # Drop `uv run <script>`; keep the flags the parser owns.
+        flags = command.split()[3:]
+        monkeypatch.setattr(sys, "argv", ["enrich_pdfs.py", *flags])
+        parser = enrich._build_parser()
+        parsed = parser.parse_args(flags)
+        assert parsed.sources == "browser"
 
 
 def test_exit_no_interactive_surface_threads_publisher_filter(

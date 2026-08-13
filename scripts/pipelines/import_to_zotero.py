@@ -349,7 +349,7 @@ def _filter_valid_fields(item: dict) -> tuple[dict, list[str]]:
 def _create_new_items(
     to_create: list[dict],
     zot: zotero_io.ZoteroClient,
-) -> tuple[int, int]:
+) -> tuple[int, int, list[str]]:
     filtered_to_create = []
     for item in to_create:
         filtered, rejected = _filter_valid_fields(item)
@@ -368,6 +368,7 @@ def _create_new_items(
         "Content-Type": "application/json",
     }
     created = failed = 0
+    created_keys: list[str] = []
     n_batches = (len(to_create) + BATCH_SIZE - 1) // BATCH_SIZE
     # Zotero asks clients to honour `Backoff` / `Retry-After` and returns
     # 429 under load. A bare `requests.post` honours neither, so a single
@@ -385,13 +386,15 @@ def _create_new_items(
         )
         resp.raise_for_status()
         result = resp.json()
-        created += len(result.get("success", {}))
+        success = result.get("success", {})
+        created += len(success)
+        created_keys.extend(str(v) for v in success.values())
         failed += len(result.get("failed", {}))
         if result.get("failed"):
             for idx, err in result["failed"].items():
                 print(f"  FAILED item {idx}: {err}", flush=True)
         time.sleep(0.5)
-    return created, failed
+    return created, failed, created_keys
 
 
 def main() -> int:
@@ -405,6 +408,14 @@ def main() -> int:
                         help="Path to deduplicated search-results CSV.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Parse and report without writing to Zotero.")
+    parser.add_argument(
+        "--created-keys-out",
+        help="Write the Zotero keys of newly CREATED items (one per line) "
+             "to this path — the create-batch success map, not patched "
+             "pre-existing items. Lets a caller (e.g. a test harness) "
+             "delete exactly what this run created, never anything it "
+             "merely touched.",
+    )
     args = parser.parse_args()
 
     api_key = "" if args.dry_run else require("zotero", "api_key",
@@ -478,10 +489,18 @@ def main() -> int:
     _patch_existing_items(to_add, zot, args.collection or None)
 
     created = 0
+    created_keys: list[str] = []
     if to_create:
         print(f"\nCreating {len(to_create)} new items...", flush=True)
-        created, failed = _create_new_items(to_create, zot)
+        created, failed, created_keys = _create_new_items(to_create, zot)
         print(f"  Created: {created}  Failed: {failed}", flush=True)
+
+    if args.created_keys_out:
+        Path(args.created_keys_out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.created_keys_out).write_text(
+            "\n".join(created_keys) + ("\n" if created_keys else ""),
+            encoding="utf-8",
+        )
 
     total = len(to_add) + created
     print(f"\nDone. {total} items now in target collection/library.", flush=True)

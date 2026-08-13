@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import requests
 from searchers import (
     OpenAlexSearch,
     SearchContext,
@@ -31,6 +33,43 @@ PIPELINES = Path(__file__).resolve().parents[2] / "scripts" / "pipelines"
 
 def _ctx() -> SearchContext:
     return SearchContext(from_year=2000, to_year=2020, issns=["1234-5678"])
+
+
+def _ctx_with(responses: list) -> tuple[SearchContext, list]:
+    """A context whose session replays `responses`, recording each call.
+
+    Semantic Scholar reaches the session with `ctx.http().get(...)`
+    rather than `http_client.get_json`, because it has to tell a 403
+    (rejected API key — drop it and retry unauthenticated) apart from
+    every other 4xx, and `get_json` collapses them all to None. So its
+    tests inject a session instead of patching `get_json`. Pre-seeding
+    `session` also keeps `http()` from building a real one, which is
+    what stops a monkeypatch miss from turning into a live request.
+    """
+    calls: list[dict] = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        calls.append({"url": url, "params": params or {},
+                      "headers": dict(headers or {})})
+        return responses[min(len(calls) - 1, len(responses) - 1)]
+
+    session = SimpleNamespace(get=fake_get)
+    ctx = SearchContext(
+        from_year=2000, to_year=2020, issns=["1234-5678"], session=session,
+    )
+    return ctx, calls
+
+
+def _resp(status_code: int, payload: dict | None = None) -> SimpleNamespace:
+    def raise_for_status() -> None:
+        if status_code >= 400:
+            raise requests.HTTPError(f"{status_code}")
+
+    return SimpleNamespace(
+        status_code=status_code,
+        json=lambda: payload or {},
+        raise_for_status=raise_for_status,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -74,25 +113,18 @@ def test_http_passes_mailto_into_the_user_agent() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_semantic_scholar_raises_when_retries_are_exhausted(monkeypatch) -> None:
+def test_semantic_scholar_raises_when_retries_are_exhausted() -> None:
     """The regression this whole module exists for.
 
-    `get_json` returns None once the session's bounded retries are spent.
-    The old code treated a 429 as "sleep and go round again" forever.
+    A 429 reaching the source means the session's bounded retries are
+    already spent. The old code answered it with `sleep(5); continue`,
+    forever. It must raise instead — and must not re-request in-process,
+    because the session owns retries.
     """
-    import http_client
-
-    calls = 0
-
-    def fake_get_json(*_a, **_kw):
-        nonlocal calls
-        calls += 1
-        return None
-
-    monkeypatch.setattr(http_client, "get_json", fake_get_json)
+    ctx, calls = _ctx_with([_resp(429)])
     with pytest.raises(RuntimeError, match="Semantic Scholar"):
-        SemanticScholarSearch()._fetch_all("q", _ctx(), api_key="")
-    assert calls == 1, "must not retry in-process; the session owns retries"
+        SemanticScholarSearch()._fetch_all("q", ctx, api_key="")
+    assert len(calls) == 1, "must not retry in-process; the session owns retries"
 
 
 def test_openalex_raises_when_retries_are_exhausted(monkeypatch) -> None:
@@ -112,27 +144,18 @@ def test_wos_raises_when_retries_are_exhausted(monkeypatch) -> None:
 
 
 def test_semantic_scholar_paginates_through_the_shared_session(monkeypatch) -> None:
-    """Happy path: the token loop still works, and every call is a
-    `get_json` against the context's session."""
-    import http_client
-
-    pages = [
-        {"data": [{"paperId": "a"}], "token": "t1"},
-        {"data": [{"paperId": "b"}], "token": None},
-    ]
-    seen_sessions = []
-
-    def fake_get_json(session, _url, **_kw):
-        seen_sessions.append(session)
-        return pages.pop(0)
-
-    monkeypatch.setattr(http_client, "get_json", fake_get_json)
+    """Happy path: the token loop still works, and every call goes to the
+    context's session rather than a module-level `requests`."""
     monkeypatch.setattr("searchers.semantic_scholar.time.sleep", lambda _s: None)
 
-    ctx = _ctx()
+    ctx, calls = _ctx_with([
+        _resp(200, {"data": [{"paperId": "a"}], "token": "t1"}),
+        _resp(200, {"data": [{"paperId": "b"}], "token": None}),
+    ])
     papers = SemanticScholarSearch()._fetch_all("q", ctx, api_key="")
     assert [p["paperId"] for p in papers] == ["a", "b"]
-    assert seen_sessions == [ctx.session, ctx.session]
+    assert len(calls) == 2
+    assert calls[1]["params"]["token"] == "t1"
 
 
 # ---------------------------------------------------------------------------

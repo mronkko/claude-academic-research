@@ -22,6 +22,394 @@ directory — not checked in because it references machine-local paths).
 
 ---
 
+## Done — PDF retrieval reliability + reporting (branch `fix/pdf-retrieval-reporting`, 2026-08-13)
+
+Driven by a real downstream session transcript in which a 244-item
+review needed four rounds of user pushback ("Why do we have so many
+fulltexts not available?" → "79 is too many. What is missing." → "No,
+try harder. Report what is missing.") to get from 125 to 223 usable
+full texts. Almost everything recovered had been retrievable all along;
+the pipeline simply never said so. Landed together because they are one
+failure mode — silent loss with no end-of-run account:
+
+- **Upload failures were terminal and undiagnosable.** `attach_pdf` had
+  no retry, and the exception text was printed and dropped. 48 Sage
+  PDFs, fully downloaded behind a solved Cloudflare challenge, were
+  lost this way. Now: tenacity retry on 429/5xx/transport (never on a
+  reported `failure` payload), a `detail` column on every non-success
+  row, and rows in `pdf_fetch_log.csv` under a new `UPLOAD_FAILED`
+  cause whose FE suggestion is explicitly "not an exclusion".
+- **Nothing recovered cached-but-unattached PDFs.** Recovery took a
+  hand-written one-off script. Now a cache-recovery pass runs before
+  any fetching, and the DOI case-skew that could hide a cache hit
+  between the API and browser paths is fixed.
+- **`--sources browser` printed no summary at all**, and only 3 of 14
+  statuses were ever counted. New `pdf_run_report.py` reports every
+  status with per-item citations and a concrete next lever, from all
+  four exits, plus `--report` to re-read an existing log.
+- **The SFX pre-flight failed closed**, so a transport blip was
+  indistinguishable from a real entitlement gap — 16 items skipped
+  against journals the user demonstrably had access to. Now fails open
+  on unset/unreachable/unparseable via `lookup_fulltext_target`, stops
+  persisting negative verdicts to `sfx_cache.json`, and falls back to
+  the DOI resolver URL (the Connector skips outright on a null target,
+  so failing open without a URL would only relabel the skip).
+  `--ignore-library-coverage` overrides it entirely.
+- **Truncated downloads passed validation.** Every HTTP fetcher checked
+  only `status_code == 200` and `content[:4] == b"%PDF"`, which half a
+  PDF satisfies. OpenAlex served five permanently-truncated files
+  (byte-identical across retries; one declared its xref at offset
+  1,744,085 in a 1,608,714-byte file) that were attached as clean
+  successes and initially misdiagnosed as scans needing OCR. New
+  `fetchers/_pdf_validate.py` checks Content-Length, the `%%EOF`
+  trailer and the xref offset; all seven fetchers use it on both
+  responses and cache reads, and a corrupt file is never attached —
+  attaching it would make the item look permanently done.
+- **Publishers needing an interactive solve were never enumerated**, so
+  the user solved Sage and AoM and was never told APA was queued (10
+  items, zero attempts). Handlers now declare
+  `needs_interactive_solve`, the queue names them up front, and
+  `--plan` prints the whole plan without opening a browser.
+- Also: `--no-prompt` now actually implies `--on-first-failure=skip`;
+  the fail-fast message no longer suggests `--browser`, a flag that
+  never existed; `--filter-keys-file` warns about keys that matched
+  nothing; and `open_log` migrates headerless / short-header logs
+  rather than silently misaligning them (a real user log was 1813 rows
+  with no header).
+
+**On OCR — a diagnosis to stay away from.** "Scanned PDF needing OCR"
+was proposed twice during the incident and was wrong both times. Of the
+5 textless files, **0** were scans: 3 came back intact via Wiley TDM
+(19/22/24 pages) and 2 via the Sage browser handler (34/44 pages), all
+with real extractable text. The lesson is that zero extractable text is
+a *symptom*, and on the only evidence we have its usual cause is a bad
+copy from a bad source. `attached_no_text` therefore points at
+re-fetching from a different source, and names OCR only as what to
+consider after a second source returns the same file. No OCR work is
+planned, and "it's a scan" should not be anyone's first hypothesis.
+
+**Still open, deliberately:** Alma structured-target ranking (P11's
+"still open" half — unchanged).
+
+---
+
+## In progress — live end-to-end SLR test (branch `feat/live-mini-slr`)
+
+**L1** — a live, opt-in mini systematic review that runs the whole
+pipeline against real APIs and a real Zotero library, then asserts the
+pipeline's own invariants. Designed 2026-08-12; implemented 2026-08-12;
+**first live run 2026-08-13 (run-id `20260813T082726Z`): 12/14 verify
+checks passed, 2 failed — root cause understood, fix not yet applied.**
+See "L1 follow-up" immediately below for exactly what to do next; this
+paragraph is the historical design record.
+
+**L1 follow-up — trim-stage journal diversity. DONE (2026-08-13, branch
+`fix/pdf-retrieval-reporting`).** `stage_trim` no longer shells out to
+`filter_search_results.py --top-n`; it round-robins across the
+configured `JOURNALS` (ISSN match, falling back to journal name),
+deterministically ordered by year desc then DOI. Covered by
+`tests/unit/test_mini_slr_trim.py` (13 tests), including the exact live
+failure shape (40 SBE rows ahead of 5 JBV + 5 SEJ). Unmatched rows only
+top up a short sample, so a stray row can never displace the coverage
+the sampling exists to guarantee. A journal that returns nothing prints
+a WARN naming the publisher route that consequently went untested. The
+original diagnosis is kept below for the audit trail.
+
+**Original diagnosis (2026-08-13).** The first live run's `verify` stage failed
+(`test_fulltext_log_decision_states_final`,
+`test_no_remaining_errors_in_fulltext_log`) because all 3 items that
+passed abstract screening ended up `error`/`no_pdf` in
+`fulltext_code.py` — no PDF was ever attached. Root cause, fully
+diagnosed via live reproduction (not a guess):
+
+1. `stage_trim` in `scripts/dev/mini_slr.py` calls
+   `filter_search_results.py --top-n 8`, which sorts by year descending
+   and keeps the first 8 rows. Every row in this corpus is year 2019
+   (a tie), so the sort is stable and just keeps whatever 8 rows came
+   first in `search.py`'s deduped output — no guarantee of covering all
+   three configured journals. In the live run, **all 8 trimmed items
+   were Small Business Economics (Springer, `0921-898X`) — zero JBV
+   (Elsevier), zero SEJ (Wiley)**, even though `ELSEVIER_API_KEY` and
+   `WILEY_TDM_TOKEN` are both configured and never got exercised.
+2. Springer's PDF fetch
+   ([fetchers/springer.py](scripts/pipelines/fetchers/springer.py))
+   is a bare unauthenticated GET against the public
+   `link.springer.com/content/pdf/<doi>.pdf` URL — no API token, no
+   proxy routing. Reproduced directly: returns HTTP 200 with
+   `Content-Type: text/html` (a landing page), not a PDF. The user
+   confirmed via their library's SFX listing that Small Business
+   Economics access at their institution genuinely exists (FinELib
+   SpringerLink from 1997) — so this isn't a missing-entitlement dead
+   end, it's that the *automated* path doesn't use the mechanism that
+   actually grants access. `library_resolver.py`'s SFX/OpenURL
+   resolution (`sfx_lookup_dual`, `first_fulltext_target_preferred`) is
+   wired into `enrich_pdfs.py` **only inside `_run_browser_in_process`
+   (Pass 2 / `--sources browser`)**, never into `_run_api_cascade`
+   (Pass 1, the automated path `mini_slr.py`'s `stage_enrich` actually
+   runs). Confirmed by grep: no `library_resolver` import anywhere in
+   `_run_api_cascade`'s call path. `LIBRARY_OPENURL_BASE` also isn't
+   configured on the dev machine, which would matter for Pass 2 but not
+   Pass 1 either way.
+3. By contrast, Elsevier
+   ([fetchers/sciencedirect.py](scripts/pipelines/fetchers/sciencedirect.py))
+   and Wiley
+   ([fetchers/wiley.py](scripts/pipelines/fetchers/wiley.py)) both
+   authenticate via a proper TDM API token
+   (`X-ELS-APIKey` against `api.elsevier.com`; the `wiley-tdm` library)
+   checked server-side against the token — not IP/proxy-dependent. If
+   the corpus had included JBV/SEJ items, Pass 1 would have had a
+   genuine, network-independent shot at them.
+
+**Decision (settled with the user, 2026-08-13): fix trim-stage journal
+diversity.** `stage_trim` should sample across all three configured
+journals instead of blind top-N-by-year, so a run actually exercises
+Elsevier/Wiley/Springer as the corpus was designed to. This does not
+guarantee zero `no_pdf` outcomes (real entitlement gaps can hit any
+publisher) — Springer via Pass 1 specifically may keep failing at this
+institution regardless of diversity, since the automated path
+structurally can't reach the SFX-mediated access route (that's Pass
+2/browser territory, which `live_slr` deliberately never runs
+unattended, same as the existing `live_browser` doctrine). The user
+explicitly confirmed `verify` should keep hard-failing on unresolved
+`error`/`no_pdf` items — that behavior is correct and should NOT be
+weakened; a `no_pdf` item is a real, surfaced pipeline outcome, not
+noise to suppress.
+
+**What it would take:** change `stage_trim` (or add a step before it)
+to group the pre-trim deduped CSV by journal/ISSN and take a balanced
+sample (e.g. up to ~3 per journal, capped at ~8 total) rather than
+`filter_search_results.py --top-n 8` verbatim. Consider whether this
+still shells out to `filter_search_results.py` (per-journal, then
+merge) or needs new logic directly in `mini_slr.py` — the shipped
+script has no per-group/stratified mode today.
+
+**Live Zotero state still open as of 2026-08-13:** run `20260813T082726Z`
+was NOT torn down (verify failure aborts before the `teardown` stage
+runs, by design — so a failed run's Zotero state stays inspectable).
+Group `academic-research-e2e` (id `6637302`) currently holds collection
+`e2e-20260813T082726Z` (key `GAA3VANG`) with 8 items (keys recorded in
+`output/e2e/20260813T082726Z/.mini_slr_state.json`'s
+`created_item_keys`). Tear down with `uv run scripts/dev/mini_slr.py
+--stage teardown --run-id 20260813T082726Z` once done inspecting, or
+just let the next full `--stage all` run reuse a fresh run-id and
+leave this one for manual comparison.
+
+**Also still open:** most of L1's own files are uncommitted (only the
+Semantic Scholar key-fallback fix — see below — landed as a commit so
+far). `git status` on this branch shows `scripts/dev/` (mini_slr.py),
+`scripts/pipelines/zotero_io.py`, `scripts/pipelines/import_to_zotero.py`,
+`templates/test_systematic_review.py`, `tests/live/README.md`,
+`tests/live/e2e/`, `tests/live/test_mini_slr.py`, and this file itself
+all modified/untracked. Commit once the trim-diversity fix lands and a
+live run passes clean, or sooner if preferred.
+
+**Unrelated fix already landed (commit `95f2e24`, 2026-08-13):** the
+first live run also hit a dead `SEMANTIC_SCHOLAR_API_KEY` (403
+Forbidden on every S2 Graph API endpoint while anonymous calls to the
+same endpoints succeeded — confirmed a revoked/invalid key, not a
+header or scope bug). Both call sites
+([searchers/semantic_scholar.py](scripts/pipelines/searchers/semantic_scholar.py),
+[fetchers/semantic_scholar.py](scripts/pipelines/fetchers/semantic_scholar.py))
+now warn once and fall back to unauthenticated on a 403-with-key
+instead of crashing the whole search. Covered by
+`tests/unit/test_semantic_scholar_key_fallback.py` (6 tests). This is
+unrelated to the trim-diversity issue and needs no further action.
+
+**Setup precondition: DONE (verified 2026-08-12).** The group
+`academic-research-e2e` exists (id `6637302`), is the unique exact
+name match among the user's groups, is synced to the local Zotero
+client (`localhost:23119` returns HTTP 200 for it), and *was* empty at
+that time. **No longer empty as of 2026-08-13** — see "Live Zotero
+state still open" above; it currently holds one leftover run's
+collection pending teardown or reuse. The id is recorded here for
+information only — the harness resolves it at run time from the
+hardcoded name and must never read it from config.
+
+**Why:** every existing test either mocks the network or probes a
+single endpoint. Nothing exercises search → import → enrich → screen →
+code → export as one run, so whole-pipeline defects survive CI. Three
+were found while merely *designing and implementing* this (D1-D3 below).
+
+**Worktree layout (already created):**
+
+- `feat/live-mini-slr` — this work. Primary checkout.
+- `chore/zotero-mcp-overlap` — parallel dead-code / zotero-mcp-overlap
+  pass in a sibling worktree at `../claude-academic-research-cleanup`.
+- Both fork from `1f8c67f` (tip of `feat/zotero-mcp-resync`).
+- `scripts/pipelines/zotero_io.py` is the one contended file — see the
+  coordination note under "Enabling changes" below.
+
+**Scope decisions (settled with the user — do not relitigate):**
+
+- **Target library: a Zotero *group* the user creates by hand**, found
+  by a **hardcoded name** (`academic-research-e2e`). No env var, no
+  config section, no `--group` flag — credentials and user id come
+  from the live installation via `core.config_loader`. The Zotero Web
+  API cannot create groups (items / collections / saved searches only)
+  and the local API at `:23119` is read-only, so manual creation is
+  unavoidable; a missing group produces a clean pytest skip with
+  instructions.
+- **Not My Library.** Empirically disqualified: the personal library
+  already holds 2019 Small Business Economics papers carrying live
+  `SLR-search` / `growth-aspirations` tags from real reviews.
+  `import_to_zotero.py`'s dedup scans the whole library
+  (`_fetch_existing_items` → `zot.journal_articles()`), so those items
+  would be patched, added to the test collection, then tagged
+  `abstract:*` / `fulltext:*` and given `SLR Coding` notes —
+  corrupting the record the pipeline treats as ground truth.
+- **Corpus:** 3 journals × a *closed* year window (`FROM_YEAR =
+  TO_YEAR = 2019`, so the corpus is near-frozen and runs stay
+  comparable), trimmed to ~8 items. JBV `0883-9026` (Elsevier/
+  ScienceDirect TDM), SEJ `1932-4391` (Wiley TDM, second pass via
+  `--sources wiley`), Small Business Economics `0921-898X` (Springer).
+  PMC / Unpaywall / OpenAlex fire as cascade fallbacks. All four
+  search databases run, because cross-database dedup and the
+  `search_run.json` DOI hash are only exercised by a multi-DB run.
+- **Teardown deletes only keys recorded from `_create_new_items`'
+  success map** — never by tag match, which would also target items
+  the harness merely patched. `--keep` skips teardown.
+
+**Deliverables:**
+
+1. `scripts/dev/mini_slr.py` — resumable stage driver (`--stage
+   search|trim|collection|import|sync|enrich|audit|screen|code|export|verify|teardown|all`),
+   artefacts under `output/e2e/<run-id>/` (already gitignored).
+2. `tests/live/e2e/{search_config,screening_config}.py` — mini fixtures.
+3. `tests/live/test_mini_slr.py` — new `live_slr` marker; drives the
+   driver and asserts invariants.
+4. `live_slr` marker registered in `pyproject.toml`; `tests/live/
+   README.md` gains a runbook + the one-time group-creation step.
+
+**Load-bearing findings (expensive to rediscover):**
+
+- **PDFs can bypass the Zotero sync wait.** `enrich_pdfs.py` caches to
+  `output/pdf_cache/<doi with / and : → _>.pdf`, and
+  `fulltext_code.py`'s `_find_pdf_path` step 4 looks for exactly
+  `<pdf_dir>/<doi.replace("/","_")>.pdf`. So `fulltext_code.py
+  --pdf-dir <run>/output/pdf_cache` reads what enrich just downloaded,
+  with no wait for attachment bytes to sync down from S3.
+- **Reads are local-only with no cloud fallback.** Every pipeline
+  script except `audit_zotero_library.py` constructs `ZoteroClient`
+  with `prefer_local=True`, and `_read_client()` has no fallback. So
+  Zotero desktop must be running and synced, and two sync waits sit in
+  the run: after `import_to_zotero.py` (cloud write → local read) and
+  after `abstract_screen.py` (cloud tag write → local tag read).
+- **Three stages are library-wide, not collection-scoped.**
+  `enrich_abstracts.py` / `enrich_pdfs.py` / `enrich_dois.py` take only
+  `--filter-keys-file` (the harness generates it at import time);
+  `audit_zotero_library.py` has *no* input filter at all — despite
+  `systematic-review/SKILL.md` claiming "`--filter-keys-file` for
+  enrichment / audit / export scripts". It only *writes* keys files.
+- **Model IDs in `templates/screening_config.py` are current** —
+  `claude-haiku-4-5-20251001` and `claude-sonnet-4-6` are both live
+  (verified 2026-08-12). No migration needed; `claude-sonnet-5` is an
+  optional upgrade, not a fix.
+
+**Enabling changes:**
+
+- `zotero_io.find_group_by_name(name)` — **promote to public** (agreed
+  with user). Implement over the existing private
+  `_list_accessible_groups(api_key, user_id)`; `user_id` is written
+  automatically by `/setup` (`wizard.py:_verify_zotero` persists
+  `userID` from `api.zotero.org/keys/<key>`), with a fallback to
+  re-deriving it the same way. Error on >1 name match; never guess.
+- `zotero_io.create_collection` / `delete_collection` — neither
+  exists today (only `delete_item`). **Coordination note for the
+  cleanup branch:** these are *not* redundant with zotero-mcp /
+  `zotero-cli`. The "zotero-cli evaluation (2026-07-19)" entry in
+  House-keeping already settled it — zotero-cli costs ~1.5–2 s startup
+  per invocation, has no batch-by-keys mode, no reliable `--json`, and
+  no HTTP-412 retry, so pipeline-shaped code stays on pyzotero.
+- *(Optional, high leverage)* **`ZOTERO_PREFER_REMOTE=1`** — an env
+  check inside `ZoteroClient.__init__` covers every construction path
+  (`from_args`, `from_config`, `for_user_library`) in ~3 lines,
+  default unchanged. Removes both sync waits and the Zotero-desktop
+  requirement, making the run a single unattended command — and
+  unblocks headless / CI / Antigravity users who have no desktop.
+- *(Optional)* **tiered runs** so a first run needs 2 keys, not 8:
+  `search` (~1 min, no Zotero writes — would have caught D1),
+  `oa` (~4 min, `ZOTERO_API_KEY` + `ANTHROPIC_API_KEY` only),
+  `full` (~10 min, adds Scopus/WoS + Elsevier/Wiley/Springer).
+
+**Cost / runtime:** ~5–12 min. Scopus/WoS negligible at 3 ISSNs × 1
+year; OpenAlex + S2 free; OpenAlex Content API $0.01/download only if
+the earlier cascade fails, capped at 8; 8 Haiku calls on title+abstract;
+`--limit 3` Sonnet calls on full PDF text (the dominant cost). The
+driver prints a per-stage token tally so spend is measured, not guessed.
+
+**Assertions:** never absolute counts (search results drift) — copy the
+four test templates into `<run-id>/scripts/` (matching
+`test_common.py`'s `PROJECT_ROOT` = parent of the script dir) and run
+`test_systematic_review.py` for PRISMA arithmetic, no duplicate DOIs,
+`search_run.json` ↔ CSV agreement, decision-state whitelists,
+`temperature=0`, config round-trip, ghost handling, and `SLR Coding`
+notes on every `fulltext:include`.
+
+---
+
+## Defects found while designing / implementing L1
+
+- **D1 — fixed (2026-08-12).** `templates/test_systematic_review.py`
+  failed against any real pipeline run.
+  `test_search_metadata_has_required_fields` asserted `"queries" in
+  meta`, but [search.py:236](scripts/pipelines/search.py#L236) writes
+  the key as `query_defs`. Fixed by asserting `query_defs` OR
+  `block_a_terms` (search.py writes one or the other depending on
+  whether the project's `search_config.py` declares `QUERY_DEFS`
+  (Scopus/WoS) or `BLOCK_A_TERMS`/`BLOCK_B_TERMS`
+  (OpenAlex/Semantic-Scholar-only projects) — asserting the literal
+  Scopus/WoS key unconditionally would have just traded one false
+  failure for another. Same commit also fixed a second bug in the same
+  test function, found by L1's own `FROM_YEAR == TO_YEAR = 2019`
+  fixture: `assert meta["from_year"] < meta["to_year"]` used a strict
+  `<`, rejecting the legitimate single-year-window case. Now `<=`.
+  Files: [templates/test_systematic_review.py](templates/test_systematic_review.py)
+  (~L105-118), [scripts/pipelines/search.py](scripts/pipelines/search.py#L236).
+
+- **D3 — found while implementing L1, deliberately left unfixed.**
+  `skills/systematic-review/SKILL.md` documents (around L644-645):
+  "`fulltext_code.py` processes items tagged `abstract:include` OR
+  `abstract:borderline`." The script itself does no such filtering —
+  `main()` builds `to_code` from every collection item not yet tagged
+  `fulltext:*` ([fulltext_code.py](scripts/pipelines/fulltext_code.py),
+  `to_code` construction in `main()`), with no reference to
+  `abstract:*` tags anywhere in the file. The doc line describes the
+  *intended* pipeline behavior (skill + agent together), which relies
+  on the agent computing the abstract-include/borderline key set itself
+  and passing `--only-keys` (SKILL.md L410 already documents combining
+  `--only-keys` with `fulltext_code.py`) — it is not something the
+  script enforces on its own. A caller that skips this step would
+  full-text-code items that failed abstract screening.
+  `mini_slr.py`'s `code` stage does this correctly (queries the
+  collection for `abstract:include`/`abstract:borderline` tags after a
+  local-sync wait, then passes the resulting key set via `--only-keys`)
+  precisely because it has to stand in for that agent step — see
+  `stage_code` in [scripts/dev/mini_slr.py](scripts/dev/mini_slr.py).
+  Left unfixed here because it's outside L1's authorized scope (not
+  named in BACKLOG's L1 "Enabling changes", and changing
+  `fulltext_code.py`'s default item selection is a behavior change to a
+  shipped, tested script that deserves its own review — either add the
+  filter to the script itself, matching the doc, or fix the doc to
+  describe the two-step contract accurately). Re-evaluate as its own
+  item.
+  Files: [scripts/pipelines/fulltext_code.py](scripts/pipelines/fulltext_code.py),
+  [skills/systematic-review/SKILL.md](skills/systematic-review/SKILL.md#L644-L645).
+
+- **D2** — dev dependencies have two sources of truth and they have
+  drifted. `pyproject.toml`'s `[dependency-groups] dev` lists only
+  `pytest`, `responses`, `ruff`, `zotero-mcp-server`, while
+  `.github/workflows/ci.yml` installs a longer hand-maintained pip
+  line adding `tenacity`, `pyzotero`, `httpx`, `anthropic`,
+  `google-genai`. A fresh `uv sync` therefore **cannot collect 14 test
+  modules** (`ModuleNotFoundError: tenacity`), even though CI is green
+  — so the documented `uv run pytest` / `.venv/bin/pytest` workflow
+  (see S11) does not reproduce from `pyproject.toml`.
+  **What it would take:** add the five to the `dev` group and switch
+  CI to `uv sync --group dev` for one source of truth.
+  Files: [pyproject.toml](pyproject.toml), `.github/workflows/ci.yml`.
+
+---
+
 ## Tier 1 — shipped in 0.5.0 (audit trail)
 
 - **S1** — `fact-check` ↔ `critic-loop` mutual-exclusion rule.
@@ -351,6 +739,52 @@ S10's `csl_json_to_zotero` reasoning) — but it surfaced two live defects.
   (~L841, ~L959, ~L1056), `scripts/setup/wizard.py`,
   `tests/live/test_auth_workflows.py`.
 
+- **P12** — Semantic Scholar rate-limit model is inverted in our docs,
+  and our bulk pacing exceeds the API-key ceiling.
+  Found during the 2026-08-13 S2 API review (see House-keeping below for
+  the verified API facts). Two halves, one root cause:
+
+  - **Defect.** `RATE_LIMIT_SLEEP = 0.5` in
+    [searchers/semantic_scholar.py:32](scripts/pipelines/searchers/semantic_scholar.py#L32)
+    paces bulk pagination at 2 req/s. The current introductory API-key
+    limit is **1 RPS on all endpoints**, so a user who follows our own
+    wizard's advice and configures a key trips 429s *more* than one who
+    runs anonymous. Not fatal — the 429 handler at
+    [L116-119](scripts/pipelines/searchers/semantic_scholar.py#L116-L119)
+    sleeps 5 s and retries — but it is needless churn on exactly the long
+    paginated runs the bulk endpoint exists for. Note the comment on that
+    line (`# unauthenticated tier is aggressive`) records the *opposite*
+    of the real constraint: 0.5 s was chosen for the anonymous tier, and
+    the keyed tier is the stricter of the two.
+  - **Wrong prose in two places.** The module docstring at
+    [searchers/semantic_scholar.py:10-13](scripts/pipelines/searchers/semantic_scholar.py#L10-L13)
+    says unauthenticated is "1 rps shared across all unauthenticated
+    callers" and that a key "moves you into the per-user higher tier".
+    The wizard's `impact` text at
+    [wizard.py:355-357](scripts/setup/wizard.py#L355-L357) repeats the
+    "much lower rate limit" framing. Both describe a tier structure that
+    is backwards: unauthenticated is a **1000 RPS pool shared globally**
+    (throttled further under load), a key is a **dedicated 1 RPS**. The
+    honest pitch for a key is *determinism*, not throughput — anonymous
+    calls 429'd within a few requests during the review, so the shared
+    pool is visibly saturated in practice.
+
+  **What it would take:** raise `RATE_LIMIT_SLEEP` to `1.0` when a key
+  is present (the `api_key` is already resolved in `run()` and threaded
+  into `_fetch_all`, so this is a parameter, not new plumbing), keep the
+  faster anonymous pacing, and rewrite the two prose blocks to describe
+  shared-pool-vs-dedicated rather than low-tier-vs-high-tier. Consider
+  also surfacing the ~60-day inactive-key pruning (see House-keeping) in
+  the wizard's `where=` text — a user who configures a key during
+  `/setup` and then runs no review for two months will find it dead with
+  no signal from us.
+  **Why deferred:** not urgent (current behavior degrades rather than
+  fails), and it touches a shipped searcher plus user-facing wizard copy,
+  so it deserves its own review rather than riding along with unrelated
+  work.
+  Files: [scripts/pipelines/searchers/semantic_scholar.py](scripts/pipelines/searchers/semantic_scholar.py)
+  (L10-13, L32, L94-132), [scripts/setup/wizard.py:345-360](scripts/setup/wizard.py#L345-L360).
+
 ### Skills
 
 - **S8** — modular / stage-scoped invocation for `systematic-review`.
@@ -492,6 +926,52 @@ S10's `csl_json_to_zotero` reasoning) — but it surfaced two live defects.
   branch adds cognitive load without catching anything. Delete the
   branch or assert-fail if a local copy is found (indicating an
   outdated project layout).
+- **P13** — adopt Semantic Scholar's `/paper/search/match` in the
+  abstract fetcher instead of hand-rolling title matching.
+  `_fetch_by_title` in
+  [fetchers/semantic_scholar.py:47-65](scripts/pipelines/fetchers/semantic_scholar.py#L47-L65)
+  hits `/paper/search?limit=5` and then compares DOIs client-side to
+  pick a hit. S2 has shipped a purpose-built endpoint for this —
+  `/graph/v1/paper/search/match` returns the single best title match
+  plus a `matchScore` (verified live 2026-08-13, HTTP 200). Swapping to
+  it would drop the 5-result fan-out and the manual compare loop, and
+  give a confidence score we currently have no equivalent of.
+  **Why deferred:** the current path works and is covered by tests; the
+  gain is tidiness plus a score we don't yet consume. Worth doing when
+  next touching this fetcher — likely alongside P12, which edits the
+  sibling searcher module. Check first whether `matchScore` is
+  calibrated well enough to replace or feed
+  [_title_match.py](scripts/pipelines/fetchers/_title_match.py)'s
+  `matches()` threshold; if it is, this shrinks two modules, not one.
+  Files: [scripts/pipelines/fetchers/semantic_scholar.py](scripts/pipelines/fetchers/semantic_scholar.py),
+  [scripts/pipelines/fetchers/_title_match.py](scripts/pipelines/fetchers/_title_match.py).
+
+- **S12** — evaluate S2's `/snippet/search` for `verifying-citations` /
+  `fact-check`.
+  `/graph/v1/snippet/search` searches text snippets across S2's
+  full-text corpus and returns matching passages. That is close to a
+  purpose-built primitive for what
+  [verifying-citations/SKILL.md](skills/verifying-citations/SKILL.md)
+  actually does — decide whether a cited paper contains support for a
+  specific claim — where today the staged procedure goes abstract first,
+  then full text via Zotero, which needs the PDF to be in the library at
+  all. A snippet query could sit between those stages: cheaper than
+  full-text retrieval, far more specific than an abstract, and it works
+  for papers the user has no PDF for.
+  **Why deferred:** unverified. The endpoint exists in the v1 swagger
+  but returned 429 on unauthenticated probes during the 2026-08-13
+  review, so its response shape, corpus coverage, and snippet quality
+  were never actually inspected. Evaluate with a real key before
+  designing anything. Two known constraints to check against: S2's
+  agreement with Springer excludes those abstracts from the API
+  (unclear whether the same applies to snippets), and a keyed account is
+  capped at 1 RPS, which matters because fact-check dispatches parallel
+  per-citation subagents — N concurrent citation checks would serialize
+  against a 1 RPS ceiling. That interaction may sink the idea on its
+  own; establish it early.
+  Files: [skills/verifying-citations/SKILL.md](skills/verifying-citations/SKILL.md),
+  [skills/fact-check/SKILL.md](skills/fact-check/SKILL.md).
+
 - **M1** — add `keywords` to `.claude-plugin/plugin.json` for
   marketplace search. The manifest currently has only `name`,
   `version`, `description`, `author`, `license`, `homepage`. An
@@ -508,6 +988,48 @@ S10's `csl_json_to_zotero` reasoning) — but it surfaced two live defects.
   longer exist by those names (`mcp-research`, `academic-writing`);
   it was already gitignored (line 41 of `.gitignore`) and never
   tracked, so the delete is local-only — no follow-up needed.
+
+- **Semantic Scholar API review (2026-08-13)** — triggered by the
+  "new API" framing on
+  https://www.semanticscholar.org/product/api. **There is no new API
+  version and no migration to do.** Recorded here so nobody re-runs
+  these probes. Verified live:
+
+  - `graph/v2` → **404**. `graph/v1/swagger.json` reports
+    `swagger: 2.0`, `basePath: /graph/v1`, `title: Academic Graph API`,
+    `version: 1.0`. `recommendations/v1` and `datasets/v1` swagger both
+    200. The three advertised services are the ones that already
+    existed; every base URL this repo ships is current.
+  - Our exact bulk-search param shape from
+    [searchers/semantic_scholar.py:102-115](scripts/pipelines/searchers/semantic_scholar.py#L102-L115)
+    still returns 200 with a valid continuation `token`.
+  - Full v1 path list (14): `/paper/search`, `/paper/search/bulk`,
+    `/paper/search/match`, `/paper/batch`, `/paper/autocomplete`,
+    `/paper/{id}`, `/paper/{id}/authors|citations|references`,
+    `/author/search`, `/author/batch`, `/author/{id}`,
+    `/author/{id}/papers`, `/snippet/search`. The last two of interest
+    to us — `search/match` and `snippet/search` — are unused here; see
+    P13 and S12.
+  - **What actually changed is the rate plan, not the API**:
+    unauthenticated is a 1000 RPS pool shared across *all* anonymous
+    callers (throttled further under load), while an API key's
+    introductory limit is 1 RPS on all endpoints. This is the opposite
+    of what our docs claim — see **P12**.
+  - `paper/DOI:<doi>` 404s for some legitimate DOIs (e.g.
+    `10.1038/nature14539`) and 200s for others. Corpus coverage gaps,
+    not breakage; `fetch_abstract` already falls back to title search,
+    so no action needed.
+  - **The public changelog is dead.**
+    [allenai/s2-folks/API_RELEASE_NOTES.md](https://github.com/allenai/s2-folks/blob/main/API_RELEASE_NOTES.md)
+    now opens with "RELEASE NOTES DISCONTINUED" and stops at November
+    2024. There is nothing left to watch for breaking changes; the API
+    Service Status Page linked from the product page is the only
+    remaining signal. Standing constraints from those final notes, all
+    still in force: abstracts for Springer papers are excluded from the
+    API by agreement (mitigated here — `enrich_abstracts.py` treats S2
+    as one source in a cascade), exponential backoff is required, keys
+    are not issued to free email domains or third-party apps, and
+    **keys inactive for ~60 days are pruned automatically**.
 
 - **`zotero-cli` evaluation (2026-07-19)** — the upstream
   `zotero-mcp-server` package (the wizard already installs it, see

@@ -14,15 +14,21 @@ run only when explicitly invoked — never automatically, never in CI.
   upstream service is the problem.
 - Before starting a systematic review — confirm the infrastructure
   your SR will depend on is healthy.
+- After changing any pipeline script under `scripts/pipelines/` — `live_slr`
+  is the only test that chains search → import → enrich → screen → code
+  → export in one run, so it catches defects the per-stage unit tests
+  can't (a stage writing a field name the next stage reads differently,
+  a path convention two scripts disagree on, and so on).
 
 ## Markers
 
-Two opt-in markers, both deselected by default:
+Three opt-in markers, all deselected by default:
 
 | Marker | What | Runtime | Needs a human? |
 |---|---|---|---|
 | `live` | Direct-HTTP PDF + abstract + auth tests (20 tests) | ~30s | No |
 | `live_browser` | Cloudflare-gated publishers via Playwright (9 tests) | 5–15 min | Yes — click CF / SSO once per publisher |
+| `live_slr` | Full mini systematic review through a real Zotero group (1 test) | ~5–12 min | No (after one-time group setup below) |
 
 ## Commands
 
@@ -36,8 +42,11 @@ pytest -m live
 # Run the browser-based tests (opens Chromium; you click through).
 pytest -m live_browser
 
+# Run the live mini end-to-end SLR (real API spend — see below).
+pytest -m live_slr
+
 # Everything.
-pytest -m "live or live_browser"
+pytest -m "live or live_browser or live_slr"
 
 # Stop at the first failure (useful for browser tests).
 pytest -m live_browser -x
@@ -62,6 +71,53 @@ Keys read per test set:
   `SEMANTIC_SCHOLAR_API_KEY`, `CROSSREF_MAILTO`). Plus placeholder
   tests for `WILEY_TDM_TOKEN` and `OPENALEX_API_KEY` that skip with
   explanations (no cheap auth-only probe exists for those two).
+
+## `live_slr` one-time setup
+
+`live_slr` drives `scripts/dev/mini_slr.py` — a resumable stage
+driver that runs the whole systematic-review pipeline (search, Zotero
+import, enrichment, abstract screening, full-text coding, export, and a
+verify pass) against real APIs and a small, disposable Zotero **group**.
+
+It targets a group named exactly `academic-research-e2e`, resolved by
+name — never by env var, config section, or `--group` flag (My Library
+already carries live SLR tags from a real review; importing test data
+into it would corrupt that record). The Zotero Web API cannot create
+groups, so this one-time step is manual:
+
+1. Create a group at <https://www.zotero.org/groups/new> named exactly
+   `academic-research-e2e` (Private membership is fine — this is scratch
+   space, not something to share).
+2. Open Zotero Desktop and let it sync (Preferences → Sync, or just wait
+   a minute) so the group appears in the local Zotero API
+   (`localhost:23119`) — every pipeline script reads locally, not from
+   the cloud, so this step is required, not optional.
+3. Leave the group otherwise empty. `test_mini_slr_end_to_end` tears
+   down everything it creates after each run (delete-by-recorded-key,
+   never by tag match, so it never touches anything else that might end
+   up in the group); a fresh run works from an empty group either way.
+
+After that, `pytest -m live_slr` needs only `ZOTERO_API_KEY` +
+`ZOTERO_USER_ID` (written automatically by `/setup`) plus whichever
+search/enrichment/screening keys you want exercised — same
+`config.toml` / env-var precedence as every other live test. Databases
+or PDF sources without usable credentials are skipped by the pipeline
+scripts themselves (see `search.py`'s "no database has usable
+credentials" message), not by this test.
+
+Runs are resumable. If a run fails partway, `mini_slr.py` prints its
+`--run-id`; re-invoke a single stage directly instead of re-running the
+whole pytest test:
+
+```bash
+uv run scripts/dev/mini_slr.py --stage screen --run-id 20260812T140000Z
+uv run scripts/dev/mini_slr.py --stage teardown --run-id 20260812T140000Z
+```
+
+Set `MINI_SLR_KEEP=1` before `pytest -m live_slr` to skip teardown on
+success and inspect the run's Zotero items/collection and
+`output/e2e/<run-id>/` artefacts afterwards (you're then responsible for
+running the `teardown` stage yourself once done).
 
 ## Dependencies
 
@@ -99,6 +155,8 @@ SSO session → no download event) if it cannot reach the content.
 | `"Cloudflare challenge page"` | Browser test: you didn't solve the CF challenge; re-run and click through. |
 | `"access denied / no subscription"` | Browser test: your institution does not subscribe to that journal. Pick a different DOI. |
 | `did not return a PDF ... HTML response` | Publisher returned an HTML wrapper page. Likely the `download_via_*` flow is broken or outdated. |
+| `skipped: no Zotero group named 'academic-research-e2e' ...` | `live_slr` only — do the one-time group setup above. |
+| `ERROR: local Zotero sync timed out ...` | `live_slr` only — Zotero Desktop isn't running, isn't synced, or Better BibTeX's local API (`localhost:23119`) is unreachable. |
 
 ## Coverage guard
 
