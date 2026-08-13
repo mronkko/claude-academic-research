@@ -29,9 +29,16 @@ ruff check scripts tests
 
 # Lint with auto-fix for I001/UP037/F401/F541 etc.
 ruff check scripts tests --fix
+
+# Set up / refresh the dev environment.
+uv sync --group dev
 ```
 
+Run tests via `.venv/bin/pytest` or `uv run pytest`, never a bare `pytest` on `PATH` — see BACKLOG S11 for why.
+
 CI (`.github/workflows/ci.yml`) runs `ruff check scripts tests` then `pytest tests -v` on Python 3.11, 3.12, 3.13. Lint is a hard gate — a single error fails the whole matrix.
+
+**Test dependencies live in exactly one place:** `[dependency-groups] dev` in `pyproject.toml`. CI installs it with `pip install --group dev` (PEP 735). Do not add a hand-written package list to `ci.yml` — that second source of truth already drifted once and left `uv sync` unable to collect 14 test modules while CI stayed green. `tests/unit/test_ci_dependencies.py` guards this.
 
 ## Architecture
 
@@ -50,6 +57,9 @@ CI (`.github/workflows/ci.yml`) runs `ruff check scripts tests` then `pytest tes
 - `scripts/pipelines/searchers/` — per-database ABC implementations (Scopus, WoS, OpenAlex, Semantic Scholar) with a similar base-class pattern.
 - `scripts/pipelines/zotero_io.py` — `ZoteroClient` wrapping `pyzotero`. Every script that touches Zotero routes through it; `update_abstract` auto-retries on HTTP 412 (version conflict) via `tenacity`.
 - `scripts/pipelines/http_client.py` — shared `requests.Session` with `urllib3.Retry` + `tenacity` wrappers.
+- `scripts/pipelines/doi_utils.py` — the one DOI normaliser. Stdlib-only, because `fetchers/doi_resolver.py` sits below the orchestrators and `enrich_dois.py` has no `zotero-mcp-server` in its PEP 723 block. Exposes a **strict** form (`normalize_doi` / `doi_key`, returns nothing for a malformed DOI — right for dedup identity) and a **lenient** one (`strip_doi_prefixes` / `doi_cache_key` — right for cache keys and for the `--fix-malformed` repair path). The split is load-bearing; the module docstring says why.
+- `scripts/pipelines/screening_common.py` — config-module loading, stage-tag matching, CSV decision reading, and `--csv-backfill`, shared by `abstract_screen.py` / `fulltext_code.py` (and the config loader by `search.py`). Each orchestrator keeps a thin private wrapper binding its own stage constants.
+- `scripts/core/models.py` — model defaults and `--model` aliases (`haiku`, `sonnet`, …) for the screening stages. `templates/screening_config.py` cannot import it (it is copied into user projects), so `tests/unit/test_model_defaults.py` keeps the literals equal.
 
 ### Runtime model users see
 
@@ -87,5 +97,7 @@ When designing a new skill, pipeline module, or workflow, check these first — 
 
 - **[Imbad0202/academic-research-skills](https://github.com/Imbad0202/academic-research-skills)** — a similar Claude Code plugin targeting academic research. Useful as a sanity check on skill decomposition, description patterns, and scope boundaries. *Reference only*, not a dependency — lifting code requires license/attribution review.
 - **[mronkko/zotero-mcp](https://github.com/mronkko/zotero-mcp)** — our fork of [54yyyu/zotero-mcp](https://github.com/54yyyu/zotero-mcp), the Zotero MCP server this plugin depends on at runtime and now the fork the wizard's `homepage` points at. `origin/main` must be kept current with `upstream/main` (fast-forward only — see the fork's own commit history for the merge/rebase discipline); a stale fork means the setup wizard's version-floor checks and PyPI install commands drift from what `origin/main` actually contains. Its source is a good reference when extending our Zotero handling: look here before building a new pyzotero helper or re-implementing a Zotero API call locally. `tests/unit/test_zotero_mcp_sync.py` guards the seam between this package's live tool registry and everything in this repo that names an `mcp__zotero__*` tool or a `zotero-cli` subcommand — see that file's docstring before changing either side.
+
+  **Importing from it is not free.** Through 0.9.1, `zotero_mcp/__init__.py` imports the MCP server eagerly, so `from zotero_mcp.schema import valid_fields` costs ~1.73 s and ~1480 modules (FastMCP, pydantic, pyzotero, …) for what is an 8 µs stdlib-only lookup — and forces the whole server dependency tree into the PEP 723 block of any `uv run` script that wants it. Only `import_to_zotero.py` pays this today, for `valid_fields`. Upstream PR [54yyyu/zotero-mcp#445](https://github.com/54yyyu/zotero-mcp/pull/445) makes `mcp` lazy and adds a stdlib-only `zotero_mcp.identifiers.normalize_doi`; until it merges *and* ships to PyPI, prefer a local stdlib helper over a new `zotero_mcp` import in pipeline code, and never import a private symbol (`zotero_mcp.tools._helpers._*`) — that seam has no stability guarantee.
 - **[openags/paper-search-mcp](https://github.com/openags/paper-search-mcp)** — the multi-database paper-search MCP server this plugin depends on at runtime (Scopus, WoS, Google Scholar, Semantic Scholar, arXiv, bioRxiv, medRxiv, PubMed, Crossref, sci-hub). Registered by `scripts/setup/wizard.py`. Its source is the reference when adding a new search provider or extending our `scripts/pipelines/searchers/` with a pattern that already exists upstream.
 - **[Dianel555/paper-search-mcp-nodejs](https://github.com/Dianel555/paper-search-mcp-nodejs)** — a Node.js companion to `openags/paper-search-mcp` with broader publisher coverage (adds Wiley, Springer, ScienceDirect, IACR, Web of Science, Scopus on top of the arXiv / bioRxiv / medRxiv / PubMed / Google Scholar / Semantic Scholar / Crossref / sci-hub set). *Reference only* today — not registered by `scripts/setup/wizard.py`. Worth consulting when a paper-search gap the Python server doesn't cover maps to an endpoint this one does, and when considering whether to add it as a second runtime MCP alongside the Python server.

@@ -56,9 +56,16 @@ directory — not checked in because it references machine-local paths).
   present by default instead of silently absent.
 - **P1** — shared enrich-orchestrator run-log helpers extracted to
   `scripts/pipelines/shared_orchestrators.py` (`open_log`,
-  `load_done_keys`, `LogManager`). The three `enrich_*` scripts now
+  `load_done_keys`). The three `enrich_*` scripts now
   delegate instead of each re-implementing `_open_log` / `_already_done`
   / `_load_done_dois`.
+  **Amended (chore/zotero-mcp-overlap):** the extraction also shipped a
+  `LogManager` class bundling the handle, a write lock, and the resume
+  lookup. No orchestrator ever adopted it — `enrich_pdfs` opens its log
+  across several phases and owns its own lock, and the other two want
+  only the two functions — so it was carrying three tests and no
+  callers. Deleted. Don't re-add one without a caller; the module
+  docstring says so too.
 - **P5** — `searchers/base.py` gained `resolve_credential()` with
   required / optional modes. `wos.py` no longer raises a bare `KeyError`
   from `os.environ[...]`; `semantic_scholar.py` and `scopus.py` route
@@ -151,6 +158,108 @@ directory — not checked in because it references machine-local paths).
   own suite still passes under `uv run pytest`. Still true generally,
   and worth keeping as house style: invoke this repo's tests via
   `.venv/bin/pytest` / `uv run pytest`, not a bare `pytest` on `PATH`.
+
+---
+
+## Cleanup pass — `chore/zotero-mcp-overlap` (2026-08-12)
+
+A review for dead code, overlap with the `mronkko/zotero-mcp` fork, and
+refactor candidates. Most of the suspected overlap turned out to be
+already correctly resolved (`merge_duplicate_item` per R7, `bbt_client`'s
+stdlib-only constraint, `generate_bib` vs `zotero_export_bibliography`,
+S10's `csl_json_to_zotero` reasoning) — but it surfaced two live defects.
+
+- **Two BBT defects, both silent, both in `bbt_client` / `zotero_io`.**
+  1. `get_bbt_keys` called `item.citationkey` with `{"keys": [...]}`.
+     BBT validates named params against the handler signature
+     (`async citationkey(item_keys)`) and answers `-32602 unsupported
+     argument`. The error body has no `result`, so the method returned
+     `{}` and `populate_missing_bbt_keys` reported *every* item as
+     unkeyed. zotero-mcp hit the same bug (its #293).
+  2. `get_bibtex_export` built
+     `/better-bibtex/library/<id>/library.bibtex`. The real path is
+     `/better-bibtex/export/library?/<id>/library.bibtex` — both the
+     `export` segment and the literal `?` matter. HTTP 404 otherwise.
+
+  Neither was reachable by the unit tests, which mock the transport; one
+  unit test actively *pinned* the wrong URL. Both are fixed, and
+  `tests/live/test_zotero_io_bbt.py` now exercises the real endpoints —
+  that live test is what found defect 2. **Lesson worth keeping: for
+  local-service integrations, a mocked test can only pin whatever shape
+  we already believed.**
+
+- **Two sources of truth for test dependencies, drifted.**
+  `pyproject.toml`'s dev group omitted `tenacity` while `ci.yml` carried
+  a hand-written pip line that included it, so `uv sync` produced an
+  environment where 14 test modules failed to collect while CI stayed
+  green. CI now runs `pip install --group dev` (PEP 735) and
+  `tests/unit/test_ci_dependencies.py` fails the build if a hand-written
+  list comes back. `anthropic` and `google-genai` were in that pip line
+  and are not needed by the suite at all — dropped. `pyzotero` / `httpx`
+  / `requests` were arriving only transitively via `zotero-mcp-server`
+  and are now explicit. `reportlab` was added: without it one test in
+  `test_sciencedirect_preview_fallback.py` silently skipped on every run.
+
+- **`>=0.9` was written out six times.** Now
+  `scripts/setup/zotero_mcp_floor.py`, imported by
+  `check_zotero_mcp_version.py` and `wizard.py`, with
+  `tests/unit/test_zotero_mcp_floor.py` asserting it matches the
+  `pyproject.toml` pin and that no install string has drifted back to a
+  literal. `pyproject.toml` stays the declarative pin because
+  `test_zotero_mcp_sync.py`'s E3 regex-matches the literal there.
+
+- **Three DOI normalizers collapsed** into `scripts/pipelines/doi_utils.py`
+  (`normalize_doi` strict, `strip_doi_prefixes` lenient, plus `doi_key` /
+  `doi_cache_key`). `doi_resolver.py` had a comment conceding its copy was
+  "kept in sync rather than imported". **The strict/lenient split is
+  load-bearing — do not flatten it:** `import_to_zotero` needs identity
+  semantics (a malformed DOI must match nothing), `doi_resolver` needs a
+  cache key (collapsing malformed DOIs to `""` makes them share one entry
+  and serve each other's cached lookups), and `enrich_dois --fix-malformed`
+  needs the cleaned string plus a "changed" flag. This also removed
+  `from zotero_mcp.tools._helpers import _normalize_doi` — a private symbol
+  from a private module of an external package.
+
+- **`screening_common.py` extracted** from `abstract_screen.py` /
+  `fulltext_code.py` (config loading, stage-tag matching, CSV decision
+  reading, `--csv-backfill`), with `search.py` as a third consumer of the
+  config loader. Each orchestrator keeps a thin wrapper binding its own
+  constants, so both stages' tests passed unchanged. **One difference is
+  deliberately not abstracted:** abstract screening filters CSV decisions
+  while reading (a trailing `error` row does not displace an earlier valid
+  decision), full-text coding filters after (it does). See the module
+  docstring.
+
+- **Upstream PR: 54yyyu/zotero-mcp#445.** `zotero_mcp/__init__.py` did
+  `from .server import mcp` eagerly, so `from zotero_mcp.schema import
+  valid_fields` cost ~1.73 s and ~1480 modules — for a stdlib-only lookup
+  that takes 8 µs. `import_to_zotero.py` paid that on every run and had to
+  declare the whole server dependency tree in its PEP 723 block. The PR
+  makes `mcp` lazy (PEP 562 `__getattr__`; ~9 ms / 75 modules after) and
+  promotes `_normalize_doi` to a public stdlib-only
+  `zotero_mcp.identifiers.normalize_doi`.
+  **Follow-up, deliberately not done here:** once that merges and a
+  release ships, raise this repo's floor in
+  `scripts/setup/zotero_mcp_floor.py` + `pyproject.toml`, and consider
+  dropping the vendored `doi_utils.normalize_doi` in favour of the
+  upstream one. Until a release lands, PyPI 0.9.1 still has the eager
+  import, so nothing here changes.
+
+- **Model selection is now a flag, not a config edit** (`--model` on both
+  screening scripts, aliases in `scripts/core/models.py`). Prompted by the
+  observation that "screen these with Haiku" previously forced an agent to
+  rewrite the user's `screening_config.py`. Also closes
+  [issue #1](https://github.com/mronkko/claude-academic-research/issues/1):
+  `ANTHROPIC_BASE_URL` points the pipelines at any Anthropic-compatible
+  endpoint (LM Studio, Open WebUI), making `ANTHROPIC_API_KEY` optional
+  and suppressing the "unknown model prefix" warning that would otherwise
+  fire on every call for a locally-served model name.
+
+  **Open decision:** `FULLTEXT_CODING_MODEL` still defaults to
+  `claude-sonnet-4-6` while the `sonnet` alias points at `claude-sonnet-5`.
+  Moving the *default* changes cost and output for every existing project,
+  so it was left for its own decision rather than riding along in a
+  cleanup branch.
 
 ---
 
