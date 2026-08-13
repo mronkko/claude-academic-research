@@ -31,12 +31,19 @@ Source selection via `--sources`:
     enrich_pdfs.py --sources wiley         # Wiley TDM only
     enrich_pdfs.py --sources browser       # Cloudflare-gated publishers
     enrich_pdfs.py --sources elsevier,pmc  # custom subset (aliases OK)
+    enrich_pdfs.py --allow-preprints       # + arXiv / SSRN / RePEc copies
 
 Fetcher names are `sciencedirect`, `springer`, `crossref`,
-`pubmed_central`, `openalex`, `unpaywall`, `wiley`; `elsevier` and
-`pmc` are accepted as aliases for the first and fourth. `browser`
-and `connector` are separate passes and cannot be combined with the
-others in one invocation — use `--all` for cascade-then-browser.
+`pubmed_central`, `openalex`, `unpaywall`, `semantic_scholar`, `core`,
+`preprint`, `wiley`; `elsevier` and `pmc` are accepted as aliases for
+the first and fourth. `browser` and `connector` are separate passes and
+cannot be combined with the others in one invocation — use `--all` for
+cascade-then-browser.
+
+`preprint` is the one source that is off unless asked for, via
+`--allow-preprints` and not via `--sources`: what it attaches is the
+manuscript before peer review, which is a different paper in every way
+a systematic review cares about. See `fetchers/preprint.py`.
 
 For `--sources browser`, this script drives the per-publisher
 `fetchers.browser` handlers directly — a visible Chromium opens, you
@@ -461,6 +468,7 @@ def _attach_and_log(
         tag for predicate, tag in (
             (fetchers.is_tdm_recovered_path, fetchers.TDM_RECOVERED_TAG),
             (fetchers.is_repository_copy_path, fetchers.REPOSITORY_COPY_TAG),
+            (fetchers.is_preprint_path, fetchers.PREPRINT_VERSION_TAG),
         ) if predicate(pdf_path)
     ]
     if provenance_tags:
@@ -2107,6 +2115,16 @@ def _build_parser() -> argparse.ArgumentParser:
              "re-deriving which items a browser pass can recover.",
     )
     parser.add_argument(
+        "--allow-preprints", action="store_true",
+        help="Also look for a preprint copy (arXiv / SSRN / RePEc) when "
+             "every other source has failed. OFF by default: a preprint is "
+             "the manuscript before peer review, and coding one as the "
+             "published article misreports what the journal actually "
+             "published. Every attachment this produces is tagged "
+             "`pdf:preprint-version`, and the coding stage surfaces the tag "
+             "— review those items before trusting their coded rows.",
+    )
+    parser.add_argument(
         "--progress-json", default="",
         help="Append one JSON object per line to this file as the browser "
              "pass progresses (publisher_start / item / publisher_done / "
@@ -2193,6 +2211,23 @@ def main() -> int:
         _SOURCE_ALIASES.get(s.strip().lower(), s.strip().lower())
         for s in args.sources.split(",") if s.strip()
     ]
+    if "preprint" in source_names and not args.allow_preprints:
+        # The flag is where the hazard is explained, so it has to be the
+        # only door in. Letting `--sources preprint` do the same thing
+        # silently would leave a user who never read that explanation
+        # coding working papers as published articles.
+        print(
+            "ERROR: --sources preprint also needs --allow-preprints.\n"
+            "  A preprint is the manuscript before peer review; coding one "
+            "as the published\n"
+            "  article misreports what the journal published. Pass "
+            "--allow-preprints to\n"
+            "  accept that, and expect every attachment to be tagged "
+            "`pdf:preprint-version`.",
+            file=sys.stderr,
+        )
+        return 2
+
     browser_modes = [s for s in source_names if s in ("browser", "connector")]
     if browser_modes and len(source_names) > 1:
         print(
@@ -2351,7 +2386,9 @@ def main() -> int:
     # and run the browser pipeline.
     if args.all:
         print("\n--- Pass 1: API cascade ---", flush=True)
-        sources = fetchers.pdf_sources(session, config)
+        sources = fetchers.pdf_sources(
+            session, config, allow_preprints=args.allow_preprints,
+        )
         print(f"Active fetchers: {[s.name for s in sources]}", flush=True)
 
         log_fh, log_writer = _open_log(args.log_csv)
@@ -2399,6 +2436,7 @@ def main() -> int:
     # Default / explicit-sources path: API cascade only.
     sources = fetchers.pdf_sources(
         session, config, names=source_names if source_names else None,
+        allow_preprints=args.allow_preprints,
     )
     if not sources:
         print(f"ERROR: no PDF fetchers matched --sources={args.sources!r}",

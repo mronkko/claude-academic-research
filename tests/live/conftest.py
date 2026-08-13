@@ -50,6 +50,7 @@ KNOWN_DOIS: dict[str, str] = {
     "openalex_oa": "10.1371/journal.pone.0012345",
     "semantic_scholar_pdf": "10.1371/journal.pone.0012345",  # PLOS ONE — S2 resolves an openAccessPdf
     "core": "10.1371/journal.pone.0012345",              # PLOS ONE — harvested into repositories
+    "preprint": "10.1103/PhysRevLett.116.061102",        # LIGO GW150914, PRL 2016 — arXiv:1602.03837 is its preprint
     "wiley_tdm": "10.1002/smj.70090",                    # SMJ (user-confirmed in TDM scope). ETP moved to Sage in 2022.
 
     # Direct-HTTP abstract endpoints.

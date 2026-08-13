@@ -655,6 +655,28 @@ S10's `csl_json_to_zotero` reasoning) — but it surfaced two live defects.
 
 ### Scripts
 
+- **P16** — the OA aggregators can attach a preprint without saying so.
+  Found while implementing `--allow-preprints` (Change 2, layer C3).
+  `PreprintSource` is off by default and tags everything it produces
+  `pdf:preprint-version`, but `UnpaywallSource` takes
+  `best_oa_location.url_for_pdf` and `OpenAlexSource` takes
+  `open_access.oa_url` with **no version filter at all**, and both run
+  in the default cascade. Unpaywall's `best_oa_location` can be a
+  `submittedVersion` on arXiv or SSRN, so a preprint can already land
+  untagged, by the default path, today. That makes the new opt-in a
+  partial guard rather than a complete one.
+  The fix is cheap in code — both APIs report `version`, and the hosts
+  are already recognised by `fetchers.preprint.preprint_server_for` —
+  but it is a **coverage decision, not a bug fix**: filtering
+  `submittedVersion` out of the default cascade would drop PDFs some
+  reviews currently get, and tagging them instead changes what those
+  reviews' audits report. Deliberately not decided here. Two options
+  when it is picked up: (a) tag rather than reject, so coverage is
+  unchanged and the coding stage sees the same warning it now gets for
+  `PreprintSource`; (b) reject unless `--allow-preprints`, which makes
+  the flag mean what it says. (a) is the smaller change and probably
+  the right one.
+
 - **P9** — migrate `test_live_coverage.py` from `legacy/` to
   `fetchers/*.py`.
   **Status: done in the 0.6.0 legacy-deletion pass.** The coverage

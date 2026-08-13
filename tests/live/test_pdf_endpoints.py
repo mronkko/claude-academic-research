@@ -164,6 +164,54 @@ def test_core_search_returns_a_download_url() -> None:
     )
 
 
+def test_preprint_discovery_finds_a_preprint_hosted_pdf() -> None:
+    """A published DOI resolves to a preprint copy on a preprint host.
+
+    Exercises the production host filter (`preprint_server_for`) against
+    real OpenAlex data, because that filter is the whole safety
+    argument: this source qualifies a location by host and nothing else,
+    which is what makes it impossible for it to return a version of
+    record and tag it `pdf:preprint-version`.
+
+    No API key — OpenAlex's free tier serves `locations`.
+    """
+    from fetchers.preprint import preprint_server_for
+
+    doi = KNOWN_DOIS["preprint"]
+    status, body, _ = http_get(
+        f"https://api.openalex.org/works/https://doi.org/{doi}",
+    )
+    if status == 0:
+        pytest.skip("Network unreachable for OpenAlex")
+    if status == 404:
+        pytest.skip(f"OpenAlex has no record for DOI {doi}; update KNOWN_DOIS")
+    assert status == 200, f"OpenAlex returned {status}"
+
+    hosted = [
+        url for url in (
+            (loc.get("pdf_url") or "").strip()
+            for loc in (json.loads(body) or {}).get("locations") or []
+        )
+        if url and preprint_server_for(url)
+    ]
+    if not hosted:
+        pytest.skip(
+            f"OpenAlex lists no preprint-hosted PDF for DOI {doi}. Coverage "
+            f"is uneven by design — pick another DOI with a known arXiv / "
+            f"SSRN / RePEc copy for KNOWN_DOIS['preprint']."
+        )
+
+    status, pdf, _ = http_get(hosted[0], headers={"User-Agent": "Mozilla/5.0"})
+    if status != 200:
+        pytest.skip(
+            f"{hosted[0]} returned {status} — preprint servers rate-limit "
+            f"and redirect; the discovery half of this test already passed."
+        )
+    assert pdf.startswith(b"%PDF-"), (
+        f"{hosted[0]} did not serve a PDF: {classify_non_pdf_body(pdf)}"
+    )
+
+
 def test_semantic_scholar_open_access_pdf_url() -> None:
     """S2 exposes a downloadable OA copy via `openAccessPdf` for an OA DOI.
 

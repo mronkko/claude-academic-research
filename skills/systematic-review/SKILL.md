@@ -752,6 +752,7 @@ adjudicator sees in Zotero, not automatic exclusions.
 | `predatory:flag` | Preflight journal check against Beall's list (`import_to_zotero.py`) | **Warning, not exclusion.** Author decides during full-text review whether to keep each flagged paper. |
 | `retracted:flag` | Post-coding retraction check via `mcp__zotero__scite_check_retractions` (see *Retraction check* in *Key methodological rules*) | **Warning, not exclusion.** Cited paper has been retracted per Scite's retraction-watch data. Adjudicator decides whether to keep (with a discussion note), replace the citation, or drop the paper. |
 | `pdf:tdm-recovered` | `enrich_pdfs.py`, when Elsevier's TDM API returns only a 1-page preview and the fetcher falls back to the XML endpoint | **Warning, not exclusion.** The attached "PDF" is text reconstructed from XML, not the publisher's native PDF — may be less complete or lose figures/tables. `audit_zotero_library.py` lists these under `tdm_recovered`; review before/during full-text coding. |
+| `pdf:preprint-version` | `enrich_pdfs.py --allow-preprints`, when the only copy found is on arXiv / SSRN / RePEc | **Warning, not exclusion — and the most consequential of these.** The attached PDF is the manuscript *before* peer review. Hypotheses, samples and findings all move between a working paper and the published article, and nothing downstream can tell the difference: the coding note and the CSV row read identically either way. `fulltext_code.py` names these items before it codes them and `audit_zotero_library.py` lists them under `preprint_version`. Verify each coded finding against the published article, or fetch the real one, before the numbers reach a manuscript. Do **not** confuse this with `OUT_OF_SCOPE`, which is about the *item's* type being a preprint; this is a journal article with a preprint file attached. |
 | `fulltext:unavailable` | Applied by the agent **only** after `audit_zotero_library.py` reports the item's cause as `UNAVAILABLE` | The full text could not be obtained by any route the plugin has. Note this is a `fulltext:*` tag, so it is mutually exclusive with `fulltext:include` / `fulltext:exclude`. **Do not invent a spelling for this** — there is exactly one, and it is this one. **Do not apply it on a failed enrichment run alone:** a `BROWSER_REQUIRED` or `ACCESS_BLOCKED` item is reachable and this tag would be false. See *Phase 4 — diagnose before you exclude*. |
 
 ### QA and adjudication tags
@@ -1050,6 +1051,19 @@ Then act by cause:
 | `UPLOAD_FAILED` | The PDF was fetched but the Zotero attach failed | The file is already in the local cache; re-run `enrich_pdfs.py` and it attaches without re-downloading. **Not an exclusion.** |
 | `OUT_OF_SCOPE` | Book chapter, thesis, preprint | FE2 / FE3 — exclude on item type, not on retrieval |
 | `UNAVAILABLE` | Every route tried, nothing found | FE6 — the only cause that justifies a full-text-unavailable exclusion |
+
+**Before accepting `UNAVAILABLE`, there is one more route — and it
+changes what the item is.** `enrich_pdfs.py --allow-preprints` looks for
+a copy on arXiv / SSRN / RePEc. It is off by default because what it
+finds is the manuscript *before* peer review: coding a working paper as
+the published article misreports what the journal published, and no
+later stage can detect the substitution. Offer it explicitly, say that
+is what it does, and let the user decide. Every attachment it produces
+is tagged `pdf:preprint-version`; `fulltext_code.py` names those items
+before coding them, and each coded finding must be checked against the
+published article before it reaches a manuscript. A preprint copy is
+better than a hole in the review only if the review says which rows rest
+on one.
 
 **The hard rule: an item may not be tagged `fulltext:unavailable` until
 its cause in the retrieval report is `UNAVAILABLE`.** If you have not run

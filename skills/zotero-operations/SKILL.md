@@ -134,8 +134,8 @@ running these stages:**
    available. Never guess the group ID.
 2. Run `audit_zotero_library.py --group <id>`. Read the summary counts.
    The script writes `.claude/audit/audit.{missing_abstract,missing_pdf,
-   missing_doi,empty_stubs,tdm_recovered}.keys` alongside the JSON
-   report (project-local).
+   missing_doi,empty_stubs,tdm_recovered,preprint_version}.keys`
+   alongside the JSON report (project-local).
 3. Report counts to the user and ask which to fix (missing abstracts,
    missing PDFs, empty stubs, or all).
 4. Run the stage(s) the user chose, passing the matching `.keys` file
@@ -158,7 +158,16 @@ running these stages:**
    | `CORRUPT_DOWNLOAD` | The source served a broken file (usually truncated). Re-running the *same* source returns the same bad bytes — escalate to a different one: the publisher TDM route, or `--sources browser`. |
    | `UPLOAD_FAILED` | The PDF is already in the local cache and only the Zotero attach failed. Re-run `enrich_pdfs.py`; it attaches from cache with no new download. Cheapest rung on the ladder — always offer it first. |
    | `OUT_OF_SCOPE` | A book chapter, thesis, or preprint. No rung applies — the item is excluded on its type, not on retrieval, and chasing a PDF for it wastes the user's time. |
-   | `UNAVAILABLE` | Genuinely unreachable. Only now is "not available" the honest report. |
+   | `UNAVAILABLE` | Genuinely unreachable *as published*. One route remains — see below — and only after the user declines it is "not available" the honest report. |
+
+   **The last rung is a different paper, so it is offered, never taken
+   silently.** `enrich_pdfs.py --allow-preprints` looks for a copy on
+   arXiv / SSRN / RePEc. What it finds is the manuscript before peer
+   review: hypotheses, samples and findings all move between a working
+   paper and the published article, and nothing downstream can tell the
+   two apart. Name that when you offer it. Attachments carry
+   `pdf:preprint-version`, `fulltext_code.py` lists those items before
+   coding them, and the audit reports them under `preprint_version`.
 
    **Say how many items each rung would recover before proposing it.**
    "76 of these 110 are behind Cloudflare at two publishers and one

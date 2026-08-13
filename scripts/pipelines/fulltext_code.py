@@ -303,6 +303,52 @@ def _already_tagged(items: list[dict]) -> set[str]:
     )
 
 
+# Canonical definition: fetchers.preprint.PREPRINT_VERSION_TAG. Repeated
+# rather than imported because this module's PEP 723 block carries no
+# fetcher dependencies, and a tag string is not worth acquiring them.
+PREPRINT_VERSION_TAG = "pdf:preprint-version"
+
+
+def _warn_on_preprint_attachments(items: list[dict]) -> None:
+    """Say out loud which items are about to be coded from a preprint.
+
+    `enrich_pdfs.py --allow-preprints` can attach the manuscript that
+    preceded peer review. Nothing downstream of this point can tell the
+    difference: the coding note, the CSV row and the export all read
+    identically whether the model read the working paper or the
+    published article. So the one place the distinction still exists —
+    the tag — has to be surfaced here, before the LLM call, while the
+    user can still decide to fetch the real thing instead.
+    """
+    flagged = [
+        it for it in items
+        if any(
+            t.get("tag") == PREPRINT_VERSION_TAG
+            for t in it.get("data", {}).get("tags", [])
+        )
+    ]
+    if not flagged:
+        return
+    print(
+        f"\n  WARNING: {len(flagged)} of these items have a PREPRINT "
+        f"attached, not the published article (tagged "
+        f"'{PREPRINT_VERSION_TAG}').\n"
+        f"  Coding a working paper as the published paper misreports what "
+        f"the journal\n"
+        f"  published — hypotheses, samples and findings all move between "
+        f"the two.\n"
+        f"  Review these before trusting their coded rows:",
+        flush=True,
+    )
+    for it in flagged[:10]:
+        title = (it.get("data", {}).get("title") or "")[:70]
+        print(f"    {it['key']}  {title}", flush=True)
+    if len(flagged) > 10:
+        print(f"    … and {len(flagged) - 10} more (audit_zotero_library.py "
+              f"writes the full list to audit.preprint_version.keys)",
+              flush=True)
+
+
 def _load_last_decisions(path: Path) -> dict[str, str]:
     """Last CSV decision per key. Used for the `--rerun` path (retry
     `error` rows) and for `--csv-backfill`, NOT for resume decisions.
@@ -728,6 +774,7 @@ def main() -> int:
             to_code = to_code[:args.limit]
 
         print(f"  To code: {len(to_code)} items", flush=True)
+        _warn_on_preprint_attachments(to_code)
         if not to_code:
             print("Nothing to code.", flush=True)
             return 0

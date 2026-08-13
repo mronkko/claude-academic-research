@@ -212,6 +212,21 @@ def test_alias_table_only_maps_to_real_fetcher_names() -> None:
     assert not unknown, f"aliases point at non-existent fetchers: {unknown}"
 
 
+def test_naming_the_preprint_source_is_not_the_opt_in(enrich, monkeypatch, capsys):
+    """`--allow-preprints` is where the hazard is explained, so it has to
+    be the only door in. A second, quieter route would let a user who
+    never read that explanation code working papers as published
+    articles."""
+    monkeypatch.setattr(
+        sys, "argv",
+        ["enrich_pdfs.py", "--user", "--sources", "preprint"],
+    )
+    assert enrich.main() == 2
+    err = capsys.readouterr().err
+    assert "--allow-preprints" in err
+    assert "before peer review" in err
+
+
 def test_mixing_browser_with_api_sources_is_rejected(enrich, monkeypatch, capsys):
     """`--sources browser,wiley` used to silently drop `browser`.
 

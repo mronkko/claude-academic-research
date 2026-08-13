@@ -98,7 +98,7 @@ _TAG = re.compile(r"`(fulltext:[a-z-]+|abstract:[a-z-]+|pdf:[a-z-]+)`")
 KNOWN_TAGS = {
     "abstract:include", "abstract:exclude", "abstract:borderline",
     "fulltext:include", "fulltext:exclude", "fulltext:unavailable",
-    "pdf:tdm-recovered",
+    "pdf:tdm-recovered", "pdf:preprint-version",
 }
 
 
@@ -107,6 +107,35 @@ def test_skills_invent_no_tags() -> None:
         found = set(_TAG.findall(path.read_text(encoding="utf-8")))
         unknown = found - KNOWN_TAGS
         assert not unknown, f"{path.name} names undefined tag(s): {unknown}"
+
+
+def test_the_preprint_tag_is_spelled_the_same_everywhere() -> None:
+    """Four copies of this string exist, and three of them are deliberate:
+    `audit_zotero_library.py` and `fulltext_code.py` both repeat it rather
+    than import a fetcher they otherwise have no dependency on. A drift
+    between any two means the tag is written by one stage and invisible
+    to the next — which is the whole failure this tag exists to prevent.
+    """
+    import audit_zotero_library
+    import fulltext_code
+    from fetchers.preprint import PREPRINT_VERSION_TAG
+
+    assert audit_zotero_library.PREPRINT_VERSION_TAG == PREPRINT_VERSION_TAG
+    assert fulltext_code.PREPRINT_VERSION_TAG == PREPRINT_VERSION_TAG
+    assert f"`{PREPRINT_VERSION_TAG}`" in _sr(), (
+        "the tag catalogue in systematic-review/SKILL.md does not name it"
+    )
+
+
+def test_the_preprint_route_is_offered_before_declaring_unavailable() -> None:
+    """A flag documented only in `--help` is a flag the agent never
+    offers, which makes the opt-in indistinguishable from not shipping
+    it."""
+    text = _sr()
+    assert "--allow-preprints" in text
+    assert "peer review" in text, (
+        "the skill names the flag without saying what makes it hazardous"
+    )
 
 
 def test_the_invented_tag_spelling_is_not_used_anywhere() -> None:

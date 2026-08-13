@@ -54,6 +54,11 @@ from core.config_loader import require  # noqa: E402
 # Canonical definition: fetchers.sciencedirect.TDM_RECOVERED_TAG.
 TDM_RECOVERED_TAG = "pdf:tdm-recovered"
 
+# Tag enrich_pdfs.py applies when the attached PDF is a preprint rather
+# than the published article (only reachable via --allow-preprints).
+# Canonical definition: fetchers.preprint.PREPRINT_VERSION_TAG.
+PREPRINT_VERSION_TAG = "pdf:preprint-version"
+
 
 def _classify(items: list[dict], attachments_by_parent: dict[str, list[dict]]) -> dict:
     missing_abstract: list[dict] = []
@@ -61,6 +66,7 @@ def _classify(items: list[dict], attachments_by_parent: dict[str, list[dict]]) -
     missing_doi: list[dict] = []
     empty_stubs: list[dict] = []
     tdm_recovered: list[dict] = []
+    preprint_version: list[dict] = []
     have_pdf = 0
 
     for it in items:
@@ -83,6 +89,8 @@ def _classify(items: list[dict], attachments_by_parent: dict[str, list[dict]]) -
         tags = {t.get("tag", "") for t in d.get("tags", []) if t.get("tag")}
         if TDM_RECOVERED_TAG in tags:
             tdm_recovered.append(identifier)
+        if PREPRINT_VERSION_TAG in tags:
+            preprint_version.append(identifier)
 
         # Missing DOI check — cheap (Zotero data only, no Crossref).
         # Feeds enrich_dois.py --find-missing via audit.missing_doi.keys.
@@ -115,11 +123,13 @@ def _classify(items: list[dict], attachments_by_parent: dict[str, list[dict]]) -
         "missing_abstract_count": len(missing_abstract),
         "missing_doi_count": len(missing_doi),
         "tdm_recovered_count": len(tdm_recovered),
+        "preprint_version_count": len(preprint_version),
         "missing_abstract": missing_abstract,
         "missing_pdf": missing_pdf,
         "missing_doi": missing_doi,
         "empty_stubs": empty_stubs,
         "tdm_recovered": tdm_recovered,
+        "preprint_version": preprint_version,
     }
 
 
@@ -529,7 +539,7 @@ def main() -> int:
     stem = out_path.with_suffix("")  # strip .json
     keys_files: dict[str, Path] = {}
     for category in ("missing_abstract", "missing_pdf", "missing_doi", "empty_stubs",
-                     "tdm_recovered"):
+                     "tdm_recovered", "preprint_version"):
         keys_path = Path(f"{stem}.{category}.keys")
         keys_path.write_text(
             "\n".join(entry["key"] for entry in report.get(category, [])) + "\n"
@@ -547,10 +557,11 @@ def main() -> int:
     print(f"  Missing abstract:           {report['missing_abstract_count']}")
     print(f"  Missing DOI:                {report['missing_doi_count']}")
     print(f"  TDM-recovered PDFs:         {report['tdm_recovered_count']}")
+    print(f"  Preprint-version PDFs:      {report['preprint_version_count']}")
     print(f"  Details written to:         {out_path}")
     print(f"  Keys files written to:      "
           f"{stem}.{{missing_abstract,missing_pdf,missing_doi,empty_stubs,"
-          f"tdm_recovered}}.keys")
+          f"tdm_recovered,preprint_version}}.keys")
     print()
     print("Next steps — feed the .keys files directly into pipeline stages:")
     if report["missing_doi_count"]:
@@ -570,6 +581,12 @@ def main() -> int:
               f"(tagged '{TDM_RECOVERED_TAG}') — full text may be less "
               f"complete than a native PDF; review before/during coding. "
               f"See {keys_files['tdm_recovered']}")
+    if report["preprint_version_count"]:
+        print(f"  # {report['preprint_version_count']} PDFs are PREPRINTS, not "
+              f"the published article (tagged '{PREPRINT_VERSION_TAG}'). What "
+              f"they report may differ from what the journal published — "
+              f"verify each finding against the published version before "
+              f"citing it. See {keys_files['preprint_version']}")
 
     if args.pdf_fetch_log:
         _report_retrieval_failures(
