@@ -201,3 +201,84 @@ def test_model_flag_help_lists_every_alias() -> None:
     for alias in models.TIER_ALIASES:
         assert alias in help_text
     assert "the stage default" in help_text
+
+
+# ---------------------------------------------------------------------------
+# Dry-run cost estimate
+# ---------------------------------------------------------------------------
+
+
+def test_cost_estimate_scales_with_the_item_count() -> None:
+    one = models.cost_estimate_line(
+        "claude-haiku-4-5", stage="abstract_screening", n_items=1,
+        provider="anthropic",
+    )
+    many = models.cost_estimate_line(
+        "claude-haiku-4-5", stage="abstract_screening", n_items=1000,
+        provider="anthropic",
+    )
+    assert "~$" in one and "~$" in many
+    assert one != many
+    assert "1,000 item(s)" in many
+
+
+def test_cost_estimate_prices_the_model_not_the_stage_default() -> None:
+    """`--model deep` on the screening stage must be priced as deep.
+
+    Quoting the stage's default tier would understate a run the user is
+    about to pay for.
+    """
+    cheap = models.cost_estimate_line(
+        "claude-haiku-4-5", stage="abstract_screening", n_items=500,
+        provider="anthropic",
+    )
+    dear = models.cost_estimate_line(
+        "claude-opus-4-1", stage="abstract_screening", n_items=500,
+        provider="anthropic",
+    )
+    assert "fast tier" in cheap
+    assert "deep tier" in dear
+    assert _usd(dear) > _usd(cheap)
+
+
+def test_fulltext_coding_costs_more_per_item_than_screening() -> None:
+    """Same model, more tokens: a 40-page paper is not an abstract."""
+    screening = models.cost_estimate_line(
+        "claude-sonnet-5", stage="abstract_screening", n_items=100,
+        provider="anthropic",
+    )
+    coding = models.cost_estimate_line(
+        "claude-sonnet-5", stage="fulltext_coding", n_items=100,
+        provider="anthropic",
+    )
+    assert _usd(coding) > _usd(screening)
+
+
+def _usd(line: str) -> float:
+    return float(line.split("~$")[1].split(" ")[0].replace(",", ""))
+
+
+def test_cost_estimate_says_unknown_rather_than_zero() -> None:
+    """"Free" is the one wrong answer a dry run must never give."""
+    line = models.cost_estimate_line(
+        "some-model-nobody-priced", stage="abstract_screening", n_items=10,
+        provider="openrouter",
+    )
+    assert "unknown" in line
+    assert "$0" not in line
+
+
+def test_cost_estimate_is_explicit_that_local_is_free() -> None:
+    line = models.cost_estimate_line(
+        "llama3:8b", stage="abstract_screening", n_items=10_000,
+        provider="ollama",
+    )
+    assert "none" in line
+    assert "own machine" in line
+
+
+def test_cost_estimate_handles_an_unrecognised_provider() -> None:
+    line = models.cost_estimate_line(
+        "x", stage="abstract_screening", n_items=1, provider="bogus",
+    )
+    assert "unknown" in line

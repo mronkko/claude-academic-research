@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Use when the user invokes `/setup` (or asks to "configure setup", "run setup wizard", "configure the academic-research project/plugin"), asks to configure the academic-research plugin, add or rotate API keys (Zotero, Elsevier, WoS, Semantic Scholar, Wiley TDM, OpenAlex, Gemini), register MCP servers, or patch permission rules. Also fires when another academic-research skill (zotero-operations, systematic-review, fact-check, critic-loop) reports `NOT CONFIGURED` on its pre-flight check.
+description: Use when the user invokes `/setup` (or asks to "configure setup", "run setup wizard", "configure the academic-research project/plugin"), asks to add or rotate API keys (Zotero, Elsevier, WoS, Semantic Scholar, Wiley TDM, OpenAlex, Gemini, OpenAI), switch LLM provider, register MCP servers, or patch permission rules. Also fires when another academic-research skill (zotero-operations, systematic-review, fact-check, critic-loop) reports `NOT CONFIGURED` on its pre-flight check.
 ---
 
 # setup
@@ -40,7 +40,11 @@ needed is already known:
 Paste the following message to the user (no tool calls needed — just
 text):
 
-> I'll hand you the setup wizard. It runs in your terminal, prompts for
+> I'll hand you the setup wizard. It runs in your terminal. It first
+> asks **which LLM provider** should run the screening pipelines —
+> Anthropic, Google, OpenAI, OpenRouter, or a local server (Ollama or
+> LM Studio, which need no API key at all) — and then only asks for
+> that provider's credential rather than all of them. It prompts for
 > each API key with hidden input (keystrokes don't appear), then checks
 > five MCP (Model Context Protocol) servers and offers to register any
 > that are missing: **Zotero** (required — every citation skill uses
@@ -117,11 +121,40 @@ problem:
   the install and registration commands; run them and re-run the
   wizard.
 
+## Switching LLM provider (the one path that is not a wizard hand-off)
+
+"Switch me to OpenAI", "use a local model for screening", "which model
+provider am I on?" — these do not involve a key, so they do not need
+the wizard. Two scripts cover it, and they are the **only** Bash calls
+this skill may make:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_llm_provider.py
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/set_llm_provider.py <name>
+```
+
+`<name>` is one of `anthropic`, `google`, `openai`, `openrouter`,
+`ollama`, `lmstudio`. The check script prints the provider, whether one
+was ever chosen, and whether its credential is present — never a key
+value. Do NOT try to read `~/.config/academic-research/config.toml`
+yourself; a permission rule denies it precisely so keys cannot reach a
+transcript.
+
+If `set_llm_provider.py` reports a missing credential, **hand off to
+the wizard for that key** — do not ask for it in the chat. Then tell
+the user to re-pin their project's models, since the old pins name
+models the new provider does not serve:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/resolve_models.py
+```
+
 ## Red flags
 
-- You are about to run a `Bash` tool call in this skill. **Don't.**
-  This skill has no Bash probes by design — they cause permission
-  prompts for no benefit. The wizard handles everything.
+- You are about to run a `Bash` tool call in this skill for anything
+  other than the two provider scripts above. **Don't.** This skill has
+  no Bash probes by design — they cause permission prompts for no
+  benefit. The wizard handles everything else.
 - You are about to ask the user to paste a key into the chat.
   **Never.** The wizard is the only acceptable path for keys.
 - You are about to log, echo, or repeat a key the user typed in any

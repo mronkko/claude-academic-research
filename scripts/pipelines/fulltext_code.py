@@ -79,6 +79,7 @@ from core.llm import (  # noqa: E402
     extract_pdf_text,
 )
 from core.models import (  # noqa: E402
+    cost_estimate_line,
     default_for_stage,
     effective_model,
     model_flag_help,
@@ -723,6 +724,9 @@ def main() -> int:
             print(f"TITLE: {first.get('title', '')}\n\nFULL TEXT: <{pdf_dir}/...>")
             print(f"\n[DRY RUN] Would code {len(to_code)} items with {model}",
                   flush=True)
+            print(cost_estimate_line(
+                model, stage="fulltext_coding", n_items=len(to_code),
+            ), flush=True)
             return 0
 
     client = llm_provider.get_provider(model)
@@ -786,6 +790,9 @@ def main() -> int:
             print(f"TITLE: {first.get('title', '')}\n\nFULL TEXT: <{pdf_dir}/...>")
             print(f"\n[DRY RUN] Would update {len(to_update)} item(s) with {model}",
                   flush=True)
+            print(cost_estimate_line(
+                model, stage="fulltext_coding", n_items=len(to_update),
+            ), flush=True)
             return 0
 
         counts: dict[str, int] = {"updated": 0, "no_pdf": 0, "error": 0}

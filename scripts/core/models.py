@@ -167,6 +167,47 @@ def effective_model(cli_model: str, config_model: str, *, stage: str) -> str:
     return resolved
 
 
+def cost_estimate_line(
+    model: str, *, stage: str, n_items: int, provider: str = "",
+) -> str:
+    """One line of projected spend, for the `--dry-run` paths.
+
+    The estimate is priced from the *model about to run*, classified
+    back into a tier — not from the stage's default tier — because
+    `--model` may have overridden it and quoting the price of a model
+    the run will not use is worse than quoting none.
+
+    Says "unknown" rather than "$0.00" when there is no catalogue price.
+    A dry run is what a user checks before committing to spend, and
+    "free" is the one wrong answer that cannot be walked back.
+    """
+    from core import model_discovery
+
+    name = provider or active_provider()
+    spec = providers.get(name)
+    if spec is None:
+        return f"Estimated cost: unknown — unrecognised provider {name!r}."
+    if spec.local:
+        return (
+            f"Estimated cost: none — {spec.label} runs on your own machine."
+        )
+    tier = providers.tier_of(spec, model)
+    usd = (
+        model_discovery.estimate_cost(name, tier, n_items, stage=stage)
+        if tier else 0.0
+    )
+    if not usd:
+        return (
+            f"Estimated cost: unknown — no list price on file for {model} "
+            f"({name}). See templates/model_catalog.toml."
+        )
+    return (
+        f"Estimated cost: ~${usd:,.2f} for {n_items:,} item(s) "
+        f"({name} · {tier} tier at list prices; excludes retries and "
+        f"re-runs)."
+    )
+
+
 def default_for_stage(stage: str, *, provider: str = "") -> str:
     """Fallback model for `stage` when the project pins none.
 

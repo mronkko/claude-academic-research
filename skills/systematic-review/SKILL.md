@@ -287,23 +287,68 @@ between scope.md and search_config.py.
 
 ## Choosing the screening model
 
-`screening_config.py` sets the model for each stage
-(`ABSTRACT_SCREENING_MODEL`, `FULLTEXT_CODING_MODEL`). That is the
+Model choice has two layers. **The provider** is a machine-wide setting
+— which company's (or which local server's) API the pipelines call.
+**The tier** is per stage: `fast` for screening thousands of abstracts,
+`balanced` for coding full texts. The plugin turns a tier into a
+concrete model by asking the provider what it currently serves, so a
+new model generation is picked up without a plugin update.
+
+`screening_config.py` records the result (`ABSTRACT_SCREENING_MODEL`,
+`FULLTEXT_CODING_MODEL`) with a provenance comment. That pin is the
 project's committed default and belongs in git with the prompts.
 
-When the user names a model in conversation — "screen these with Haiku",
-"use Sonnet for the coding pass" — pass `--model` rather than editing
-`screening_config.py`:
+**Which provider is configured** — ask, don't guess, and never try to
+read `config.toml` (the Read tool is denied on it):
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_llm_provider.py
+```
+
+It reports the provider, whether the user ever chose one, and whether
+its credential is present — without printing any key.
+
+**Pinning the models** (bootstrap, and any time the provider changes):
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/resolve_models.py
+```
+
+Run it from the project directory. It rewrites only the two `*_MODEL`
+lines in `screening_config.py`, leaving the prompts untouched. Add
+`--dry-run` to show the choice without writing. If it reports a
+**catalogue fallback**, say so to the user: the pin came from a file
+shipped with the plugin rather than from the provider, and may name a
+superseded model.
+
+**Switching provider** — "use OpenAI instead", "screen this locally":
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/set_llm_provider.py openai
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/resolve_models.py
+```
+
+Providers: `anthropic`, `google`, `openai`, `openrouter`, and the two
+local ones, `ollama` and `lmstudio`, which need no API key and no
+per-paper spend. If the new provider's credential is missing, the
+script says which variable is needed — **hand that to `/setup`, never
+ask the user to paste a key into the conversation.**
+
+**A one-off model change** — "screen these with the cheap one", "use a
+stronger model for the coding pass" — is a `--model` flag, not an edit:
 
 ```bash
 uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/abstract_screen.py \
     --group <id> --collection <key> --config ./screening_config.py \
-    --model haiku
+    --model fast
 ```
 
-`--model` accepts a short alias (`haiku`, `sonnet`, `opus`, `flash`,
-`pro`, `gemini`) or a full model ID. Unknown names pass through
-untouched, so an explicit ID or a locally-served model name both work.
+`--model` accepts a tier (`fast`, `balanced`, `deep`), a short alias
+that names a tier (`cheap`, `haiku`, `flash`, `mini`, `sonnet`, `opus`,
+`pro`, `best`, …), or a full model ID. Aliases resolve against the
+configured provider, so `--model fast` means Haiku for an Anthropic
+user and Flash for a Gemini one. Unknown names pass through untouched,
+so an explicit ID or a locally-served model name both work.
 
 **Do NOT edit `screening_config.py` to satisfy a one-off request.** The
 config is what a reviewer reads to reconstruct the review; rewriting it
@@ -312,14 +357,23 @@ the config, and the effective model is written to the `model` column of
 every CSV log row — **that column, not the config file, is what the
 manuscript should cite** (see `empirical-integrity`).
 
-If the user wants the change to be permanent — "always use Sonnet for
-coding" — then edit `screening_config.py`, and say that you did.
+If the user wants the change to be permanent — "always code full texts
+with the strong model" — re-pin it rather than hand-editing the
+constant, so the provenance comment stays true:
 
-**Local / self-hosted models.** Setting `ANTHROPIC_BASE_URL` (via
-`/setup` or the environment) points the screening pipelines at any
-Anthropic-compatible endpoint, such as LM Studio or Open WebUI. With it
-set, `ANTHROPIC_API_KEY` becomes optional and `--model` takes whatever
-name that server serves.
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/resolve_models.py \
+    --stage fulltext_coding --tier deep
+```
+
+Then say that you did, and that it changed the committed default.
+
+**Cost before spending.** `--dry-run` on either screening script prints
+a projected cost for the real item count. Quote it before a full run,
+especially when the user is about to move to a stronger tier — `deep`
+is roughly double `balanced` per paper. An "unknown" estimate means no
+list price is on file for that model; report that rather than implying
+the run is free.
 
 ---
 

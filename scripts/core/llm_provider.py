@@ -72,8 +72,9 @@ def configured_provider() -> str:
 def _configured_base_url(spec: ProviderSpec) -> str:
     if not spec.base_url_env:
         return ""
-    section = spec.name if spec.name != "anthropic" else "anthropic"
-    return get(section, "base_url", env=spec.base_url_env) or ""
+    return get(
+        providers.config_section(spec), "base_url", env=spec.base_url_env,
+    ) or ""
 
 
 def base_url_for(spec: ProviderSpec) -> str:
@@ -92,6 +93,28 @@ def anthropic_base_url() -> str:
     return get("anthropic", "base_url", env="ANTHROPIC_BASE_URL") or ""
 
 
+def credential_status(spec: ProviderSpec) -> tuple[bool, str]:
+    """Whether `spec` can be called as currently configured.
+
+    Returns `(ok, missing_env_var)`. Follows the same rules as
+    `_api_key_for` below — local providers declare no credential, and an
+    Anthropic-compatible endpoint has one it does not check — so an `ok`
+    here means a run will get past credential resolution rather than
+    merely that some key is on file.
+
+    Read-only and network-free: the setup scripts use it to report state
+    without touching the provider.
+    """
+    if not spec.api_key_env:
+        return True, ""
+    if spec.transport == "anthropic" and anthropic_base_url():
+        return True, ""
+    section = providers.config_section(spec)
+    if get(section, "api_key", env=spec.api_key_env).strip():
+        return True, ""
+    return False, spec.api_key_env
+
+
 def _api_key_for(spec: ProviderSpec, *, required: bool = True) -> str:
     """Credential for `spec`, or a placeholder when none is needed.
 
@@ -101,7 +124,7 @@ def _api_key_for(spec: ProviderSpec, *, required: bool = True) -> str:
     """
     if not spec.api_key_env:
         return "not-required-for-local-endpoint"
-    section = spec.name if spec.name != "google" else "gemini"
+    section = providers.config_section(spec)
     if spec.transport == "anthropic" and anthropic_base_url():
         return get(section, "api_key", env=spec.api_key_env) or (
             "not-required-for-local-endpoint"
@@ -303,8 +326,7 @@ def require_credentials(model_name: str = "", provider_hint: str = "") -> None:
         return
     if spec.transport == "anthropic" and anthropic_base_url():
         return
-    section = spec.name if spec.name != "google" else "gemini"
-    require(section, "api_key", env=spec.api_key_env)
+    require(providers.config_section(spec), "api_key", env=spec.api_key_env)
 
 
 def get_provider(model_name: str = "", provider_hint: str = "") -> LLMProvider:

@@ -1139,7 +1139,7 @@ def _llm_credential_present(
     spec = providers.get(provider) or providers.require(providers.DEFAULT_PROVIDER)
     if not spec.api_key_env:
         return True, ""
-    section = "gemini" if spec.name == "google" else spec.name
+    section = providers.config_section(spec)
 
     def _value(key: str) -> str:
         return str(

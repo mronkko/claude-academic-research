@@ -202,6 +202,18 @@ def require(name: str) -> ProviderSpec:
     return spec
 
 
+def config_section(spec: ProviderSpec) -> str:
+    """The `config.toml` section holding this provider's settings.
+
+    Section name equals provider name, with one exception: Google's key
+    has lived under `[gemini]` since before this registry existed, and
+    renaming it would silently un-configure everyone who has already run
+    `/setup`. Kept in one function because the exception is invisible at
+    every call site that hardcodes it.
+    """
+    return "gemini" if spec.name == "google" else spec.name
+
+
 def base_url_for(spec: ProviderSpec, configured: str = "") -> str:
     """Effective base URL: an explicit override, else the default."""
     return (configured or "").strip().rstrip("/") or spec.default_base_url

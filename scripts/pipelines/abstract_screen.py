@@ -70,6 +70,7 @@ import zotero_io  # noqa: E402
 from core import llm_provider  # noqa: E402
 from core.config_loader import require  # noqa: E402
 from core.models import (  # noqa: E402
+    cost_estimate_line,
     default_for_stage,
     effective_model,
     model_flag_help,
@@ -286,6 +287,9 @@ def main() -> int:
         print(msg)
         print(f"\n[DRY RUN] Would screen {len(to_screen)} items with {model}",
               flush=True)
+        print(cost_estimate_line(
+            model, stage="abstract_screening", n_items=len(to_screen),
+        ), flush=True)
         return 0
 
     client = llm_provider.get_provider(model)
