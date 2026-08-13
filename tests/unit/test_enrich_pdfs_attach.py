@@ -225,15 +225,40 @@ def test_cache_recovery_reports_failures_without_claiming_success(tmp_path) -> N
 
 # --- resume semantics -------------------------------------------------
 
-def test_attached_no_text_counts_as_done_for_resume() -> None:
-    """Re-fetching a scan produces the same scan; the file is attached.
-    It stays a distinct status so the report can single it out."""
-    assert "attached_no_text" in enrich_pdfs.DONE_STATUSES
+def test_attached_no_text_does_not_count_as_done() -> None:
+    """"No extractable text" must not be recorded as a finished item.
+
+    The tempting reasoning — the file is attached, and re-fetching a
+    scan just returns the same scan — rests on a diagnosis the evidence
+    refuted. All five textless files in the incident came back intact
+    from a different source (3 Wiley TDM, 2 Sage browser; 19-44 real
+    pages). None was a scan.
+    """
+    assert "attached_no_text" not in enrich_pdfs.DONE_STATUSES
     assert "attached" in enrich_pdfs.DONE_STATUSES
 
 
 @pytest.mark.parametrize(
-    "status", ["upload_failed", "rejected_corrupt_pdf", "skipped_no_pdf"],
+    "status",
+    ["upload_failed", "rejected_corrupt_pdf", "skipped_no_pdf",
+     "attached_no_text"],
 )
 def test_unresolved_statuses_are_retried_next_run(status) -> None:
     assert status not in enrich_pdfs.DONE_STATUSES
+
+
+def test_textless_detail_does_not_assert_it_is_a_scan(tmp_path) -> None:
+    """The run log must not carry a cause the evidence contradicts."""
+    path = tmp_path / "p.pdf"
+    path.write_bytes(_pdf_bytes())
+    log = _Log()
+
+    enrich_pdfs._attach_and_log(
+        MagicMock(), log, run_date="2026-08-13", item_key="K1",
+        doi="10.1/x", title="T", source="openalex", pdf_path=path,
+        check_text=True,
+    )
+    row = log.rows[-1]
+    if row["status"] == "attached_no_text":
+        assert "OCR" not in row["detail"]
+        assert "scan" not in row["detail"].lower()

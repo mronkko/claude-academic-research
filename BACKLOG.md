@@ -77,10 +77,19 @@ failure mode — silent loss with no end-of-run account:
   rather than silently misaligning them (a real user log was 1813 rows
   with no header).
 
+**On OCR — a diagnosis to stay away from.** "Scanned PDF needing OCR"
+was proposed twice during the incident and was wrong both times. Of the
+5 textless files, **0** were scans: 3 came back intact via Wiley TDM
+(19/22/24 pages) and 2 via the Sage browser handler (34/44 pages), all
+with real extractable text. The lesson is that zero extractable text is
+a *symptom*, and on the only evidence we have its usual cause is a bad
+copy from a bad source. `attached_no_text` therefore points at
+re-fetching from a different source, and names OCR only as what to
+consider after a second source returns the same file. No OCR work is
+planned, and "it's a scan" should not be anyone's first hypothesis.
+
 **Still open, deliberately:** Alma structured-target ranking (P11's
-"still open" half — unchanged); OCR for genuinely scanned PDFs (out of
-scope, now correctly distinguished from truncation via
-`attached_no_text` vs `rejected_corrupt_pdf`).
+"still open" half — unchanged).
 
 ---
 

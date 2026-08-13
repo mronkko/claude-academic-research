@@ -121,10 +121,21 @@ def _open_log(path: str):
 
 
 # Statuses that mean "this item has its PDF; don't fetch it again".
-# `attached_no_text` counts: the file is attached and re-fetching would
-# produce the same scan. It stays a distinct status so the run report can
-# single those items out as needing OCR.
-DONE_STATUSES = ("attached", "attached_no_text")
+#
+# `attached_no_text` is deliberately NOT here. It is tempting to call it
+# done — the file is attached — but the live evidence says a PDF with no
+# extractable text is usually a bad copy rather than a scan: all five
+# textless files in the incident came back perfect from a different
+# source (3 via Wiley TDM, 2 via the Sage browser handler; 19-44 real
+# pages each). Zero were scans. Treating them as done would suppress the
+# retry that actually works.
+#
+# In practice `pdf_map()` still gates these items — they carry an
+# attachment, so they drop out before any fetch — which is why the run
+# report tells the user to delete the attachment first. Keeping the
+# status out of this tuple at least stops the run-log from asserting
+# something the evidence contradicts.
+DONE_STATUSES = ("attached",)
 
 
 def _load_done_dois(path: str) -> set[str]:
@@ -192,8 +203,10 @@ def _pdf_has_text(pdf_path, item_key: str) -> bool | None:
 
     None means "couldn't tell" — poppler missing or extraction blew up —
     which callers treat as "assume fine" rather than flagging a false
-    positive. False means a structurally valid PDF with no text layer,
-    i.e. a genuine scan.
+    positive. False means the file is structurally intact yet yields no
+    text, which is a symptom, not a cause: on the evidence available it
+    usually means a bad copy that another source will serve properly,
+    and only rarely a genuine scan.
 
     Only meaningful *after* `_pdf_validate.file_defect` has passed. Zero
     extractable text has two very different causes, and a live run
@@ -307,10 +320,14 @@ def _attach_and_log(
 
     status, detail = "attached", ""
     if check_text and _pdf_has_text(pdf_path, item_key) is False:
-        # Structure already validated above, so this really is a scan.
+        # Structure passed, so this is not truncation — but "no text"
+        # is not the same as "scan". Every textless file in the live
+        # incident turned out to be a bad copy that another source
+        # served intact, so state the observation and let the report
+        # carry the remediation rather than asserting a cause here.
         status = "attached_no_text"
-        detail = "structurally valid PDF with no text layer (scan) — needs OCR"
-        print("→ attached (no text layer)", flush=True)
+        detail = "no extractable text — likely a bad copy; try another source"
+        print("→ attached (no extractable text)", flush=True)
     else:
         print("→ attached", flush=True)
 
@@ -1768,10 +1785,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--no-check-text", action="store_true",
-        help="Skip the post-attach text-layer check. By default each "
-             "attached PDF is checked for extractable text so scanned, "
-             "image-only PDFs are reported as `attached_no_text` instead "
-             "of counting as clean successes.",
+        help="Skip the post-attach text check. By default each attached "
+             "PDF is checked for extractable text, so a file that is "
+             "structurally intact but yields nothing downstream is "
+             "reported as `attached_no_text` instead of counting as a "
+             "clean success.",
     )
     return parser
 

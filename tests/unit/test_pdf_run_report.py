@@ -96,6 +96,27 @@ def test_upload_failed_is_not_described_as_an_access_problem() -> None:
     assert "NOT an access problem" in text
 
 
+def test_textless_guidance_leads_with_a_bad_copy_not_ocr() -> None:
+    """"It's a scan, needs OCR" was proposed twice during the incident
+    and was wrong both times — 0 of the 5 textless files were scans; all
+    5 came back intact from a different source. The report must lead
+    with the remediation that worked."""
+    text = report.format_report([_row(status="attached_no_text")])
+    assert "NOT a scan" in text
+    assert "different source" in text
+    # OCR may appear, but only as the fallback after a second source
+    # returns the same file — never as the headline.
+    lead = text.split("OCR")[0]
+    assert "different source" in lead
+
+
+def test_textless_guidance_says_to_delete_the_attachment_first() -> None:
+    """Without that step the item looks complete and every run skips
+    it — the reason recovery needed manual intervention."""
+    text = report.format_report([_row(status="attached_no_text")])
+    assert "delete" in text.lower()
+
+
 def test_corrupt_pdf_guidance_points_at_a_different_source() -> None:
     """Retrying the same provider returned byte-identical broken files;
     only another source helped."""

@@ -50,11 +50,17 @@ STATUS_INFO: dict[str, tuple[str, str]] = {
     "attached_via_connector": ("PDF attached via the Zotero Connector", ""),
     "dry_run": ("PDF downloaded, upload skipped (--dry-run)", ""),
     "attached_no_text": (
-        "PDF attached, structurally valid, but carries no text layer",
-        "A genuine scan. Needs OCR, which this pipeline does not do. The "
-        "item counts as having a PDF, but every downstream text consumer "
-        "will see nothing. Note this is checked *after* structural "
-        "validation, so it is not the truncated-download case below.",
+        "PDF attached and structurally intact, but no text can be extracted",
+        "Most likely a bad copy, NOT a scan. Every textless file in the "
+        "incident behind this check came back perfect from a different "
+        "source (3 via Wiley TDM, 2 via the Sage browser handler, 19-44 "
+        "real pages each); none needed OCR. To retry you must delete the "
+        "existing attachment first — the item otherwise looks complete "
+        "and every run skips it. Then re-run against the publisher's own "
+        "route (`--sources wiley` / `--sources elsevier` / "
+        "`--sources browser`). Only if a different source returns the "
+        "same textless file is this plausibly a genuine scan, which "
+        "would need OCR this pipeline does not do.",
     ),
     "rejected_corrupt_pdf": (
         "A source returned a broken file (usually truncated) — not attached",
