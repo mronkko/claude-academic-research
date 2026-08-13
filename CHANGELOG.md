@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-08-13
+
+Five defects the first end-to-end runs on 0.10.0 exposed, four of them
+the same shape: the pipeline knew something had gone wrong and named
+something else. A missing PDF logged as a coding error. A throttled key
+blamed on a missing key. A previous run's leftovers surfacing as a
+missing file. In each case the report sent the operator somewhere the
+problem was not — which is the failure mode 0.9.0 set out to remove from
+PDF retrieval, showing up again in the stages either side of it.
+
+### Changed
+
+- **`no_pdf` is a decision, not a reason string.** "No PDF to read" and
+  "coding blew up" were both logged as `decision=error` and told apart
+  afterwards by matching the literal `reason` text, so the CSV disagreed
+  with the summary printed beside it — one run showed `error: 0,
+  no_pdf: 2` over two rows that both said `error` — and `verify`
+  reported *"2 items still in error state"* for items whose only problem
+  was a missing file. Both states remain equally unresolved: neither
+  gets a stage tag, both still fail `verify`. Only the label changes,
+  because the fix differs — go find the PDF, versus re-run the model.
+
+  `templates/test_systematic_review.py` now names both states. Matching
+  only `error` there would have let every missing-PDF item through the
+  moment those stopped being logged as errors, inverting the guard this
+  change was meant to leave intact. **Projects created before this
+  release keep their copied template until it is regenerated**, and an
+  old copy paired with a new pipeline is exactly the weakened-guard case
+  above — regenerate it.
+- **A throttled database no longer discards the ones that succeeded.** A
+  Semantic Scholar 429 raised out of `source.run()` and killed the
+  process, throwing away completed Scopus (156 rows), WoS (191) and
+  OpenAlex (310) queries — and the API quota they had already cost —
+  before anything reached disk. Failures are now collected per source,
+  so every one is reported at once and sources after the failing one
+  still run, with the paid-for rows written to
+  `search_results_raw.partial.csv`. Still a hard failure, deliberately:
+  a corpus assembled from a subset of its declared databases is not the
+  corpus the protocol describes, so neither the dedup CSV nor
+  `search_run.json` — whose DOI hash downstream stages read as proof of
+  a complete search — is written.
+
+### Fixed
+
+- **The export stage no longer races Zotero's sync.**
+  `export_coded_includes.py` selects on tags `fulltext_code.py` writes
+  through the Web API, but reads them through a client that prefers the
+  local Zotero server. Exporting straight after coding silently wrote a
+  short CSV — 0 rows against a real include, with the identical export
+  returning the row when re-run minutes later. `stage_code` already
+  carried this wait for `abstract:*` tags; the `fulltext:*` half was
+  missing. It waits on the include/exclude count from the log, not the
+  number of coded items, since `error` and `no_pdf` stay untagged by
+  design and waiting on them would hang until the timeout on every run
+  with a missing PDF.
+- **Semantic Scholar's rate-limit message no longer blames a working
+  key.** It said *"Set SEMANTIC_SCHOLAR_API_KEY"* regardless of what the
+  request carried — advice that, with a freshly rotated key the API had
+  just accepted, sends the operator to `/setup` to rotate a working
+  credential while the real answer is to wait or paginate less. The
+  bulk endpoint throttles per key, and a broad block query can exhaust
+  that on its own.
+- **`mini_slr.py` refuses to start a new run in a dirty group.**
+  `import_to_zotero.py` deduplicates by DOI, so a second run against a
+  group still holding an earlier run's items creates nothing at all — it
+  re-uses them, stage tags and all. One run lost a full pipeline that
+  way: screening found every item already tagged and wrote no log, a
+  stale `fulltext:include` inflated the export, and it surfaced as five
+  `verify` failures that never mentioned the earlier run. The check runs
+  before search spends anything, only for genuinely new runs, and hands
+  over the teardown command for whichever run owns the offending items.
+
+### Internal
+
+- `pybliometrics` and `wiley-tdm` join the dev group. Both gate live
+  tests behind `pytest.importorskip`, so without them installed the
+  Scopus, ScienceDirect and Wiley TDM entitlement tests skipped silently
+  while `test_live_coverage.py` still saw a live test covering each key
+  — a real entitlement failure would have hidden among sixteen other
+  skips. `enrich_pdfs.py` already declared `wiley-tdm` in its PEP 723
+  block, so the pipeline could reach Wiley TDM while its test could not.
+
 ## [0.10.0] — 2026-08-13
 
 Two arcs, both from the same 244-item review that drove 0.9.0. That
