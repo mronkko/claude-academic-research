@@ -166,6 +166,7 @@ def main() -> int:
 
     all_rows: list[dict] = []
     counts: dict = {}
+    failed: dict[str, str] = {}
     for name in selected:
         source = registry[name]
         err = source.credentials_error(ctx)
@@ -183,10 +184,46 @@ def main() -> int:
             print(f"  ({name} needs BLOCK_A_TERMS / BLOCK_B_TERMS — skipping)",
                   flush=True)
             continue
-        rows = source.run(cfg, ctx)
+        try:
+            rows = source.run(cfg, ctx)
+        except Exception as e:  # noqa: BLE001
+            # One throttled database used to abort the process and throw
+            # away every other database's results with it — a Semantic
+            # Scholar 429 discarding completed Scopus, WoS and OpenAlex
+            # queries, and the API quota they cost. Collect the failure and
+            # keep going, so the run below can report all of them at once
+            # and preserve the rows that were paid for.
+            failed[name] = f"{type(e).__name__}: {e}"
+            print(f"  FAILED: {e}", flush=True)
+            print()
+            continue
         counts[name] = len(rows)
         all_rows.extend(rows)
         print()
+
+    if failed:
+        # Deliberately still a hard failure. A corpus assembled from a
+        # subset of its declared databases is not the corpus the protocol
+        # describes, and writing the dedup CSV + search_run.json would
+        # present it as one — the DOI hash downstream stages treat as the
+        # integrity gatekeeper would certify an incomplete search.
+        partial = output_dir / "search_results_raw.partial.csv"
+        with partial.open("w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=SEARCH_ROW_FIELDS,
+                               extrasaction="ignore")
+            w.writeheader()
+            w.writerows(all_rows)
+        detail = "\n".join(f"  {n}: {msg}" for n, msg in failed.items())
+        ok = ", ".join(f"{n}={c}" for n, c in counts.items()) or "none"
+        sys.exit(
+            f"ERROR: {len(failed)} of {len(failed) + len(counts)} database(s) "
+            f"failed:\n{detail}\n"
+            f"Succeeded: {ok}.\n"
+            f"Their {len(all_rows)} row(s) were kept at {partial} so a re-run "
+            f"can be judged against them, but no dedup CSV and no "
+            f"search_run.json were written: those certify a complete search, "
+            f"and this one was not. Re-run once the failure above clears."
+        )
 
     print(f"Total rows before dedup: {len(all_rows)}")
 
