@@ -152,3 +152,57 @@ def test_the_retry_key_files_the_audit_writes_are_named() -> None:
     for label in ("retry.browser", "retry.ill", "true_negative"):
         assert label in text, f"{label} key file not mentioned in SKILL.md"
     assert "--filter-keys-file" in text
+
+
+# ---------------------------------------------------------------------------
+# The agent-drivable browser pass
+# ---------------------------------------------------------------------------
+#
+# The control-file handshake only helps if the skills tell the agent to
+# use it. Before it existed the honest advice was "open your own
+# terminal", and that sentence outliving the limitation would send users
+# away for no reason.
+
+
+def _enrich_parser():
+    import enrich_pdfs
+
+    return enrich_pdfs._build_parser()
+
+
+def test_both_skills_tell_the_agent_to_drive_the_browser_pass() -> None:
+    for name, text in (("systematic-review", _sr()), ("zotero-operations", _zot())):
+        assert "--control-file" in text, (
+            f"{name}/SKILL.md never mentions --control-file, so the agent "
+            f"will still hand the user a command to paste"
+        )
+        assert "run_in_background" in text, (
+            f"{name}/SKILL.md does not say to background the run, which is "
+            f"what makes the handshake possible"
+        )
+
+
+def test_the_skills_explain_the_seq_echo() -> None:
+    """Replying with the wrong seq is silently ignored. An agent that
+    does not know why would read it as the script hanging."""
+    for text in (_sr(), _zot()):
+        assert "seq" in text
+
+
+def test_every_browser_flag_the_skills_name_actually_exists() -> None:
+    """A stale flag in a SKILL.md fails at the moment the user is already
+    stuck — and silently for us."""
+    import re
+
+    parser = _enrich_parser()
+    known = {
+        opt for action in parser._actions for opt in action.option_strings
+    }
+    for name, text in (("systematic-review", _sr()), ("zotero-operations", _zot())):
+        for flag in set(re.findall(r"(?<![\w-])--[a-z][a-z0-9-]+", text)):
+            # Only check flags in enrich_pdfs' own namespace; the skills
+            # also document other scripts.
+            if flag in ("--control-file", "--auto-publishers", "--no-prompt",
+                        "--filter-keys-file", "--sources", "--plan",
+                        "--control-timeout"):
+                assert flag in known, f"{name}/SKILL.md names unknown {flag}"

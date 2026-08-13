@@ -165,6 +165,41 @@ running these stages:**
    browser pass gets them" is a decision the user can make; "110 items
    failed" is not.
 
+7. **Run the browser pass yourself — do not send the user to a
+   terminal.** You have no controlling TTY, but that no longer matters:
+   `--control-file` moves the prompts into a file you poll, while the
+   Chromium window still opens on the user's screen and the user still
+   solves every challenge.
+
+   ```bash
+   uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py \
+       --sources browser --auto-publishers \
+       --control-file .claude/audit/browser.json
+   ```
+
+   Launch it with `run_in_background: true`, then loop:
+
+   - read `.claude/audit/browser.json`;
+   - when `state` is `awaiting_user`, **relay `prompt` to the user
+     verbatim** — it is the text they would have seen on a terminal, and
+     it names the publisher whose challenge is on screen;
+   - write their answer to `.claude/audit/browser.json.reply` as
+     `{"seq": <the seq you just read>, "answer": "<their answer>"}`;
+   - carry on until `state` stays `running` and the process exits.
+
+   Always echo back the `seq` you read. A reply carrying an old `seq` is
+   ignored by design, which is what stops a stale answer from silently
+   clearing a challenge nobody looked at.
+
+   `--auto-publishers` takes the item list from the audit's
+   `retry.browser.keys`, so do not assemble a key list by hand. If it
+   reports no retry set, the audit in step 5 has not been run — run it
+   rather than falling back to a full-library pass.
+
+   Use `--no-prompt` only for genuinely unattended runs. It answers every
+   challenge with "skip", so it is not a substitute for the control file
+   when the user is present.
+
 ### Optional: retraction check
 
 Retracted papers in a Zotero library are a silent data-quality

@@ -1055,6 +1055,25 @@ writes the retry sets for you as key files
 `true_negative`, `out_of_scope`) — feed them straight to
 `--filter-keys-file`; do not assemble key lists by hand.
 
+**Run the browser pass yourself.** Having no controlling terminal is no
+longer a reason to hand the user a command to paste — `--control-file`
+puts the prompts in a file you poll, while the Chromium window opens on
+the user's screen and the user still solves each challenge:
+
+```bash
+uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py \
+    --sources browser --auto-publishers \
+    --control-file .claude/audit/browser.json
+```
+
+Start it with `run_in_background: true`. When the file's `state` becomes
+`awaiting_user`, relay its `prompt` to the user verbatim and write their
+answer back as `{"seq": <seq from the file>, "answer": "..."}` to
+`.claude/audit/browser.json.reply`. Echo the `seq` you read — a reply
+with a stale `seq` is ignored, which is what stops an old answer from
+clearing a challenge nobody looked at. The full procedure is in
+`zotero-operations`, step 7 of the canonical workflow.
+
 **Never silently drop items** — a paper with no attached PDF after all
 phases is a data-quality signal, not a failure to hide.
 
