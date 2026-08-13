@@ -1,9 +1,25 @@
-"""Ask a provider which models it currently serves, and pick one per tier.
+"""Ask a provider which models it currently serves.
 
-This is what replaces the hardcoded model IDs. `providers.py` knows that
-Anthropic marks cheap models with "haiku"; this module asks Anthropic
-which "haiku" models exist right now and takes the newest. When a
-provider ships a new generation, the plugin finds it with no code change.
+This is what replaces the hardcoded model IDs: instead of shipping a
+model name that goes stale on the provider's next release, the plugin
+asks the provider, shows the answer, and lets the agent and the user
+choose. `resolve_models.py` writes the choice into the project.
+
+**This module does not pick a model, and should not learn to.** It once
+did, ranking candidates by tier hints and version numbers, and the
+ranking was wrong in ways no amount of tuning fixes: OpenRouter's
+`anthropic/claude-haiku-4.5:batch` (the async Batch API) beat the plain
+ID on a string tiebreak, and Google's `deep-research-pro-preview-12-2025`
+won the deep tier because `12-2025` parses as version 12.2025. Both are
+obvious to anyone who can read a model name and knows what a Batch API
+is — and this module runs in exactly one place, `resolve_models.py`,
+which is invoked from a SKILL.md with an agent reading the output and a
+user present to confirm. Encoding that judgement as substring
+blocklists just recreates the staleness treadmill one level down.
+
+`templates/model_catalog.toml` remains the answer for the case with no
+human in the loop: an unreachable provider, or a project that never
+pinned anything.
 
 Deliberately stdlib-only for the HTTP call, with its own bounded
 backoff. The wizard imports this, and `scripts/setup/` runs under a bare
@@ -15,7 +31,6 @@ from __future__ import annotations
 
 import json
 import random
-import re
 import time
 import tomllib
 import urllib.error
@@ -131,54 +146,6 @@ def list_models(spec: ProviderSpec, api_key: str = "", base_url: str = "") -> li
 
 
 # ---------------------------------------------------------------------------
-# Selection
-# ---------------------------------------------------------------------------
-
-_VERSION = re.compile(r"(\d+(?:[.\-]\d+)*)")
-
-
-def _sort_key(m: ModelInfo) -> tuple:
-    """Newest-first ordering: version numbers first, `created` to break ties.
-
-    Version wins over the timestamp deliberately. The failure that
-    matters is silently picking an *older generation*, and the numbers
-    in the ID encode generation explicitly, while `created` is whatever
-    the provider chose to report — absent on several, and not
-    necessarily monotonic with capability. `claude-haiku-4-5` must beat
-    `claude-haiku-3-5` regardless of what either timestamp says.
-
-    Within one generation the numbers are equal, so `created` and then
-    the dated suffix decide, which picks the more recent snapshot.
-    """
-    parts = tuple(
-        int(n) for chunk in _VERSION.findall(m.id)
-        for n in re.split(r"[.\-]", chunk) if n.isdigit()
-    )
-    return (parts, m.created, m.id)
-
-
-def pick_for_tier(models: list[ModelInfo], spec: ProviderSpec, tier: str) -> str:
-    """The best-fitting, newest model for `tier`, or `""`.
-
-    Two-level choice: the tier's hints are ordered best-first, so
-    `deep: ("opus", "sonnet")` takes an Opus when one exists and falls
-    back to Sonnet when none does. Only within one hint does recency
-    decide.
-
-    Pure — given the same listing it always returns the same ID, which
-    is what makes a pinned choice reproducible and testable against a
-    recorded fixture.
-    """
-    candidates = [m for m in models if providers.matches_tier(spec, m.id, tier)]
-    if not candidates:
-        return ""
-    return max(
-        candidates,
-        key=lambda m: (-providers.hint_rank(spec, m.id, tier), *_sort_key(m)),
-    ).id
-
-
-# ---------------------------------------------------------------------------
 # Catalog fallback
 # ---------------------------------------------------------------------------
 
@@ -208,51 +175,20 @@ def catalog_prices(provider: str, tier: str, catalog: dict | None = None) -> tup
     )
 
 
-@dataclass
-class Resolution:
-    """What `resolve_tier` decided, and how it decided it."""
+def catalog_suggestions(provider: str, catalog: dict | None = None) -> list[tuple[str, str]]:
+    """`[(tier, model)]` the shipped catalogue offers for `provider`.
 
-    model: str
-    source: str               # "discovered" | "catalog" | "none"
-    detail: str = ""          # why discovery was not used, when it wasn't
-
-    @property
-    def is_stale_risk(self) -> bool:
-        """True when the answer came from a file rather than the provider."""
-        return self.source == "catalog"
-
-
-def resolve_tier(
-    spec: ProviderSpec,
-    tier: str,
-    *,
-    api_key: str = "",
-    base_url: str = "",
-    catalog: dict | None = None,
-) -> Resolution:
-    """Pick a concrete model for `tier`, falling back loudly.
-
-    Never raises: a bootstrap that cannot reach the provider should
-    still produce a working project, and should say what happened
-    rather than pinning something stale in silence.
+    The fallback menu when the provider cannot be asked. Empty for
+    OpenRouter (it proxies everyone, so no single pin is defensible) and
+    for the local providers, which serve whatever the user pulled.
     """
-    try:
-        models = list_models(spec, api_key=api_key, base_url=base_url)
-    except DiscoveryError as e:
-        fallback = catalog_model(spec.name, tier, catalog)
-        if fallback:
-            return Resolution(fallback, "catalog", str(e))
-        return Resolution("", "none", str(e))
-    picked = pick_for_tier(models, spec, tier)
-    if picked:
-        return Resolution(picked, "discovered")
-    fallback = catalog_model(spec.name, tier, catalog)
-    if fallback:
-        return Resolution(
-            fallback, "catalog",
-            f"{len(models)} models listed, none matching the {tier} tier",
-        )
-    return Resolution("", "none", f"no {tier}-tier model among {len(models)} listed")
+    entry = (catalog if catalog is not None else load_catalog()).get(provider, {})
+    out = []
+    for tier in providers.TIERS:
+        model = str(entry.get(tier, {}).get("model", ""))
+        if model:
+            out.append((tier, model))
+    return out
 
 
 # ---------------------------------------------------------------------------

@@ -16,8 +16,9 @@ transcript, so a missing credential is reported here and collected by
 `/setup`, whose prompts read the terminal directly.
 
 Changing the provider does not re-pin the models. Follow with
-`resolve_models.py` inside the project so `screening_config.py` names
-models the new provider actually serves.
+`resolve_models.py` inside the project — it lists what the new provider
+serves, and `--stage X --model Y` writes the choice — so
+`screening_config.py` names models the new provider actually has.
 
 Stdlib-only, like everything in `scripts/setup/`.
 """
@@ -84,8 +85,10 @@ def main(argv: list[str] | None = None) -> int:
             f"conversation.",
         )
     print(
-        "NEXT: run resolve_models.py in the project directory to re-pin "
-        "screening_config.py to models this provider serves.",
+        "NEXT: run resolve_models.py in the project directory to see what "
+        "this provider\n      serves, then re-pin screening_config.py with "
+        "--stage/--model. The old pins\n      name models this provider does "
+        "not have.",
     )
     return 0
 

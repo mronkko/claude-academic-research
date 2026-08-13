@@ -289,10 +289,10 @@ between scope.md and search_config.py.
 
 Model choice has two layers. **The provider** is a machine-wide setting
 — which company's (or which local server's) API the pipelines call.
-**The tier** is per stage: `fast` for screening thousands of abstracts,
-`balanced` for coding full texts. The plugin turns a tier into a
-concrete model by asking the provider what it currently serves, so a
-new model generation is picked up without a plugin update.
+**The tier** is a per-stage capability level: `fast` for screening
+thousands of abstracts, `balanced` for coding full texts. No model ID
+is hardcoded anywhere in the plugin; you ask the provider what it
+serves today and pin a choice.
 
 `screening_config.py` records the result (`ABSTRACT_SCREENING_MODEL`,
 `FULLTEXT_CODING_MODEL`) with a provenance comment. That pin is the
@@ -308,18 +308,40 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_llm_provider.py
 It reports the provider, whether the user ever chose one, and whether
 its credential is present — without printing any key.
 
-**Pinning the models** (bootstrap, and any time the provider changes):
+**Pinning the models** (bootstrap, and any time the provider changes)
+is a two-step, and the middle step is the user's. First see what is on
+offer — this writes nothing:
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/resolve_models.py
 ```
 
-Run it from the project directory. It rewrites only the two `*_MODEL`
-lines in `screening_config.py`, leaving the prompts untouched. Add
-`--dry-run` to show the choice without writing. If it reports a
-**catalogue fallback**, say so to the user: the pin came from a file
-shipped with the plugin rather than from the provider, and may name a
-superseded model.
+**Then propose one model per stage and get the user's confirmation
+before pinning anything.** The script deliberately does not choose:
+provider listings are full of things that are not ordinary synchronous
+chat models — `:batch` IDs are asynchronous queue endpoints, and
+`-image`, `-tts`, `-audio`, `deep-research` and `customtools` variants
+appear right alongside the models you want. The `tier?` column is a
+guess from the model's name and is labelled as one. Reading past that
+is your job, not the script's.
+
+Then write each confirmed choice, one call per stage, from the project
+directory:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/resolve_models.py \
+    --stage abstract_screening --model <id>
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/resolve_models.py \
+    --stage fulltext_coding --model <id>
+```
+
+It rewrites only that stage's `*_MODEL` line, leaving the prompts
+untouched, and stamps a provenance comment whose `tier=` label is
+inferred from the model you pinned (override with `--tier`). Add
+`--dry-run` to see the line without writing it. If the listing step
+reports a **catalogue fallback**, say so to the user: the menu came
+from a file shipped with the plugin rather than from the provider, and
+may name superseded models.
 
 **Switching provider** — "use OpenAI instead", "screen this locally":
 
@@ -327,6 +349,9 @@ superseded model.
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/set_llm_provider.py openai
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/resolve_models.py
 ```
+
+then confirm and pin as above — the old pins name models the new
+provider does not serve.
 
 Providers: `anthropic`, `google`, `openai`, `openrouter`, and the two
 local ones, `ollama` and `lmstudio`, which need no API key and no
@@ -363,10 +388,12 @@ constant, so the provenance comment stays true:
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/resolve_models.py \
-    --stage fulltext_coding --tier deep
+    --stage fulltext_coding --model <id>
 ```
 
-Then say that you did, and that it changed the committed default.
+Run the script bare first if you need to see what the provider serves,
+and confirm the specific model with the user before writing. Then say
+that you did, and that it changed the committed default.
 
 **Cost before spending.** `--dry-run` on either screening script prints
 a projected cost for the real item count. Quote it before a full run,

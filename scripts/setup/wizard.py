@@ -2376,8 +2376,8 @@ def main() -> int:
     print()
     print(_wrap_body(
         "Screening runs on whichever models your provider currently serves. "
-        "Inside a systematic-review project, pin them into "
-        "screening_config.py with:",
+        "Inside a systematic-review project, run this to see them — it "
+        "writes nothing, and takes --stage/--model to pin the one you pick:",
     ))
     print(f"    python3 {_HERE / 'resolve_models.py'}")
 

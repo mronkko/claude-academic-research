@@ -1,9 +1,14 @@
 """Tests for the model-pinning bootstrap and the provider-switch scripts.
 
-`resolve_models.py` rewrites two lines of a file the user owns and keeps
-in git, so the tests care as much about what it leaves alone as about
-what it writes: the prompts, the coding scheme, and the line endings all
-have to survive untouched.
+`resolve_models.py` reports what a provider serves and writes the model
+the user picked. It rewrites a line of a file the user owns and keeps in
+git, so the tests care as much about what it leaves alone as about what
+it writes: the prompts, the coding scheme, and the line endings all have
+to survive untouched.
+
+The script picks no model of its own — see
+`test_model_discovery.test_nothing_here_picks_a_model` for why — so what
+is tested here is the menu it prints and the pin it writes on request.
 
 Discovery is monkeypatched throughout — these are unit tests and must
 not call a provider. `tests/live/test_auth_workflows.py` covers the real
@@ -54,10 +59,20 @@ def project(tmp_path: Path) -> Path:
     return path
 
 
-def _fake_resolution(mod, model: str, source: str = "discovered", detail: str = ""):
+def _serves(mod, *ids: str):
+    """Monkeypatch `list_models` to report `ids` as the provider's listing."""
     from core import model_discovery
 
-    return lambda *a, **kw: model_discovery.Resolution(model, source, detail)
+    return lambda *a, **kw: [model_discovery.ModelInfo(id=i) for i in ids]
+
+
+def _unreachable(message: str = "HTTP 401"):
+    from core import model_discovery
+
+    def boom(*_a, **_kw):
+        raise model_discovery.DiscoveryError(message)
+
+    return boom
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +109,7 @@ def test_pin_line_carries_provenance(resolve) -> None:
     assert line.startswith('X_MODEL = "claude-haiku-4-5"')
     assert "provider=anthropic" in line
     assert "tier=fast" in line
-    assert "resolved 2026-08-13" in line
+    assert "pinned 2026-08-13" in line
 
 
 def test_rewrite_replaces_only_the_target_line(resolve) -> None:
@@ -132,7 +147,7 @@ def test_rewrite_replaces_an_existing_pin_without_stacking_comments(
     text, _ = resolve.rewrite_pin('M = ""\n', "M", first)
     text, n = resolve.rewrite_pin(text, "M", second)
     assert n == 1
-    assert text.count("resolved") == 1
+    assert text.count("pinned") == 1
     assert "a-2" in text and "a-1" not in text
 
 
@@ -149,99 +164,205 @@ def test_rewrite_handles_a_model_id_with_a_backslash(resolve) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_main_writes_both_pins(resolve, project, monkeypatch, capsys) -> None:
+def test_main_without_a_model_lists_and_writes_nothing(
+    resolve, project, monkeypatch, capsys,
+) -> None:
+    """The default is a menu, not a decision."""
+    before = project.read_text(encoding="utf-8")
     monkeypatch.setattr(
-        resolve.model_discovery, "resolve_tier", _fake_resolution(resolve, "m-1"),
+        resolve.model_discovery, "list_models",
+        _serves(resolve, "claude-haiku-4-5", "claude-opus-5"),
     )
     rc = resolve.main(["--config", str(project), "--provider", "anthropic"])
     assert rc == 0
+    assert project.read_text(encoding="utf-8") == before
+
+    out = capsys.readouterr().out
+    assert "claude-haiku-4-5" in out and "claude-opus-5" in out
+    assert "Nothing has been written" in out
+
+
+def test_the_listing_marks_its_tier_column_as_a_guess(
+    resolve, project, monkeypatch, capsys,
+) -> None:
+    """The column exists to narrow a 400-row listing, not to recommend.
+
+    Stated in the output because the reader is an agent about to propose
+    one of these to a user, and an unlabelled "tier" column reads as the
+    plugin's endorsement.
+    """
+    monkeypatch.setattr(
+        resolve.model_discovery, "list_models",
+        _serves(resolve, "claude-haiku-4-5", "some-unrelated-model"),
+    )
+    resolve.main(["--config", str(project), "--provider", "anthropic"])
+    out = capsys.readouterr().out
+    assert "tier?" in out
+    assert "not a recommendation" in out
+    assert ":batch" in out, "the output must warn about non-chat variants"
+
+
+def test_the_listing_places_what_it_can_and_admits_what_it_cannot(
+    resolve, monkeypatch,
+) -> None:
+    from core import model_discovery, providers
+
+    spec = providers.require("anthropic")
+    models = [
+        model_discovery.ModelInfo(id="claude-haiku-4-5", created=1_700_000_000),
+        model_discovery.ModelInfo(id="mystery-model"),
+    ]
+    body = "\n".join(resolve.listing_lines(spec, models))
+    assert "fast" in body
+    assert "?" in body
+    assert "2023-11-14" in body, "a reported timestamp becomes a readable date"
+
+
+def test_main_pins_the_model_it_is_given(resolve, project, monkeypatch) -> None:
+    monkeypatch.setattr(
+        resolve.model_discovery, "list_models", _serves(resolve, "claude-opus-5"),
+    )
+    rc = resolve.main([
+        "--config", str(project), "--provider", "anthropic",
+        "--stage", "fulltext_coding", "--model", "claude-opus-5",
+    ])
+    assert rc == 0
 
     written = project.read_text(encoding="utf-8")
-    assert 'ABSTRACT_SCREENING_MODEL = "m-1"' in written
-    assert 'FULLTEXT_CODING_MODEL = "m-1"' in written
+    assert 'FULLTEXT_CODING_MODEL = "claude-opus-5"' in written
+    assert 'ABSTRACT_SCREENING_MODEL = ""' in written, "only the named stage"
     # Everything else survives.
     assert '"""Docstring the user edited."""' in written
     assert 'ABSTRACT_SCREENING_SYSTEM_PROMPT = """Screen this."""' in written
     assert 'ABSTRACT_SCREENING_PROMPT_VERSION = "v1"' in written
 
 
-def test_main_uses_the_stage_default_tiers(resolve, project, monkeypatch) -> None:
-    """Abstract screening asks for the fast tier and full-text coding for
-    the balanced one — the cost decision pinned in TIER_FOR_STAGE."""
-    seen: list[str] = []
-
-    def spy(_spec, tier, **_kw):
-        from core import model_discovery
-
-        seen.append(tier)
-        return model_discovery.Resolution(f"model-for-{tier}", "discovered")
-
-    monkeypatch.setattr(resolve.model_discovery, "resolve_tier", spy)
-    resolve.main(["--config", str(project), "--provider", "anthropic"])
-    assert seen == ["fast", "balanced"]
-
-
-def test_main_stage_and_tier_pins_one_line(resolve, project, monkeypatch) -> None:
-    """The permanent-change path: --stage X --tier deep rewrites only X."""
+def test_the_tier_label_describes_the_model_actually_pinned(
+    resolve, project, monkeypatch,
+) -> None:
+    """A user who deliberately pins Opus to the screening stage must not
+    get a comment calling it the fast tier."""
     monkeypatch.setattr(
-        resolve.model_discovery, "resolve_tier", _fake_resolution(resolve, "big-1"),
+        resolve.model_discovery, "list_models", _serves(resolve, "claude-opus-5"),
     )
-    rc = resolve.main([
+    resolve.main([
         "--config", str(project), "--provider", "anthropic",
-        "--stage", "fulltext_coding", "--tier", "deep",
+        "--stage", "abstract_screening", "--model", "claude-opus-5",
     ])
-    assert rc == 0
+    assert "tier=deep" in project.read_text(encoding="utf-8")
 
+
+def test_an_unplaceable_model_falls_back_to_the_stage_tier(resolve) -> None:
+    """Local model names carry no tier vocabulary, so the stage's own
+    default is the only honest label left."""
+    from core import providers
+
+    spec = providers.require("ollama")
+    assert resolve.tier_for_pin(spec, "some-custom-gguf", "fulltext_coding", "") == (
+        "balanced"
+    )
+    assert resolve.tier_for_pin(spec, "some-custom-gguf", "abstract_screening", "") == (
+        "fast"
+    )
+
+
+def test_an_explicit_tier_overrides_the_inference(resolve, project, monkeypatch) -> None:
+    monkeypatch.setattr(
+        resolve.model_discovery, "list_models", _serves(resolve, "claude-haiku-4-5"),
+    )
+    resolve.main([
+        "--config", str(project), "--provider", "anthropic", "--stage",
+        "fulltext_coding", "--model", "claude-haiku-4-5", "--tier", "deep",
+    ])
     written = project.read_text(encoding="utf-8")
-    assert 'FULLTEXT_CODING_MODEL = "big-1"' in written
     assert "tier=deep" in written
-    assert 'ABSTRACT_SCREENING_MODEL = ""' in written
+    assert 'FULLTEXT_CODING_MODEL = "claude-haiku-4-5"' in written
 
 
-def test_main_rejects_tier_without_stage(resolve, project) -> None:
+def test_main_rejects_a_model_without_a_stage(resolve, project) -> None:
     with pytest.raises(SystemExit):
-        resolve.main(["--config", str(project), "--tier", "deep"])
+        resolve.main(["--config", str(project), "--model", "claude-opus-5"])
+
+
+def test_main_rejects_a_tier_without_a_model(resolve, project) -> None:
+    """--tier only labels a pin; alone it would silently do nothing."""
+    with pytest.raises(SystemExit):
+        resolve.main(["--config", str(project), "--tier", "deep",
+                      "--stage", "fulltext_coding"])
 
 
 def test_main_dry_run_writes_nothing(resolve, project, monkeypatch, capsys) -> None:
     before = project.read_text(encoding="utf-8")
-    monkeypatch.setattr(
-        resolve.model_discovery, "resolve_tier", _fake_resolution(resolve, "m-1"),
-    )
-    rc = resolve.main(["--config", str(project), "--provider", "anthropic",
-                       "--dry-run"])
+    rc = resolve.main([
+        "--config", str(project), "--provider", "anthropic",
+        "--stage", "fulltext_coding", "--model", "claude-opus-5", "--dry-run",
+    ])
     assert rc == 0
     assert project.read_text(encoding="utf-8") == before
-    assert "m-1" in capsys.readouterr().out
+    assert "claude-opus-5" in capsys.readouterr().out
 
 
-def test_main_announces_a_catalogue_fallback(
+def test_an_unlisted_model_warns_but_still_pins(
     resolve, project, monkeypatch, capsys,
 ) -> None:
-    """A pin that came from the shipped file, not the provider, must say
-    so — silence there is how a project stays on a superseded model."""
+    """Usually a typo — but LM Studio omits models it has not loaded, so
+    refusing would block a legitimate pin."""
     monkeypatch.setattr(
-        resolve.model_discovery, "resolve_tier",
-        _fake_resolution(resolve, "old-1", source="catalog", detail="HTTP 401"),
+        resolve.model_discovery, "list_models", _serves(resolve, "claude-opus-5"),
     )
+    rc = resolve.main([
+        "--config", str(project), "--provider", "anthropic",
+        "--stage", "fulltext_coding", "--model", "claude-opuss-5",
+    ])
+    assert rc == 0
+    assert "WARNING" in capsys.readouterr().err
+    assert 'FULLTEXT_CODING_MODEL = "claude-opuss-5"' in project.read_text(
+        encoding="utf-8",
+    )
+
+
+def test_an_unreachable_provider_does_not_block_a_pin(
+    resolve, project, monkeypatch,
+) -> None:
+    """The typo check is a courtesy; being offline is not a veto."""
+    monkeypatch.setattr(resolve.model_discovery, "list_models", _unreachable())
+    rc = resolve.main([
+        "--config", str(project), "--provider", "anthropic",
+        "--stage", "fulltext_coding", "--model", "claude-opus-5",
+    ])
+    assert rc == 0
+    assert 'FULLTEXT_CODING_MODEL = "claude-opus-5"' in project.read_text(
+        encoding="utf-8",
+    )
+
+
+def test_listing_falls_back_to_the_catalogue_loudly(
+    resolve, project, monkeypatch, capsys,
+) -> None:
+    """A menu from the shipped file, not the provider, must say so —
+    silence there is how a project stays on a superseded model."""
+    monkeypatch.setattr(resolve.model_discovery, "list_models", _unreachable())
     rc = resolve.main(["--config", str(project), "--provider", "anthropic"])
     assert rc == 0
-    err = capsys.readouterr().err
-    assert "WARNING" in err
-    assert "HTTP 401" in err
+
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+    assert "HTTP 401" in captured.err
+    assert "ANTHROPIC_API_KEY" in captured.err
+    assert "catalogue" in captured.out
+    assert "claude-haiku" in captured.out
 
 
-def test_main_fails_when_nothing_resolves(
+def test_listing_fails_when_there_is_nothing_to_suggest(
     resolve, project, monkeypatch, capsys,
 ) -> None:
+    """OpenRouter has no catalogue entry — reporting the failure beats
+    inventing a pin."""
     monkeypatch.setattr(
-        resolve.model_discovery, "resolve_tier",
-        _fake_resolution(resolve, "", source="none", detail="unreachable"),
+        resolve.model_discovery, "list_models", _unreachable("offline"),
     )
-    before = project.read_text(encoding="utf-8")
-    rc = resolve.main(["--config", str(project), "--provider", "anthropic"])
+    rc = resolve.main(["--config", str(project), "--provider", "openrouter"])
     assert rc == 1
-    assert project.read_text(encoding="utf-8") == before
     assert "ERROR" in capsys.readouterr().err
 
 
@@ -255,28 +376,49 @@ def test_main_reports_a_missing_config_file(
     resolve, tmp_path, monkeypatch, capsys,
 ) -> None:
     monkeypatch.setattr(
-        resolve.model_discovery, "resolve_tier", _fake_resolution(resolve, "m-1"),
+        resolve.model_discovery, "list_models", _serves(resolve, "claude-opus-5"),
     )
     rc = resolve.main([
         "--config", str(tmp_path / "nope.py"), "--provider", "anthropic",
+        "--stage", "fulltext_coding", "--model", "claude-opus-5",
     ])
     assert rc == 1
     assert "not found" in capsys.readouterr().err
+
+
+def test_main_reports_a_config_without_the_constant(
+    resolve, tmp_path, monkeypatch, capsys,
+) -> None:
+    path = tmp_path / "screening_config.py"
+    path.write_text("NOTHING = 1\n", encoding="utf-8")
+    monkeypatch.setattr(
+        resolve.model_discovery, "list_models", _serves(resolve, "claude-opus-5"),
+    )
+    rc = resolve.main([
+        "--config", str(path), "--provider", "anthropic",
+        "--stage", "fulltext_coding", "--model", "claude-opus-5",
+    ])
+    assert rc == 1
+    assert "ERROR" in capsys.readouterr().err
+    assert path.read_text(encoding="utf-8") == "NOTHING = 1\n"
 
 
 def test_main_preserves_crlf_line_endings(
     resolve, tmp_path, monkeypatch,
 ) -> None:
     """The file is in the user's git repo. Flipping every line ending
-    would bury the two lines that actually changed."""
+    would bury the one line that actually changed."""
     path = tmp_path / "screening_config.py"
     path.write_bytes(
         b'ABSTRACT_SCREENING_MODEL = ""\r\nFULLTEXT_CODING_MODEL = ""\r\n',
     )
     monkeypatch.setattr(
-        resolve.model_discovery, "resolve_tier", _fake_resolution(resolve, "m-1"),
+        resolve.model_discovery, "list_models", _serves(resolve, "claude-haiku-4-5"),
     )
-    resolve.main(["--config", str(path), "--provider", "anthropic"])
+    resolve.main([
+        "--config", str(path), "--provider", "anthropic",
+        "--stage", "abstract_screening", "--model", "claude-haiku-4-5",
+    ])
 
     raw = path.read_bytes()
     assert b"\r\n" in raw

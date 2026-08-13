@@ -1,34 +1,46 @@
 #!/usr/bin/env python3
-"""Pin the models this project screens with, by asking the provider.
+"""Show what your provider serves, and pin the model you choose.
 
-This is the bootstrap step that turns a tier ("fast", "balanced") into a
-concrete model ID. It asks your configured provider which models it
-currently serves, picks the newest one in each stage's tier, and writes
-the answer into the project's `screening_config.py`.
+Two jobs, deliberately separated:
 
-Usage:
-    python3 resolve_models.py                      # both stages, default tiers
-    python3 resolve_models.py --dry-run            # show the choice, write nothing
-    python3 resolve_models.py --stage fulltext_coding --tier deep
-    python3 resolve_models.py --config path/to/screening_config.py
+    python3 resolve_models.py                          # what can I use?
+    python3 resolve_models.py --stage abstract_screening --model <id>
+
+The first asks the configured provider for its model listing and prints
+it. It picks nothing and writes nothing. The second writes one chosen ID
+into the project's `screening_config.py`.
+
+**Why there is no automatic pick.** There used to be one: tier hints
+plus a version-number sort. It chose `anthropic/claude-haiku-4.5:batch`
+on OpenRouter — the *asynchronous Batch API*, useless for a synchronous
+screening run — because the suffix won a string tiebreak. On Google it
+chose `deep-research-pro-preview-12-2025` for the deep tier, because
+`12-2025` parses as version 12.2025 and outranks every real Gemini. Both
+mistakes are obvious to a reader who knows what a Batch API is, and this
+script only ever runs from a SKILL.md, with an agent reading its output
+and a user available to confirm. Suppressing those two would have meant
+a blocklist of provider-specific substrings — `:batch`, `-image`, `-tts`,
+`customtools` — that goes stale exactly as fast as the pinned model IDs
+this whole design exists to eliminate.
+
+So: the script reports, the agent proposes, the user confirms.
+`templates/model_catalog.toml` covers the one case with nobody in the
+loop — a provider that cannot be reached.
 
 Why write into `screening_config.py` rather than re-copying the
 template: that file also holds the review's prompts and coding scheme,
-which the user wrote and a reviewer will read. Only the two
-`*_MODEL = "…"` lines are rewritten, in place; everything else in the
+which the user wrote and a reviewer will read. Only the one
+`*_MODEL = "…"` line is rewritten, in place; everything else in the
 file is untouched, byte for byte.
 
 Each rewritten line carries its provenance —
 
-    ABSTRACT_SCREENING_MODEL = "…"  # provider=… · tier=… · resolved …
+    ABSTRACT_SCREENING_MODEL = "…"  # provider=… · tier=… · pinned …
 
 — because the pin is a methods-section fact. A reader reconstructing the
-review needs to know not just which model ran, but which tier it was
-chosen to satisfy and when the choice was made.
-
-`--stage X --tier Y` is also the permanent-change path: to code full
-texts on the deep tier from now on, run it with `--tier deep` rather
-than hand-editing the constant, so the provenance comment stays true.
+review needs to know not just which model ran, but roughly what class of
+model it was and when the choice was made. The tier label is inferred
+from the ID and can be overridden with `--tier`.
 
 Stdlib-only, like everything in `scripts/setup/` — this runs under a
 bare `python3` with no venv (see CLAUDE.md).
@@ -39,7 +51,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -78,13 +90,107 @@ def _credentials(spec: ProviderSpec) -> tuple[str, str]:
     return api_key, base_url
 
 
+# ---------------------------------------------------------------------------
+# Listing
+# ---------------------------------------------------------------------------
+
+
+def _released(created: int) -> str:
+    """`created` as a date, or blank. Providers report it inconsistently."""
+    if not created:
+        return ""
+    try:
+        return datetime.fromtimestamp(created, tz=UTC).date().isoformat()
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
+def listing_lines(spec: ProviderSpec, models: list) -> list[str]:
+    """The model menu, one row per model, sorted by ID.
+
+    Sorted rather than ranked. Alphabetical order groups a vendor's
+    models together — which is what makes a 400-row OpenRouter listing
+    skimmable — without implying that anything at the top is preferred.
+
+    The `tier?` column is `providers.tier_of`, a guess from the ID's
+    wording, and is labelled as a guess. It narrows a long listing; it
+    does not decide anything.
+    """
+    rows = [
+        (providers.tier_label(spec, m.id), m.id, _released(m.created))
+        for m in sorted(models, key=lambda m: m.id)
+    ]
+    tier_w = max([len(t) for t, _i, _r in rows] + [len("tier?")])
+    id_w = max([len(i) for _t, i, _r in rows] + [len("model")])
+    out = [f"  {'tier?':<{tier_w}}  {'model':<{id_w}}  released"]
+    out += [f"  {t:<{tier_w}}  {i:<{id_w}}  {r}".rstrip() for t, i, r in rows]
+    return out
+
+
+def _print_listing(spec: ProviderSpec, models: list) -> None:
+    print(f"provider: {spec.name} ({spec.label})")
+    print(f"{len(models)} model(s) served. Nothing has been written.\n")
+    for line in listing_lines(spec, models):
+        print(line)
+    print(
+        "\n`tier?` is a guess from the model's name, not a recommendation — "
+        "check it.\nVariants that are not ordinary synchronous chat models "
+        "(`:batch` queues,\n`-image` / `-tts` / `deep-research` endpoints) "
+        "appear here too and are rarely\nwhat a screening run wants.\n"
+        "\nPin a choice with:\n"
+        f"  {Path(__file__).name} --stage abstract_screening --model <id>\n"
+        f"  {Path(__file__).name} --stage fulltext_coding    --model <id>",
+    )
+
+
+def _print_catalog_fallback(spec: ProviderSpec, reason: str) -> int:
+    """Offer the shipped catalogue when the provider cannot be asked.
+
+    A catalogue answer is a working answer, but it comes from a file
+    that ages with the plugin release rather than with the provider.
+    Silence here is how a project ends up pinned to a superseded model
+    and nobody notices.
+    """
+    print(
+        f"WARNING: could not ask {spec.name} for its model listing: {reason}.\n"
+        f"         Check the credential for "
+        f"{spec.api_key_env or spec.base_url_env or 'this provider'}, "
+        f"or pin a model by hand.",
+        file=sys.stderr,
+    )
+    suggestions = model_discovery.catalog_suggestions(spec.name)
+    if not suggestions:
+        print(
+            f"ERROR: the shipped catalogue has no entry for {spec.name} "
+            f"either, so\n       there is nothing to suggest. Fix the "
+            f"credential and re-run, or pass\n       --model with an ID "
+            f"you know the provider serves.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"provider: {spec.name} ({spec.label})")
+    print(
+        "Falling back to the catalogue shipped with this plugin. These may "
+        "name\nmodels that have since been superseded — say so to the user "
+        "before pinning:\n",
+    )
+    for tier, model in suggestions:
+        print(f"  {tier:<9} {model}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Pinning
+# ---------------------------------------------------------------------------
+
+
 def pin_line(constant: str, model: str, provider: str, tier: str,
              today: str = "") -> str:
     """The replacement source line, with its provenance comment."""
     stamp = today or date.today().isoformat()
     return (
         f'{constant} = "{model}"'
-        f"  # provider={provider} · tier={tier} · resolved {stamp}"
+        f"  # provider={provider} · tier={tier} · pinned {stamp}"
     )
 
 
@@ -108,9 +214,47 @@ def rewrite_pin(text: str, constant: str, line: str) -> tuple[str, int]:
     return pattern.subn(lambda _m: line, text, count=1)
 
 
+def tier_for_pin(spec: ProviderSpec, model: str, stage: str, override: str) -> str:
+    """The tier label for the provenance comment.
+
+    Classified from the model actually chosen, not from the stage's
+    default tier: a user who deliberately pins a strong model to the
+    screening stage must not get a comment claiming it is the fast one.
+    Falls back to the stage default only when the ID says nothing —
+    common on local providers, where names carry no tier vocabulary.
+    """
+    return override or providers.tier_of(spec, model) or TIER_FOR_STAGE.get(
+        stage, providers.TIER_BALANCED,
+    )
+
+
+def _warn_if_unlisted(spec: ProviderSpec, model: str) -> None:
+    """Flag a model the provider does not list — usually a typo.
+
+    A warning rather than a refusal: LM Studio omits models it has not
+    loaded, and a user may legitimately name something the listing
+    endpoint does not return. Being unreachable is not a reason to
+    block a pin either, so a failed lookup passes quietly.
+    """
+    api_key, base_url = _credentials(spec)
+    try:
+        served = {m.id for m in model_discovery.list_models(
+            spec, api_key=api_key, base_url=base_url,
+        )}
+    except model_discovery.DiscoveryError:
+        return
+    if model not in served:
+        print(
+            f"WARNING: {spec.name} does not list {model!r}. Pinning it "
+            f"anyway — check\n         for a typo, or run without --model "
+            f"to see what is served.",
+            file=sys.stderr,
+        )
+
+
 def _read(path: Path) -> str:
-    # newline="" keeps CRLF files CRLF: this rewrites two lines of a file
-    # the user has in git, and flipping every line ending would bury them.
+    # newline="" keeps CRLF files CRLF: this rewrites a line of a file
+    # the user has in git, and flipping every line ending would bury it.
     with open(path, encoding="utf-8", newline="") as fh:
         return fh.read()
 
@@ -120,50 +264,9 @@ def _write(path: Path, text: str) -> None:
         fh.write(text)
 
 
-def _resolve(
-    spec: ProviderSpec, stages: list[str], tier_override: str, catalog: dict | None,
-) -> dict[str, tuple[str, model_discovery.Resolution]]:
-    """Resolve every stage, returning `{stage: (tier, Resolution)}`."""
-    api_key, base_url = _credentials(spec)
-    out: dict[str, tuple[str, model_discovery.Resolution]] = {}
-    for stage in stages:
-        tier = tier_override or TIER_FOR_STAGE.get(stage, providers.TIER_BALANCED)
-        out[stage] = (tier, model_discovery.resolve_tier(
-            spec, tier, api_key=api_key, base_url=base_url, catalog=catalog,
-        ))
-    return out
-
-
-def _report(spec: ProviderSpec, resolved: dict) -> None:
-    print(f"provider: {spec.name} ({spec.label})")
-    stage_w = max((len(s) for s in resolved), default=0)
-    model_w = max((len(r.model) or 12 for _t, r in resolved.values()), default=0)
-    for stage, (tier, res) in resolved.items():
-        model = res.model or "(none found)"
-        print(f"  {stage:<{stage_w}}  tier={tier:<9} {model:<{model_w}}  [{res.source}]")
-
-
-def _warn_stale(spec: ProviderSpec, resolved: dict) -> None:
-    """Say out loud when a pin came from the shipped file, not the API.
-
-    A catalogue fallback is a working answer, but it is an answer from a
-    file that ages with the plugin release rather than with the
-    provider. Silence here is how a project ends up pinned to a
-    superseded model and nobody notices.
-    """
-    for stage, (_tier, res) in resolved.items():
-        if not res.is_stale_risk:
-            continue
-        print(
-            f"\nWARNING: {stage} fell back to the model catalogue shipped "
-            f"with this plugin.\n"
-            f"         Could not ask {spec.name}: {res.detail}.\n"
-            f"         The pin below may name a model that has since been "
-            f"superseded —\n"
-            f"         fix the credential or endpoint and re-run to get a "
-            f"current one.",
-            file=sys.stderr,
-        )
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -174,27 +277,39 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--stage", choices=sorted(CONSTANT_FOR_STAGE),
-        help="Pin only this stage. Default: every stage.",
+        help="Which stage's pin to write. Required with --model.",
+    )
+    parser.add_argument(
+        "--model",
+        help="The model ID to pin. Without it, the script lists what the "
+             "provider serves and writes nothing.",
     )
     parser.add_argument(
         "--tier", choices=list(providers.TIERS),
-        help="Override the stage's default tier. Requires --stage, since a "
-             "tier names one capability level and the stages want different "
-             "ones. This is the supported way to make the change permanent.",
+        help="Tier label for the provenance comment. Defaults to the tier "
+             "the model ID implies. Only affects the comment, never which "
+             "model is written.",
     )
     parser.add_argument(
         "--provider",
-        help="Resolve against this provider instead of the configured one. "
-             "Does not change the configuration — use set_llm_provider.py.",
+        help="Use this provider instead of the configured one. Does not "
+             "change the configuration — use set_llm_provider.py.",
+    )
+    parser.add_argument(
+        "--list", action="store_true",
+        help="List the served models and exit. This is also the default "
+             "when --model is not given.",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
-        help="Print what would be pinned; write nothing.",
+        help="Print the line that would be written; write nothing.",
     )
     args = parser.parse_args(argv)
 
-    if args.tier and not args.stage:
-        parser.error("--tier applies to one stage; pass --stage as well.")
+    if args.model and not args.stage:
+        parser.error("--model pins one stage; pass --stage as well.")
+    if args.tier and not args.model:
+        parser.error("--tier labels a pin; it does nothing without --model.")
 
     provider_name = args.provider or get(
         "llm", "provider", env=providers.PROVIDER_ENV,
@@ -205,56 +320,46 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
 
-    stages = [args.stage] if args.stage else list(CONSTANT_FOR_STAGE)
-    resolved = _resolve(spec, stages, args.tier or "", None)
+    if args.list or not args.model:
+        api_key, base_url = _credentials(spec)
+        try:
+            models = model_discovery.list_models(
+                spec, api_key=api_key, base_url=base_url,
+            )
+        except model_discovery.DiscoveryError as e:
+            return _print_catalog_fallback(spec, str(e))
+        _print_listing(spec, models)
+        return 0
 
-    _report(spec, resolved)
-    _warn_stale(spec, resolved)
-
-    unresolved = [s for s, (_t, r) in resolved.items() if not r.model]
-    if unresolved:
-        print(
-            f"\nERROR: no model found for: {', '.join(unresolved)}.\n"
-            f"       {spec.name} could not be asked and the shipped "
-            f"catalogue has no entry for that tier.\n"
-            f"       Check the credential for {spec.api_key_env or spec.base_url_env}, "
-            f"or pin a model by hand in {args.config}.",
-            file=sys.stderr,
-        )
-        return 1
+    constant = CONSTANT_FOR_STAGE[args.stage]
+    tier = tier_for_pin(spec, args.model, args.stage, args.tier or "")
+    line = pin_line(constant, args.model, spec.name, tier)
 
     if args.dry_run:
-        print(f"\ndry run: {args.config} not modified.")
+        print(f"would write to {args.config}:\n  {line}")
         return 0
+
+    _warn_if_unlisted(spec, args.model)
 
     if not args.config.is_file():
         print(
-            f"\nERROR: {args.config} not found. Run this from the project "
+            f"ERROR: {args.config} not found. Run this from the project "
             f"directory, or pass --config.",
             file=sys.stderr,
         )
         return 1
 
-    text = _read(args.config)
-    written = []
-    for stage, (tier, res) in resolved.items():
-        constant = CONSTANT_FOR_STAGE[stage]
-        text, n = rewrite_pin(
-            text, constant, pin_line(constant, res.model, spec.name, tier),
+    text, n = rewrite_pin(_read(args.config), constant, line)
+    if not n:
+        print(
+            f"ERROR: {constant} not found in {args.config}; nothing written. "
+            f"Is that a screening config?",
+            file=sys.stderr,
         )
-        if n:
-            written.append(constant)
-        else:
-            print(
-                f"WARNING: {constant} not found in {args.config}; left alone. "
-                f"Is that a screening config?",
-                file=sys.stderr,
-            )
-    if not written:
         return 1
 
     _write(args.config, text)
-    print(f"\nwrote {len(written)} pin(s) to {args.config}: {', '.join(written)}")
+    print(f"pinned {constant} in {args.config}:\n  {line}")
     return 0
 
 

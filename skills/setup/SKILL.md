@@ -141,12 +141,24 @@ yourself; a permission rule denies it precisely so keys cannot reach a
 transcript.
 
 If `set_llm_provider.py` reports a missing credential, **hand off to
-the wizard for that key** — do not ask for it in the chat. Then tell
-the user to re-pin their project's models, since the old pins name
-models the new provider does not serve:
+the wizard for that key** — do not ask for it in the chat. Then re-pin
+the project's models, since the old pins name models the new provider
+does not serve. Run this from the project directory to see what it
+does serve:
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/resolve_models.py
+```
+
+It lists models and writes nothing. **Propose one per stage to the user
+and get confirmation before pinning** — the listing includes variants
+that are not ordinary chat models (`:batch` queues, `-image` / `-tts`
+endpoints, `deep-research`), and the `tier?` column is a guess from the
+model's name, not a recommendation. Then write each confirmed choice:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/resolve_models.py \
+    --stage abstract_screening --model <id>
 ```
 
 ## Red flags

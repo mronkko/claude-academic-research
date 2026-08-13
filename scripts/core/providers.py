@@ -13,11 +13,14 @@ The three-layer split:
   model_discovery.py what it currently serves  (asks the provider)
   screening_config.py what this project pinned (written at bootstrap)
 
-`tier_hints` is the load-bearing idea. Rather than knowing that Haiku 4.5
-is the cheap Anthropic model, the plugin knows that Anthropic marks its
-cheap models with "haiku" in the ID, and asks the API which of those
-exist today. When Anthropic ships Haiku 5, discovery finds it with no
-code change.
+`tier_hints` maps a capability tier onto the words a provider puts in its
+own model IDs ("haiku", "flash", "mini"). It is a *classifier*, not a
+chooser: `tier_of` uses it to price a model back into a tier, and
+`resolve_models.py --list` uses it to annotate a listing so a reader can
+skim it. Nothing picks a model from these hints — that judgement belongs
+to the agent and the user, who can tell that `deep-research-pro-preview`
+is an async research API and `:batch` is a queue, which no substring
+list encodes durably.
 """
 
 from __future__ import annotations
@@ -52,15 +55,9 @@ class ProviderSpec:
     #: key in the query string rather than a header).
     list_models_url: str = ""
     #: Substrings that identify a tier inside this provider's model IDs.
-    #: Checked lowercase, in order; first match wins.
+    #: Checked lowercase, in order; first match wins. Advisory only —
+    #: see the module docstring on why nothing selects a model from these.
     tier_hints: dict[str, tuple[str, ...]] = field(default_factory=dict)
-    #: Substrings that disqualify a model from a tier even though one of
-    #: that tier's hints matched. Needed because provider naming nests:
-    #: "gemini-2.5-flash-lite" contains "flash", so without an exclusion
-    #: the balanced tier picks the cheap model. Explicit rather than
-    #: inferred from hint length — the nesting is a naming accident, not
-    #: a rule, and a wrong guess here silently downgrades every run.
-    tier_excludes: dict[str, tuple[str, ...]] = field(default_factory=dict)
     #: True when the provider runs on the user's own machine — no key,
     #: no per-paper cost, and no point verifying a credential.
     local: bool = False
@@ -96,7 +93,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
             TIER_BALANCED: ("flash",),
             TIER_DEEP: ("pro",),
         },
-        tier_excludes={TIER_BALANCED: ("flash-lite",)},
         key_url="https://aistudio.google.com/app/apikey",
     ),
     ProviderSpec(
@@ -112,12 +108,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
             TIER_BALANCED: ("mini",),
             TIER_DEEP: ("gpt",),
         },
-        tier_excludes={
-            TIER_BALANCED: ("nano",),
-            # Otherwise "gpt" matches every model the account can see.
-            TIER_DEEP: ("nano", "mini", "audio", "realtime", "embedding",
-                        "image", "tts", "whisper", "moderation"),
-        },
         key_url="https://platform.openai.com/api-keys",
     ),
     ProviderSpec(
@@ -132,10 +122,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
             TIER_FAST: ("haiku", "flash", "mini"),
             TIER_BALANCED: ("sonnet", "flash"),
             TIER_DEEP: ("opus", "pro", "sonnet"),
-        },
-        tier_excludes={
-            TIER_BALANCED: ("flash-lite",),
-            TIER_DEEP: ("mini", "flash-lite"),
         },
         key_url="https://openrouter.ai/keys",
     ),
@@ -233,33 +219,11 @@ def tier_of(spec: ProviderSpec, model_id: str) -> str:
     return ""
 
 
-def hint_rank(spec: ProviderSpec, model_id: str, tier: str) -> int:
-    """Index of the first `tier` hint that `model_id` matches.
+def tier_label(spec: ProviderSpec, model_id: str) -> str:
+    """`tier_of`, rendered for a listing column. `"?"` when unclassifiable.
 
-    Hints are ordered best-first, so a lower rank is a better fit. This
-    is what makes `deep: ("opus", "sonnet")` mean "Opus, or Sonnet if
-    there is no Opus" rather than "either, whichever sorts later".
-    Returns a large number when nothing matches.
+    A display helper rather than a decision: the caller is printing a
+    menu for a human to choose from, and a blank cell reads as an error
+    where a question mark reads as "this one I cannot place".
     """
-    lowered = (model_id or "").lower()
-    for i, hint in enumerate(spec.tier_hints.get(tier, ())):
-        if hint in lowered:
-            return i
-    return 99
-
-
-def matches_tier(spec: ProviderSpec, model_id: str, tier: str) -> bool:
-    """True if `model_id` is eligible for `tier`.
-
-    Deliberately not `tier_of(...) == tier`: a deep-tier search should
-    accept `claude-sonnet-*` even though `tier_of` calls it balanced.
-    Selection is a filter, classification is a single label.
-
-    `tier_excludes` is checked first so a nested name cannot sneak into
-    a tier above its own — "gemini-2.5-flash-lite" contains "flash" and
-    would otherwise satisfy the balanced tier.
-    """
-    lowered = (model_id or "").lower()
-    if any(bad in lowered for bad in spec.tier_excludes.get(tier, ())):
-        return False
-    return any(hint in lowered for hint in spec.tier_hints.get(tier, ()))
+    return tier_of(spec, model_id) or "?"

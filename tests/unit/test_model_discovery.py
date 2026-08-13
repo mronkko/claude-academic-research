@@ -1,14 +1,16 @@
-"""Tier-based model selection, without a single pinned version in code.
+"""Model discovery, without a single pinned version in code.
 
 The defect this replaces: `scripts/core/models.py` hardcoded five model
 IDs, so every provider release made the plugin ship a stale default to
-everyone who had already installed it. Now the code knows only that
-Anthropic marks cheap models with "haiku", and asks the API which ones
-exist today.
+everyone who had already installed it. Now nothing in code names a
+model — the plugin asks the provider what it serves and an agent and
+user choose from the answer.
 
-These tests use recorded-shape listings rather than live calls, so they
-pin the *selection rule* — which is the part that has to stay correct
-when the model names change under it.
+An earlier pass tried to make that choice automatically, ranking by tier
+hints and version numbers. `test_nothing_here_picks_a_model` guards
+against it coming back, and says why.
+
+These tests use recorded-shape listings rather than live calls.
 """
 
 from __future__ import annotations
@@ -41,9 +43,9 @@ def _code_strings(path: Path) -> list[str]:
     """Every string literal in `path` except docstrings.
 
     Comments never enter the AST, and docstrings are skipped explicitly,
-    so prose that *explains* a version (the `tier_excludes` note names
-    gemini-2.5-flash-lite to say why the exclusion exists) does not
-    count as pinning one.
+    so prose that *explains* a version (the module docstring names
+    claude-haiku-4.5:batch to say why auto-selection was removed) does
+    not count as pinning one.
     """
     import ast
 
@@ -107,84 +109,58 @@ def test_the_catalog_is_the_only_place_versions_live() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Selection
+# Nothing selects a model — the property that replaced selection
 # ---------------------------------------------------------------------------
 
 
-def test_anthropic_tiers() -> None:
-    spec = providers.get("anthropic")
-    listing = _models(
-        "claude-haiku-4-5-20251001", "claude-haiku-3-5-20241022",
-        "claude-sonnet-5", "claude-sonnet-4-6", "claude-opus-5",
+def test_nothing_here_picks_a_model() -> None:
+    """Auto-selection was removed; it must not come back by accident.
+
+    It shipped once and was wrong for two of six providers against their
+    live listings. On OpenRouter the fast tier resolved to
+    `anthropic/claude-haiku-4.5:batch` — the asynchronous Batch API,
+    which a synchronous screening run cannot use — because the suffix
+    won a string tiebreak against the plain ID. On Google the deep tier
+    resolved to `deep-research-pro-preview-12-2025`, because `12-2025`
+    parses as version 12.2025 and outranks every real Gemini.
+
+    Neither is fixable by tuning. Suppressing them means a blocklist of
+    provider-specific substrings that goes stale exactly as fast as the
+    hardcoded model IDs this design exists to eliminate — and the one
+    caller, `resolve_models.py`, always runs with an agent reading its
+    output and a user present to confirm.
+    """
+    banned = {"pick_for_tier", "resolve_tier", "_sort_key", "Resolution"}
+    assert not banned & set(dir(md)), (
+        f"model_discovery regrew automatic selection: {banned & set(dir(md))}"
     )
-    assert md.pick_for_tier(listing, spec, "fast") == "claude-haiku-4-5-20251001"
-    assert md.pick_for_tier(listing, spec, "balanced") == "claude-sonnet-5"
-    assert md.pick_for_tier(listing, spec, "deep") == "claude-opus-5"
+    assert not {"matches_tier", "hint_rank"} & set(dir(providers))
+    assert not any(getattr(s, "tier_excludes", None) for s in providers.PROVIDERS)
 
 
-def test_hint_order_decides_within_a_tier() -> None:
-    """`deep: ("opus", "sonnet")` means Opus, or Sonnet if there is none.
+def test_tier_hints_classify_but_do_not_rank() -> None:
+    """`tier_of` still has to place a model, for pricing and the listing.
 
-    Without hint ranking, "claude-sonnet-5" beat "claude-opus-5" on the
-    string tiebreak — the plugin would have quietly picked the weaker
-    model for the stage that needs the stronger one.
+    Cheapest-first, so a model matching several hints lands where a
+    cost-conscious user expects: "gemini-2.5-flash" is fast, not
+    balanced, even though "flash" appears in both tiers' hints.
     """
+    google = providers.get("google")
+    assert providers.tier_of(google, "gemini-2.5-flash") == "fast"
+    assert providers.tier_of(google, "gemini-2.5-pro") == "deep"
+
+    anthropic = providers.get("anthropic")
+    assert providers.tier_of(anthropic, "claude-haiku-4-5") == "fast"
+    assert providers.tier_of(anthropic, "claude-sonnet-5") == "balanced"
+    assert providers.tier_of(anthropic, "claude-opus-5") == "deep"
+
+
+def test_an_unplaceable_model_is_labelled_not_guessed() -> None:
+    """The listing column must admit ignorance rather than invent a tier."""
     spec = providers.get("anthropic")
-    with_opus = _models("claude-sonnet-5", "claude-opus-5")
-    without = _models("claude-sonnet-5", "claude-haiku-4-5")
-    assert md.pick_for_tier(with_opus, spec, "deep") == "claude-opus-5"
-    assert md.pick_for_tier(without, spec, "deep") == "claude-sonnet-5"
-
-
-def test_a_newer_generation_beats_a_newer_timestamp() -> None:
-    """Version numbers outrank `created`.
-
-    Providers report `created` inconsistently — absent on several, and
-    not monotonic with capability. Picking an older generation because
-    it happens to carry a later timestamp is the failure that matters.
-    """
-    spec = providers.get("anthropic")
-    listing = [
-        md.ModelInfo(id="claude-haiku-4-5", created=1_000),
-        md.ModelInfo(id="claude-haiku-3-5", created=9_999_999),
-    ]
-    assert md.pick_for_tier(listing, spec, "fast") == "claude-haiku-4-5"
-
-
-def test_nested_names_do_not_leak_into_a_higher_tier() -> None:
-    """"gemini-2.5-flash-lite" contains "flash".
-
-    Without an explicit exclusion the balanced tier picks the cheap
-    model, and every full-text coding run is silently downgraded.
-    """
-    spec = providers.get("google")
-    listing = _models("gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro")
-    assert md.pick_for_tier(listing, spec, "fast") == "gemini-2.5-flash-lite"
-    assert md.pick_for_tier(listing, spec, "balanced") == "gemini-2.5-flash"
-    assert md.pick_for_tier(listing, spec, "deep") == "gemini-2.5-pro"
-
-
-def test_openai_deep_ignores_non_chat_models() -> None:
-    """An OpenAI account lists embeddings, TTS and moderation too."""
-    spec = providers.get("openai")
-    listing = _models(
-        "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4o",
-        "text-embedding-3-large", "whisper-1", "tts-1", "omni-moderation-latest",
-    )
-    assert md.pick_for_tier(listing, spec, "deep") == "gpt-5"
-    assert md.pick_for_tier(listing, spec, "fast") == "gpt-5-nano"
-
-
-def test_local_providers_pick_by_parameter_count() -> None:
-    spec = providers.get("ollama")
-    listing = _models("llama3.3:70b", "llama3.2:3b", "qwen2.5:14b")
-    assert md.pick_for_tier(listing, spec, "fast") == "llama3.2:3b"
-    assert md.pick_for_tier(listing, spec, "deep") == "llama3.3:70b"
-
-
-def test_no_match_returns_empty_not_a_wrong_guess() -> None:
-    spec = providers.get("anthropic")
-    assert md.pick_for_tier(_models("some-unrelated-model"), spec, "fast") == ""
+    assert providers.tier_of(spec, "some-unrelated-model") == ""
+    assert providers.tier_label(spec, "some-unrelated-model") == "?"
+    assert providers.tier_label(spec, "claude-haiku-4-5") == "fast"
 
 
 # ---------------------------------------------------------------------------
@@ -213,53 +189,32 @@ def test_normalises_each_providers_listing_shape() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fallback — must be loud, never silent
+# Catalogue fallback — the only path with nobody in the loop
 # ---------------------------------------------------------------------------
 
 
-def test_unreachable_provider_falls_back_to_the_catalog(monkeypatch) -> None:
-    def boom(*_a, **_kw):
-        raise md.DiscoveryError("could not reach api.anthropic.com")
-
-    monkeypatch.setattr(md, "list_models", boom)
-    res = md.resolve_tier(providers.get("anthropic"), "fast")
-    assert res.source == "catalog"
-    assert res.model.startswith("claude-haiku")
-    assert res.is_stale_risk, "a catalog answer must be flagged as possibly stale"
-    assert "api.anthropic.com" in res.detail, "the reason must reach the user"
+def test_the_catalog_offers_a_menu_per_tier() -> None:
+    """What `resolve_models.py` shows when the provider cannot be asked."""
+    got = md.catalog_suggestions("anthropic")
+    assert [tier for tier, _m in got] == ["fast", "balanced", "deep"]
+    assert all(model for _t, model in got)
 
 
-def test_discovery_success_is_not_flagged_stale(monkeypatch) -> None:
-    monkeypatch.setattr(
-        md, "list_models", lambda *_a, **_kw: _models("claude-haiku-9-9"),
+def test_a_provider_with_no_catalog_entry_offers_nothing(monkeypatch) -> None:
+    """OpenRouter proxies other providers; suggesting a pin would be worse
+    than reporting that there is none."""
+    assert md.catalog_suggestions("openrouter") == []
+    assert md.catalog_suggestions("ollama") == [], (
+        "a local provider serves whatever the user pulled"
     )
-    res = md.resolve_tier(providers.get("anthropic"), "fast")
-    assert res.source == "discovered"
-    assert res.model == "claude-haiku-9-9"
-    assert not res.is_stale_risk
 
 
-def test_a_provider_with_no_catalog_entry_says_so(monkeypatch) -> None:
-    """OpenRouter proxies other providers; guessing a pin would be worse
-    than reporting the failure."""
-    monkeypatch.setattr(
-        md, "list_models",
-        lambda *_a, **_kw: (_ for _ in ()).throw(md.DiscoveryError("offline")),
-    )
-    res = md.resolve_tier(providers.get("openrouter"), "deep")
-    assert res.source == "none"
-    assert res.model == ""
-
-
-def test_resolve_tier_never_raises(monkeypatch) -> None:
-    """A bootstrap that cannot reach the provider must still finish."""
-    monkeypatch.setattr(
-        md, "list_models",
-        lambda *_a, **_kw: (_ for _ in ()).throw(md.DiscoveryError("nope")),
-    )
-    for spec in providers.PROVIDERS:
-        for tier in providers.TIERS:
-            md.resolve_tier(spec, tier)  # must not raise
+def test_catalog_lookup_survives_a_missing_file(tmp_path) -> None:
+    """A malformed or absent catalogue must degrade, not raise — this is
+    already the failure path."""
+    assert md.load_catalog(tmp_path / "nope.toml") == {}
+    assert md.catalog_model("anthropic", "fast", {}) == ""
+    assert md.catalog_suggestions("anthropic", {}) == []
 
 
 # ---------------------------------------------------------------------------
