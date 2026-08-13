@@ -78,7 +78,7 @@ from core.llm import (  # noqa: E402
     extract_pdf_text,
 )
 from core.models import (  # noqa: E402
-    DEFAULT_FULLTEXT_CODING_MODEL,
+    default_for_stage,
     effective_model,
     model_flag_help,
 )
@@ -246,7 +246,7 @@ def _load_screening_config(path: str):
     return (
         mod.FULLTEXT_CODING_SYSTEM_PROMPT,
         mod.FULLTEXT_CODING_FIELDS,
-        getattr(mod, "FULLTEXT_CODING_MODEL", DEFAULT_FULLTEXT_CODING_MODEL),
+        getattr(mod, "FULLTEXT_CODING_MODEL", "") or default_for_stage("fulltext_coding"),
         getattr(mod, "FULLTEXT_CODING_PROMPT_VERSION", ""),
     )
 
@@ -519,7 +519,7 @@ def main() -> int:
     parser.add_argument("--model", default="",
                         help=model_flag_help(
                             "FULLTEXT_CODING_MODEL from screening_config.py, "
-                            f"else {DEFAULT_FULLTEXT_CODING_MODEL}"))
+                            "else the configured provider's balanced tier"))
     parser.add_argument("--dry-run", action="store_true",
                         help="Print first rendered prompt; no API calls.")
     parser.add_argument("--limit", type=int, default=0,

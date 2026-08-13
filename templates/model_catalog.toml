@@ -1,0 +1,96 @@
+# Last-known-good model IDs and list prices, per provider and tier.
+#
+# THIS IS THE ONLY FILE IN THE PLUGIN THAT MAY CONTAIN A MODEL VERSION.
+# It is data, not code: nothing imports a constant from here, and the
+# pipelines never read it during a run. It exists for exactly two jobs:
+#
+#   1. Fallback. `resolve_models.py` asks the provider which models it
+#      currently serves. When that call fails — offline, no key yet,
+#      provider outage — the bootstrap falls back to these and says so
+#      out loud, rather than silently pinning something stale.
+#
+#   2. Cost estimates. The wizard and the screening scripts' --dry-run
+#      quote a price so a user can see what a review will cost before
+#      spending anything.
+#
+# Being out of date here is survivable and visible. Being out of date in
+# code was neither.
+#
+# `checked` is when a human last verified this file against the
+# providers' own pricing pages. Treat anything older than a few months
+# as indicative.
+checked = "2026-08-13"
+
+# Prices are per million tokens, in USD, at list rates. Discounts,
+# introductory pricing, and batch rates are deliberately not modelled:
+# an estimate that is slightly high is a much better failure than one
+# that is low. (Sonnet 5 carries introductory pricing of 2.00/10.00
+# through 2026-08-31; the standard rate is quoted below so the estimate
+# does not get worse when it lapses.)
+
+[anthropic.fast]
+model = "claude-haiku-4-5-20251001"
+input_per_mtok = 1.00
+output_per_mtok = 5.00
+
+[anthropic.balanced]
+model = "claude-sonnet-5"
+input_per_mtok = 3.00
+output_per_mtok = 15.00
+
+[anthropic.deep]
+model = "claude-sonnet-5"
+input_per_mtok = 3.00
+output_per_mtok = 15.00
+
+[google.fast]
+model = "gemini-2.5-flash"
+input_per_mtok = 0.30
+output_per_mtok = 2.50
+
+[google.balanced]
+model = "gemini-2.5-flash"
+input_per_mtok = 0.30
+output_per_mtok = 2.50
+
+[google.deep]
+model = "gemini-2.5-pro"
+input_per_mtok = 1.25
+output_per_mtok = 10.00
+
+[openai.fast]
+model = "gpt-5-mini"
+input_per_mtok = 0.25
+output_per_mtok = 2.00
+
+[openai.balanced]
+model = "gpt-5-mini"
+input_per_mtok = 0.25
+output_per_mtok = 2.00
+
+[openai.deep]
+model = "gpt-5"
+input_per_mtok = 1.25
+output_per_mtok = 10.00
+
+# OpenRouter proxies other providers' models and prices vary per
+# upstream; no fallback pin is offered, because guessing one would be
+# worse than telling the user discovery failed.
+
+# Local providers serve whatever the user has pulled, so there is no
+# meaningful default and nothing to charge.
+[ollama.fast]
+input_per_mtok = 0.0
+output_per_mtok = 0.0
+
+[ollama.deep]
+input_per_mtok = 0.0
+output_per_mtok = 0.0
+
+[lmstudio.fast]
+input_per_mtok = 0.0
+output_per_mtok = 0.0
+
+[lmstudio.deep]
+input_per_mtok = 0.0
+output_per_mtok = 0.0

@@ -69,7 +69,7 @@ import zotero_io  # noqa: E402
 from core import llm_provider  # noqa: E402
 from core.config_loader import require  # noqa: E402
 from core.models import (  # noqa: E402
-    DEFAULT_ABSTRACT_SCREENING_MODEL,
+    default_for_stage,
     effective_model,
     model_flag_help,
 )
@@ -88,7 +88,7 @@ def _load_screening_config(path: str):
     )
     return (
         mod.ABSTRACT_SCREENING_SYSTEM_PROMPT,
-        getattr(mod, "ABSTRACT_SCREENING_MODEL", DEFAULT_ABSTRACT_SCREENING_MODEL),
+        getattr(mod, "ABSTRACT_SCREENING_MODEL", "") or default_for_stage("abstract_screening"),
         getattr(mod, "ABSTRACT_SCREENING_PROMPT_VERSION", ""),
     )
 
@@ -199,7 +199,7 @@ def main() -> int:
     parser.add_argument("--model", default="",
                         help=model_flag_help(
                             "ABSTRACT_SCREENING_MODEL from screening_config.py, "
-                            f"else {DEFAULT_ABSTRACT_SCREENING_MODEL}"))
+                            "else the configured provider's fast tier"))
     parser.add_argument("--dry-run", action="store_true",
                         help="Print first item's prompt; no API calls.")
     parser.add_argument("--sample", type=int, default=0,

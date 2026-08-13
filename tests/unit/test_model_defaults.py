@@ -1,154 +1,203 @@
-"""Model defaults, aliases, and the `--model` override.
+"""Stage → tier mapping, aliases, and the `--model` precedence chain.
 
-`templates/screening_config.py` is copied into user projects and must stand
-alone, so it cannot import `core.models`. It keeps literals; these tests are
-what keep them equal to the constants the orchestrators fall back to.
+This file used to assert that two literals in `templates/screening_config.py`
+equalled two constants in `scripts/core/models.py` — a guard that kept a
+duplicated model pin in sync. Both pins are gone: the template now ships
+empty and `resolve_models.py` fills it at bootstrap from whatever the
+user's provider currently serves. So the invariant flipped, from "these
+two literals match" to "there are no literals".
+
+What still needs pinning is the behaviour around that: which tier each
+stage asks for, that conversational aliases resolve through the active
+provider, that explicit model IDs pass through untouched, and that an
+override announces itself.
 """
 
 from __future__ import annotations
 
 import importlib.util
-import re
 import sys
 from pathlib import Path
 
 import pytest
-from core import models
+from core import models, providers
 
-REPO = Path(__file__).resolve().parents[2]
-TEMPLATE = REPO / "templates" / "screening_config.py"
+ROOT = Path(__file__).resolve().parents[2]
+TEMPLATE = ROOT / "templates" / "screening_config.py"
 
 
 def _template_module():
-    """Execute `templates/screening_config.py` and hand back the module.
+    """Load the template by path, without writing a .pyc.
 
-    Bytecode writing is suppressed for the duration: without that, importing
-    the template drops a `.pyc` into `templates/__pycache__/`, and
-    `test_zotero_mcp_sync.py` — which scans `templates/**/*` as UTF-8 text —
-    then dies on the binary file.
+    `test_zotero_mcp_sync.py` scans `templates/**/*` as UTF-8, so a
+    stray bytecode file there breaks an unrelated test.
     """
-    spec = importlib.util.spec_from_file_location("screening_config_tpl", TEMPLATE)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["screening_config_tpl"] = mod
-    previous = sys.dont_write_bytecode
     sys.dont_write_bytecode = True
     try:
+        spec = importlib.util.spec_from_file_location("screening_config", TEMPLATE)
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
+        return mod
     finally:
-        sys.dont_write_bytecode = previous
-    return mod
+        sys.dont_write_bytecode = False
 
 
 # ---------------------------------------------------------------------------
-# Template <-> constants
+# The template ships no pin at all
 # ---------------------------------------------------------------------------
 
 
-def test_template_abstract_model_matches_constant() -> None:
-    assert _template_module().ABSTRACT_SCREENING_MODEL == (
-        models.DEFAULT_ABSTRACT_SCREENING_MODEL
-    ), (
-        "templates/screening_config.py and core/models.py disagree on the "
-        "abstract-screening default. The template cannot import the module "
-        "(it is copied into user projects), so they are kept equal here."
-    )
+def test_template_ships_empty_model_pins() -> None:
+    """A shipped pin is a stale pin the day the provider releases.
+
+    `resolve_models.py` writes these at bootstrap; until then the
+    pipeline falls back to the catalogue and says so.
+    """
+    template = _template_module()
+    assert template.ABSTRACT_SCREENING_MODEL == ""
+    assert template.FULLTEXT_CODING_MODEL == ""
 
 
-def test_template_fulltext_model_matches_constant() -> None:
-    assert _template_module().FULLTEXT_CODING_MODEL == (
-        models.DEFAULT_FULLTEXT_CODING_MODEL
-    ), (
-        "templates/screening_config.py and core/models.py disagree on the "
-        "full-text coding default."
-    )
+def test_template_explains_how_the_pin_gets_filled() -> None:
+    """An empty constant with no explanation is just a broken config."""
+    text = TEMPLATE.read_text(encoding="utf-8")
+    assert "resolve_models.py" in text
+    assert "--model" in text
 
 
 def test_orchestrators_do_not_hardcode_a_model_id() -> None:
-    """The `getattr(..., "claude-...")` fallbacks were the other half of the
-    duplication; they must read from core.models now."""
-    offenders = []
-    for name in ("abstract_screen.py", "fulltext_code.py"):
-        path = REPO / "scripts" / "pipelines" / name
-        for lineno, line in enumerate(
-            path.read_text(encoding="utf-8").splitlines(), start=1
-        ):
-            if re.search(r'getattr\([^)]*MODEL[^)]*"(claude|gemini)-', line):
-                offenders.append(f"{name}:{lineno}: {line.strip()}")
-    assert not offenders, (
-        "Orchestrator hard-codes a model ID as a getattr fallback; use the "
-        "DEFAULT_* constants from core.models:\n  " + "\n  ".join(offenders)
+    """Unchanged in spirit from the original guard, widened in scope.
+
+    The old version matched only `claude-` and `gemini-` prefixes; a
+    provider-agnostic plugin has to reject an OpenAI pin too.
+    """
+    import re
+
+    pattern = re.compile(
+        r"getattr\([^)]*MODEL[^)]*\"(claude|gemini|gpt|llama|mistral)-",
     )
+    for name in ("abstract_screen.py", "fulltext_code.py"):
+        text = (ROOT / "scripts" / "pipelines" / name).read_text(encoding="utf-8")
+        assert not pattern.search(text), f"{name} hardcodes a model id"
 
 
 # ---------------------------------------------------------------------------
-# resolve_model
+# Stage → tier
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("alias", sorted(models.ALIASES))
-def test_every_alias_resolves_to_a_full_id(alias: str) -> None:
-    resolved = models.resolve_model(alias)
-    assert resolved == models.ALIASES[alias]
-    assert "-" in resolved, f"alias {alias!r} should map to a full model ID"
+def test_screening_is_cheap_and_coding_is_not() -> None:
+    assert models.tier_for_stage("abstract_screening") == providers.TIER_FAST
+    assert models.tier_for_stage("fulltext_coding") == providers.TIER_BALANCED
+
+
+def test_coding_default_did_not_silently_become_opus() -> None:
+    """The pre-tier defaults were Haiku + Sonnet.
+
+    Mapping full-text coding to `deep` would resolve to Opus where one
+    exists and roughly double the per-paper cost for every existing
+    project. That is the user's decision, not a side effect of this
+    refactor — `--model deep` remains available.
+    """
+    assert models.tier_for_stage("fulltext_coding") != providers.TIER_DEEP
+
+
+def test_unknown_stage_gets_a_safe_middle_tier() -> None:
+    assert models.tier_for_stage("some_future_stage") == providers.TIER_BALANCED
+
+
+# ---------------------------------------------------------------------------
+# Aliases resolve through the provider, not to a fixed ID
+# ---------------------------------------------------------------------------
+
+
+def test_every_alias_names_a_real_tier() -> None:
+    for alias, tier in models.TIER_ALIASES.items():
+        assert tier in providers.TIERS, f"{alias} maps to unknown tier {tier}"
+
+
+def test_the_same_alias_means_different_models_per_provider() -> None:
+    """"Screen these with the fast model" is provider-relative.
+
+    This is the whole point of tiers: the user says what they want, not
+    which vendor SKU delivers it.
+    """
+    anthropic = models.resolve_model("fast", provider="anthropic")
+    google = models.resolve_model("fast", provider="google")
+    assert anthropic.startswith("claude-haiku")
+    assert google.startswith("gemini")
+    assert anthropic != google
+
+
+@pytest.mark.parametrize(
+    ("alias", "tier"),
+    [("haiku", "fast"), ("sonnet", "balanced"), ("opus", "deep"),
+     ("cheap", "fast"), ("best", "deep")],
+)
+def test_conversational_words_map_to_tiers(alias, tier) -> None:
+    assert models.TIER_ALIASES[alias] == tier
 
 
 def test_resolve_model_is_case_and_space_insensitive() -> None:
-    assert models.resolve_model("  Haiku ") == models.ALIASES["haiku"]
-    assert models.resolve_model("SONNET") == models.ALIASES["sonnet"]
-
-
-def test_resolve_model_passes_unknown_names_through() -> None:
-    """Explicit model IDs and locally-served names must keep working — the
-    alias table is a convenience, not a whitelist."""
-    assert models.resolve_model("claude-opus-4-1-20250805") == (
-        "claude-opus-4-1-20250805"
+    assert models.resolve_model("  Haiku ", provider="anthropic").startswith(
+        "claude-haiku",
     )
-    assert models.resolve_model("qwen3-30b") == "qwen3-30b"
+    assert models.resolve_model("FAST", provider="anthropic").startswith(
+        "claude-haiku",
+    )
+
+
+def test_resolve_model_passes_explicit_ids_through() -> None:
+    """The contract that keeps every existing project working.
+
+    A user who pinned `claude-opus-4-1-20250805`, or who runs a locally
+    served `qwen3-30b`, must not have it rewritten.
+    """
+    for name in ("claude-opus-4-1-20250805", "qwen3-30b", "some/custom:model"):
+        assert models.resolve_model(name) == name
 
 
 def test_resolve_model_empty_returns_empty() -> None:
     assert models.resolve_model("") == ""
 
 
-def test_haiku_alias_matches_the_abstract_default() -> None:
-    assert models.resolve_model("haiku") == models.DEFAULT_ABSTRACT_SCREENING_MODEL
+def test_an_alias_with_no_catalogue_entry_is_handed_back() -> None:
+    """Better the provider rejects an alias than that we invent an ID."""
+    assert models.resolve_model("deep", provider="openrouter") == "deep"
 
 
 # ---------------------------------------------------------------------------
-# effective_model — precedence and the override banner
+# Precedence chain — unchanged, and load-bearing for reproducibility
 # ---------------------------------------------------------------------------
 
 
 def test_effective_model_falls_back_to_config_when_flag_absent(capsys) -> None:
-    assert models.effective_model("", "claude-sonnet-4-6", stage="X") == (
-        "claude-sonnet-4-6"
-    )
+    assert models.effective_model("", "claude-sonnet-5", stage="X") == "claude-sonnet-5"
     assert capsys.readouterr().out == ""
 
 
 def test_effective_model_flag_wins_and_announces(capsys) -> None:
-    out = models.effective_model(
-        "haiku", "claude-sonnet-4-6", stage="FULLTEXT_CODING_MODEL",
+    """Silence here would let screening_config.py describe a run it did
+    not configure — the reviewer checks that file first."""
+    out_model = models.effective_model(
+        "haiku", "claude-sonnet-5", stage="FULLTEXT_CODING_MODEL",
     )
-    assert out == models.ALIASES["haiku"]
     printed = capsys.readouterr().out
+    assert out_model != "claude-sonnet-5"
     assert "FULLTEXT_CODING_MODEL" in printed
-    assert "claude-sonnet-4-6" in printed
-    assert models.ALIASES["haiku"] in printed
+    assert "claude-sonnet-5" in printed
     assert "screening_config.py is unchanged" in printed
 
 
 def test_effective_model_silent_when_flag_matches_config(capsys) -> None:
-    """No banner when the flag names what the config already says — the
-    banner is about divergence, not about the flag being present."""
-    out = models.effective_model("haiku", models.ALIASES["haiku"], stage="X")
-    assert out == models.ALIASES["haiku"]
+    pin = models.resolve_model("fast", provider="anthropic")
+    models.effective_model(pin, pin, stage="X")
     assert capsys.readouterr().out == ""
 
 
 def test_model_flag_help_lists_every_alias() -> None:
-    help_text = models.model_flag_help("some default")
-    for alias in models.ALIASES:
+    help_text = models.model_flag_help("the stage default")
+    for alias in models.TIER_ALIASES:
         assert alias in help_text
-    assert "some default" in help_text
+    assert "the stage default" in help_text
