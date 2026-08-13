@@ -161,12 +161,32 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/resolve_models.py \
     --stage abstract_screening --model <id>
 ```
 
+Pinning ends with an automatic ~4-token test request, and the script
+exits non-zero when the model does not answer. **A pin is not done
+until that check passes** — the written line records an intention; the
+check is what proves the model ID, the provider, and the credential
+agree. To re-check later without re-pinning:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_model_connection.py
+```
+
+Report the status word verbatim. `QUOTA_EXHAUSTED` and `RATE_LIMITED`
+are both HTTP 429 and mean opposite things: the first says the
+allowance is spent and **retrying is useless** until billing or the
+quota period changes; the second is a passing throttle. `AUTH_FAILED`
+means rotate the key **through the wizard**, never through the chat.
+
 ## Red flags
 
 - You are about to run a `Bash` tool call in this skill for anything
-  other than the two provider scripts above. **Don't.** This skill has
+  other than the three provider scripts above. **Don't.** This skill has
   no Bash probes by design — they cause permission prompts for no
   benefit. The wizard handles everything else.
+- A model-connection check returned `QUOTA_EXHAUSTED` and you are about
+  to suggest waiting, retrying, or raising a timeout. **Don't.** That
+  status means the quota is spent; only billing or a provider switch
+  clears it. Retrying it once cost a real user ~22 minutes of silence.
 - You are about to ask the user to paste a key into the chat.
   **Never.** The wizard is the only acceptable path for keys.
 - You are about to log, echo, or repeat a key the user typed in any

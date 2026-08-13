@@ -343,6 +343,44 @@ reports a **catalogue fallback**, say so to the user: the menu came
 from a file shipped with the plugin rather than from the provider, and
 may name superseded models.
 
+Each pin is followed automatically by a ~4-token test request, and
+**`resolve_models.py` exits non-zero if the model does not answer.** Do
+not treat a pin as done until that check passes — a written pin only
+records an intention, and the check is what proves the model ID, the
+provider, and the credential agree.
+
+### Check the connection before any batch run — mandatory
+
+Before `abstract_screen.py` or `fulltext_code.py` runs over a real
+corpus:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_model_connection.py
+```
+
+Exit `0` means every pinned model answered; `1` means one did not; `2`
+means the project is not pinned or configured yet. Both orchestrators
+also run this check themselves at startup and refuse to begin when it
+fails, so a run that dies here has cost nothing.
+
+**Read the status word, because two of them look alike and are not.**
+
+| Status | What it means | What to do |
+|---|---|---|
+| `QUOTA_EXHAUSTED` | The key is valid; its allowance is spent | **Retrying will not help.** Tell the user to check billing, or switch provider. Do not restart the run. |
+| `RATE_LIMITED` | Throttled this second; the quota is intact | Re-run, or lower `--workers`. |
+| `AUTH_FAILED` | The key was rejected | Hand off to `/setup` to rotate it. Never ask for a key in chat. |
+| `MODEL_NOT_FOUND` | The provider does not serve this ID | Re-list and re-pin. Usually a typo or a superseded model. |
+| `UNREACHABLE` | Nothing answered at the endpoint | For `ollama` / `lmstudio`, the local server is not running. |
+
+The first row is why this section exists. In a real run, an exhausted
+Gemini quota was diagnosed as a network hang: the per-item retry ladder
+spent 131 seconds per paper failing, progress printed only every tenth
+paper, and ~22 minutes passed with no output and no cause. The response
+body had said "check your plan and billing details" from the first
+request. **When you see `QUOTA_EXHAUSTED`, report it and stop — do not
+add timeouts, do not retry, do not diagnose the network.**
+
 **Switching provider** — "use OpenAI instead", "screen this locally":
 
 ```bash

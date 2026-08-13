@@ -337,3 +337,67 @@ def get_provider(model_name: str = "", provider_hint: str = "") -> LLMProvider:
     if spec.transport == "google":
         return GeminiProvider()
     return OpenAICompatProvider(spec)
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight
+# ---------------------------------------------------------------------------
+
+
+def preflight(model_name: str, provider_hint: str = ""):
+    """Probe the provider once before a run. Returns a `ConnectionResult`.
+
+    `require_credentials` only proves a key is *present*. That is not the
+    same as usable: the failure that motivated this was a key which was
+    present, valid, and out of quota. One real request is the only thing
+    that tells those apart, and it costs about four tokens.
+    """
+    from core import model_health
+
+    spec = resolve_provider(model_name, provider_hint)
+    return model_health.check_connection(
+        spec,
+        model_name,
+        api_key=_api_key_for(spec, required=False) if spec.api_key_env else "",
+        base_url=_configured_base_url(spec),
+    )
+
+
+def preflight_or_exit(model_name: str, provider_hint: str = "") -> None:
+    """`preflight`, but abort the process when the model cannot be reached.
+
+    Called by the screening and coding orchestrators before their main
+    loop. Exiting here rather than letting the loop discover it per item
+    is the entire lesson of the incident this was written for: 244 items
+    each spent 131 seconds in a retry ladder against an exhausted quota,
+    wrote 244 `decision=error` rows, and reported nothing legible until
+    the run was over.
+    """
+    result = preflight(model_name, provider_hint)
+    if result.ok:
+        print(result.format(), flush=True)
+        return
+    print("", flush=True)
+    print(result.format(), file=sys.stderr, flush=True)
+    print("", file=sys.stderr, flush=True)
+    raise SystemExit(2)
+
+
+def classify_failure(exc: BaseException):
+    """Classify a mid-run SDK exception. Returns a `ConnectionResult`.
+
+    Used by the worker loops so a per-item failure says *why* rather
+    than stringifying whatever the SDK raised, and so the run can tell a
+    transient blip apart from a condition that will fail every remaining
+    item too.
+    """
+    from core import model_health
+
+    status, detail, http_status = model_health.classify_exception(exc)
+    return model_health.ConnectionResult(
+        status=status,
+        provider=configured_provider(),
+        model="",
+        detail=detail,
+        http_status=http_status,
+    )

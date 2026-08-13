@@ -40,6 +40,31 @@ def resolve():
     return _load("resolve_models")
 
 
+@pytest.fixture(autouse=True)
+def _no_live_probe(monkeypatch):
+    """Stub the post-pin connection check for every test in this module.
+
+    Pinning now ends with a real request to the provider, which is right
+    in production and wrong here — it made this suite hit Anthropic and
+    fail on the exit code. Stubbing it in one autouse fixture keeps the
+    pinning tests about pinning, and makes it impossible for a new test
+    in this file to reach the network by accident. The check's own
+    behaviour is covered by `test_model_health.py` and by the two tests
+    at the bottom of this file.
+    """
+    from core import model_health
+
+    monkeypatch.setattr(
+        model_health,
+        "check_connection",
+        lambda spec, model, **_kw: model_health.ConnectionResult(
+            status=model_health.ConnectionStatus.OK,
+            provider=spec.name,
+            model=model,
+        ),
+    )
+
+
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
     """A minimal screening_config.py, shaped like the real template."""
@@ -590,3 +615,90 @@ def test_wizard_and_runtime_agree_on_credential_status(_redirect_config) -> None
         wizard_ok, _hint = wizard._llm_credential_present(spec.name, {}, existing)
         runtime_ok, _missing = llm_provider.credential_status(spec)
         assert wizard_ok == runtime_ok, f"disagreement on {spec.name}"
+
+
+# ---------------------------------------------------------------------------
+# The post-pin connection check
+# ---------------------------------------------------------------------------
+#
+# A pin is a claim that three things agree: the model ID, the provider,
+# and the credential. Writing the line proves none of it. These pin the
+# rule that the claim is tested at the moment it is made — the alternative
+# is discovering it per-item, mid-run, which is how an exhausted quota
+# once read as a 22-minute network hang.
+
+
+def test_a_pin_is_verified_by_a_real_request(
+    resolve, project, monkeypatch,
+) -> None:
+    from core import model_health
+
+    called: list[tuple] = []
+
+    def spy(spec, model, **_kw):
+        called.append((spec.name, model))
+        return model_health.ConnectionResult(
+            status=model_health.ConnectionStatus.OK,
+            provider=spec.name, model=model,
+        )
+
+    monkeypatch.setattr(
+        resolve.model_discovery, "list_models", _serves(resolve, "claude-opus-5"),
+    )
+    monkeypatch.setattr(model_health, "check_connection", spy)
+    rc = resolve.main([
+        "--config", str(project), "--provider", "anthropic",
+        "--stage", "fulltext_coding", "--model", "claude-opus-5",
+    ])
+    assert rc == 0
+    assert called == [("anthropic", "claude-opus-5")]
+
+
+def test_a_pin_that_does_not_answer_exits_non_zero(
+    resolve, project, monkeypatch, capsys,
+) -> None:
+    """The line is still written — the user asked for it, and an
+    unreachable provider is not proof the ID is wrong — but the exit
+    code must not say "done"."""
+    from core import model_health
+
+    monkeypatch.setattr(
+        resolve.model_discovery, "list_models", _serves(resolve, "claude-opus-5"),
+    )
+    monkeypatch.setattr(
+        model_health, "check_connection",
+        lambda spec, model, **_kw: model_health.ConnectionResult(
+            status=model_health.ConnectionStatus.QUOTA_EXHAUSTED,
+            provider=spec.name, model=model,
+            detail="You exceeded your current quota", http_status=429,
+        ),
+    )
+    rc = resolve.main([
+        "--config", str(project), "--provider", "anthropic",
+        "--stage", "fulltext_coding", "--model", "claude-opus-5",
+    ])
+    assert rc == 1
+    assert 'FULLTEXT_CODING_MODEL = "claude-opus-5"' in project.read_text(
+        encoding="utf-8",
+    )
+    out = capsys.readouterr()
+    assert "QUOTA_EXHAUSTED" in out.out
+    assert "retrying will not fix this" in out.out.lower()
+
+
+def test_no_check_skips_the_probe(resolve, project, monkeypatch) -> None:
+    """An offline or scripted bootstrap must be able to opt out."""
+    from core import model_health
+
+    def explode(*_a, **_kw):
+        raise AssertionError("--no-check must not probe the provider")
+
+    monkeypatch.setattr(
+        resolve.model_discovery, "list_models", _serves(resolve, "claude-opus-5"),
+    )
+    monkeypatch.setattr(model_health, "check_connection", explode)
+    rc = resolve.main([
+        "--config", str(project), "--provider", "anthropic",
+        "--stage", "fulltext_coding", "--model", "claude-opus-5", "--no-check",
+    ])
+    assert rc == 0

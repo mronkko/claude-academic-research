@@ -59,10 +59,24 @@ _SCRIPTS_ROOT = _HERE.parent
 if str(_SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_ROOT))
 
-from core import model_discovery, providers  # noqa: E402
+from core import model_discovery, model_health, providers  # noqa: E402
 from core.config_loader import get  # noqa: E402
 from core.models import TIER_FOR_STAGE  # noqa: E402
 from core.providers import ProviderSpec  # noqa: E402
+
+
+def _api_key(spec: ProviderSpec) -> str:
+    if not spec.api_key_env:
+        return ""
+    return get(providers.config_section(spec), "api_key", env=spec.api_key_env)
+
+
+def _base_url(spec: ProviderSpec) -> str:
+    if not spec.base_url_env:
+        return ""
+    return get(
+        providers.config_section(spec), "base_url", env=spec.base_url_env,
+    ) or ""
 
 #: Which constant in `screening_config.py` each stage pins. Explicit
 #: rather than derived from the stage name: the constants are part of a
@@ -304,6 +318,12 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run", action="store_true",
         help="Print the line that would be written; write nothing.",
     )
+    parser.add_argument(
+        "--no-check", action="store_true",
+        help="Do not probe the model after pinning it. The probe costs "
+             "~4 tokens and catches a dead key, a spent quota, or a "
+             "mistyped ID at the moment of pinning rather than mid-run.",
+    )
     args = parser.parse_args(argv)
 
     if args.model and not args.stage:
@@ -359,7 +379,31 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     _write(args.config, text)
-    print(f"pinned {constant} in {args.config}:\n  {line}")
+    print(f"pinned {constant} in {args.config}:\n  {line}", flush=True)
+
+    if args.no_check:
+        return 0
+
+    # Prove the pin before anyone runs on it. Pinning is the moment the
+    # model ID, the provider, and the credential first have to agree, and
+    # a mismatch here is silent until a batch run discovers it item by
+    # item — which is how a spent quota once read as a 22-minute network
+    # hang. One ~4-token request settles it now.
+    print("", flush=True)
+    result = model_health.check_connection(
+        spec,
+        args.model,
+        api_key=_api_key(spec),
+        base_url=_base_url(spec),
+    )
+    print(result.format(), flush=True)
+    if not result.ok:
+        print(
+            "\nThe pin was written, but the model did not answer. Fix the "
+            "above before running a screening or coding stage.",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

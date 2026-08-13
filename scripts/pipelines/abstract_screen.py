@@ -208,6 +208,12 @@ def main() -> int:
                         help="Screen a random sample of N items (0 = all).")
     parser.add_argument("--workers", type=int, default=8,
                         help="Parallel API workers (default: 8).")
+    parser.add_argument("--skip-preflight", action="store_true",
+                        help="Skip the one-request check that the provider "
+                             "answers for this model. The check costs ~4 "
+                             "tokens and catches a spent quota or a dead key "
+                             "before the run; skip it only if you have "
+                             "already run check_model_connection.py.")
     parser.add_argument("--tag-batch-size", type=int, default=50,
                         help="Write abstract:* tags to Zotero in batches of "
                              "this many decisions via one multi-item PATCH "
@@ -233,6 +239,12 @@ def main() -> int:
                                               env="ZOTERO_API_KEY")
     if not args.dry_run and not args.csv_backfill:
         llm_provider.require_credentials(model)
+        # A present key is not a working one. One ~4-token request here
+        # separates "valid key, spent quota" from "bad key" from "model
+        # ID the provider does not serve" — in about a second, before
+        # any per-item spend.
+        if not args.skip_preflight:
+            llm_provider.preflight_or_exit(model)
 
 
     output_path = Path(args.output)
@@ -302,6 +314,10 @@ def main() -> int:
     counts: dict[str, int] = {k: 0 for k in (*VALID_DECISIONS, "error")}
     done_count = 0
     total = len(to_screen)
+    #: Non-retryable verdicts seen by the workers. A spent quota or a
+    #: rejected key fails every remaining item identically, so the run
+    #: stops and says so once instead of grinding out N error rows.
+    fatal: list = []
 
     def screen_one(item: dict) -> tuple[str, str, str, str, str, str, str]:
         d = item.get("data", {})
@@ -333,8 +349,15 @@ def main() -> int:
                 decision = "borderline"
                 reason = f"PARSE ERROR — raw: {text[:200]}"
         except Exception as e:
+            # Classify rather than stringify. A run that hits a spent
+            # quota fails every remaining item the same way, and the
+            # useful output is one clear diagnosis, not N copies of an
+            # SDK repr.
+            verdict = llm_provider.classify_failure(e)
             decision = "error"
-            reason = str(e)[:200]
+            reason = f"{verdict.status.value}: {verdict.detail}"[:200]
+            if not verdict.retryable:
+                fatal.append(verdict)
 
         # The stage tag is applied by the main loop, batched (R6). The
         # CSV row is written first there, so a tag write that never lands
@@ -382,17 +405,36 @@ def main() -> int:
 
                 print(f"[{done_count}/{total}] {title[:70]:<70} → {decision}",
                       flush=True)
+
+                if fatal:
+                    # Cancel what has not started. Items already in
+                    # flight finish and get logged; nothing new is sent
+                    # to a provider that has told us it will refuse.
+                    for pending in futures:
+                        pending.cancel()
+                    print("", flush=True)
+                    print(fatal[0].format(), file=sys.stderr, flush=True)
+                    print(
+                        f"\nStopped after {done_count} of {total} items. "
+                        f"Decisions already made are in {output_path} and "
+                        f"tagged in Zotero — re-run after fixing the above "
+                        f"and screening resumes from there.",
+                        file=sys.stderr, flush=True,
+                    )
+                    break
         finally:
             # Flush whatever is left, including on Ctrl+C — partial progress
             # gets tagged so a resume doesn't re-screen already-decided items.
             _flush_tag_buffer(zot, tag_buffer)
 
     print(f"\n{'=' * 60}")
-    print(f"Done. Screened {total} items.")
+    print(f"Done. Screened {done_count} of {total} items.")
     for k in (*VALID_DECISIONS, "error"):
         print(f"  {k}: {counts.get(k, 0)}")
     print(f"Log: {output_path}")
-    return 0
+    # A run cut short by a dead provider must not exit 0 — the caller is
+    # usually a skill, and a zero here reads as "screening complete".
+    return 1 if fatal else 0
 
 
 if __name__ == "__main__":

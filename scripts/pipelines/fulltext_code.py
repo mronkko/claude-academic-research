@@ -484,8 +484,14 @@ def _code_one(item: dict, pdf_path: Path, client, model: str, prompt: str,
             row["decision"] = "error"
             row["reason"] = f"invalid decision value: {parsed.get('decision')!r}"
     except Exception as e:
+        # Classified, not stringified — the caller needs to know whether
+        # every remaining paper will fail the same way. Coding runs are
+        # the expensive stage, so grinding through a whole corpus against
+        # a spent quota is the costliest version of this mistake.
+        verdict = llm_provider.classify_failure(e)
         row["decision"] = "error"
-        row["reason"] = str(e)[:300]
+        row["reason"] = f"{verdict.status.value}: {verdict.detail}"[:300]
+        row["_fatal"] = "" if verdict.retryable else verdict.format()
 
     return row
 
@@ -537,6 +543,12 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=5,
                         help="Parallel API workers (default: 5; Sonnet has "
                              "tighter rate limits than Haiku).")
+    parser.add_argument("--skip-preflight", action="store_true",
+                        help="Skip the one-request check that the provider "
+                             "answers for this model. The check costs ~4 "
+                             "tokens and catches a spent quota or a dead key "
+                             "before the run; skip it only if you have "
+                             "already run check_model_connection.py.")
     parser.add_argument("--csv-backfill", action="store_true",
                         help="One-time migration from pre-Zotero-as-truth "
                              "deployments: read CSV decisions and apply "
@@ -564,6 +576,10 @@ def main() -> int:
                                               env="ZOTERO_API_KEY")
     if not args.dry_run:
         llm_provider.require_credentials(model)
+        # See abstract_screen.py: a present key is not a working one, and
+        # this stage is the expensive one to discover that on item 200.
+        if not args.skip_preflight:
+            llm_provider.preflight_or_exit(model)
 
 
     pdf_dir = Path(args.pdf_dir) if args.pdf_dir else None
@@ -881,8 +897,12 @@ def main() -> int:
             max_workers=args.workers
         ) as pool:
             futures = {pool.submit(update_worker, it): it for it in to_update}
+            update_fatal: list[str] = []
             for fut in concurrent.futures.as_completed(futures):
                 row = fut.result()
+                verdict = row.pop("_fatal", "")
+                if verdict:
+                    update_fatal.append(verdict)
                 done_count += 1
                 decision = row.get("decision", "error")
                 if "no PDF attachment found" in row.get("reason", ""):
@@ -902,13 +922,20 @@ def main() -> int:
                 print(f"[{done_count}/{total}] {title:<60} → {outcome}",
                       flush=True)
 
+                if update_fatal:
+                    for pending in futures:
+                        pending.cancel()
+                    print("", flush=True)
+                    print(update_fatal[0], file=sys.stderr, flush=True)
+                    break
+
         print(f"\n{'=' * 60}")
-        print(f"Done. Updated {total} item(s).")
+        print(f"Done. Updated {done_count} of {total} item(s).")
         for k in ("updated", "error", "no_pdf"):
             if counts.get(k, 0):
                 print(f"  {k}: {counts[k]}")
         print(f"Log: {output_path}")
-        return 0
+        return 1 if update_fatal else 0
 
     counts = {"include": 0, "exclude": 0, "error": 0, "no_pdf": 0}
     done_count = 0
@@ -942,10 +969,17 @@ def main() -> int:
     print(f"Coding with {args.workers} parallel workers (model={model})...",
           flush=True)
 
+    fatal: list[str] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = {pool.submit(worker, it): it for it in to_code}
         for fut in concurrent.futures.as_completed(futures):
             row = fut.result()
+            # Carried out of the worker on the row because that is the
+            # only channel back; popped before the row reaches the CSV,
+            # which has a fixed schema.
+            verdict = row.pop("_fatal", "")
+            if verdict:
+                fatal.append(verdict)
             done_count += 1
             decision = row.get("decision", "error")
             if row.get("reason") == "no PDF attachment found":
@@ -1000,12 +1034,26 @@ def main() -> int:
             print(f"[{done_count}/{total}] {title:<60} → {decision}",
                   flush=True)
 
+            if fatal:
+                for pending in futures:
+                    pending.cancel()
+                print("", flush=True)
+                print(fatal[0], file=sys.stderr, flush=True)
+                print(
+                    f"\nStopped after {done_count} of {total} papers. Coded "
+                    f"rows so far are in {output_path} and tagged in Zotero — "
+                    f"re-run after fixing the above and coding resumes from "
+                    f"there.",
+                    file=sys.stderr, flush=True,
+                )
+                break
+
     print(f"\n{'=' * 60}")
-    print(f"Done. Coded {total} items.")
+    print(f"Done. Coded {done_count} of {total} items.")
     for k in ("include", "exclude", "error", "no_pdf"):
         print(f"  {k}: {counts.get(k, 0)}")
     print(f"Log: {output_path}")
-    return 0
+    return 1 if fatal else 0
 
 
 if __name__ == "__main__":
