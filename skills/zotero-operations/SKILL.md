@@ -95,8 +95,10 @@ The browser route (`--sources browser`) needs a one-time Playwright
 browser install before first use: `uvx playwright install chromium`
 (the setup wizard pre-approves this command).
 
-The audit script writes both a JSON report and three `.keys` files
-(`.claude/audit/audit.{missing_abstract,missing_pdf,empty_stubs}.keys`)
+The audit script writes both a JSON report and five `.keys` files
+(`.claude/audit/audit.{missing_abstract,missing_pdf,missing_doi,
+empty_stubs,tdm_recovered}.keys`), plus a set of `retry.*` /
+`true_negative` key files when a PDF-fetch failure log is present
 — feed them straight to the next stage's `--filter-keys-file` flag.
 **Do not improvise a `jq` step to extract keys**; the script wrote them
 for you.
@@ -132,13 +134,34 @@ running these stages:**
    available. Never guess the group ID.
 2. Run `audit_zotero_library.py --group <id>`. Read the summary counts.
    The script writes `.claude/audit/audit.{missing_abstract,missing_pdf,
-   empty_stubs}.keys` alongside the JSON report (project-local).
+   missing_doi,empty_stubs,tdm_recovered}.keys` alongside the JSON
+   report (project-local).
 3. Report counts to the user and ask which to fix (missing abstracts,
    missing PDFs, empty stubs, or all).
 4. Run the stage(s) the user chose, passing the matching `.keys` file
    to `--filter-keys-file`. The audit script prints the exact commands
    in its "Next steps" output — use those verbatim.
-5. Re-run the audit to confirm counts dropped.
+5. Re-run the audit to confirm counts dropped — **and to read the
+   retrieval report for whatever did not drop.** A count that stayed
+   put is not the end of the workflow; it is the start of step 6.
+6. **Escalate the residuals rather than reporting them as failures.**
+   The audit's per-publisher table names the cause for each item, and
+   the causes map to rungs on a ladder. Work down it, offering each
+   rung to the user:
+
+   | Cause in the report | Next rung |
+   |---|---|
+   | `BROWSER_REQUIRED` | `enrich_pdfs.py --sources browser --filter-keys-file <retry.browser.keys>` — a visible Chromium opens; the user solves one Cloudflare challenge per publisher. Narrow to one publisher with `retry.browser.<publisher>.keys`. |
+   | `ACCESS_BLOCKED` (Wiley prefix, no token) | Configure `WILEY_TDM_TOKEN` via `/setup`, then `--sources wiley` |
+   | `ACCESS_BLOCKED` (anything else) | Hand the user `retry.ill.keys` as an interlibrary-loan list |
+   | `NETWORK_ERROR` | Re-run the same stage; the cause is transient |
+   | `OUT_OF_SCOPE` | A book chapter, thesis, or preprint. No rung applies — the item is excluded on its type, not on retrieval, and chasing a PDF for it wastes the user's time. |
+   | `UNAVAILABLE` | Genuinely unreachable. Only now is "not available" the honest report. |
+
+   **Say how many items each rung would recover before proposing it.**
+   "76 of these 110 are behind Cloudflare at two publishers and one
+   browser pass gets them" is a decision the user can make; "110 items
+   failed" is not.
 
 ### Optional: retraction check
 

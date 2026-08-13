@@ -633,6 +633,7 @@ adjudicator sees in Zotero, not automatic exclusions.
 | `predatory:flag` | Preflight journal check against Beall's list (`import_to_zotero.py`) | **Warning, not exclusion.** Author decides during full-text review whether to keep each flagged paper. |
 | `retracted:flag` | Post-coding retraction check via `mcp__zotero__scite_check_retractions` (see *Retraction check* in *Key methodological rules*) | **Warning, not exclusion.** Cited paper has been retracted per Scite's retraction-watch data. Adjudicator decides whether to keep (with a discussion note), replace the citation, or drop the paper. |
 | `pdf:tdm-recovered` | `enrich_pdfs.py`, when Elsevier's TDM API returns only a 1-page preview and the fetcher falls back to the XML endpoint | **Warning, not exclusion.** The attached "PDF" is text reconstructed from XML, not the publisher's native PDF — may be less complete or lose figures/tables. `audit_zotero_library.py` lists these under `tdm_recovered`; review before/during full-text coding. |
+| `fulltext:unavailable` | Applied by the agent **only** after `audit_zotero_library.py` reports the item's cause as `UNAVAILABLE` | The full text could not be obtained by any route the plugin has. Note this is a `fulltext:*` tag, so it is mutually exclusive with `fulltext:include` / `fulltext:exclude`. **Do not invent a spelling for this** — there is exactly one, and it is this one. **Do not apply it on a failed enrichment run alone:** a `BROWSER_REQUIRED` or `ACCESS_BLOCKED` item is reachable and this tag would be false. See *Phase 4 — diagnose before you exclude*. |
 
 ### QA and adjudication tags
 
@@ -878,11 +879,61 @@ resolver (`scripts/pipelines/fetchers/library_resolver.py`). Requires:
 Zotero Desktop running locally, Zotero Connector installed in the
 Chromium profile, and the institution's OpenURL base URL configured.
 
-**Phase 4 — graceful failure.** Items that all three phases fail on
-are logged with a status code (`connector_zotero_unavailable`,
-`connector_save_failed`, `connector_sw_timeout`,
-`connector_extension_missing`, and others defined in `enrich_pdfs.py`)
-so the user can surface the residual list for manual retrieval.
+**Phase 4 — diagnose before you exclude. This step is mandatory.**
+
+Never go from "the cascade failed" to "tag it unavailable". Most of what
+Phase 1 fails on is *not* unreachable — it is reachable by a route that
+has not been tried yet. On a real 244-item run, 76 of 119 apparent
+failures were Sage and Academy of Management articles that one browser
+pass recovered; the pipeline had reported all 119 as "no fulltext
+available".
+
+After **every** enrichment run, run the audit and read the retrieval
+report:
+
+```bash
+uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/audit_zotero_library.py \
+    --group <id>
+```
+
+It prints a per-publisher × cause table and, crucially, a count of how
+many residuals are *recoverable*:
+
+```
+PDF retrieval: 125/244 attached · 110 still missing
+
+  publisher                 n  cause              next step
+  Sage                     48  BROWSER_REQUIRED   --sources browser --publisher sage
+  Academy of Management    28  BROWSER_REQUIRED   --sources browser --publisher aom
+  Wiley                     8  ACCESS_BLOCKED     Flag for ILL — paywall, full text exists
+  Springer                 15  UNAVAILABLE        FE6 (no fulltext available)
+
+  86 of the 110 are recoverable — they have not been through every route yet.
+```
+
+**Report this table to the user and offer the next step before
+proposing any exclusion.** Say how many items the browser pass would
+recover — that number, not the raw failure count, is what the user needs
+to decide with.
+
+Then act by cause:
+
+| Cause | Meaning | What to do |
+|---|---|---|
+| `BROWSER_REQUIRED` | A Cloudflare-gated publisher this plugin has a handler for, not yet run | Offer the browser pass. **Not an exclusion.** |
+| `ACCESS_BLOCKED` | Paywalled; the full text exists | Offer the ILL list. **Not an exclusion.** |
+| `NETWORK_ERROR` | Transport failure | Re-run. **Not an exclusion.** |
+| `OUT_OF_SCOPE` | Book chapter, thesis, preprint | FE2 / FE3 — exclude on item type, not on retrieval |
+| `UNAVAILABLE` | Every route tried, nothing found | FE6 — the only cause that justifies a full-text-unavailable exclusion |
+
+**The hard rule: an item may not be tagged `fulltext:unavailable` until
+its cause in the retrieval report is `UNAVAILABLE`.** If you have not run
+the audit, you do not know the cause, and you may not tag. The audit
+writes the retry sets for you as key files
+(`retry.browser[.<publisher>]`, `retry.ill`, `retry.network`,
+`true_negative`, `out_of_scope`) — feed them straight to
+`--filter-keys-file`; do not assemble key lists by hand.
+
 **Never silently drop items** — a paper with no attached PDF after all
 phases is a data-quality signal, not a failure to hide.
 
