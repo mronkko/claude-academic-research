@@ -278,6 +278,162 @@ def _row_query_main(argv: list[str]) -> int:
     return 0
 
 
+def _report_retrieval_failures(
+    log_path: str,
+    report: dict,
+    stem: Path,
+    output_path: str,
+) -> None:
+    """Per-publisher × cause breakdown of items that still have no PDF.
+
+    Replaces a cause-only grouping that could not answer the question a
+    user actually asks after a failed enrichment run — *which publisher,
+    and what do I do about it?* On the run that motivated this, the
+    honest answer was "76 of these 119 are Sage and Academy of
+    Management, and one browser pass gets them all", but the report said
+    only "119 UNAVAILABLE — FE6" and the user had to rebuild the table
+    by hand.
+
+    Two joins make that possible. `latest_per_item` collapses the
+    per-source rows the composite key now keeps, taking the most
+    *actionable* verdict rather than the last-written one. Then the
+    still-missing set from this audit filters out anything a later pass
+    already attached, so a stale failure row never argues for excluding
+    a paper that is sitting in the library.
+    """
+    try:
+        import pdf_fetch_log
+    except ImportError:
+        return
+    failures = pdf_fetch_log.read_failures(log_path)
+    if not failures:
+        return
+
+    # Only items this audit still sees as missing a PDF.
+    still_missing = {e["key"] for e in report.get("missing_pdf", []) if e.get("key")}
+    verdicts = {
+        key: row
+        for key, row in pdf_fetch_log.latest_per_item(failures).items()
+        if key in still_missing
+    }
+    if not verdicts:
+        return
+
+    have = report.get("have_pdf", 0)
+    total = report.get("total_items", 0)
+    print()
+    print(f"PDF retrieval: {have}/{total} attached · {len(verdicts)} still missing")
+    print(f"  (from {log_path})")
+    print()
+
+    # publisher × cause, most actionable cause first, biggest bucket first.
+    cause_order = [
+        pdf_fetch_log.FailureCause.BROWSER_REQUIRED.value,
+        pdf_fetch_log.FailureCause.ACCESS_BLOCKED.value,
+        pdf_fetch_log.FailureCause.NETWORK_ERROR.value,
+        pdf_fetch_log.FailureCause.OUT_OF_SCOPE.value,
+        pdf_fetch_log.FailureCause.UNAVAILABLE.value,
+    ]
+    buckets: dict[tuple[str, str], list[dict]] = {}
+    for row in verdicts.values():
+        key = (row.get("publisher", "") or "(unknown)", row.get("cause", ""))
+        buckets.setdefault(key, []).append(row)
+
+    rank = {c: i for i, c in enumerate(cause_order)}
+    ordered = sorted(
+        buckets.items(),
+        key=lambda kv: (rank.get(kv[0][1], 99), -len(kv[1]), kv[0][0]),
+    )
+    width = max((len(p) for (p, _c) in buckets), default=9)
+    width = min(max(width, 9), 32)
+    print(f"  {'publisher':<{width}}  {'n':>4}  {'cause':<17}  next step")
+    for (publisher, cause), rows in ordered:
+        step = pdf_fetch_log.SUGGESTED_FE_CODE.get(cause, "")
+        handler = rows[0].get("source", "")
+        if cause == pdf_fetch_log.FailureCause.BROWSER_REQUIRED.value and handler:
+            step = f"--sources browser --publisher {handler}"
+        print(
+            f"  {publisher[:width]:<{width}}  {len(rows):>4}  {cause:<17}  {step}"
+        )
+
+    # Retry sets, one key per line, same convention as the audit's own
+    # .keys files so they feed --filter-keys-file with no jq step.
+    written = _write_retry_keys(pdf_fetch_log, verdicts, stem)
+    recoverable = sum(
+        len(rows) for (_p, cause), rows in buckets.items()
+        if cause in pdf_fetch_log.RECOVERABLE_CAUSES
+    )
+    print()
+    if recoverable:
+        publishers = sorted({
+            rows[0].get("source", "")
+            for (_p, cause), rows in buckets.items()
+            if cause == pdf_fetch_log.FailureCause.BROWSER_REQUIRED.value
+        } - {""})
+        print(
+            f"  {recoverable} of the {len(verdicts)} are recoverable — they "
+            f"have not been through every route yet."
+        )
+        if publishers:
+            print(
+                f"  A single browser pass covers {len(publishers)} publisher"
+                f"{'s' if len(publishers) != 1 else ''} "
+                f"({', '.join(publishers)}):"
+            )
+            print(
+                f"    uv run {SCRIPT_DIR}/enrich_pdfs.py --sources browser "
+                f"--filter-keys-file {written['retry.browser']}"
+            )
+        print(
+            "  Do NOT mark these full-text-unavailable until that has run."
+        )
+    for label, path in sorted(written.items()):
+        if label != "retry.browser":
+            print(f"  {label}: {path}")
+    print(f"  (audit JSON: {output_path})")
+
+
+def _write_retry_keys(pdf_fetch_log, verdicts: dict, stem: Path) -> dict[str, Path]:
+    """Write one key-file per triage bucket. Returns {label: path}."""
+    cause = pdf_fetch_log.FailureCause
+    buckets: dict[str, list[str]] = {
+        "retry.browser": [],
+        "retry.ill": [],
+        "retry.network": [],
+        "true_negative": [],
+        "out_of_scope": [],
+    }
+    label_for = {
+        cause.BROWSER_REQUIRED.value: "retry.browser",
+        cause.ACCESS_BLOCKED.value: "retry.ill",
+        cause.NETWORK_ERROR.value: "retry.network",
+        cause.UNAVAILABLE.value: "true_negative",
+        cause.OUT_OF_SCOPE.value: "out_of_scope",
+    }
+    for key, row in verdicts.items():
+        label = label_for.get(row.get("cause", ""))
+        if label:
+            buckets[label].append(key)
+
+    # Per-publisher browser sets too, so a user can solve one Cloudflare
+    # challenge and run just that publisher.
+    per_publisher: dict[str, list[str]] = {}
+    for key, row in verdicts.items():
+        if row.get("cause") == cause.BROWSER_REQUIRED.value:
+            handler = row.get("source", "")
+            if handler:
+                per_publisher.setdefault(f"retry.browser.{handler}", []).append(key)
+
+    written: dict[str, Path] = {}
+    for label, keys in {**buckets, **per_publisher}.items():
+        if not keys:
+            continue
+        path = Path(f"{stem}.{label}.keys")
+        path.write_text("\n".join(sorted(keys)) + "\n", encoding="utf-8")
+        written[label] = path
+    return written
+
+
 def main() -> int:
     # Subcommand fast-path: when the first positional arg is one of the
     # row-level operations, skip Zotero and dispatch to the CSV helpers.
@@ -321,9 +477,12 @@ def main() -> int:
         help=(
             "Path to the structured PDF-fetch failure log written by "
             "enrich_pdfs.py (default: output/pdf_fetch_log.csv). When "
-            "present, the audit groups failures by cause (out-of-scope, "
-            "access-blocked, unavailable, network-error) and suggests "
-            "FE codes per group. Pass an empty string to skip."
+            "present, the audit prints a per-publisher x cause breakdown "
+            "of the items that still have no PDF, says how many are "
+            "recoverable rather than genuinely unavailable, and writes "
+            "retry key-files (retry.browser[.<publisher>], retry.ill, "
+            "retry.network, true_negative, out_of_scope) for "
+            "--filter-keys-file. Pass an empty string to skip."
         ),
     )
     args = parser.parse_args()
@@ -412,42 +571,10 @@ def main() -> int:
               f"complete than a native PDF; review before/during coding. "
               f"See {keys_files['tdm_recovered']}")
 
-    # PDF-fetch failure-cause grouping (T4-3). Reads the structured log
-    # written by enrich_pdfs and groups items by why the cascade gave
-    # up. Each group gets a suggested FE-code label so the user can
-    # adjudicate in bulk rather than retyping per item.
     if args.pdf_fetch_log:
-        try:
-            import pdf_fetch_log
-        except ImportError:
-            pdf_fetch_log = None  # type: ignore[assignment]
-        if pdf_fetch_log is not None:
-            failures = pdf_fetch_log.read_failures(args.pdf_fetch_log)
-            if failures:
-                groups = pdf_fetch_log.group_by_cause(failures)
-                print()
-                print(
-                    f"PDF-fetch failures grouped by cause "
-                    f"({len(failures)} total, from {args.pdf_fetch_log})"
-                )
-                # Stable ordering: most actionable causes first.
-                ordered = [
-                    pdf_fetch_log.FailureCause.ACCESS_BLOCKED.value,
-                    pdf_fetch_log.FailureCause.OUT_OF_SCOPE.value,
-                    pdf_fetch_log.FailureCause.UNAVAILABLE.value,
-                    pdf_fetch_log.FailureCause.NETWORK_ERROR.value,
-                ]
-                for cause in ordered:
-                    rows = groups.get(cause, [])
-                    if not rows:
-                        continue
-                    suggestion = pdf_fetch_log.SUGGESTED_FE_CODE.get(cause, "")
-                    print(f"  {cause} ({len(rows)} items)")
-                    print(f"    suggested action: {suggestion}")
-                    sample_keys = [r.get("item_key", "") for r in rows[:5]]
-                    print(f"    sample keys: {', '.join(k for k in sample_keys if k)}")
-                    if len(rows) > 5:
-                        print(f"    ...and {len(rows) - 5} more")
+        _report_retrieval_failures(
+            args.pdf_fetch_log, report, stem, args.output,
+        )
     return 0
 
 
