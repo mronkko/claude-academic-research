@@ -7,6 +7,7 @@
 #     "tenacity>=8.0",
 #     "httpx>=0.25",
 #     "google-genai",
+#     "openai>=1.0",
 # ]
 # ///
 """LLM-driven title+abstract screening for a systematic review.

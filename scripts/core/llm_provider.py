@@ -1,8 +1,15 @@
-"""Unified LLM provider layer for the academic-research plugin.
+"""Unified LLM client layer for the academic-research plugin.
 
-Supports Anthropic (Claude) and Google Gemini (Antigravity) models through
-a unified client interface. Extensible to other providers (e.g. OpenAI)
-by registering new subclasses of LLMProvider.
+Three transports cover six providers. Anthropic and Google need their
+own SDKs; OpenAI, OpenRouter, Ollama and LM Studio all speak the same
+`/v1/chat/completions` shape and share one client — the difference
+between them is an endpoint and a credential, not a protocol.
+
+Routing used to be a `startswith("claude-")` chain, duplicated between
+`get_provider` and `require_credentials`, which meant the plugin could
+only talk to the two providers whose model names it recognised. Now the
+configured provider decides, and the model-name sniff survives only as a
+fallback for projects configured before `[llm] provider` existed.
 """
 
 from __future__ import annotations
@@ -10,13 +17,29 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# Add parent directory to path to enable core imports
 SCRIPT_DIR = Path(__file__).resolve().parent
 SCRIPTS_ROOT = SCRIPT_DIR.parent
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
+from core import providers  # noqa: E402
 from core.config_loader import get, require  # noqa: E402
+from core.providers import ProviderSpec  # noqa: E402
+
+#: Attempts per request before giving up. The SDKs default to 2, which
+#: is thin for this workload: `abstract_screen.py` runs 8 parallel
+#: workers and `fulltext_code.py` 5, so 429s are the steady state rather
+#: than an edge case. Set explicitly so the value is a decision rather
+#: than an accident of whichever SDK version is installed.
+DEFAULT_MAX_RETRIES = 5
+
+
+def max_retries() -> int:
+    raw = get("llm", "max_retries", env="ACADEMIC_RESEARCH_MAX_RETRIES")
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_RETRIES
 
 
 class LLMProvider:
@@ -34,37 +57,74 @@ class LLMProvider:
         raise NotImplementedError("Subclasses must implement generate().")
 
 
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+
+def configured_provider() -> str:
+    """The provider name from `[llm] provider`, or the registry default."""
+    return get("llm", "provider", env="ACADEMIC_RESEARCH_PROVIDER") or (
+        providers.DEFAULT_PROVIDER
+    )
+
+
+def _configured_base_url(spec: ProviderSpec) -> str:
+    if not spec.base_url_env:
+        return ""
+    section = spec.name if spec.name != "anthropic" else "anthropic"
+    return get(section, "base_url", env=spec.base_url_env) or ""
+
+
+def base_url_for(spec: ProviderSpec) -> str:
+    """Effective base URL for `spec`: configured override, else default."""
+    return providers.base_url_for(spec, _configured_base_url(spec))
+
+
 def anthropic_base_url() -> str:
     """Optional Anthropic-compatible endpoint, or `""` for the real API.
 
-    Set `[anthropic] base_url` in config.toml or `$ANTHROPIC_BASE_URL` to
-    point the screening pipelines at a local server. Open WebUI and LM
-    Studio both expose Anthropic-compatible `/v1/messages` endpoints, which
-    makes local models a workable alternative for high-volume abstract
-    screening (issue #1).
+    Kept as a named function because `ANTHROPIC_BASE_URL` is the
+    documented way to point screening at Open WebUI or LM Studio
+    (issue #1) and predates the provider registry. It is now one case of
+    the general `base_url_env` mechanism.
     """
     return get("anthropic", "base_url", env="ANTHROPIC_BASE_URL") or ""
 
 
+def _api_key_for(spec: ProviderSpec, *, required: bool = True) -> str:
+    """Credential for `spec`, or a placeholder when none is needed.
+
+    Local providers declare no credential at all, and a self-hosted
+    Anthropic-compatible endpoint has one it does not check — in both
+    cases demanding a key would block a setup that works.
+    """
+    if not spec.api_key_env:
+        return "not-required-for-local-endpoint"
+    section = spec.name if spec.name != "google" else "gemini"
+    if spec.transport == "anthropic" and anthropic_base_url():
+        return get(section, "api_key", env=spec.api_key_env) or (
+            "not-required-for-local-endpoint"
+        )
+    if required:
+        return require(section, "api_key", env=spec.api_key_env)
+    return get(section, "api_key", env=spec.api_key_env)
+
+
+# ---------------------------------------------------------------------------
+# Transports
+# ---------------------------------------------------------------------------
+
+
 class AnthropicProvider(LLMProvider):
-    """Provider for Anthropic (Claude) models, or any Anthropic-compatible
-    endpoint named by `ANTHROPIC_BASE_URL` / `[anthropic] base_url`."""
+    """Anthropic, or any endpoint speaking the Anthropic Messages API."""
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None):
+        spec = providers.require("anthropic")
         if base_url is None:
             base_url = anthropic_base_url()
-
         if not api_key:
-            if base_url:
-                # Local servers generally ignore the key but the SDK still
-                # requires one. Fall back to a placeholder rather than
-                # forcing users to invent an Anthropic key they won't use.
-                api_key = get(
-                    "anthropic", "api_key", env="ANTHROPIC_API_KEY",
-                ) or "not-required-for-local-endpoint"
-            else:
-                api_key = require("anthropic", "api_key", env="ANTHROPIC_API_KEY")
-
+            api_key = _api_key_for(spec)
         try:
             import anthropic
         except ImportError as e:
@@ -72,7 +132,7 @@ class AnthropicProvider(LLMProvider):
                 "Anthropic Python SDK is required for Claude models. "
                 "Ensure 'anthropic' is installed."
             ) from e
-        kwargs: dict = {"api_key": api_key}
+        kwargs: dict = {"api_key": api_key, "max_retries": max_retries()}
         if base_url:
             kwargs["base_url"] = base_url
         self.client = anthropic.Anthropic(**kwargs)
@@ -96,15 +156,11 @@ class AnthropicProvider(LLMProvider):
 
 
 class GeminiProvider(LLMProvider):
-    """Provider for Google Gemini models using the official Google GenAI Python SDK."""
+    """Google Gemini via the official Google GenAI SDK."""
 
     def __init__(self, api_key: str | None = None):
         if not api_key:
-            # Try to get GEMINI_API_KEY first, fallback to checking config.toml under gemini.api_key
-            api_key = get("gemini", "api_key", env="GEMINI_API_KEY")
-            if not api_key:
-                api_key = require("gemini", "api_key", env="GEMINI_API_KEY")
-
+            api_key = _api_key_for(providers.require("google"))
         try:
             from google import genai
         except ImportError as e:
@@ -122,16 +178,11 @@ class GeminiProvider(LLMProvider):
         temperature: float = 0.0,
         max_tokens: int = 1000,
     ) -> str:
-        # Standardize Gemini model names (remove 'models/' prefix if user includes it)
-        clean_model = model
-        if clean_model.startswith("models/"):
-            clean_model = clean_model.replace("models/", "")
+        clean_model = model.removeprefix("models/")
 
         from google.genai import types
 
-        config = types.GenerateContentConfig(
-            temperature=temperature,
-        )
+        config = types.GenerateContentConfig(temperature=temperature)
         if system:
             config.system_instruction = system
         if max_tokens:
@@ -139,48 +190,128 @@ class GeminiProvider(LLMProvider):
 
         try:
             response = self.client.models.generate_content(
-                model=clean_model,
-                contents=prompt,
-                config=config,
+                model=clean_model, contents=prompt, config=config,
             )
             return response.text.strip()
         except Exception as e:
             raise RuntimeError(f"Gemini API returned error: {e}") from e
 
 
-def require_credentials(model_name: str) -> None:
-    """Pre-flight: fail fast if the credential this model needs is missing.
+class OpenAICompatProvider(LLMProvider):
+    """OpenAI, OpenRouter, Ollama and LM Studio.
 
-    Called before a run starts so a missing key surfaces immediately rather
-    than after the first item has been fetched. Skips the Anthropic key
-    check when `ANTHROPIC_BASE_URL` points at a local endpoint — those
-    generally have no key to check.
+    One class, not four: all of them accept `POST /v1/chat/completions`
+    with the same body, and differ only in base URL and credential. The
+    local two ignore the key entirely, which is why a placeholder is
+    acceptable there — the SDK requires *a* value, not a valid one.
     """
-    if model_name.lower().startswith("gemini-"):
-        require("gemini", "api_key", env="GEMINI_API_KEY")
-    elif not anthropic_base_url():
-        require("anthropic", "api_key", env="ANTHROPIC_API_KEY")
 
+    def __init__(self, spec: ProviderSpec, api_key: str | None = None):
+        self.spec = spec
+        if not api_key:
+            api_key = _api_key_for(spec, required=not spec.local)
+        try:
+            import openai
+        except ImportError as e:
+            raise ImportError(
+                f"The OpenAI Python SDK is required for {spec.label}. "
+                f"Ensure 'openai' is installed."
+            ) from e
+        base = base_url_for(spec)
+        self.client = openai.OpenAI(
+            api_key=api_key or "not-required-for-local-endpoint",
+            # Every one of these providers serves the OpenAI surface
+            # under /v1, including Ollama — whose *listing* endpoint is
+            # its own /api/tags, but whose chat endpoint is not.
+            base_url=f"{base.rstrip('/')}/v1",
+            max_retries=max_retries(),
+        )
 
-def get_provider(model_name: str) -> LLMProvider:
-    """Factory function to get the appropriate LLMProvider for a given model."""
-    name_lower = model_name.lower()
-    if name_lower.startswith("claude-"):
-        return AnthropicProvider()
-    elif name_lower.startswith("gemini-"):
-        return GeminiProvider()
-    else:
-        # Extensible default: fall back to the Anthropic client shape.
-        #
-        # Only warn when talking to the real Anthropic API — there an
-        # unrecognised prefix is almost certainly a typo. With a custom
-        # base_url configured, a name like `qwen3-30b` or `llama-3.3-70b` is
-        # the expected case, and warning on every single screening call
-        # would bury the run's real output.
-        if not anthropic_base_url():
-            print(
-                f"Warning: Unknown model prefix for '{model_name}'. "
-                f"Defaulting to Anthropic.",
-                file=sys.stderr,
+    def generate(
+        self,
+        model: str,
+        system: str,
+        prompt: str,
+        temperature: float = 0.0,
+        max_tokens: int = 1000,
+    ) -> str:
+        messages: list[dict] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        try:
+            resp = self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
             )
+        except Exception as e:
+            raise RuntimeError(f"{self.spec.label} returned error: {e}") from e
+        return (resp.choices[0].message.content or "").strip()
+
+
+# ---------------------------------------------------------------------------
+# Routing
+# ---------------------------------------------------------------------------
+
+#: Fallback only. A project configured before `[llm] provider` existed
+#: has no provider recorded, and guessing from the model name is better
+#: than failing — but it is a guess, and it is why `/setup` should be
+#: re-run rather than relied upon.
+_LEGACY_PREFIXES = (
+    ("claude-", "anthropic"),
+    ("gemini-", "google"),
+    ("models/gemini", "google"),
+    ("gpt-", "openai"),
+    ("o1-", "openai"),
+    ("o3-", "openai"),
+)
+
+
+def resolve_provider(model_name: str = "", provider_hint: str = "") -> ProviderSpec:
+    """Which provider should serve `model_name`.
+
+    Order: an explicit hint, then `[llm] provider`, then the model-name
+    sniff for pre-registry projects. The configured provider wins over
+    the model name on purpose — an OpenRouter user legitimately asks for
+    `anthropic/claude-sonnet-5`, and routing that to Anthropic's own API
+    would use the wrong endpoint and the wrong key.
+    """
+    if provider_hint:
+        return providers.require(provider_hint)
+    configured = get("llm", "provider", env="ACADEMIC_RESEARCH_PROVIDER")
+    if configured:
+        return providers.require(configured)
+    lowered = (model_name or "").lower()
+    for prefix, name in _LEGACY_PREFIXES:
+        if lowered.startswith(prefix):
+            return providers.require(name)
+    return providers.require(providers.DEFAULT_PROVIDER)
+
+
+def require_credentials(model_name: str = "", provider_hint: str = "") -> None:
+    """Fail fast when the credential this run needs is missing.
+
+    Called before a run starts so a missing key surfaces immediately
+    rather than after the first item has been fetched. Shares
+    `resolve_provider` with `get_provider`, which the two prefix chains
+    this replaces did not — they could and did disagree.
+    """
+    spec = resolve_provider(model_name, provider_hint)
+    if not spec.api_key_env:
+        return
+    if spec.transport == "anthropic" and anthropic_base_url():
+        return
+    section = spec.name if spec.name != "google" else "gemini"
+    require(section, "api_key", env=spec.api_key_env)
+
+
+def get_provider(model_name: str = "", provider_hint: str = "") -> LLMProvider:
+    """Build the client for the provider serving `model_name`."""
+    spec = resolve_provider(model_name, provider_hint)
+    if spec.transport == "anthropic":
         return AnthropicProvider()
+    if spec.transport == "google":
+        return GeminiProvider()
+    return OpenAICompatProvider(spec)

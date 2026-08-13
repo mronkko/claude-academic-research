@@ -9,6 +9,7 @@
 #     "tenacity>=8.0",
 #     "httpx>=0.25",
 #     "google-genai",
+#     "openai>=1.0",
 # ]
 # ///
 """LLM-driven full-text screening + structured coding for an SLR.

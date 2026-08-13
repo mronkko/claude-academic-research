@@ -40,6 +40,18 @@ CI (`.github/workflows/ci.yml`) runs `ruff check scripts tests` then `pytest tes
 
 **Test dependencies live in exactly one place:** `[dependency-groups] dev` in `pyproject.toml`. CI installs it with `pip install --group dev` (PEP 735). Do not add a hand-written package list to `ci.yml` — that second source of truth already drifted once and left `uv sync` unable to collect 14 test modules while CI stayed green. `tests/unit/test_ci_dependencies.py` guards this.
 
+## Parallel sessions
+
+Multiple agent instances work this repo concurrently. Start any non-trivial task in a **git worktree**, never in a working tree another instance is already editing — two agents in one checkout clobber each other's edits and run tests against half-applied changes. Git enforces the useful half of this itself: the same branch cannot be checked out in two worktrees.
+
+After creating a worktree, run `uv sync --group dev` before anything else. `uv.lock` and `.venv/` are both gitignored, so a fresh worktree has no environment and every test fails until you sync. `.claude/` is gitignored too, which means project-local permission settings do not follow a worktree either — symlink `.claude/settings.local.json` from the primary checkout rather than copying it, so approvals stay in one place.
+
+The default test run is hermetic — `addopts` in `pyproject.toml` deselects the `live` and `live_browser` markers — so `pytest tests/ -q` and `ruff check scripts tests` are safe to run from any number of worktrees at once.
+
+**Live work is single-lane.** `pytest -m live`, `pytest -m live_browser`, anything under `scripts/pipelines/`, and the `/setup` wizard all contend for resources that exist exactly once on the machine: one Zotero desktop holding `localhost:23119` and one Web API library (concurrent writers interleave badly, and the HTTP 412 retry in `zotero_io.py` masks rather than resolves it), one shared API quota per publisher key, one Playwright Chromium profile, and one `~/.config/academic-research/config.toml`. Confirm no other instance holds that lane before starting.
+
+High-collision files across branches are this file, `BACKLOG.md`, and `.claude-plugin/plugin.json`. Since the version string moves only on user-visible releases, bump it once at merge time in a single branch — bumping it per-branch guarantees a conflict on that line in every subsequent merge.
+
 ## Architecture
 
 ### Plugin surface (what users consume)

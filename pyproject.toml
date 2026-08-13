@@ -24,6 +24,9 @@ dev = [
     "pyzotero>=1.6",
     "httpx>=0.25",
     "requests>=2.31",
+    # `core/llm_provider.py` imports openai lazily for the four
+    # providers that share the OpenAI-compatible transport.
+    "openai>=1.0",
     # Without reportlab, the XML-fallback rendering assertion in
     # tests/unit/test_sciencedirect_preview_fallback.py silently pytest.skips.
     "reportlab>=4.0",
