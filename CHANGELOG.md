@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-08-13
+
+Driven by a real downstream session in which a 244-item review took four
+rounds of user pushback to get from 125 to 223 usable full texts. Almost
+everything recovered had been retrievable all along — the pipeline never
+said so. One theme throughout: silent loss with no end-of-run account.
+
+### Fixed
+
+- **Successfully-downloaded PDFs were lost at the Zotero upload step.**
+  `attach_pdf` had no retry and its exception text was printed then
+  discarded, so 48 Sage PDFs fetched behind a solved Cloudflare
+  challenge became dead ends while the files sat intact in
+  `output/pdf_cache/`. Adds retry on 429/5xx/transport (never on a
+  reported `failure` payload), a `detail` column carrying the reason on
+  every non-success row, and rows in `pdf_fetch_log.csv` under a new
+  `UPLOAD_FAILED` cause whose FE suggestion is explicitly *not* an
+  exclusion. A tag PATCH after a good upload no longer records the item
+  as `upload_failed`.
+- **Nothing went back for cached-but-unattached PDFs.** A cache-recovery
+  pass now runs before any fetching, and the DOI case-skew that could
+  hide a cache hit between the API and browser paths is fixed.
+- **Truncated downloads passed validation.** Every HTTP fetcher checked
+  only `status_code == 200` and a `%PDF` prefix — which half a PDF
+  satisfies. OpenAlex served five permanently-truncated files
+  (byte-identical across retries; one declared its xref at offset
+  1,744,085 in a 1,608,714-byte file) that were attached as clean
+  successes. New `fetchers/_pdf_validate.py` checks `Content-Length`,
+  the `%%EOF` trailer and the xref offset; all seven fetchers apply it
+  to responses *and* cache reads, so a poisoned cache entry is discarded
+  rather than served forever. A corrupt file is never attached —
+  attaching one makes the item look permanently complete.
+- **The library-resolver pre-flight failed closed**, making a transport
+  blip indistinguishable from a real entitlement gap: 16 items were
+  skipped against journals the user demonstrably had access to. It now
+  fails open on unset / unreachable / unparseable responses, stops
+  persisting negative verdicts to `sfx_cache.json`, and falls back to
+  the DOI resolver URL. A genuinely empty response still gates.
+- **`--no-prompt` did not do what its help text claimed** — it never
+  implied `--on-first-failure=skip`, so unattended runs could still
+  block on a TTY prompt.
+- The no-terminal error suggested `--browser`, a flag that has never
+  existed; pasting it failed at the moment the user was already stuck.
+- `open_log` now migrates headerless and short-header run-logs instead
+  of silently misaligning them.
+- **`attach_pdf` accepted a zero-byte file.** Zotero stores it without
+  complaint and the resulting attachment still carries an md5 — of
+  nothing — which `pdf_map()` reads as "this item has a real PDF". The
+  item was then marked complete and skipped by every future run while
+  holding an empty attachment. Empty and unreadable files are now
+  refused before upload. Found by the new live test.
+
+### Added
+
+- **An end-of-run report** (`pdf_run_report.py`). `--sources browser`
+  previously printed no summary at all, and only 3 of 14 statuses were
+  ever counted. Every run now ends with each status counted, per-item
+  citations for anything still missing a PDF, and a concrete next lever
+  per failure bucket. `--report` re-reads an existing log without
+  fetching.
+- **`--plan`** — prints the browser queue, naming which publishers will
+  need an interactive Cloudflare/SSO solve, without opening a browser.
+  Handlers declare `needs_interactive_solve`. Previously the queue never
+  said which publishers needed a solve, so a user solved Sage and AoM
+  and was never told APA was also queued (10 items, zero attempts).
+- **`--ignore-library-coverage`** — bypass the resolver gate when it
+  false-negatives on journals the library actually holds.
+- **`--no-check-text`** — opt out of the post-attach text check. By
+  default a structurally intact PDF yielding no text is reported as
+  `attached_no_text` rather than counting as a clean success. Note this
+  points at re-fetching from a different source, *not* at OCR: of the
+  five textless files in the incident, zero were scans and all five came
+  back intact from another source.
+
+### Changed
+
+- `scripts/dev/mini_slr.py`'s trim stage samples across all configured
+  journals instead of top-N-by-year, which in a single-year corpus kept
+  8 rows from one publisher and left the Elsevier and Wiley routes
+  untested. Its `verify` stage now asserts the fetch→attach invariant:
+  an item logged as attached must really carry a PDF in Zotero.
+
 ## [0.8.2] — 2026-08-12
 
 ### Added

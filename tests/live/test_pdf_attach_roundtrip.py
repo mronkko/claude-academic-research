@@ -35,12 +35,19 @@ pytestmark = pytest.mark.live
 GROUP_NAME = "academic-research-e2e"
 
 
-def _pdf_bytes(marker: bytes = b"live-test") -> bytes:
-    """A small but structurally complete PDF.
+def _pdf_bytes(marker: bytes | None = None) -> bytes:
+    """A small but structurally complete PDF, unique per call by default.
 
     Must satisfy `fetchers._pdf_validate`: `%PDF-` header, >= 1000
     bytes, and an `%%EOF` trailer whose `startxref` is in bounds.
+
+    The content is randomised because Zotero deduplicates uploads by
+    file hash: a fixture with fixed bytes uploads cleanly the first
+    time, then comes back `unchanged` on every later run — so the test
+    passes once and then fails forever on a real library.
     """
+    if marker is None:
+        marker = uuid.uuid4().hex.encode()
     return b"%PDF-1.4\n" + marker + b"\n" + b"0" * 2000 + b"\nstartxref\n9\n%%EOF\n"
 
 
@@ -116,13 +123,25 @@ def test_attached_pdf_actually_lands_with_bytes(client, scratch_item, tmp_path):
 
 
 def test_pdf_map_agrees_the_item_has_a_real_pdf(client, scratch_item, tmp_path):
-    """`pdf_map()` is what decides whether a later run re-processes an
-    item, so it has to agree with the attach step."""
+    """`pdf_map()` decides whether a later run re-processes an item, so
+    it has to agree with the attach step.
+
+    Reads the cloud library explicitly. `ZoteroClient` prefers the local
+    Zotero server for reads while uploads go to the Web API, so the
+    default client would race Zotero Desktop's sync — the first version
+    of this test failed for exactly that reason, which is also why
+    `mini_slr.py` has a dedicated sync stage between import and enrich.
+    """
+    import zotero_io as zio
+
     pdf = tmp_path / "paper.pdf"
     pdf.write_bytes(_pdf_bytes())
     client.attach_pdf(scratch_item, pdf)
 
-    has_real, stubs = client.pdf_map().get(scratch_item, (False, []))
+    cloud_reader = zio.ZoteroClient(
+        api_key=client.api_key, group_id=client.group_id, prefer_local=False,
+    )
+    has_real, stubs = cloud_reader.pdf_map().get(scratch_item, (False, []))
     assert has_real, "pdf_map does not see the PDF we just attached"
     assert not stubs
 
@@ -151,14 +170,19 @@ def test_attach_to_a_nonexistent_parent_raises(client, tmp_path):
 
 
 def test_attach_of_an_empty_file_fails_loudly(client, scratch_item, tmp_path):
-    """Better to raise than to silently register a zero-byte
-    attachment that later reads as a real PDF."""
+    """A zero-byte upload must be refused before it reaches Zotero.
+
+    Zotero accepts one happily, and the resulting attachment still
+    carries an md5 — of nothing — which `pdf_map()` reads as "this item
+    has a real PDF". The item would then be marked complete and skipped
+    by every future run, holding an attachment with no content. This
+    test found that gap live; `attach_pdf` now rejects empty files.
+    """
     empty = tmp_path / "empty.pdf"
     empty.write_bytes(b"")
 
-    with pytest.raises(Exception) as exc:      # noqa: B017
+    with pytest.raises(RuntimeError, match="empty file"):
         client.attach_pdf(scratch_item, empty)
-    assert str(exc.value).strip()
 
 
 # --- structural validation against the live library -------------------

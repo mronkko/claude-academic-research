@@ -964,7 +964,20 @@ class ZoteroClient:
         upload blip was terminal for the item; the bytes were still on
         disk, but nothing ever tried again.
         """
-        path_str = str(Path(pdf_path))
+        path = Path(pdf_path)
+        # Refuse to upload a file that cannot be a PDF. Zotero accepts a
+        # zero-byte upload happily, and the resulting attachment still
+        # carries an md5 (of nothing) — which `pdf_map()` reads as "this
+        # item has a real PDF", marking it permanently complete and
+        # skipping it on every future run. Found by a live test.
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            raise RuntimeError(f"attach_pdf: cannot read {path}: {exc}") from exc
+        if size == 0:
+            raise RuntimeError(f"attach_pdf: refusing to upload empty file {path}")
+
+        path_str = str(path)
         result = self.cloud.attachment_simple([path_str], parentid=item_key)
 
         success = result.get("success") or []
