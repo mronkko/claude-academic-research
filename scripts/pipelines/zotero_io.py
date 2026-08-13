@@ -978,10 +978,20 @@ class ZoteroClient:
         synced, or item added without BBT running) are absent from
         the returned dict — callers can compute the missing set as
         `set(item_keys) - result.keys()`.
+
+        The parameter name is `item_keys`, not `keys`: BBT's JSON-RPC
+        handler validates named parameters against the method
+        signature (`async citationkey(item_keys)`) and rejects
+        anything else with `-32602 unsupported argument`. Because the
+        error body carries no `result`, the wrong name fails *silently*
+        — this method returns `{}` and `populate_missing_bbt_keys`
+        reports every item as unkeyed. zotero-mcp hit the identical
+        bug (its #293); `tests/live/test_zotero_io_bbt.py` is what
+        pins it here, since a mocked transport cannot catch it.
         """
         if not item_keys:
             return {}
-        body = self.bbt_json_rpc("item.citationkey", {"keys": list(item_keys)})
+        body = self.bbt_json_rpc("item.citationkey", {"item_keys": list(item_keys)})
         result = body.get("result")
         if not isinstance(result, dict):
             return {}

@@ -5,8 +5,9 @@ machine when Zotero desktop is running:
 
 - `http://127.0.0.1:23119/better-bibtex/json-rpc` — JSON-RPC 2.0
   for citation-key lookups, item exports, group enumeration, etc.
-- `http://127.0.0.1:23119/better-bibtex/library/<library_id>/library.bibtex`
-  — full BibTeX export of a library.
+- `http://127.0.0.1:23119/better-bibtex/export/library?/<library_id>/library.bibtex`
+  — full BibTeX export of a library. The `?` is part of BBT's path
+  syntax, not a query string.
 
 This module is pure stdlib so light-weight uv-run scripts (notably
 `generate_bib.py`, which declares `dependencies = []`) can talk to BBT
@@ -70,10 +71,16 @@ def get_bibtex_export(library_id: int | str, *, timeout: int = 60) -> str:
     `library_id` is BBT's numeric library identifier — `1` for the
     user's personal library, or the group ID for a group library.
 
+    The path is `/export/library?/<id>/library.bibtex`. Both parts
+    matter: BBT serves library exports under `/export/`, and the
+    literal `?` before the path segments is BBT's own query syntax,
+    not a typo. `/better-bibtex/library/<id>/library.bibtex` — the
+    form this function used previously — returns HTTP 404.
+
     Returns the BibTeX as a single string. Raises BBTUnreachableError
     on transport failure.
     """
-    url = f"{BBT_BASE}/library/{library_id}/library.bibtex"
+    url = f"{BBT_BASE}/export/library?/{library_id}/library.bibtex"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
             return resp.read().decode("utf-8")

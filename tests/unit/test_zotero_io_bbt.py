@@ -57,12 +57,19 @@ def test_bbt_json_rpc_raises_unreachable_on_url_error() -> None:
 
 
 def test_get_bibtex_export_uses_library_id_in_url() -> None:
+    """The path is `/export/library?/<id>/library.bibtex`. Dropping the
+    `/export/` segment or the literal `?` yields HTTP 404 from BBT — this
+    assertion previously pinned the 404-producing form, which is why the
+    live test in `tests/live/test_zotero_io_bbt.py` is the real guard."""
     payload = b"@article{Smith2020, ...}"
     with patch("urllib.request.urlopen", return_value=_fake_response(payload)) as mock:
         body = bbt_client.get_bibtex_export(library_id=6015547)
     assert body == "@article{Smith2020, ...}"
     url = mock.call_args.args[0]
-    assert url == "http://127.0.0.1:23119/better-bibtex/library/6015547/library.bibtex"
+    assert url == (
+        "http://127.0.0.1:23119/better-bibtex/export/library"
+        "?/6015547/library.bibtex"
+    )
 
 
 def test_get_group_library_ids_extracts_ids_from_user_groups_response() -> None:
@@ -138,6 +145,22 @@ def test_get_bbt_keys_returns_only_non_empty_string_values() -> None:
     }):
         out = zc.get_bbt_keys(["ABCD0001", "ABCD0002", "ABCD0003", "ABCD0004"])
     assert out == {"ABCD0001": "smith2020Foo", "ABCD0004": "jones2021Bar"}
+
+
+def test_get_bbt_keys_sends_item_keys_named_param() -> None:
+    """BBT's JSON-RPC handler validates named params against the method
+    signature (`async citationkey(item_keys)`) and rejects `keys` with
+    `-32602 unsupported argument`. The rejection carries no `result`, so
+    the wrong name degrades to "every item is unkeyed" rather than
+    raising — see the note on `get_bbt_keys`. This assertion is the
+    unit-level half; `tests/live/test_zotero_io_bbt.py` is the half that
+    would actually have caught the original bug."""
+    zc = _client()
+    with patch.object(zc, "bbt_json_rpc", return_value={"result": {}}) as mock:
+        zc.get_bbt_keys(["ABCD0001", "ABCD0002"])
+    mock.assert_called_once_with(
+        "item.citationkey", {"item_keys": ["ABCD0001", "ABCD0002"]},
+    )
 
 
 def test_get_bbt_keys_empty_input_short_circuits() -> None:
