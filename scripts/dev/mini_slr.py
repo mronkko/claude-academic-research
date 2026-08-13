@@ -787,6 +787,103 @@ STAGE_ORDER = list(STAGE_FUNCS)
 # ---------------------------------------------------------------------------
 
 
+STAGE_TAG_PREFIXES = ("abstract:", "fulltext:")
+
+
+def _runs_owning(item_keys: set[str]) -> list[str]:
+    """Run-ids whose teardown would remove `item_keys`, newest last.
+
+    The tagged items carry no record of which run made them, but each
+    run's state file lists what it created, so the intersection names the
+    run to tear down. Runs already torn down are skipped.
+    """
+    owners: list[str] = []
+    if not OUTPUT_E2E_ROOT.is_dir():
+        return owners
+    for run_dir in sorted(OUTPUT_E2E_ROOT.iterdir()):
+        state_path = run_dir / ".mini_slr_state.json"
+        if not state_path.is_file():
+            continue
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        if state.get("torn_down"):
+            continue
+        if set(state.get("created_item_keys", [])) & item_keys:
+            owners.append(run_dir.name)
+    return owners
+
+
+def _preflight_clean_group(ctx: Ctx) -> None:
+    """Refuse to start a new run in a group that still holds staged items.
+
+    `import_to_zotero.py` deduplicates by DOI, so a second run against a
+    dirty group creates no items at all — it re-uses the previous run's,
+    stage tags and all. The damage is silent and downstream:
+    `abstract_screen.py` sees every item already tagged and screens
+    nothing (writing no `abstract_screening.csv`), a stale
+    `fulltext:include` inflates the export, and the operator learns about
+    it five `verify` failures later, none of which name the real cause.
+    Run 20260813T184419Z lost a full pipeline that way.
+
+    Reads the *cloud* library deliberately, for the same reason
+    `_verify_fetch_attach_invariant` does: teardown deletes through the
+    Web API, so the cloud is clean the moment it finishes, while Zotero
+    Desktop may still be showing the items locally. Checking the local
+    view would block a genuinely clean run and tell the operator to tear
+    down a run that is already gone — a loop with no exit.
+
+    Fails open: a group that cannot be read is not evidence of a dirty
+    one, and blocking a run on a transient Zotero blip would be worse
+    than the race this guards. An empty answer still counts as clean.
+    """
+    try:
+        reader = zotero_io.ZoteroClient.from_config(
+            group_id=ctx.group_id, prefer_local=False,
+        )
+        items = reader.journal_articles()
+    except Exception as e:  # noqa: BLE001
+        print(f"  WARNING: could not pre-check the group for stale items "
+              f"({e}); continuing.", flush=True)
+        return
+
+    dirty = {
+        it.get("key", "")
+        for it in items
+        if any(t.get("tag", "").startswith(STAGE_TAG_PREFIXES)
+               for t in it.get("data", {}).get("tags", []))
+    } - {""}
+    if not dirty:
+        return
+
+    owners = _runs_owning(dirty)
+    if owners:
+        how = "\n".join(
+            f"  uv run {Path(__file__).resolve()} --stage teardown --run-id {r}"
+            for r in owners
+        )
+        hint = f"Tear the earlier run(s) down first:\n{how}"
+    else:
+        # Items nothing claims — a run whose state file was deleted, or
+        # hand-added items. Teardown cannot help; say so rather than
+        # printing a command that would delete nothing.
+        hint = (
+            "No run's state file claims these items, so --stage teardown "
+            "will not remove them. Delete them in Zotero (or use a "
+            "different group) before re-running."
+        )
+
+    sys.exit(
+        f"ERROR: group {ctx.group_id} already holds {len(dirty)} item(s) "
+        f"tagged abstract:*/fulltext:* from an earlier run.\n"
+        f"import_to_zotero.py deduplicates by DOI, so this run would "
+        f"re-use those items along with their stale tags, screen nothing, "
+        f"and fail verify for reasons that point away from the cause.\n"
+        f"{hint}"
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -839,6 +936,11 @@ def main() -> int:
         f"(group {ctx.group_id} {state.get('group_name', '')!r}) ===",
         flush=True,
     )
+
+    # Only a brand-new run can be contaminated by an earlier one; a resumed
+    # run is *supposed* to find its own stage tags in the group.
+    if fresh and not args.run_id:
+        _preflight_clean_group(ctx)
 
     stages = STAGE_ORDER if args.stage == "all" else [args.stage]
     stages_done = set(state.get("stages_completed", []))
