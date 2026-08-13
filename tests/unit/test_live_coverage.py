@@ -187,6 +187,7 @@ PDF_LIVE_TESTS: dict[str, list[str]] = {
         "test_openalex_oa_url_present",
     ],
     "unpaywall": ["test_unpaywall_returns_pdf_url"],
+    "semantic_scholar": ["test_semantic_scholar_open_access_pdf_url"],
     "wiley": ["test_wiley_tdm_downloads_pdf"],
 }
 

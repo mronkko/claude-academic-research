@@ -60,7 +60,13 @@ def pdf_sources(
 
     Default cascade order:
         ScienceDirect (Elsevier) → Springer → Crossref TDM → PMC
-        → OpenAlex (Content + OA) → Unpaywall
+        → OpenAlex (Content + OA) → Unpaywall → Semantic Scholar
+
+    Publisher-direct sources come first because they serve the version
+    of record. The two aggregators go last, and Semantic Scholar last of
+    those: it is the widest net and the least particular about which
+    copy it points at, so it should only answer for DOIs the others
+    could not.
 
     Wiley and Browser are included in the registry but excluded by the
     default selection — they require a specific auth contract (Wiley)
@@ -76,6 +82,7 @@ def pdf_sources(
         PmcSource(http, config),
         OpenAlexSource(http, config),
         UnpaywallSource(http, config),
+        SemanticScholarSource(http, config),
         WileySource(http, config),
         BrowserSource(http, config),
     ])

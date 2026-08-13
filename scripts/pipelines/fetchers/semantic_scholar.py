@@ -1,19 +1,43 @@
-"""Semantic Scholar — abstract (by DOI, with title-search fallback)."""
+"""Semantic Scholar — abstracts, and open-access PDFs via `openAccessPdf`.
+
+Both capabilities from one class, sharing one key, one session, and one
+rejected-key fallback. The PDF half was added because the abstract half
+was already asking Semantic Scholar about the same DOIs and throwing
+away the `openAccessPdf` field sitting in the response: the cheapest
+real coverage gain available, with no new credential and no new
+provider to configure.
+
+Its value is complementary rather than duplicative. Unpaywall indexes
+publisher and repository OA; Semantic Scholar's S2 corpus also surfaces
+author-deposited copies that Unpaywall's `best_oa_location` misses, and
+it answers by DOI *or* by title, which matters for the records whose
+DOI never resolved.
+"""
 
 from __future__ import annotations
 
 import logging
 import os
 import urllib.parse
+from pathlib import Path
 
-from fetchers.base import AbstractFetcher
+from fetchers import _pdf_validate
+from fetchers.base import AbstractFetcher, PdfFetcher
 
 logger = logging.getLogger(__name__)
 
 _API_BASE = "https://api.semanticscholar.org/graph/v1"
 
 
-class SemanticScholarSource(AbstractFetcher):
+def _doi_safe(doi: str) -> str:
+    return doi.replace("/", "_").replace(":", "_")
+
+
+def _cache_pdf_path(cache_dir: str | Path, doi: str) -> Path:
+    return Path(cache_dir) / f"{_doi_safe(doi)}.pdf"
+
+
+class SemanticScholarSource(AbstractFetcher, PdfFetcher):
     name = "semantic_scholar"
 
     def __init__(self, *args, **kwargs) -> None:
@@ -92,3 +116,67 @@ class SemanticScholarSource(AbstractFetcher):
             if (ext.get("DOI") or "").lower().strip() == doi_norm:
                 return hit.get("abstract") or None
         return None
+
+    # -- PdfFetcher ----------------------------------------------------
+
+    def _open_access_pdf_url(self, doi: str) -> str | None:
+        """The `openAccessPdf.url` S2 reports for this DOI, if any.
+
+        One field on the same paper endpoint the abstract half already
+        calls. S2 populates it only when it has resolved an actually
+        downloadable copy, so an empty answer here is a real negative
+        rather than a lookup that needs retrying elsewhere.
+        """
+        url = f"{_API_BASE}/paper/DOI:{doi}?fields=openAccessPdf"
+        try:
+            resp = self._get(url)
+        except Exception as e:
+            logger.debug("semantic_scholar openAccessPdf lookup failed: %s", e)
+            return None
+        if resp.status_code != 200:
+            return None
+        oa = (resp.json() or {}).get("openAccessPdf") or {}
+        return (oa.get("url") or "").strip() or None
+
+    def fetch_pdf(
+        self, doi: str, *, cache_dir, bypass_prefix_filter: bool = False,
+    ) -> tuple[Path, str] | None:
+        del bypass_prefix_filter          # not prefix-filtered
+        path = _cache_pdf_path(cache_dir, doi)
+        if path.exists():
+            # Same rule as every other fetcher: validate before serving a
+            # cached file, or an earlier truncated download becomes
+            # permanent because every later run short-circuits on it.
+            defect = _pdf_validate.file_defect(path)
+            if defect is None:
+                return path, f"cache://{path}"
+            logger.warning("discarding cached PDF for %s — %s", doi, defect)
+            path.unlink(missing_ok=True)
+
+        pdf_url = self._open_access_pdf_url(doi)
+        if not pdf_url:
+            return None
+
+        try:
+            resp = self.http.get(
+                pdf_url,
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=60,
+                allow_redirects=True,
+            )
+        except Exception as e:
+            logger.debug("semantic_scholar PDF %s failed: %s", pdf_url, e)
+            return None
+
+        defect = _pdf_validate.response_defect(resp)
+        if defect is not None:
+            # None rather than an exception, so the cascade moves on: S2
+            # links out to repositories that sometimes serve a landing
+            # page or a truncated file where another source has the
+            # article intact.
+            logger.warning("%s: rejected PDF for %s — %s", self.name, doi, defect)
+            return None
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(resp.content)
+        return path, pdf_url

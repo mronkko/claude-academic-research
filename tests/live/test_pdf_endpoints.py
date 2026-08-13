@@ -136,6 +136,28 @@ def test_unpaywall_returns_pdf_url() -> None:
     assert pdf_url, f"Unpaywall has no PDF URL for DOI {doi}"
 
 
+def test_semantic_scholar_open_access_pdf_url() -> None:
+    """S2 exposes a downloadable OA copy via `openAccessPdf` for an OA DOI.
+
+    Unauthenticated on purpose: the field is public, and the shared tier
+    is what a user without SEMANTIC_SCHOLAR_API_KEY actually hits — so
+    this exercises the path most installs take.
+    """
+    doi = KNOWN_DOIS["semantic_scholar_pdf"]
+    status, body, _ = http_get(
+        f"https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}"
+        f"?fields=openAccessPdf",
+    )
+    if status == 429:
+        pytest.skip("Semantic Scholar shared rate limit hit; re-run later.")
+    assert status == 200, f"Semantic Scholar returned {status}"
+    oa = (json.loads(body) or {}).get("openAccessPdf") or {}
+    assert oa.get("url"), (
+        f"Semantic Scholar reports no openAccessPdf for DOI {doi}. "
+        f"If this paper is still OA, update KNOWN_DOIS."
+    )
+
+
 def test_openalex_oa_url_present() -> None:
     """OpenAlex metadata (free, no key) exposes an OA URL for OA papers."""
     doi = KNOWN_DOIS["openalex_oa"]

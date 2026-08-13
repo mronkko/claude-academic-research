@@ -48,6 +48,7 @@ KNOWN_DOIS: dict[str, str] = {
     "openalex_content": "10.1371/journal.pone.0012345",
     "unpaywall": "10.1371/journal.pone.0012345",
     "openalex_oa": "10.1371/journal.pone.0012345",
+    "semantic_scholar_pdf": "10.1371/journal.pone.0012345",  # PLOS ONE — S2 resolves an openAccessPdf
     "wiley_tdm": "10.1002/smj.70090",                    # SMJ (user-confirmed in TDM scope). ETP moved to Sage in 2022.
 
     # Direct-HTTP abstract endpoints.

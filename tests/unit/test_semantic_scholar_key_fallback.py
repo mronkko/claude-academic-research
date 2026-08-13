@@ -189,3 +189,125 @@ def test_fetch_abstract_returns_none_when_403_has_no_key() -> None:
 
     assert src.fetch_abstract("10.1/x") is None
     assert len(http.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# fetchers/semantic_scholar.py — the openAccessPdf PDF path
+# ---------------------------------------------------------------------------
+#
+# The class serves abstracts and PDFs from one key, one session, and one
+# rejected-key fallback. These pin the PDF half, including that it obeys
+# the same validate-before-serving rule as every other fetcher.
+
+
+def _pdf_bytes() -> bytes:
+    """A minimal structurally-valid PDF, per fetchers/_pdf_validate."""
+    body = (
+        b"%PDF-1.4\n"
+        b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+        b"2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\n"
+    )
+    body += b"%" + b"padding" * 200 + b"\n"
+    return body + b"startxref\n9\n%%EOF\n"
+
+
+def _pdf_response(content: bytes) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.content = content
+    resp.headers = {"Content-Type": "application/pdf"}
+    resp.raise_for_status.return_value = None
+    return resp
+
+
+def test_fetch_pdf_downloads_the_open_access_copy(tmp_path) -> None:
+    http = MagicMock()
+    http.get.side_effect = [
+        _resp(200, {"openAccessPdf": {"url": "https://oa.example/x.pdf"}}),
+        _pdf_response(_pdf_bytes()),
+    ]
+    src = SemanticScholarSource(http=http, config=None)
+
+    result = src.fetch_pdf("10.1/x", cache_dir=tmp_path)
+
+    assert result is not None
+    path, url = result
+    assert url == "https://oa.example/x.pdf"
+    assert path.read_bytes().startswith(b"%PDF")
+
+
+def test_fetch_pdf_returns_none_when_there_is_no_open_access_copy(tmp_path) -> None:
+    """A missing `openAccessPdf` is a real negative, not a retry signal."""
+    http = MagicMock()
+    http.get.side_effect = [_resp(200, {})]
+    src = SemanticScholarSource(http=http, config=None)
+
+    assert src.fetch_pdf("10.1/x", cache_dir=tmp_path) is None
+    assert http.get.call_count == 1     # no download attempted
+
+
+def test_fetch_pdf_rejects_a_truncated_download(tmp_path) -> None:
+    """S2 links out to repositories that sometimes serve a landing page
+    or a partial file. Returning None lets the cascade try elsewhere."""
+    http = MagicMock()
+    http.get.side_effect = [
+        _resp(200, {"openAccessPdf": {"url": "https://oa.example/x.pdf"}}),
+        _pdf_response(b"<html>Sign in to continue</html>"),
+    ]
+    src = SemanticScholarSource(http=http, config=None)
+
+    assert src.fetch_pdf("10.1/x", cache_dir=tmp_path) is None
+    assert not list(tmp_path.glob("*.pdf")), "a rejected body must not be cached"
+
+
+def test_fetch_pdf_discards_a_corrupt_cached_file(tmp_path) -> None:
+    """Serving an unvalidated cache entry makes an earlier truncated
+    download permanent — every later run short-circuits on it."""
+    cached = tmp_path / "10.1_x.pdf"
+    cached.write_bytes(b"%PDF-1.4\ntruncated")
+
+    http = MagicMock()
+    http.get.side_effect = [
+        _resp(200, {"openAccessPdf": {"url": "https://oa.example/x.pdf"}}),
+        _pdf_response(_pdf_bytes()),
+    ]
+    src = SemanticScholarSource(http=http, config=None)
+
+    result = src.fetch_pdf("10.1/x", cache_dir=tmp_path)
+    assert result is not None
+    assert result[1] == "https://oa.example/x.pdf"   # re-fetched, not served
+
+
+def test_fetch_pdf_serves_a_valid_cached_file_without_a_request(tmp_path) -> None:
+    cached = tmp_path / "10.1_x.pdf"
+    cached.write_bytes(_pdf_bytes())
+    http = MagicMock()
+    src = SemanticScholarSource(http=http, config=None)
+
+    result = src.fetch_pdf("10.1/x", cache_dir=tmp_path)
+
+    assert result == (cached, f"cache://{cached}")
+    http.get.assert_not_called()
+
+
+def test_fetch_pdf_shares_the_rejected_key_fallback(capsys) -> None:
+    """The 403-drop-the-key logic lives in `_get`, so the PDF path
+    inherits it rather than reimplementing it."""
+    http = _http_returning(
+        (403, {}),
+        (200, {"openAccessPdf": {"url": "https://oa.example/x.pdf"}}),
+    )
+    src = SemanticScholarSource(http=http, config=_FetcherConfig())
+
+    assert src._open_access_pdf_url("10.1/x") == "https://oa.example/x.pdf"
+    assert src._key_rejected is True
+    assert "rejected" in capsys.readouterr().out.lower()
+
+
+def test_the_source_advertises_both_capabilities() -> None:
+    """One class, both ABCs — the registry and the coverage guard walk
+    the subclass tree, so this is what puts it in the PDF cascade."""
+    from fetchers.base import AbstractFetcher, PdfFetcher
+
+    assert issubclass(SemanticScholarSource, AbstractFetcher)
+    assert issubclass(SemanticScholarSource, PdfFetcher)
