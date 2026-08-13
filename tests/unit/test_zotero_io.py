@@ -8,6 +8,13 @@ import pytest
 import zotero_io
 
 
+def _real_pdf(tmp_path) -> str:
+    """`attach_pdf` refuses missing/empty files, so tests need real bytes."""
+    path = tmp_path / "paper.pdf"
+    path.write_bytes(b"%PDF-1.4\n" + b"0" * 2000 + b"\n%%EOF\n")
+    return str(path)
+
+
 def _client() -> zotero_io.ZoteroClient:
     """ZoteroClient with fake credentials; real pyzotero clients are
     injected via the _local/_cloud properties in tests."""
@@ -244,7 +251,7 @@ def test_attach_pdf_delegates_to_pyzotero_attachment_simple(tmp_path) -> None:
     }
     zc._cloud = fake_cloud
 
-    pdf_path = tmp_path / "paper.pdf"
+    pdf_path = _Path(_real_pdf(tmp_path))
     result = zc.attach_pdf("PARENT1", str(pdf_path))
 
     # attach_pdf normalises via str(Path(...)), which uses backslashes on
@@ -256,7 +263,7 @@ def test_attach_pdf_delegates_to_pyzotero_attachment_simple(tmp_path) -> None:
     assert result == "NEWATT1"
 
 
-def test_attach_pdf_returns_none_on_unchanged() -> None:
+def test_attach_pdf_returns_none_on_unchanged(tmp_path) -> None:
     """pyzotero returns the file under 'unchanged' if the same hash
     is already attached — not an error, just a no-op."""
     zc = _client()
@@ -268,10 +275,10 @@ def test_attach_pdf_returns_none_on_unchanged() -> None:
     }
     zc._cloud = fake_cloud
 
-    assert zc.attach_pdf("PARENT1", "/tmp/paper.pdf") is None
+    assert zc.attach_pdf("PARENT1", _real_pdf(tmp_path)) is None
 
 
-def test_attach_pdf_raises_on_failure() -> None:
+def test_attach_pdf_raises_on_failure(tmp_path) -> None:
     zc = _client()
     fake_cloud = MagicMock()
     fake_cloud.attachment_simple.return_value = {
@@ -282,10 +289,10 @@ def test_attach_pdf_raises_on_failure() -> None:
     zc._cloud = fake_cloud
 
     with pytest.raises(RuntimeError):
-        zc.attach_pdf("PARENT1", "/tmp/bad.pdf")
+        zc.attach_pdf("PARENT1", _real_pdf(tmp_path))
 
 
-def test_attach_pdf_reads_nested_data_key_shape() -> None:
+def test_attach_pdf_reads_nested_data_key_shape(tmp_path) -> None:
     """Some pyzotero responses nest the key under `data` instead of at
     the top level. The wrapper should handle both."""
     zc = _client()
@@ -296,7 +303,7 @@ def test_attach_pdf_reads_nested_data_key_shape() -> None:
         "unchanged": [],
     }
     zc._cloud = fake_cloud
-    assert zc.attach_pdf("PARENT1", "/tmp/x.pdf") == "NESTED1"
+    assert zc.attach_pdf("PARENT1", _real_pdf(tmp_path)) == "NESTED1"
 
 
 def test_update_abstract_patches_item_with_current_version() -> None:

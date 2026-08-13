@@ -624,6 +624,11 @@ def _verify_fetch_attach_invariant(ctx: Ctx) -> None:
     Compares the two authorities directly, so a log that claims success
     while Zotero holds nothing is a hard failure rather than a number
     the operator has to notice.
+
+    Reads the *cloud* library deliberately. `ZoteroClient` prefers the
+    local Zotero server for reads, but uploads go to the Web API, so a
+    local read races Zotero Desktop's sync and would fail this check on
+    timing rather than on substance.
     """
     log_path = ctx.run_dir / "output" / "pdf_attach_log.csv"
     if not log_path.is_file():
@@ -650,7 +655,10 @@ def _verify_fetch_attach_invariant(ctx: Ctx) -> None:
         print("  (no items claimed as attached)", flush=True)
         return
 
-    pdf_map = _cloud_client(ctx.group_id).pdf_map()
+    cloud_reader = zotero_io.ZoteroClient.from_config(
+        group_id=ctx.group_id, prefer_local=False,
+    )
+    pdf_map = cloud_reader.pdf_map()
     missing = sorted(k for k in claimed if not pdf_map.get(k, (False, []))[0])
     if missing:
         raise SystemExit(
