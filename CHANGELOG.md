@@ -7,6 +7,155 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-08-13
+
+Two arcs, both from the same 244-item review that drove 0.9.0. That
+release made the pipeline *report* what it lost. This one changes what
+it can reach, and who gets to decide: the model provider becomes a
+choice instead of a hardcode, retrieval failures get a cause and a retry
+set instead of a shrug, and the browser pass — the route that recovers
+the most items — stops requiring the user to leave the conversation.
+
+### Added
+
+- **Provider-agnostic, tier-based model selection.** Plugin code no
+  longer carries model versions. `scripts/core/providers.py` knows six
+  providers (Anthropic, Google, OpenAI, OpenRouter, Ollama, LM Studio)
+  and three tiers (`fast` / `balanced` / `deep`); concrete IDs are
+  discovered from the provider's own model-list endpoint at project
+  bootstrap and pinned into the project's `screening_config.py` with a
+  provenance comment. `/setup` asks which provider **before** any key
+  question and then asks for exactly one credential rather than four.
+  New scripts: `resolve_models.py` (list and pin), `set_llm_provider.py`
+  (switch provider from chat), `check_llm_provider.py` (yes/no probe, so
+  a skill can ask without reading `config.toml`, which the Read tool is
+  denied on). `templates/model_catalog.toml` is now the only place in
+  the repo a version string or a price may live, and two AST guards keep
+  it that way.
+
+  **Closes #1** — local models. `ANTHROPIC_BASE_URL` routes screening at
+  any Anthropic-compatible endpoint (Open WebUI, LM Studio), and Ollama
+  and LM Studio are first-class providers with no API key at all rather
+  than the old `"not-required-for-local-endpoint"` placeholder.
+- **A cost estimate before the spend.** Both `--dry-run` paths now quote
+  the projected cost from the real item count and a token estimate, and
+  `/setup` shows unit prices with the arithmetic rather than a headline
+  range. Prompt caching is deliberately *not* quoted: the screening and
+  coding prompts are ~600 and ~800 tokens against 1024/4096-token
+  minimum cacheable prefixes, so neither caches and a cached price would
+  be a lie.
+- **A retrieval diagnosis, per publisher.** `audit_zotero_library.py`
+  now groups PDF failures by **publisher × cause** and writes retry sets
+  as `.keys` files (`retry.browser[.<publisher>]`, `retry.ill`,
+  `retry.network`, `true_negative`, `out_of_scope`) that feed straight
+  into `--filter-keys-file`. This is the table a user had to rebuild by
+  hand: of 119 apparent failures, 76 were Sage and Academy of Management
+  articles one browser pass recovers.
+- **A `BROWSER_REQUIRED` failure cause.** The DOI resolves to a
+  publisher this plugin has a handler for, and that handler has not run.
+  Its suggestion is not an FE code but a command. Previously these fell
+  through to `UNAVAILABLE` → *"FE6, no fulltext available"*, which was
+  wrong for 76 of 119 items.
+- **Two new PDF sources.** Semantic Scholar's `openAccessPdf` (no new
+  credential — the abstract half was already asking about the same DOIs
+  and discarding the field), and **CORE** (`CORE_API_KEY`, free and
+  self-service), which indexes institutional repositories and so reaches
+  author-deposited copies of exactly the Cloudflare-gated articles that
+  fail everywhere else. CORE is last in the cascade because it usually
+  serves the accepted manuscript rather than the version of record;
+  those attachments carry `pdf:repository-copy`.
+- **Preprints, opt-in and tagged.** `--allow-preprints` looks for a copy
+  on arXiv / SSRN / RePEc before an item is declared unavailable.
+  Off by default and unreachable via `--sources`, because what it
+  attaches is the manuscript before peer review: hypotheses, samples and
+  findings all move between a working paper and the published article,
+  and no later stage can see the substitution. Every attachment carries
+  `pdf:preprint-version`, `fulltext_code.py` names those items before it
+  codes them, and the audit lists them under `preprint_version`.
+- **The agent can drive the browser pass.** `--control-file` publishes
+  each prompt as JSON and waits for a reply file, so the questions
+  travel through the conversation instead of a controlling terminal
+  nobody has — the Chromium window still opens on the user's screen and
+  the user still solves every challenge. `--auto-publishers` takes the
+  item list from the audit's retry set instead of a hand-assembled key
+  list. `--progress-json` appends one JSON object per line so a
+  background run can be followed without parsing stdout.
+
+### Changed
+
+- **The browser pass stops asking when there is nothing to solve.**
+  `setup()` polls for Cloudflare clearance — no challenge visible, plus
+  a `cf_clearance` cookie scoped to *this* host — before falling back to
+  prompting. The persistent profile means a repeat run usually has
+  nothing to ask about, and self-clearing JS challenges pass in seconds.
+  The probe can only ever answer "proceed": a timeout, an error, or a
+  handler declaring a `setup_hint` (AoM's sign-in, Emerald's banner) all
+  reach the user, because a wrong "proceed" costs one failed download
+  before the existing failure prompt asks again with evidence, while a
+  wrong "skip" would lose a publisher silently.
+- **Diagnosis before exclusion is now mandatory in the skills.** An item
+  may not be tagged `fulltext:unavailable` until the retrieval report
+  gives its cause as `UNAVAILABLE`. The tag itself is new — an agent in
+  a real run invented `fulltext-unavailable`, a spelling that exists
+  nowhere in this repo, because the skill said "surface the residual
+  list" and stopped. `zotero-operations` gained the full escalation
+  ladder, and a guard test now fails the build if a skill names a tag or
+  omits a cause the code can emit.
+- **Model selection is proposed, never automatic.** An earlier pass in
+  this arc auto-picked a model per tier from the provider's listing; it
+  was deleted after live runs resolved OpenRouter's fast tier to a Batch
+  API variant and Google's deep tier to a preview model whose date
+  parsed as a version number. Fixing it meant substring blocklists that
+  go stale exactly as fast as the hardcoded IDs this design exists to
+  remove — and every caller is a skill, with an agent and a user
+  present. `resolve_models.py` lists; the agent proposes; the user
+  confirms.
+- **Failure records keep every attempt.** `pdf_fetch_log` upserts by
+  `(item_key, source)` rather than `item_key`, so a retry ladder can
+  read its own history, and carries a `publisher` column joined from the
+  DOI resolver cache. The browser and Connector paths write to it too —
+  previously only the API cascade did, which is why `ACCESS_BLOCKED` was
+  unreachable in practice.
+
+### Fixed
+
+- **An unbounded retry loop in the search stage.** `searchers/
+  semantic_scholar.py` answered HTTP 429 with `time.sleep(5); continue`
+  inside a `while True` — no cap, no jitter, no `Retry-After`. Against a
+  throttling unauthenticated tier it spins forever. All searchers now
+  route through `http_client.build_session()`, and an AST-based guard
+  test fails the build on a new bare `requests.get` anywhere in
+  `scripts/pipelines/`.
+- **The setup wizard gave up on the first transient failure** during key
+  verification. It now backs off exponentially with jitter, honouring
+  `Retry-After` — in stdlib only, since `scripts/setup/` is invoked
+  without `uv` and cannot import `requests`. A second guard test keeps
+  that directory stdlib-only.
+- **`--sources elsevier,pmc` exited 2** despite being advertised in both
+  the docstring and `--help`; the fetchers are named `sciencedirect` and
+  `pubmed_central`. Both spellings are now accepted.
+- **`--sources browser,wiley` silently dropped `browser`** — the
+  dispatch compared the parsed list against `["browser"]` exactly, so
+  any extra name fell through to the API-only path and the browser pass
+  never ran, with nothing said about it. Mixing the two is now rejected
+  with an explanation.
+- **Connector successes were re-queued every run** — `attached_via_
+  connector` was missing from the resume status set.
+- Two silent Better BibTeX defects, and `enrich_abstracts.py`'s docs
+  omitted `wos` from the cascade they listed.
+
+### Internal
+
+- `screening_common.py` extracts the machinery `abstract_screen.py` and
+  `fulltext_code.py` had in duplicate; `doi_utils.py` collapses three
+  DOI normalisers into one strict form and one lenient one (the split is
+  load-bearing — see its docstring); `scripts/setup/` has one definition
+  of the zotero-mcp version floor; test dependencies live only in
+  `pyproject.toml`'s `[dependency-groups] dev`, guarded by a test.
+- CLAUDE.md now requires a paste-ready prompt when handing off to a new
+  session, because a cold session otherwise re-derives what the previous
+  one already settled.
+
 ## [0.9.0] — 2026-08-13
 
 Driven by a real downstream session in which a 244-item review took four
