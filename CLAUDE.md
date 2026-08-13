@@ -52,6 +52,16 @@ The default test run is hermetic — `addopts` in `pyproject.toml` deselects the
 
 High-collision files across branches are this file, `BACKLOG.md`, and `.claude-plugin/plugin.json`. Since the version string moves only on user-visible releases, bump it once at merge time in a single branch — bumping it per-branch guarantees a conflict on that line in every subsequent merge.
 
+### Handing off to a new session
+
+**Whenever you suggest continuing in a fresh session, end your message with a ready-to-paste prompt that starts it.** Not a description of what the next session should do — the literal text to paste, in a fenced block, written in second person to that session.
+
+The reason is that a new session begins with nothing: no conversation, no working memory of which of four plausible branches is live, no idea that a decision was already argued and settled. Left to reconstruct that from the repo alone it will re-read files you already read, re-derive conclusions you already reached, and quite possibly re-open a question you closed. The handoff prompt is what stops that, and writing it is the outgoing session's job because only the outgoing session knows what was in its head.
+
+A usable prompt names, at minimum: the branch to work on and how it relates to `main`; where the detailed plan lives (a path under `~/.claude/plans/`, or the relevant `BACKLOG.md` entry); the specific next task, not the whole remaining backlog; the verification command that should pass before and after; and any decision already taken that must not be re-litigated. If a guard test is expected to fail as part of the work, say so — otherwise the next session will treat a deliberate red test as a bug it introduced.
+
+Two habits that make these prompts cheap to write: keep a `## STATE` section at the end of the plan file, updated as work lands, so the prompt can point at it rather than repeat it; and put the *why* in commit messages rather than in chat, since commits are the one artefact a cold session reliably reads.
+
 ## Architecture
 
 ### Plugin surface (what users consume)
