@@ -112,9 +112,91 @@ def _open_log(path: str):
 
 
 def _load_done_dois(path: str) -> set[str]:
+    # `attached_via_connector` counts as done. Leaving it out meant every
+    # Connector success was re-queued on the next run, and only fell out
+    # later via the "already has a real PDF" attachment scan.
     return shared_orchestrators.load_done_keys(
-        path, statuses="attached", key_field="doi",
+        path, statuses=("attached", "attached_via_connector"), key_field="doi",
     )
+
+
+# --- Publisher / browser-handler triage (no network) ------------------------
+#
+# Both lookups read only what is already on disk: the Crossref-resolved
+# publisher and URL come from `doi_resolver_cache.json`, and the handler
+# registry is a pure prefix/suffix match. This is what lets the API
+# cascade say "Sage — a browser handler exists and has not run" instead
+# of "unavailable, exclude as FE6".
+
+#: Corporate suffixes that make otherwise-identical Crossref publisher
+#: strings group separately in a report ("Springer Science and Business
+#: Media LLC" vs "Springer Nature"). Trimmed for display only — the
+#: untrimmed value is never needed downstream.
+_PUBLISHER_NOISE = re.compile(
+    r"\s*(,)?\s*\b(Ltd|Limited|Inc|Incorporated|LLC|GmbH|BV|B\.V\.|PLC|"
+    r"Publications?|Publishing|Publishers?|Group|Media|Science and Business Media)"
+    r"\b\.?",
+    re.IGNORECASE,
+)
+
+
+def _tidy_publisher(name: str) -> str:
+    """Collapse Crossref's corporate-suffix variants for grouping."""
+    if not name:
+        return ""
+    tidied = _PUBLISHER_NOISE.sub("", name).strip(" ,.")
+    return tidied or name.strip()
+
+
+def _browser_handler_for(doi: str, resolved_url: str = ""):
+    """The browser handler that covers this DOI, or None.
+
+    Host first, DOI prefix second: a journal that migrated publishers
+    keeps its old prefix, so `10.1111/etap.*` looks like Wiley but now
+    resolves to journals.sagepub.com. Same precedence the browser
+    pipeline's own Pass-1 classification uses.
+    """
+    from urllib.parse import urlparse
+
+    from fetchers import browser as browser_registry
+
+    handlers = browser_registry.all_handlers()
+    if resolved_url:
+        host = urlparse(resolved_url).netloc.lower()
+        by_host = browser_registry.resolve_by_host(host, handlers)
+        if by_host is not None:
+            return by_host
+    return browser_registry.resolve_by_doi(doi, handlers)
+
+
+def _triage_context(doi: str, cache_dir: str) -> tuple[str, str]:
+    """Return `(publisher, browser_handler_name)` for a failed DOI.
+
+    Best-effort and never raises: triage metadata must not be able to
+    break a fetch run. An empty handler name means no browser handler
+    covers this publisher, which is what makes the difference between
+    "try harder" and a genuine FE6.
+    """
+    from fetchers.doi_resolver import DoiResolverCache
+
+    publisher = ""
+    resolved_url = ""
+    try:
+        hit = DoiResolverCache(cache_dir).get(doi)
+        if hit is not None:
+            publisher = _tidy_publisher(hit.publisher)
+            resolved_url = hit.url
+    except Exception:  # noqa: BLE001 — cache is advisory, never load-bearing
+        pass
+    try:
+        handler = _browser_handler_for(doi, resolved_url)
+    except Exception:  # noqa: BLE001
+        handler = None
+    if handler is not None:
+        # Prefer the handler's display name: Crossref spells one
+        # publisher several ways, and the report groups on this.
+        return (handler.display_name or publisher), handler.name
+    return publisher, ""
 
 
 def _year_from_zotero_date(date_str: str) -> str | None:
@@ -132,6 +214,47 @@ def _first_issn(issn_field: str) -> str | None:
     fallback query wants a single value, so take the first."""
     first = (issn_field or "").split(",")[0].strip()
     return first or None
+
+
+def _log_browser_failure(
+    args: argparse.Namespace,
+    item: dict,
+    *,
+    source: str,
+    publisher: str = "",
+    cause: pdf_fetch_log.FailureCause | None = None,
+) -> None:
+    """Record a browser / Connector failure in the structured log.
+
+    Until now only the API cascade wrote `pdf_fetch_log.csv`, so every
+    browser and Connector outcome was invisible to the audit that reads
+    it — exactly the outcomes a triage report most needs.
+
+    Note what is *not* passed: `untried_browser_handler`. By the time
+    this is called the handler has had its turn, so the item is no
+    longer "try the browser" — it classifies on its own merits, and the
+    composite `(item_key, source)` key means this row sits alongside the
+    earlier API-cascade row rather than replacing it.
+
+    Best-effort: a logging failure must never break a run.
+    """
+    log_path = getattr(args, "failure_log_csv", "")
+    item_key = item.get("item_key") or ""
+    if not log_path or not item_key:
+        return
+    try:
+        pdf_fetch_log.log_failure(
+            log_path,
+            item_key=item_key,
+            doi=item.get("doi", "") or "",
+            item_type=item.get("item_type", "") or "journalArticle",
+            attempt=2,
+            source=source,
+            publisher=publisher,
+            cause=cause,
+        )
+    except Exception as e:  # noqa: BLE001
+        print(f"    [pdf_fetch_log write failed: {e}]", flush=True)
 
 
 async def _drive_handler(
@@ -234,6 +357,14 @@ async def _drive_handler(
                         "title": (item.get("title") or "")[:70],
                         "status": "skipped_no_access", "source": handler.name,
                     })
+                    # The user looked at the landing page and said they
+                    # have no access. That is an ILL candidate, not a
+                    # missing paper — ACCESS_BLOCKED says exactly that.
+                    _log_browser_failure(
+                        args, item,
+                        source=handler.name, publisher=handler.display_name,
+                        cause=pdf_fetch_log.FailureCause.ACCESS_BLOCKED,
+                    )
             await ctx.close()
             return
 
@@ -288,6 +419,14 @@ async def _drive_handler(
                     elif answer == "skip":
                         skip_remaining = True
                     # "keep" → keep looping, same as before.
+                # Structured record either way: this handler was tried
+                # and did not produce a PDF. That fact is true whether
+                # or not the Connector gets a turn next, and the
+                # composite key keeps both attempts.
+                _log_browser_failure(
+                    args, item,
+                    source=handler.name, publisher=handler.display_name,
+                )
                 if on_failure == "retry_bucket" and retry_bucket is not None:
                     retry_bucket.append(item)
                 else:
@@ -638,6 +777,10 @@ async def _drive_connector(
                 "doi": doi, "title": title,
                 "status": status, "source": handler.name,
             })
+            if status == "connector_save_failed":
+                # Last rung of the ladder: the library's own route was
+                # opened in a real browser and still produced nothing.
+                _log_browser_failure(args, item, source="connector")
 
         print(
             f"\n  Total: {counter.ok} new, {counter.failed} failed",
@@ -1073,6 +1216,14 @@ def _run_browser_in_process(
                 "title": (it.get("title") or "")[:70],
                 "status": status, "source": "connector",
             })
+            # The library resolver reports no full-text route for this
+            # item in its date range. The article exists; this reader
+            # cannot reach it — which is the definition of an ILL
+            # candidate, not of a missing paper.
+            _log_browser_failure(
+                args, it, source="library_resolver",
+                cause=pdf_fetch_log.FailureCause.ACCESS_BLOCKED,
+            )
             skipped_no_target += 1
 
     if skipped_no_target:
@@ -1099,7 +1250,41 @@ def _run_browser_in_process(
             args, run_date,
         ))
 
+    _print_browser_summary(args, len(to_process))
     return 0
+
+
+def _print_browser_summary(args: argparse.Namespace, queued: int) -> None:
+    """End-of-run totals for `--sources browser` / `connector`.
+
+    The browser path printed per-handler totals and then returned in
+    silence, so a run that queued 119 items ended with no statement of
+    how many were attached — the one number the user is waiting for.
+    Read back from the run log rather than threading counters through
+    four passes, which also means resumed and partial runs report the
+    same way.
+    """
+    try:
+        attached = shared_orchestrators.load_done_keys(
+            args.log_csv,
+            statuses=("attached", "attached_via_connector"),
+            key_field="item_key",
+        )
+    except Exception:  # noqa: BLE001 — a summary must not fail a run
+        return
+    print(
+        f"\nDone. {len(attached)} of {queued} queued item"
+        f"{'s' if queued != 1 else ''} now have a PDF attached.",
+        flush=True,
+    )
+    remaining = queued - len(attached)
+    if remaining > 0:
+        print(
+            f"  {remaining} still missing. Run "
+            f"`audit_zotero_library.py --pdf-fetch-log` for the "
+            f"per-publisher breakdown and what to try next.",
+            flush=True,
+        )
 
 
 def _try_cascade(
@@ -1142,14 +1327,16 @@ def _try_cascade(
 
     # Cascade exhausted. Classify and persist if a log path was given.
     if failure_log_path and item_key:
-        # Best-effort cause: out-of-scope item types resolve regardless;
-        # otherwise lean on UNAVAILABLE for "all fetchers returned None"
-        # vs NETWORK_ERROR when an exception was raised at least once
-        # (transport problem rather than missing PDF).
+        publisher, browser_handler = _triage_context(doi, cache_dir)
+        # Best-effort cause. Out-of-scope item types resolve regardless.
+        # A raised exception means a transport problem rather than a
+        # missing PDF — but only when no browser handler covers the
+        # publisher, since a Cloudflare block can surface as either an
+        # exception or a silent miss and is recoverable in both cases.
         cause: pdf_fetch_log.FailureCause | None = None
         if item_type in pdf_fetch_log.DEFAULT_OUT_OF_SCOPE_TYPES:
             cause = pdf_fetch_log.FailureCause.OUT_OF_SCOPE
-        elif raised_exception:
+        elif raised_exception and not browser_handler:
             cause = pdf_fetch_log.FailureCause.NETWORK_ERROR
         try:
             pdf_fetch_log.log_failure(
@@ -1159,7 +1346,9 @@ def _try_cascade(
                 item_type=item_type,
                 attempt=1,
                 source=last_source,
+                publisher=publisher,
                 cause=cause,
+                untried_browser_handler=browser_handler,
             )
         except Exception as e:  # noqa: BLE001
             # Logging is best-effort — never let a CSV write break a
