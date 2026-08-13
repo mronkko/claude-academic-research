@@ -311,3 +311,55 @@ def test_the_source_advertises_both_capabilities() -> None:
 
     assert issubclass(SemanticScholarSource, AbstractFetcher)
     assert issubclass(SemanticScholarSource, PdfFetcher)
+
+
+# ---------------------------------------------------------------------------
+# 429 advice must match what the failing request actually carried
+# ---------------------------------------------------------------------------
+
+
+def test_rate_limit_with_a_working_key_does_not_blame_the_key() -> None:
+    """The message used to say "Set SEMANTIC_SCHOLAR_API_KEY" no matter
+    what. Seen live with a freshly rotated, accepted key: it sends the
+    operator to /setup to rotate a credential that is working, while the
+    real answer is to wait or paginate less."""
+    src = SemanticScholarSearch()
+    ctx, calls = _ctx_recording(lambda _n: _resp(429))
+
+    with pytest.raises(RuntimeError) as exc:
+        src._fetch_all("entrepreneur", ctx, "live-key")
+
+    msg = str(exc.value)
+    assert calls[0].get("x-api-key") == "live-key", "precondition: key was sent"
+    assert "Set SEMANTIC_SCHOLAR_API_KEY" not in msg, (
+        "telling someone to set the key they already set is the bug"
+    )
+    assert "throttles per key" in msg
+
+
+def test_rate_limit_without_a_key_still_recommends_setting_one() -> None:
+    """The original advice is right in the case it was written for."""
+    src = SemanticScholarSearch()
+    ctx, _ = _ctx_recording(lambda _n: _resp(429))
+
+    with pytest.raises(RuntimeError) as exc:
+        src._fetch_all("entrepreneur", ctx, "")
+
+    assert "SEMANTIC_SCHOLAR_API_KEY" in str(exc.value)
+
+
+def test_rate_limit_after_a_rejected_key_gives_unauthenticated_advice() -> None:
+    """403 drops the key, so the throttled request that follows really is
+    unauthenticated — advise accordingly, not "your key is fine"."""
+    def responder(n: int):
+        return _resp(403) if n == 1 else _resp(429)
+
+    src = SemanticScholarSearch()
+    ctx, _ = _ctx_recording(responder)
+
+    with pytest.raises(RuntimeError) as exc:
+        src._fetch_all("entrepreneur", ctx, "dead-key")
+
+    msg = str(exc.value)
+    assert "unauthenticated tier" in msg
+    assert "throttles per key" not in msg

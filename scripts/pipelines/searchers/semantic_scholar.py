@@ -146,10 +146,27 @@ class SemanticScholarSearch(SearchSource):
             if resp.status_code == 429:
                 # The adapter already retried this to exhaustion; spinning
                 # here would re-create the unbounded loop.
+                #
+                # Which advice is right depends on what this request
+                # actually carried. Telling someone to set the key they
+                # already set — the message this used to print
+                # unconditionally — sends them to /setup to rotate a
+                # working credential while the real answer is to wait.
+                if headers.get("x-api-key"):
+                    raise RuntimeError(
+                        "Semantic Scholar bulk search stayed rate-limited "
+                        "after retries, with SEMANTIC_SCHOLAR_API_KEY "
+                        "attached and accepted. The key is not the problem: "
+                        "the bulk endpoint throttles per key, and a large "
+                        "paginated query can exhaust it on its own. Re-run "
+                        "in a few minutes, or narrow BLOCK_A_TERMS / "
+                        "BLOCK_B_TERMS so fewer pages are needed."
+                    )
                 raise RuntimeError(
                     "Semantic Scholar bulk search stayed rate-limited after "
-                    "retries. Set SEMANTIC_SCHOLAR_API_KEY to leave the "
-                    "shared unauthenticated rate limit."
+                    "retries on the shared unauthenticated tier. Set "
+                    "SEMANTIC_SCHOLAR_API_KEY (see `/setup`) to get a "
+                    "per-key rate limit."
                 )
             resp.raise_for_status()
             data = resp.json()
