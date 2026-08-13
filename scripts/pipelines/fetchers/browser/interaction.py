@@ -42,6 +42,7 @@ import sys
 import tempfile
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
 
 #: How often `ControlFileChannel` looks for a reply, and how long it
@@ -246,11 +247,49 @@ class ControlFileChannel(InteractionChannel):
         self._write({"state": "running", "seq": self._seq, "progress": event})
 
 
+class JsonlProgressFile:
+    """Append-only JSONL sink — the second place progress events go.
+
+    `ControlFileChannel.progress` already publishes these, but only for a
+    run being driven through a control file, and only ever the latest
+    one: the control file is a state document, so each event overwrites
+    the last. A run started in the background without prompts has nothing
+    to read but stdout, which is formatted for a person and reflows
+    freely.
+
+    So the same events also go here, one JSON object per line, and they
+    accumulate. Following a run becomes a `tail`, and the history of a
+    finished run survives to be read afterwards.
+
+    The file is truncated when the sink is created: one file belongs to
+    one run, and appending across runs would make "how far along is
+    this?" unanswerable.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text("", encoding="utf-8")
+
+    def __call__(self, event: dict) -> None:
+        record = {"ts": time.time(), **event}
+        with self.path.open("a", encoding="utf-8") as fh:
+            # One write per line so a reader polling mid-run sees whole
+            # records; a partial final line is the reader's cue to wait.
+            fh.write(json.dumps(record) + "\n")
+
+
 # ---------------------------------------------------------------------------
-# Process-global current channel
+# Process-global current channel and progress sinks
 # ---------------------------------------------------------------------------
+#
+# Same reasoning as the channel: `PublisherHandler.setup()` and the
+# handler `download()` signatures are public extension points, and
+# threading a reporter through them would make every downstream handler
+# carry a concern none of them should know about.
 
 _channel: InteractionChannel = TtyChannel()
+_progress_sinks: list[Callable[[dict], None]] = []
 
 
 def get_channel() -> InteractionChannel:
@@ -263,3 +302,28 @@ def set_channel(channel: InteractionChannel) -> InteractionChannel:
     previous = _channel
     _channel = channel
     return previous
+
+
+def add_progress_sink(sink: Callable[[dict], None]) -> None:
+    """Send progress events to `sink` as well as to the channel."""
+    _progress_sinks.append(sink)
+
+
+def reset_progress_sinks() -> None:
+    """Drop every extra sink. For tests, and for a second run in-process."""
+    _progress_sinks.clear()
+
+
+def report_progress(event: dict) -> None:
+    """Publish one progress event to the channel and every extra sink.
+
+    The single call site the pipeline uses. Failures are swallowed per
+    sink: progress reporting is diagnostics, and a full disk or a
+    read-only path must not take down a browser pass a human is sitting
+    in front of.
+    """
+    for emit in (_channel.progress, *_progress_sinks):
+        try:
+            emit(event)
+        except Exception:  # noqa: BLE001 — diagnostics must never sink the run
+            pass

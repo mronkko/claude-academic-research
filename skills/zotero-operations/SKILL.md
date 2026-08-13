@@ -174,7 +174,8 @@ running these stages:**
    ```bash
    uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py \
        --sources browser --auto-publishers \
-       --control-file .claude/audit/browser.json
+       --control-file .claude/audit/browser.json \
+       --progress-json .claude/audit/browser-progress.jsonl
    ```
 
    Launch it with `run_in_background: true`, then loop:
@@ -190,6 +191,16 @@ running these stages:**
    Always echo back the `seq` you read. A reply carrying an old `seq` is
    ignored by design, which is what stops a stale answer from silently
    clearing a challenge nobody looked at.
+
+   **Expect long stretches with no question.** The run only asks when
+   there is something for the user to solve: it opens each publisher's
+   first page and waits for the Cloudflare challenge to clear on its own,
+   which it usually does — the browser profile persists between runs, and
+   non-interactive challenges pass in seconds. Silence is the normal case,
+   not a hang. Read `--progress-json` to tell the two apart: it is one
+   JSON object per line (`publisher_start`, `item`, `publisher_done`,
+   `run_done`), so the last line tells you where the run is without
+   parsing stdout. Report progress from there rather than guessing.
 
    `--auto-publishers` takes the item list from the audit's
    `retry.browser.keys`, so do not assemble a key list by hand. If it

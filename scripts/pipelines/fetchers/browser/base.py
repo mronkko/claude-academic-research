@@ -27,6 +27,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from . import interaction
 
@@ -187,6 +188,115 @@ async def launch_context(
         raise
 
 
+# ---------------------------------------------------------------------------
+# Cloudflare clearance detection.
+# ---------------------------------------------------------------------------
+#
+# Most of the prompts this pass fires ask a question the browser can
+# already answer. The Chromium profile is persistent, so the second run
+# against a publisher usually starts with a valid `cf_clearance` cookie
+# and no challenge on screen — nothing for the user to solve — and the
+# user is asked anyway. Non-interactive JS challenges are the same story
+# within a single run: they clear themselves in a few seconds while the
+# script sits at a prompt waiting for an Enter that means nothing.
+#
+# What is deliberately NOT automated is the judgement: whether the user
+# can actually reach the PDF from this page. The probe only ever
+# short-circuits the prompt in the affirmative, and a wrong "proceed"
+# costs one failed download before `_prompt_on_first_failure` puts the
+# same decision back in front of the human, with evidence. A wrong
+# "skip" would cost the whole publisher silently, so the probe is never
+# allowed to produce one — every uncertain answer falls through to the
+# prompt.
+
+#: Cookie Cloudflare issues once a challenge has been cleared. Its
+#: presence for the page's own host is the only positive evidence
+#: available that this session is through.
+CLEARANCE_COOKIE = "cf_clearance"
+
+#: Elements that exist only while an unsolved challenge is on screen.
+#: Checked for visibility, not presence: the Turnstile widget is left in
+#: the DOM, hidden, on pages that have already passed.
+CHALLENGE_SELECTORS = (
+    "#challenge-form",
+    "#challenge-running",
+    "#cf-chl-widget",
+    "iframe[src*='challenges.cloudflare.com']",
+)
+
+#: Titles Cloudflare's interstitials use. Cheaper than a DOM query and
+#: catches the variants whose markup differs by deployment.
+CHALLENGE_TITLE_MARKERS = (
+    "just a moment",
+    "attention required",
+    "checking your browser",
+    "verifying you are human",
+)
+
+
+async def _challenge_is_showing(page: Page) -> bool:
+    """True when the page looks like an unsolved Cloudflare interstitial.
+
+    Errors resolve to True — "I cannot tell" must route to the human,
+    not past them.
+    """
+    try:
+        title = (await page.title() or "").lower()
+    except Exception:
+        return True
+    if any(marker in title for marker in CHALLENGE_TITLE_MARKERS):
+        return True
+    for selector in CHALLENGE_SELECTORS:
+        try:
+            if await page.locator(selector).first.is_visible(timeout=250):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def _has_clearance_cookie(page: Page) -> bool:
+    """True when a `cf_clearance` cookie covers the page's own host.
+
+    The host check is load-bearing. One persistent profile serves every
+    publisher in a run, so a cookie left by Sage would otherwise read as
+    clearance for Academy of Management and skip a challenge nobody
+    solved.
+    """
+    try:
+        host = (urlparse(page.url).hostname or "").lower()
+        cookies = await page.context.cookies()
+    except Exception:
+        return False
+    if not host:
+        return False
+    for cookie in cookies or ():
+        if cookie.get("name") != CLEARANCE_COOKIE:
+            continue
+        domain = str(cookie.get("domain") or "").lstrip(".").lower()
+        if domain and (host == domain or host.endswith(f".{domain}")):
+            return True
+    return False
+
+
+async def wait_for_clearance(
+    page: Page, *, timeout_s: float, poll_interval_s: float = 0.5,
+) -> bool:
+    """Poll until the session is demonstrably clear, or give up.
+
+    Both conditions must hold at the same moment: no challenge visible,
+    and a clearance cookie for this host. Returns False on timeout, which
+    the caller reads as "ask the user" rather than as failure.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        if not await _challenge_is_showing(page) and await _has_clearance_cookie(page):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(poll_interval_s)
+
+
 def _wait_for_user(prompt: str) -> None:
     """Block until the user acknowledges the prompt.
 
@@ -265,6 +375,12 @@ class PublisherHandler(ABC):
     # user was told to solve Sage and AoM, was never told APA was also
     # queued, and 10 APA items were skipped without a single attempt.
     needs_interactive_solve: bool = True
+    # How long `setup()` waits for a Cloudflare challenge to clear on
+    # its own before falling back to asking. Covers the two cases where
+    # the prompt has nothing to ask about: a persistent profile that
+    # still holds valid clearance, and a non-interactive JS challenge
+    # that resolves in a few seconds. Set to 0 to always ask.
+    clearance_timeout_s: float = 12.0
     # When True, the handler does not produce a local PDF file — it
     # attaches directly to Zotero via its own code path (the Zotero
     # Connector translator). The driver calls
@@ -338,6 +454,9 @@ class PublisherHandler(ABC):
         page with no Download PDF button) — the user knows now and
         shouldn't need to sit through a failed download to persist
         it.
+
+        The prompt is skipped entirely when the clearance probe can
+        show there is nothing to solve — see `_cleared_without_asking`.
         """
         url = self._setup_url_for(first_doi)
         if url:
@@ -348,6 +467,8 @@ class PublisherHandler(ABC):
                 # The landing page may not fully load if it's a Cloudflare
                 # challenge — the user sees it anyway and solves it.
                 pass
+            if await self._cleared_without_asking(page):
+                return "proceed"
         self._print_setup_banner()
 
         answer = await asyncio.to_thread(
@@ -366,6 +487,35 @@ class PublisherHandler(ABC):
         if a.lower() in ("n", "no", "s", "skip"):
             return "skip"
         return "proceed"
+
+    async def _cleared_without_asking(self, page: Page) -> bool:
+        """True when this publisher's session needs nothing from the user.
+
+        Two conditions, and the first is the interesting one:
+
+        - **`setup_hint` is empty.** A hint is the handler's own
+          declaration that this publisher wants a step beyond Cloudflare
+          — an institutional sign-in at AoM, a cookie banner at Emerald.
+          No cookie proves any of that happened, so a handler that
+          declares one always asks.
+        - the clearance probe found a `cf_clearance` cookie for this host
+          and no challenge on screen, within `clearance_timeout_s`.
+
+        Anything else — a timeout, an error, a challenge still up — falls
+        through to the prompt. The probe removes the question only when
+        it can answer it.
+        """
+        if self.setup_hint or self.clearance_timeout_s <= 0:
+            return False
+        if not await wait_for_clearance(page, timeout_s=self.clearance_timeout_s):
+            return False
+        display = self.display_name or self.name
+        print(
+            f"  {display}: Cloudflare clearance already in place and no "
+            f"challenge on screen — proceeding without asking.",
+            flush=True,
+        )
+        return True
 
     def _print_setup_banner(self) -> None:
         display = self.display_name or self.name

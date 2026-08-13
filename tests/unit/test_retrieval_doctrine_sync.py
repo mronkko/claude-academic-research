@@ -204,5 +204,5 @@ def test_every_browser_flag_the_skills_name_actually_exists() -> None:
             # also document other scripts.
             if flag in ("--control-file", "--auto-publishers", "--no-prompt",
                         "--filter-keys-file", "--sources", "--plan",
-                        "--control-timeout"):
+                        "--control-timeout", "--progress-json"):
                 assert flag in known, f"{name}/SKILL.md names unknown {flag}"

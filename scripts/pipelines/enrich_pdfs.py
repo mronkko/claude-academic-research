@@ -533,7 +533,7 @@ async def _drive_handler(
     remaining un-attempted items go straight into the retry bucket
     without re-opening the page — saves 30s × N of timeouts.
     """
-    from fetchers.browser import Counter, launch_context
+    from fetchers.browser import Counter, interaction, launch_context
     from fetchers.browser.base import normalise_setup_result
 
     try:
@@ -547,6 +547,10 @@ async def _drive_handler(
           flush=True)
     if not items:
         return
+    interaction.report_progress({
+        "event": "publisher_start", "publisher": handler.name,
+        "queued": len(items),
+    })
 
     os.makedirs(args.cache_dir, exist_ok=True)
 
@@ -604,6 +608,10 @@ async def _drive_handler(
                         source=handler.name, publisher=handler.display_name,
                         cause=pdf_fetch_log.FailureCause.ACCESS_BLOCKED,
                     )
+            interaction.report_progress({
+                "event": "publisher_skipped", "publisher": handler.name,
+                "queued": len(items), "reason": setup_result,
+            })
             await ctx.close()
             return
 
@@ -633,6 +641,15 @@ async def _drive_handler(
             )
             doi = item["doi"]
             title = (item.get("title") or "")[:70]
+            # A heartbeat per item, so an agent following the run knows
+            # it is alive and how far along without parsing stdout.
+            # "downloaded" rather than "attached": the upload happens
+            # below and has its own row in the run log.
+            interaction.report_progress({
+                "event": "item", "publisher": handler.name, "doi": doi,
+                "outcome": "failed" if result is None else "downloaded",
+                "done": counter.done, "queued": total,
+            })
 
             if result is None:
                 # Per-item download failure.
@@ -710,6 +727,11 @@ async def _drive_handler(
             f"{counter.failed} failed",
             flush=True,
         )
+        interaction.report_progress({
+            "event": "publisher_done", "publisher": handler.name,
+            "queued": total, "ok": counter.ok, "cached": counter.cached,
+            "failed": counter.failed,
+        })
         await ctx.close()
 
 
@@ -1054,15 +1076,29 @@ def _auto_publisher_keys(stem: str = AUDIT_KEYS_STEM) -> tuple[str, list[str]]:
 
 
 def _install_interaction_channel(args: argparse.Namespace) -> None:
-    """Choose how this run will ask the user things.
+    """Choose how this run talks to whoever is driving it.
 
-    Precedence: an explicit `--control-file` wins, then `--no-prompt`,
-    then the TTY default. `--control-file` is what makes the browser pass
-    drivable from an agent's Bash subprocess: the human still solves
+    Two directions, and they are independent. Questions go out over the
+    channel: an explicit `--control-file` wins, then `--no-prompt`, then
+    the TTY default. `--control-file` is what makes the browser pass
+    drivable from an agent's Bash subprocess — the human still solves
     every challenge, but the question travels through a file and the
     conversation instead of through a controlling terminal nobody has.
+
+    Progress goes out over the sinks. The channel is always one of them;
+    `--progress-json` adds a file that accumulates every event, which is
+    what a run started in the background with no prompts has instead of
+    a terminal to watch.
     """
     from fetchers.browser import interaction
+
+    interaction.reset_progress_sinks()
+    if getattr(args, "progress_json", ""):
+        interaction.add_progress_sink(
+            interaction.JsonlProgressFile(args.progress_json),
+        )
+        print(f"Progress events go to {args.progress_json} (one JSON object "
+              f"per line).", flush=True)
 
     if getattr(args, "control_file", ""):
         interaction.set_channel(
@@ -1638,6 +1674,12 @@ def _print_browser_summary(args: argparse.Namespace, queued: int) -> None:
         )
     except Exception:  # noqa: BLE001 — a summary must not fail a run
         return
+    from fetchers.browser import interaction
+
+    interaction.report_progress({
+        "event": "run_done", "queued": queued, "attached": len(attached),
+        "missing": max(queued - len(attached), 0),
+    })
     print(
         f"\nDone. {len(attached)} of {queued} queued item"
         f"{'s' if queued != 1 else ''} now have a PDF attached.",
@@ -2063,6 +2105,14 @@ def _build_parser() -> argparse.ArgumentParser:
              "--filter-keys-file. Run `audit_zotero_library.py "
              "--pdf-fetch-log` first; this reuses its triage rather than "
              "re-deriving which items a browser pass can recover.",
+    )
+    parser.add_argument(
+        "--progress-json", default="",
+        help="Append one JSON object per line to this file as the browser "
+             "pass progresses (publisher_start / item / publisher_done / "
+             "run_done). Lets an agent driving a background run report "
+             "progress without parsing stdout, which is written for a "
+             "person. The file is truncated at start — one file per run.",
     )
     parser.add_argument(
         "--control-timeout", type=float, default=1800.0,

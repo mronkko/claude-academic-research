@@ -24,10 +24,11 @@ from fetchers.browser import interaction
 
 @pytest.fixture(autouse=True)
 def _restore_channel():
-    """Never let a test leak its channel into the next one."""
+    """Never let a test leak its channel or sinks into the next one."""
     previous = interaction.get_channel()
     yield
     interaction.set_channel(previous)
+    interaction.reset_progress_sinks()
 
 
 def _reply(path: Path, seq: int, answer: str) -> None:
@@ -189,6 +190,85 @@ def test_creating_the_channel_makes_the_parent_directory(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# The progress file
+# ---------------------------------------------------------------------------
+
+
+def _events(path: Path) -> list[dict]:
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def test_the_progress_file_keeps_every_event(tmp_path) -> None:
+    """The difference from the control file, which is a state document:
+    here the history survives, so a finished run can still be read."""
+    path = tmp_path / "progress.jsonl"
+    sink = interaction.JsonlProgressFile(path)
+    sink({"event": "publisher_start", "publisher": "sage"})
+    sink({"event": "publisher_done", "publisher": "sage", "ok": 12})
+
+    events = _events(path)
+    assert [e["event"] for e in events] == ["publisher_start", "publisher_done"]
+    assert events[1]["ok"] == 12
+    assert all("ts" in e for e in events), "each event is timestamped"
+
+
+def test_a_new_run_does_not_append_to_the_previous_one(tmp_path) -> None:
+    """One file, one run — otherwise "how far along is this?" has no
+    answer."""
+    path = tmp_path / "progress.jsonl"
+    interaction.JsonlProgressFile(path)({"event": "run_done", "attached": 1})
+    interaction.JsonlProgressFile(path)({"event": "publisher_start"})
+
+    assert [e["event"] for e in _events(path)] == ["publisher_start"]
+
+
+def test_the_progress_file_creates_its_directory(tmp_path) -> None:
+    path = tmp_path / "nested" / "dir" / "progress.jsonl"
+    interaction.JsonlProgressFile(path)
+    assert path.is_file()
+
+
+def test_report_progress_reaches_the_channel_and_every_sink(tmp_path) -> None:
+    path = tmp_path / "progress.jsonl"
+    control = tmp_path / "browser.json"
+    channel = interaction.ControlFileChannel(control, timeout_s=0.1)
+    interaction.set_channel(channel)
+    interaction.add_progress_sink(interaction.JsonlProgressFile(path))
+
+    interaction.report_progress({"event": "item", "done": 3, "queued": 10})
+
+    assert json.loads(control.read_text(encoding="utf-8"))["progress"]["done"] == 3
+    assert _events(path)[0]["queued"] == 10
+
+
+def test_a_failing_sink_does_not_sink_the_run(tmp_path) -> None:
+    """Progress is diagnostics. A full disk must not end a browser pass
+    a human is sitting in front of."""
+    path = tmp_path / "progress.jsonl"
+    good = interaction.JsonlProgressFile(path)
+
+    def _explodes(event: dict) -> None:
+        raise OSError("no space left on device")
+
+    interaction.add_progress_sink(_explodes)
+    interaction.add_progress_sink(good)
+    interaction.report_progress({"event": "item"})
+
+    assert _events(path), "a later sink still receives the event"
+
+
+def test_progress_goes_nowhere_by_default(tmp_path) -> None:
+    """A plain TTY run installs no sink; `report_progress` must be a
+    no-op rather than an error."""
+    interaction.set_channel(interaction.TtyChannel())
+    interaction.report_progress({"event": "item"})
+
+
+# ---------------------------------------------------------------------------
 # The prompt helpers route through the channel
 # ---------------------------------------------------------------------------
 
@@ -227,6 +307,7 @@ def _args(**kw):
 
     defaults = {
         "control_file": "", "control_timeout": 1800.0, "no_prompt": False,
+        "progress_json": "",
     }
     return argparse.Namespace(**{**defaults, **kw})
 
@@ -263,6 +344,19 @@ def test_plain_args_leave_the_tty_channel_alone() -> None:
 
     enrich_pdfs._install_interaction_channel(_args())
     assert isinstance(interaction.get_channel(), interaction.TtyChannel)
+
+
+def test_progress_json_installs_a_file_sink_on_its_own(tmp_path) -> None:
+    """Independent of the channel: a background run with no prompts still
+    wants somewhere to report progress that isn't stdout."""
+    import enrich_pdfs
+
+    path = tmp_path / "progress.jsonl"
+    enrich_pdfs._install_interaction_channel(_args(progress_json=str(path)))
+    interaction.report_progress({"event": "publisher_start"})
+
+    assert isinstance(interaction.get_channel(), interaction.TtyChannel)
+    assert _events(path)[0]["event"] == "publisher_start"
 
 
 def test_auto_publishers_reads_the_audits_retry_set(tmp_path) -> None:

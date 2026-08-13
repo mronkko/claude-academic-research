@@ -980,14 +980,18 @@ automatically. First-time use needs a one-time browser install:
 this command). If the browser cascade regresses, file an issue and
 attach the run log (`--log-csv`) so the failure can be reproduced.
 
-> **Run the browser cascade in your own terminal — not via the
-> Bash tool.** The Playwright window opens visibly and prompts you
-> for Cloudflare / SSO confirmation. The agent's Bash subprocess has no
-> controlling TTY, so the script detects this on startup and exits
-> with a paste-in command rather than silently hanging on the first
-> prompt. For unattended runs (cron, agent loops) pass `--no-prompt`
-> — the script then auto-skips publishers that would prompt and
-> records them in the run log.
+> **The agent runs this pass; the user only solves the challenges.**
+> The Playwright window opens on the user's screen either way. What the
+> agent lacks is a controlling TTY, so a bare invocation from the Bash
+> tool exits with a paste-in command rather than hanging on the first
+> prompt — pass `--control-file` and the prompts travel through a file
+> and the conversation instead. See *Phase 4* below for the handshake.
+> Most publishers now ask nothing at all: the script waits for the
+> Cloudflare challenge to clear on its own first, and a persistent
+> browser profile usually means there is nothing left to solve. For
+> genuinely unattended runs (cron, no user present) pass `--no-prompt`
+> — it answers every challenge with "skip" and records which publishers
+> were bypassed in the run log.
 
 **Phase 3 — Zotero Connector + institutional SFX/OpenURL**
 (`enrich_pdfs.py` with Connector handlers). For items the browser
@@ -1063,7 +1067,8 @@ the user's screen and the user still solves each challenge:
 ```bash
 uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py \
     --sources browser --auto-publishers \
-    --control-file .claude/audit/browser.json
+    --control-file .claude/audit/browser.json \
+    --progress-json .claude/audit/browser-progress.jsonl
 ```
 
 Start it with `run_in_background: true`. When the file's `state` becomes
@@ -1073,6 +1078,10 @@ answer back as `{"seq": <seq from the file>, "answer": "..."}` to
 with a stale `seq` is ignored, which is what stops an old answer from
 clearing a challenge nobody looked at. The full procedure is in
 `zotero-operations`, step 7 of the canonical workflow.
+
+Long silences are expected — the run asks only when a challenge needs a
+human, and most do not. `--progress-json` is how you tell a working run
+from a stuck one: one JSON object per line, newest last.
 
 **Never silently drop items** — a paper with no attached PDF after all
 phases is a data-quality signal, not a failure to hide.
