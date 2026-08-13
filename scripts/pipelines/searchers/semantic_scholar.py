@@ -37,6 +37,12 @@ class SemanticScholarSearch(SearchSource):
     supports_journal_scope = False   # no reliable API-level ISSN filter
     supports_block_queries = True
 
+    def __init__(self) -> None:
+        # Set once a 403 proves SEMANTIC_SCHOLAR_API_KEY is being rejected,
+        # so the second block query (run() calls _fetch_all twice) doesn't
+        # re-send the dead key and re-print the warning.
+        self._key_rejected = False
+
     def credentials_error(self, ctx: SearchContext) -> str | None:
         # Free tier works; key only recommended. Never a hard error.
         return None
@@ -94,7 +100,7 @@ class SemanticScholarSearch(SearchSource):
     def _fetch_all(self, query: str, ctx: SearchContext,
                    api_key: str) -> list[dict]:
         headers: dict = {}
-        if api_key:
+        if api_key and not self._key_rejected:
             headers["x-api-key"] = api_key
         papers: list[dict] = []
         token: str | None = None
@@ -113,6 +119,23 @@ class SemanticScholarSearch(SearchSource):
                 params["token"] = token
             resp = requests.get(BULK_ENDPOINT, params=params,
                                 headers=headers, timeout=60)
+            if resp.status_code == 403 and headers.get("x-api-key"):
+                # A 403 on this endpoint with a key attached means the key
+                # itself is invalid/revoked (anonymous calls to the same
+                # endpoint succeed) — not a scope/plan restriction. Warn
+                # once and fall back to unauthenticated rather than
+                # failing the whole search.
+                print(
+                    "  WARNING: SEMANTIC_SCHOLAR_API_KEY was rejected (403 "
+                    "Forbidden) by the Semantic Scholar API — the key "
+                    "appears invalid or revoked. Continuing this search "
+                    "unauthenticated (lower, shared rate limit applies). "
+                    "Rotate the key via `/setup` when convenient.",
+                    flush=True,
+                )
+                self._key_rejected = True
+                headers.pop("x-api-key", None)
+                continue
             if resp.status_code == 429:
                 # Unauthenticated tier throttles aggressively; back off.
                 time.sleep(5)
