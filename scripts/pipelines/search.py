@@ -35,7 +35,6 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
-import importlib.util
 import json
 import os
 import re
@@ -47,6 +46,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import screening_common  # noqa: E402
 from searchers import (  # noqa: E402
     SEARCH_ROW_FIELDS,
     SearchContext,
@@ -55,16 +55,9 @@ from searchers import (  # noqa: E402
 
 
 def _load_config(path: str):
-    spec = importlib.util.spec_from_file_location("search_config", path)
-    assert spec is not None and spec.loader is not None, (
-        f"cannot load search config: {path}"
+    return screening_common.load_config_module(
+        path, "search_config", required=("FROM_YEAR", "TO_YEAR", "JOURNALS"),
     )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    for attr in ("FROM_YEAR", "TO_YEAR", "JOURNALS"):
-        if not hasattr(mod, attr):
-            sys.exit(f"ERROR: {path} is missing `{attr}`.")
-    return mod
 
 
 def _title_author_key(title: str, authors: str) -> str:

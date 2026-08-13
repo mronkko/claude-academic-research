@@ -51,7 +51,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import importlib.util
 import random
 import sys
 import threading
@@ -65,6 +64,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
 import csv_io  # noqa: E402
+import screening_common  # noqa: E402
 import zotero_io  # noqa: E402
 from core import llm_provider  # noqa: E402
 from core.config_loader import require  # noqa: E402
@@ -78,14 +78,9 @@ VALID_DECISIONS = ("include", "borderline", "exclude")
 
 
 def _load_screening_config(path: str):
-    spec = importlib.util.spec_from_file_location("screening_config", path)
-    assert spec is not None and spec.loader is not None, (
-        f"cannot load screening config: {path}"
+    mod = screening_common.load_config_module(
+        path, "screening_config", required=("ABSTRACT_SCREENING_SYSTEM_PROMPT",),
     )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    if not hasattr(mod, "ABSTRACT_SCREENING_SYSTEM_PROMPT"):
-        sys.exit(f"ERROR: {path} is missing `ABSTRACT_SCREENING_SYSTEM_PROMPT`.")
     return (
         mod.ABSTRACT_SCREENING_SYSTEM_PROMPT,
         getattr(mod, "ABSTRACT_SCREENING_MODEL", "claude-haiku-4-5-20251001"),
@@ -109,31 +104,21 @@ STAGE_TAG_PREFIX = "abstract:"
 
 def _already_tagged(items: list[dict]) -> set[str]:
     """Items that already have any `abstract:*` tag in Zotero — these are
-    'done' for resume purposes. Canonical source of truth."""
-    done: set[str] = set()
-    for it in items:
-        tags = {
-            t.get("tag", "")
-            for t in it.get("data", {}).get("tags", [])
-        }
-        if any(t.startswith(STAGE_TAG_PREFIX) for t in tags):
-            done.add(it["key"])
-    return done
+    'done' for resume purposes. Canonical source of truth.
+
+    Prefix match, not an exact-value match: `abstract:borderline` counts as
+    decided, so a re-run does not re-screen it."""
+    return screening_common.items_with_stage_tag(items, prefix=STAGE_TAG_PREFIX)
 
 
 def _csv_decisions(path: Path) -> dict[str, str]:
     """Last-decision-per-key map from the CSV log. Used ONLY for
-    `--csv-backfill` migration, not for resume decisions."""
-    if not path.exists():
-        return {}
-    latest: dict[str, str] = {}
-    with path.open(newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            k = row.get("item_key")
-            d = row.get("decision", "")
-            if k and d in VALID_DECISIONS:
-                latest[k] = d
-    return latest
+    `--csv-backfill` migration, not for resume decisions.
+
+    Filters *while reading*: a trailing `error` row for an item does not
+    displace an earlier valid decision. `fulltext_code` deliberately
+    filters after — see the note in `screening_common`."""
+    return screening_common.last_decisions_by_key(path, valid=VALID_DECISIONS)
 
 
 def _run_csv_backfill(
@@ -144,43 +129,19 @@ def _run_csv_backfill(
     """One-time migration: apply abstract:* tags from CSV decisions for
     items that have a CSV decision but no Zotero tag yet. No LLM calls.
     Exits with 0 on success, 1 on partial failure."""
-    tagged = _already_tagged(coll_items)
-    csv_done = _csv_decisions(output_path)
-    drift = {k: d for k, d in csv_done.items() if k not in tagged}
-
-    if not drift:
-        print("Nothing to backfill — all CSV-decided items already have "
-              "abstract:* tags in Zotero.", flush=True)
-        return 0
-
-    print(f"Backfilling abstract:* tags for {len(drift)} item(s) "
-          f"(batched)...", flush=True)
-    updates = [
-        (
-            key,
-            {
-                "add": [f"{STAGE_TAG_PREFIX}{decision}"],
-                "remove_prefixed": [STAGE_TAG_PREFIX],
-            },
-        )
-        for key, decision in drift.items()
-    ]
-    stats = zot.batch_update_tags(updates)
-    print(
-        f"Backfill complete: {stats['applied']} tagged, "
-        f"{stats['unchanged']} unchanged, {stats['failed']} failed.",
-        flush=True,
+    return screening_common.run_csv_backfill(
+        zot,
+        coll_items,
+        _csv_decisions(output_path),
+        prefix=STAGE_TAG_PREFIX,
+        label="abstract:*",
     )
-    return 0 if stats["failed"] == 0 else 1
 
 
 def _stage_tag_op(decision: str) -> dict:
     """The `batch_update_tags` / `update_tags` op that records a stage
     decision: add `abstract:<decision>`, clearing any prior `abstract:*`."""
-    return {
-        "add": [f"{STAGE_TAG_PREFIX}{decision}"],
-        "remove_prefixed": [STAGE_TAG_PREFIX],
-    }
+    return screening_common.stage_tag_op(STAGE_TAG_PREFIX, decision)
 
 
 def _flush_tag_buffer(zot, buffer: list[tuple[str, dict]]) -> dict[str, int]:
