@@ -30,6 +30,15 @@ dev = [
     # Without reportlab, the XML-fallback rendering assertion in
     # tests/unit/test_sciencedirect_preview_fallback.py silently pytest.skips.
     "reportlab>=4.0",
+    # Same silent-skip problem, on the `live` suite: these two gate live
+    # tests behind `pytest.importorskip`, so the entitlement they exist to
+    # verify goes untested while test_live_coverage.py still sees a test
+    # for the key. pybliometrics gates test_scopus_abstract and
+    # test_sciencedirect_abstract; wiley-tdm gates test_wiley_tdm_downloads_pdf.
+    # Versions match the PEP 723 blocks in scripts/pipelines/enrich_*.py, so
+    # the suite exercises what the pipeline actually resolves at runtime.
+    "pybliometrics>=3.6",
+    "wiley-tdm>=0.2",
     "zotero-mcp-server>=0.9,<0.10",
 ]
 
