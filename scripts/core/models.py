@@ -89,7 +89,7 @@ def active_provider() -> str:
     """
     from core.config_loader import get
 
-    return get("llm", "provider", env="ACADEMIC_RESEARCH_PROVIDER") or (
+    return get("llm", "provider", env=providers.PROVIDER_ENV) or (
         providers.DEFAULT_PROVIDER
     )
 

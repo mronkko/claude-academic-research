@@ -199,6 +199,103 @@ def test_remove_from_list_on_missing_section_is_noop(_redirect_config) -> None:
 
 
 # ---------------------------------------------------------------------------
+# set_value
+# ---------------------------------------------------------------------------
+
+
+def test_set_value_creates_section_and_key(_redirect_config) -> None:
+    from core import config_writer
+
+    _write_initial(_redirect_config, "")
+    config_writer.set_value("llm", "provider", "openai")
+
+    parsed = tomllib.loads(_redirect_config.read_text())
+    assert parsed["llm"]["provider"] == "openai"
+
+
+def test_set_value_overwrites_an_existing_scalar(_redirect_config) -> None:
+    """Switching provider replaces the old answer — that is the point."""
+    from core import config_writer
+
+    _write_initial(_redirect_config, '[llm]\nprovider = "anthropic"\n')
+    config_writer.set_value("llm", "provider", "ollama")
+
+    parsed = tomllib.loads(_redirect_config.read_text())
+    assert parsed["llm"]["provider"] == "ollama"
+
+
+def test_set_value_preserves_other_sections(_redirect_config) -> None:
+    from core import config_writer
+
+    _write_initial(
+        _redirect_config,
+        (
+            "[zotero]\n"
+            'api_key = "secret"\n'
+            "\n"
+            "[library]\n"
+            'no_access = ["aom"]\n'
+        ),
+    )
+    config_writer.set_value("llm", "provider", "google")
+
+    parsed = tomllib.loads(_redirect_config.read_text())
+    assert parsed["zotero"]["api_key"] == "secret"
+    assert parsed["library"]["no_access"] == ["aom"]
+    assert parsed["llm"]["provider"] == "google"
+
+
+def test_set_value_refuses_to_flatten_a_list(_redirect_config) -> None:
+    """Replacing a list with a scalar would silently drop entries."""
+    from core import config_writer
+
+    _write_initial(_redirect_config, '[library]\nno_access = ["aom", "apa"]\n')
+    with pytest.raises(ValueError):
+        config_writer.set_value("library", "no_access", "aom")
+
+    parsed = tomllib.loads(_redirect_config.read_text())
+    assert parsed["library"]["no_access"] == ["aom", "apa"]
+
+
+def test_set_value_rejects_non_string_values(_redirect_config) -> None:
+    """`_dump` renders one `[section]` header per top-level key, so a
+    dict value would serialise as `key = {...}` and not round-trip."""
+    from core import config_writer
+
+    _write_initial(_redirect_config, "")
+    with pytest.raises(TypeError):
+        config_writer.set_value("llm", "provider", {"name": "openai"})  # type: ignore[arg-type]
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX permission bits; NTFS uses per-user ACLs instead",
+)
+def test_set_value_preserves_file_mode_0600(_redirect_config) -> None:
+    from core import config_writer
+
+    _write_initial(_redirect_config, '[zotero]\napi_key = "secret"\n')
+    os.chmod(_redirect_config, 0o644)
+
+    config_writer.set_value("llm", "provider", "openrouter")
+
+    mode = stat.S_IMODE(_redirect_config.stat().st_mode)
+    assert mode == 0o600
+
+
+def test_set_value_is_visible_to_the_next_get(_redirect_config) -> None:
+    """The lru_cache in config_loader is cleared on write, so a running
+    process sees its own mutation."""
+    from core import config_loader, config_writer
+
+    _write_initial(_redirect_config, "")
+    assert config_loader.get("llm", "provider") == ""
+
+    config_writer.set_value("llm", "provider", "lmstudio")
+    assert config_loader.get("llm", "provider") == "lmstudio"
+
+
+# ---------------------------------------------------------------------------
 # Escaping
 # ---------------------------------------------------------------------------
 

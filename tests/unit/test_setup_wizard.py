@@ -246,8 +246,55 @@ def test_env_var_names_match_user_convention() -> None:
         # Not a credential: points the screening pipelines at an
         # Anthropic-compatible endpoint (local models — issue #1).
         "ANTHROPIC_BASE_URL",
+        # The other four providers in `core.providers`. Each is only
+        # prompted for when it is the selected provider, but the name
+        # must stay stable regardless — users set these in their shell.
+        "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENROUTER_API_KEY",
+        # Local providers: a URL is the whole configuration, there is
+        # no key at all.
+        "OLLAMA_BASE_URL", "LMSTUDIO_BASE_URL",
     }
     assert env_names == expected, f"env var schema drift: {env_names ^ expected}"
+
+
+def test_llm_key_specs_name_a_real_provider() -> None:
+    """`llm_provider` on a KeySpec gates whether that key is asked for.
+
+    A typo there would silently drop the question for a provider the
+    user just selected, so the value must resolve in `core.providers`.
+    """
+    mod = _load()
+    from core import providers
+
+    unknown = {
+        spec.env_var: spec.llm_provider
+        for spec in mod.KEYS
+        if spec.llm_provider and providers.get(spec.llm_provider) is None
+    }
+    assert not unknown, f"KeySpecs naming an unknown provider: {unknown}"
+
+
+def test_every_provider_credential_has_a_key_spec() -> None:
+    """Every provider in the registry can be configured through /setup.
+
+    Without this, adding a provider to `core.providers` gives the user a
+    menu entry and no way to supply its credential — the exact
+    invisibility this change set out to remove.
+    """
+    mod = _load()
+    from core import providers
+
+    asked = {spec.env_var for spec in mod.KEYS}
+    missing = []
+    for spec in providers.PROVIDERS:
+        # Local providers have no key; the base URL is the whole config.
+        wanted = spec.api_key_env or spec.base_url_env
+        if wanted and wanted not in asked:
+            missing.append(f"{spec.name} (expected a KeySpec for {wanted})")
+    assert not missing, (
+        f"Providers with no KeySpec to configure them: {missing}. "
+        f"Add one to wizard.py:KEYS (plus a live auth test)."
+    )
 
 
 
@@ -913,3 +960,210 @@ def test_zotero_bbt_help_mentions_xpi_install_path(capsys) -> None:
     assert "Tools" in out and "Add-ons" in out   # install path in Zotero
     assert "retorquere/zotero-better-bibtex" in out  # release URL
     assert "grounded-citations" in out           # *why* it matters
+
+
+# ---------------------------------------------------------------------------
+# LLM provider selection
+# ---------------------------------------------------------------------------
+
+
+def test_provider_default_falls_back_to_registry_default(monkeypatch) -> None:
+    mod = _load()
+    from core import providers
+
+    monkeypatch.delenv(providers.PROVIDER_ENV, raising=False)
+    assert mod._provider_default({}) == providers.DEFAULT_PROVIDER
+
+
+def test_provider_default_reads_existing_config(monkeypatch) -> None:
+    mod = _load()
+    from core import providers
+
+    monkeypatch.delenv(providers.PROVIDER_ENV, raising=False)
+    assert mod._provider_default({"llm": {"provider": "ollama"}}) == "ollama"
+
+
+def test_provider_default_env_beats_config(monkeypatch) -> None:
+    """Same precedence as llm_provider.resolve_provider — env wins."""
+    mod = _load()
+    from core import providers
+
+    monkeypatch.setenv(providers.PROVIDER_ENV, "openai")
+    assert mod._provider_default({"llm": {"provider": "ollama"}}) == "openai"
+
+
+def test_provider_default_ignores_an_unknown_name(monkeypatch) -> None:
+    """A typo in the config must not be offered back as the default."""
+    mod = _load()
+    from core import providers
+
+    monkeypatch.delenv(providers.PROVIDER_ENV, raising=False)
+    assert mod._provider_default(
+        {"llm": {"provider": "anthorpic"}},
+    ) == providers.DEFAULT_PROVIDER
+
+
+def test_choose_provider_non_interactive_never_prompts(monkeypatch) -> None:
+    mod = _load()
+    from core import providers
+
+    def boom(*_a, **_kw):
+        raise AssertionError("must not prompt in non-interactive mode")
+
+    monkeypatch.setattr("builtins.input", boom)
+    monkeypatch.setenv(providers.PROVIDER_ENV, "lmstudio")
+    assert mod._choose_provider(False, {}) == "lmstudio"
+
+
+def test_choose_provider_accepts_a_number(monkeypatch, capsys) -> None:
+    mod = _load()
+    from core import providers
+
+    monkeypatch.delenv(providers.PROVIDER_ENV, raising=False)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: "3")
+    assert mod._choose_provider(True, {}) == providers.PROVIDERS[2].name
+
+
+def test_choose_provider_accepts_a_name(monkeypatch) -> None:
+    mod = _load()
+    from core import providers
+
+    monkeypatch.delenv(providers.PROVIDER_ENV, raising=False)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: "OpenRouter")
+    assert mod._choose_provider(True, {}) == "openrouter"
+
+
+def test_choose_provider_empty_input_keeps_the_default(monkeypatch) -> None:
+    mod = _load()
+    from core import providers
+
+    monkeypatch.delenv(providers.PROVIDER_ENV, raising=False)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: "")
+    assert mod._choose_provider(True, {"llm": {"provider": "google"}}) == "google"
+
+
+def test_choose_provider_reprompts_on_a_bad_answer(monkeypatch, capsys) -> None:
+    mod = _load()
+    from core import providers
+
+    monkeypatch.delenv(providers.PROVIDER_ENV, raising=False)
+    answers = iter(["chatgtp", "99", "ollama"])
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: next(answers))
+    assert mod._choose_provider(True, {}) == "ollama"
+    assert "Not one of" in capsys.readouterr().out
+
+
+def test_choose_provider_menu_lists_every_registered_provider(
+    monkeypatch, capsys,
+) -> None:
+    """The menu is generated from the registry, so a provider added there
+    is offered here without a second edit."""
+    mod = _load()
+    from core import providers
+
+    monkeypatch.delenv(providers.PROVIDER_ENV, raising=False)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: "")
+    mod._choose_provider(True, {})
+    out = capsys.readouterr().out
+    for spec in providers.PROVIDERS:
+        assert spec.label in out
+
+
+# ---------------------------------------------------------------------------
+# Provider-conditional key collection
+# ---------------------------------------------------------------------------
+
+
+def _collect(mod, monkeypatch, provider: str, existing: dict) -> dict:
+    """Run _collect_keys non-interactively over a fake existing config."""
+    monkeypatch.setattr(mod, "_load_existing_config", lambda: existing)
+    for spec in mod.KEYS:
+        monkeypatch.delenv(spec.env_var, raising=False)
+    return mod._collect_keys(False, False, provider)
+
+
+def test_collect_keys_skips_other_providers_credentials(monkeypatch) -> None:
+    """An OpenAI user is not asked for an Anthropic key."""
+    mod = _load()
+    asked: list[str] = []
+    real_prompt = mod._prompt_key
+
+    def spy(spec, existing, interactive, verify):
+        asked.append(spec.env_var)
+        return real_prompt(spec, existing, interactive, verify)
+
+    monkeypatch.setattr(mod, "_prompt_key", spy)
+    _collect(mod, monkeypatch, "openai", {"zotero": {"api_key": "z"}})
+
+    assert "OPENAI_API_KEY" in asked
+    assert "ANTHROPIC_API_KEY" not in asked
+    assert "GEMINI_API_KEY" not in asked
+    # Non-LLM keys are asked for whatever the provider is.
+    assert "ZOTERO_API_KEY" in asked
+    assert "SCOPUS_API_KEY" in asked
+
+
+def test_collect_keys_preserves_the_unselected_providers_key(monkeypatch) -> None:
+    """Switching provider must not delete the old key from config.toml —
+    _write_config rewrites the file from these values alone."""
+    mod = _load()
+    values = _collect(mod, monkeypatch, "openai", {
+        "zotero": {"api_key": "z"},
+        "anthropic": {"api_key": "sk-ant-old", "base_url": "http://x:1234"},
+        "gemini": {"api_key": "gem-old"},
+    })
+    assert values["anthropic"]["api_key"] == "sk-ant-old"
+    assert values["anthropic"]["base_url"] == "http://x:1234"
+    assert values["gemini"]["api_key"] == "gem-old"
+
+
+def test_collect_keys_warns_when_the_selected_provider_has_no_key(
+    monkeypatch, capsys,
+) -> None:
+    mod = _load()
+    _collect(mod, monkeypatch, "openai", {"zotero": {"api_key": "z"}})
+    out = capsys.readouterr().out
+    assert "OPENAI_API_KEY" in out
+    assert "WARNING" in out
+
+
+def test_collect_keys_is_silent_for_a_local_provider(monkeypatch, capsys) -> None:
+    """Local providers have no credential; warning about a missing key
+    scolds a user whose setup is complete."""
+    mod = _load()
+    _collect(mod, monkeypatch, "ollama", {"zotero": {"api_key": "z"}})
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_collect_keys_accepts_anthropic_base_url_without_a_key(
+    monkeypatch, capsys,
+) -> None:
+    """Issue #1: a local Anthropic-compatible endpoint ignores the key,
+    so a base URL alone is a working configuration."""
+    mod = _load()
+    _collect(mod, monkeypatch, "anthropic", {
+        "zotero": {"api_key": "z"},
+        "anthropic": {"base_url": "http://localhost:1234"},
+    })
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_collect_keys_no_warning_when_the_key_is_present(monkeypatch, capsys) -> None:
+    mod = _load()
+    _collect(mod, monkeypatch, "google", {
+        "zotero": {"api_key": "z"},
+        "gemini": {"api_key": "gem"},
+    })
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_llm_credential_hint_points_at_the_key_when_only_a_url_is_set() -> None:
+    """An OpenAI-compatible gateway still needs *a* key value: the SDK
+    requires one even when the endpoint ignores it."""
+    mod = _load()
+    ok, hint = mod._llm_credential_present(
+        "openai", {}, {"openai": {"base_url": "http://localhost:8000"}},
+    )
+    assert not ok
+    assert "OPENAI_API_KEY" in hint
+    assert "OPENAI_BASE_URL" in hint

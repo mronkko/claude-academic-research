@@ -64,7 +64,7 @@ class LLMProvider:
 
 def configured_provider() -> str:
     """The provider name from `[llm] provider`, or the registry default."""
-    return get("llm", "provider", env="ACADEMIC_RESEARCH_PROVIDER") or (
+    return get("llm", "provider", env=providers.PROVIDER_ENV) or (
         providers.DEFAULT_PROVIDER
     )
 
@@ -280,7 +280,7 @@ def resolve_provider(model_name: str = "", provider_hint: str = "") -> ProviderS
     """
     if provider_hint:
         return providers.require(provider_hint)
-    configured = get("llm", "provider", env="ACADEMIC_RESEARCH_PROVIDER")
+    configured = get("llm", "provider", env=providers.PROVIDER_ENV)
     if configured:
         return providers.require(configured)
     lowered = (model_name or "").lower()

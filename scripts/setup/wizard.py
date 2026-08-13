@@ -43,7 +43,15 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
+# `core.providers` is the single registry of LLM providers. Importing it
+# rather than re-listing the providers here is what keeps the wizard's
+# menu and the runtime router from drifting apart. It is stdlib-only, so
+# the `scripts/setup/` no-third-party rule still holds.
+_SCRIPTS_ROOT = _HERE.parent
+if str(_SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_ROOT))
 
+from core import providers  # noqa: E402
 from zotero_mcp_floor import (  # noqa: E402
     PIP_INSTALL_CMD as ZOTERO_MCP_PIP_INSTALL_CMD,
 )
@@ -213,6 +221,71 @@ def _verify_gemini(key: str) -> tuple[bool, str, dict]:
 
 
 
+def _verify_openai(key: str) -> tuple[bool, str, dict]:
+    status, data, err = _http_json(
+        "https://api.openai.com/v1/models",
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    if status == 0:
+        return False, f"could not reach api.openai.com ({err}) — saved anyway", {}
+    if status in (401, 403):
+        return False, "OpenAI rejected the key (401/403). Re-check it.", {}
+    if status != 200:
+        return False, f"OpenAI returned HTTP {status}", {}
+    n = len((data or {}).get("data") or [])
+    return True, f"key valid; {n} models visible to this account", {}
+
+
+def _verify_openrouter(key: str) -> tuple[bool, str, dict]:
+    status, data, err = _http_json(
+        "https://openrouter.ai/api/v1/models",
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    if status == 0:
+        return False, f"could not reach openrouter.ai ({err}) — saved anyway", {}
+    if status in (401, 403):
+        return False, "OpenRouter rejected the key (401/403). Re-check it.", {}
+    if status != 200:
+        return False, f"OpenRouter returned HTTP {status}", {}
+    n = len((data or {}).get("data") or [])
+    return True, f"key valid; {n} models available via OpenRouter", {}
+
+
+def _verify_local_endpoint(
+    url: str, path: str, label: str, payload_key: str,
+) -> tuple[bool, str, dict]:
+    """Probe a local model server's listing endpoint.
+
+    Local providers have no credential, so reachability *is* the
+    verification — and "the server isn't running" or "no model is
+    loaded" are the two failures these users actually hit. Both are
+    worth catching at setup time rather than in the middle of a
+    screening run.
+    """
+    status, data, err = _http_json(
+        f"{url.rstrip('/')}{path}", timeout=5,
+    )
+    if status == 0:
+        return False, (
+            f"nothing answered at {url} ({err}). Start {label} and re-run, "
+            f"or leave this blank if you are not using it."
+        ), {}
+    if status != 200:
+        return False, f"{label} returned HTTP {status} from {path}", {}
+    models = (data or {}).get(payload_key) or []
+    if not models:
+        return True, f"{label} is running but has no models loaded yet", {}
+    return True, f"{label} reachable; {len(models)} model(s) available", {}
+
+
+def _verify_ollama_base_url(url: str) -> tuple[bool, str, dict]:
+    return _verify_local_endpoint(url, "/api/tags", "Ollama", "models")
+
+
+def _verify_lmstudio_base_url(url: str) -> tuple[bool, str, dict]:
+    return _verify_local_endpoint(url, "/v1/models", "LM Studio", "data")
+
+
 def _verify_elsevier(key: str) -> tuple[bool, str, dict]:
     status, _, err = _http_json(
         "https://api.elsevier.com/content/article/doi/10.1016/j.procs.2018.10.404",
@@ -313,6 +386,12 @@ class KeySpec:
     impact: str      # what happens if this key is not provided
     where: str       # how to get a key
     verify: Callable[[str], tuple[bool, str, dict]] = field(default=_verify_none)
+    #: Name in `core.providers` when this key configures one LLM provider.
+    #: Such a spec is only prompted for when that provider is the chosen
+    #: one — a new user should answer one credential question, not six.
+    #: Empty means "always ask": every non-LLM key here is used whatever
+    #: the screening pipelines run on.
+    llm_provider: str = ""
 
 
 KEYS: tuple[KeySpec, ...] = (
@@ -342,6 +421,7 @@ KEYS: tuple[KeySpec, ...] = (
                "your interactive Claude Code session, not this key.",
         where="https://console.anthropic.com/settings/keys",
         verify=_verify_anthropic,
+        llm_provider="anthropic",
     ),
     KeySpec(
         "ANTHROPIC_BASE_URL", "anthropic", "base_url",
@@ -362,6 +442,7 @@ KEYS: tuple[KeySpec, ...] = (
               "http://localhost:1234). Open WebUI: your instance's base URL. "
               "Give the base only — the SDK appends /v1/messages itself.",
         verify=_verify_none,
+        llm_provider="anthropic",
     ),
     KeySpec(
         "GEMINI_API_KEY", "gemini", "api_key", "Gemini API key",
@@ -375,8 +456,90 @@ KEYS: tuple[KeySpec, ...] = (
                "to use Gemini models and do not provide this key.",
         where="https://aistudio.google.com/app/apikey",
         verify=_verify_gemini,
+        llm_provider="google",
     ),
-
+    KeySpec(
+        "OPENAI_API_KEY", "openai", "api_key", "OpenAI API key",
+        required=False, hidden=True,
+        what="OpenAI builds the GPT models. This API key lets the plugin's "
+             "screening and coding scripts call them directly.",
+        used_by="systematic-review (abstract screening, full-text screening, "
+                "and structured coding of included papers).",
+        impact="Screening pipelines will fail while OpenAI is your selected "
+               "provider. Skills that use your interactive assistant "
+               "session instead — critic-loop, fact-check — are unaffected.",
+        where="https://platform.openai.com/api-keys",
+        verify=_verify_openai,
+        llm_provider="openai",
+    ),
+    KeySpec(
+        "OPENAI_BASE_URL", "openai", "base_url",
+        "OpenAI-compatible endpoint URL",
+        required=False, hidden=False,
+        what="An alternative endpoint speaking the OpenAI "
+             "/v1/chat/completions API instead of api.openai.com — vLLM, "
+             "LiteLLM, a university gateway, or any other compatible "
+             "server. Not a secret: a plain URL, safe to paste in view. "
+             "Leave blank to use OpenAI's own API.",
+        used_by="systematic-review (abstract screening and full-text "
+                "coding, whenever OpenAI is the selected provider).",
+        impact="None if blank — the pipelines call api.openai.com as "
+               "usual. When set, OPENAI_API_KEY may still be required, "
+               "depending on what your gateway checks.",
+        where="Your gateway's documentation. Give the base only — the SDK "
+              "appends /v1/chat/completions itself.",
+        verify=_verify_none,
+        llm_provider="openai",
+    ),
+    KeySpec(
+        "OPENROUTER_API_KEY", "openrouter", "api_key", "OpenRouter API key",
+        required=False, hidden=True,
+        what="OpenRouter (https://openrouter.ai) is a single API in front "
+             "of models from many vendors — Anthropic, Google, OpenAI, "
+             "Meta and others. One key, one bill, and a way to compare "
+             "models without opening an account per vendor.",
+        used_by="systematic-review (abstract screening, full-text "
+                "screening, and structured coding of included papers).",
+        impact="Screening pipelines will fail while OpenRouter is your "
+               "selected provider.",
+        where="https://openrouter.ai/keys",
+        verify=_verify_openrouter,
+        llm_provider="openrouter",
+    ),
+    KeySpec(
+        "OLLAMA_BASE_URL", "ollama", "base_url", "Ollama server URL",
+        required=False, hidden=False,
+        what="Ollama (https://ollama.com) runs open-weight models on your "
+             "own machine. No API key and no per-paper cost — screening "
+             "thousands of abstracts costs electricity rather than "
+             "dollars. Not a secret: a plain URL, safe to paste in view.",
+        used_by="systematic-review (abstract screening and full-text "
+                "coding, whenever Ollama is the selected provider).",
+        impact=f"Blank means the default, {providers.BY_NAME['ollama'].default_base_url}, "
+               f"which is where Ollama listens unless you changed it. Set "
+               f"this only if you moved the port or run it on another host.",
+        where="Ollama serves on http://localhost:11434 by default. Check "
+              "with `ollama list`; if that works, the default URL is right.",
+        verify=_verify_ollama_base_url,
+        llm_provider="ollama",
+    ),
+    KeySpec(
+        "LMSTUDIO_BASE_URL", "lmstudio", "base_url", "LM Studio server URL",
+        required=False, hidden=False,
+        what="LM Studio (https://lmstudio.ai) is a desktop app for running "
+             "open-weight models locally, with an OpenAI-compatible "
+             "server built in. No API key and no per-paper cost. Not a "
+             "secret: a plain URL, safe to paste in view.",
+        used_by="systematic-review (abstract screening and full-text "
+                "coding, whenever LM Studio is the selected provider).",
+        impact=f"Blank means the default, {providers.BY_NAME['lmstudio'].default_base_url}, "
+               f"which is where LM Studio listens unless you changed it.",
+        where="LM Studio → Developer tab → Start Server; the URL is shown "
+              "there (default http://localhost:1234). Load a model before "
+              "running a screening pass — an idle server has none.",
+        verify=_verify_lmstudio_base_url,
+        llm_provider="lmstudio",
+    ),
     KeySpec(
         "WOS_API_KEY_EXTENDED", "wos", "expanded_key",
         "Web of Science Expanded API key",
@@ -666,9 +829,10 @@ def _print_header() -> None:
     print("=" * 64)
     print()
     print("  This will:")
-    print("    1. Collect API keys (hidden input) and verify each one")
-    print(f"    2. Write {CONFIG_PATH} (mode 0600)")
-    print(f"    3. Patch {SETTINGS_PATH} with permission rules")
+    print("    1. Ask which LLM provider should run your screening pipelines")
+    print("    2. Collect API keys (hidden input) and verify each one")
+    print(f"    3. Write {CONFIG_PATH} (mode 0600)")
+    print(f"    4. Patch {SETTINGS_PATH} with permission rules")
     print()
     print("  Your keys stay on this machine. They do not pass through")
     print("  your AI assistant's context at any point.")
@@ -883,6 +1047,123 @@ def _offer_no_access_editor(
     return keep
 
 
+# ---------------------------------------------------------------------------
+# LLM provider selection.
+#
+# Asked before any key question, because the answer decides which key
+# questions there are. Before this existed the wizard asked for an
+# Anthropic key and a Gemini key and nothing else, so the tier system
+# only engaged for users who knew to set ACADEMIC_RESEARCH_PROVIDER by
+# hand — the feature shipped invisible.
+# ---------------------------------------------------------------------------
+
+
+def _provider_default(existing: dict) -> str:
+    """The provider to offer, in the runtime's own precedence order.
+
+    Env beats the config file beats the registry default, matching
+    `llm_provider.resolve_provider`. An unrecognised value in either
+    place falls through rather than being offered back to the user.
+    """
+    candidates = (
+        os.environ.get(providers.PROVIDER_ENV, "").strip(),
+        str((existing.get("llm", {}) or {}).get("provider", "")).strip(),
+    )
+    for name in candidates:
+        if providers.get(name) is not None:
+            return name.lower()
+    return providers.DEFAULT_PROVIDER
+
+
+def _choose_provider(interactive: bool, existing: dict) -> str:
+    """Ask which LLM provider the screening pipelines should call.
+
+    Returns a name from `core.providers`. Non-interactive runs take the
+    default without prompting, which is what makes
+    `--non-interactive` with `ACADEMIC_RESEARCH_PROVIDER` set a
+    reproducible fresh-machine setup.
+    """
+    default = _provider_default(existing)
+    if not interactive:
+        return default
+
+    print()
+    print(_wrap_body("Which LLM should run the screening pipelines?"))
+    print()
+    print(_wrap_body(
+        "This chooses a provider, not a model. The plugin then asks that "
+        "provider which models it currently serves and pins one per stage "
+        "— a cheap model for screening thousands of abstracts, a stronger "
+        "one for coding full texts. Only the credential belonging to the "
+        "provider you pick here is asked for below.",
+    ))
+    print()
+    for i, spec in enumerate(providers.PROVIDERS, 1):
+        current = "  <- current" if spec.name == default else ""
+        print(f"    {i}. {spec.label}{current}")
+        need = (
+            f"no API key; runs on your machine at {spec.default_base_url}"
+            if spec.local else f"needs {spec.api_key_env}"
+        )
+        print(f"       {need}")
+    print()
+    print(f"  Enter a number or a name; press Enter to keep {default}.")
+
+    valid = {p.name for p in providers.PROVIDERS}
+    while True:
+        try:
+            typed = input("    > ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  Aborted.")
+            sys.exit(1)
+        if not typed:
+            return default
+        if typed.isdigit() and 1 <= int(typed) <= len(providers.PROVIDERS):
+            return providers.PROVIDERS[int(typed) - 1].name
+        if typed in valid:
+            return typed
+        print(f"    Not one of: {', '.join(sorted(valid))}. Try again.")
+
+
+def _llm_credential_present(
+    provider: str, values: dict, existing: dict,
+) -> tuple[bool, str]:
+    """Whether `provider` can actually be called, and what is missing.
+
+    Mirrors `llm_provider._api_key_for` rather than guessing: local
+    providers declare no credential at all, and an Anthropic-compatible
+    self-hosted endpoint has one it does not check. Getting this wrong in
+    either direction is a bad outcome — a false warning trains users to
+    ignore the wizard, and a missing one lets a run fail on item 1.
+    """
+    spec = providers.get(provider) or providers.require(providers.DEFAULT_PROVIDER)
+    if not spec.api_key_env:
+        return True, ""
+    section = "gemini" if spec.name == "google" else spec.name
+
+    def _value(key: str) -> str:
+        return str(
+            (values.get(section, {}) or {}).get(key)
+            or (existing.get(section, {}) or {}).get(key)
+            or ""
+        ).strip()
+
+    if _value("api_key"):
+        return True, ""
+    # A local endpoint speaking the Anthropic Messages API ignores the
+    # key, so a base URL alone is a working setup (issue #1).
+    if spec.transport == "anthropic" and _value("base_url"):
+        return True, ""
+    hint = f"{spec.api_key_env} is not set"
+    if spec.base_url_env and _value("base_url"):
+        hint += (
+            f", and {spec.base_url_env} alone is not enough for this "
+            f"provider — set any non-empty {spec.api_key_env} if your "
+            f"endpoint does not check it"
+        )
+    return False, hint
+
+
 def _load_existing_config() -> dict[str, dict[str, str]]:
     if not CONFIG_PATH.exists():
         return {}
@@ -895,14 +1176,34 @@ def _load_existing_config() -> dict[str, dict[str, str]]:
         return {}
 
 
+def _carry_forward(
+    spec: KeySpec, existing: dict, values: dict[str, dict[str, object]],
+) -> None:
+    """Preserve a key this run did not ask about.
+
+    `_write_config` rewrites the file from `values` alone, so anything
+    not collected is deleted. A user who configured Anthropic last month
+    and selects OpenAI today must not lose the Anthropic key — providers
+    get compared and switched back, and re-issuing a key is a trip to a
+    console the wizard cannot make for them.
+    """
+    prior = (existing.get(spec.toml_section, {}) or {}).get(spec.toml_key, "")
+    if prior:
+        values.setdefault(spec.toml_section, {})[spec.toml_key] = prior
+
+
 def _collect_keys(
-    interactive: bool, verify: bool,
+    interactive: bool, verify: bool, provider: str = "",
 ) -> dict[str, dict[str, object]]:
     existing = _load_existing_config()
     values: dict[str, dict[str, object]] = {}
+    provider = provider or providers.DEFAULT_PROVIDER
 
     missing_required: list[str] = []
     for spec in KEYS:
+        if spec.llm_provider and spec.llm_provider != provider:
+            _carry_forward(spec, existing, values)
+            continue
         prior = existing.get(spec.toml_section, {}).get(spec.toml_key, "")
         val, extras = _prompt_key(spec, prior, interactive, verify)
         if spec.required and not val:
@@ -920,15 +1221,14 @@ def _collect_keys(
         print("  Re-run the wizard and supply these before using the plugin.")
         sys.exit(2)
 
-    has_llm_key = bool(
-        values.get("anthropic", {}).get("api_key")
-        or values.get("gemini", {}).get("api_key")
-        or existing.get("anthropic", {}).get("api_key")
-        or existing.get("gemini", {}).get("api_key")
-    )
-    if not has_llm_key:
-        print("\n  WARNING: Neither ANTHROPIC_API_KEY nor GEMINI_API_KEY is configured.")
-        print("           You must provide at least one LLM key to run screening pipelines.")
+    ok, hint = _llm_credential_present(provider, values, existing)
+    if not ok:
+        spec = providers.require(provider)
+        print(f"\n  WARNING: no credential configured for {spec.label} —")
+        print(f"           {hint}.")
+        print("           Screening pipelines will fail until it is set.")
+        print("           Re-run this wizard, or pick a different provider:")
+        print("           local providers (Ollama, LM Studio) need no key.")
 
     return values
 
@@ -1962,10 +2262,13 @@ def main() -> int:
             print("  These will be offered as defaults below (press Enter to accept).")
             print()
 
-    values = _collect_keys(interactive, verify)
-
     # Preserve (or extend) non-key sections across re-runs.
     existing_cfg = _load_existing_config()
+
+    provider = _choose_provider(interactive, existing_cfg)
+    values = _collect_keys(interactive, verify, provider)
+    # Keep any other `[llm]` key the user set by hand (`max_retries`).
+    values["llm"] = {**(existing_cfg.get("llm", {}) or {}), "provider": provider}
 
     connector_entry = _detect_and_prompt_connector(interactive, existing_cfg)
     if connector_entry:
@@ -2032,6 +2335,7 @@ def main() -> int:
     print()
     print("  Setup complete.")
     print(f"    Config:   {CONFIG_PATH} (mode 0600)")
+    print(f"    LLM:      {providers.require(provider).label}")
     print(f"    Settings: {SETTINGS_PATH} (+{allow_added} allow, +{deny_added} deny)")
     if gitignore_updated is not None:
         print(f"    Gitignore: added .claude/ entry to {gitignore_updated}")
@@ -2068,6 +2372,14 @@ def main() -> int:
         print("  Literature search will not work without at least one of:")
         print("  scopus, semantic-scholar, openalex. Other skills (e.g.")
         print("  critic-loop, fact-check on existing items) still work.")
+
+    print()
+    print(_wrap_body(
+        "Screening runs on whichever models your provider currently serves. "
+        "Inside a systematic-review project, pin them into "
+        "screening_config.py with:",
+    ))
+    print(f"    python3 {_HERE / 'resolve_models.py'}")
 
     claude_code_available = (Path.home() / ".claude").exists()
     print()

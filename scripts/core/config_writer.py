@@ -4,6 +4,7 @@ Used by:
   - The "Always skip" failure-prompt path in enrich_pdfs.py (appends a
     publisher name to `[library] no_access`).
   - The setup wizard's `no_access` editor (removes entries).
+  - `scripts/setup/set_llm_provider.py` (sets `[llm] provider`).
 
 Design notes:
   - Re-uses the wizard's manual TOML format. Quoted strings and flat
@@ -92,6 +93,36 @@ def append_to_list(section: str, key: str, value: str) -> None:
             f"[{section}] {key} is not a list "
             f"({type(existing).__name__}); refusing to overwrite.",
         )
+    _write(values)
+
+
+def set_value(section: str, key: str, value: str) -> None:
+    """Set the scalar at `[section] key`, creating the section if missing.
+
+    Overwrites an existing scalar — this is the "switch me to OpenAI"
+    path, where replacing the old answer is the whole point. Raises
+    ValueError if the key currently holds a list, since flattening one
+    silently would lose data.
+
+    Scalars only, and deliberately: `_dump` emits exactly one
+    `[section]` header per top-level key, so a dict value here would
+    serialise as `key = {...}` and fail to round-trip. Everything the
+    plugin stores is flat.
+    """
+    if not isinstance(value, str):
+        raise TypeError(
+            f"[{section}] {key} must be a string; got {type(value).__name__}. "
+            f"The config schema is flat scalars and lists of strings.",
+        )
+    values = _read()
+    sect = values.setdefault(section, {})
+    existing = sect.get(key)
+    if isinstance(existing, list):
+        raise ValueError(
+            f"[{section}] {key} is a list; refusing to replace it with a "
+            f"scalar. Use remove_from_list to clear it first.",
+        )
+    sect[key] = value
     _write(values)
 
 

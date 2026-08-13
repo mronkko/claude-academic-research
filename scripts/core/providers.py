@@ -180,6 +180,11 @@ BY_NAME: dict[str, ProviderSpec] = {p.name: p for p in PROVIDERS}
 #: claim that it is best.
 DEFAULT_PROVIDER = "anthropic"
 
+#: Environment override for `[llm] provider`, following the plugin-wide
+#: rule that env beats config file. Named here so the wizard, the
+#: setup scripts, and the runtime router cannot drift on the spelling.
+PROVIDER_ENV = "ACADEMIC_RESEARCH_PROVIDER"
+
 
 def get(name: str) -> ProviderSpec | None:
     """Look up a provider by name, case-insensitively."""

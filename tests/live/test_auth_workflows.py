@@ -142,6 +142,70 @@ def test_auth_anthropic_base_url() -> None:
     # routing. Only a transport failure (0) means the URL is wrong.
 
 
+def test_auth_openai() -> None:
+    key = require_config("openai", "api_key", env="OPENAI_API_KEY")
+    ok, msg, _ = _wizard()._verify_openai(key)
+    assert ok, f"OpenAI auth failed: {msg}"
+
+
+def test_auth_openrouter() -> None:
+    key = require_config("openrouter", "api_key", env="OPENROUTER_API_KEY")
+    ok, msg, _ = _wizard()._verify_openrouter(key)
+    assert ok, f"OpenRouter auth failed: {msg}"
+
+
+def test_auth_openai_base_url() -> None:
+    """OPENAI_BASE_URL is a plain URL, not a credential — same shape as
+    the Anthropic one above. Confirms the gateway the user configured is
+    listening; whether it accepts their key is what test_auth_openai
+    covers.
+
+    Skips when unset, which is the normal case: blank means
+    api.openai.com.
+    """
+    base = require_config("openai", "base_url", env="OPENAI_BASE_URL")
+    status, _body, _headers = http_get(base.rstrip("/") + "/v1/models")
+    assert status != 0, f"{base} unreachable (network/DNS error)"
+
+
+# ---------------------------------------------------------------------------
+# Local providers.
+#
+# No key exists to verify, so reachability is the whole test — and the
+# endpoint only exists while the user has the app running. These skip
+# rather than fail when nothing answers: a laptop with LM Studio closed
+# is not a broken configuration, and a live suite that goes red for that
+# reason stops being read.
+# ---------------------------------------------------------------------------
+
+
+def _local_base(provider: str, env: str) -> str:
+    """Configured base URL for a local provider, else its default."""
+    from core import providers
+    from core.config_loader import get
+
+    spec = providers.require(provider)
+    return providers.base_url_for(spec, get(provider, "base_url", env=env))
+
+
+def test_auth_ollama_base_url() -> None:
+    """OLLAMA_BASE_URL points at a local Ollama server (no API key)."""
+    base = _local_base("ollama", "OLLAMA_BASE_URL")
+    ok, msg, _ = _wizard()._verify_ollama_base_url(base)
+    if not ok and "nothing answered" in msg:
+        pytest.skip(f"no Ollama server at {base}; skipping ({msg})")
+    assert ok, f"Ollama endpoint check failed: {msg}"
+
+
+def test_auth_lmstudio_base_url() -> None:
+    """LMSTUDIO_BASE_URL points at a local LM Studio server (no API key)."""
+    base = _local_base("lmstudio", "LMSTUDIO_BASE_URL")
+    ok, msg, _ = _wizard()._verify_lmstudio_base_url(base)
+    if not ok and "nothing answered" in msg:
+        pytest.skip(f"no LM Studio server at {base}; skipping ({msg})")
+    assert ok, f"LM Studio endpoint check failed: {msg}"
+
+
 def test_auth_library_openurl_base() -> None:
     """openurl_base is a plain URL, not a credential — there's no auth
     to verify. This confirms whatever endpoint the user configured
