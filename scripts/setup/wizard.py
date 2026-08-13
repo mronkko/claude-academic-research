@@ -25,10 +25,12 @@ import argparse
 import getpass
 import json
 import os
+import random
 import re
 import shutil
 import sys
 import textwrap
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -80,24 +82,79 @@ MCP_TIER_OPTIONAL = "optional"
 # ---------------------------------------------------------------------------
 
 
+# Retry policy for `_http_json`. Deliberately hand-rolled rather than
+# reusing `pipelines/http_client.py`: skills invoke this file as
+# `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py` with no `uv`
+# and no venv, so `scripts/setup/` must stay stdlib-only. `requests`,
+# `urllib3`, and `tenacity` are not importable here.
+_RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+_MAX_ATTEMPTS = 3
+_BASE_DELAY_S = 1.0
+_MAX_DELAY_S = 8.0
+
+
+def _retry_after_seconds(value: str | None) -> float | None:
+    """Parse a `Retry-After` header value into seconds.
+
+    Only the delta-seconds form is handled; the HTTP-date form returns
+    None so the caller falls back to exponential backoff. Providers that
+    throttle key-verification calls (Semantic Scholar, Crossref) all use
+    delta-seconds.
+    """
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value.strip()))
+    except ValueError:
+        return None
+
+
+def _backoff_delay(attempt: int, retry_after: float | None) -> float:
+    """Seconds to wait before `attempt` (1-based), with full jitter.
+
+    `Retry-After` wins when the server sent one. Otherwise exponential
+    from `_BASE_DELAY_S`, capped, with jitter so a wizard run and a
+    concurrent pipeline run don't retry in lockstep.
+    """
+    if retry_after is not None:
+        return min(retry_after, _MAX_DELAY_S)
+    ceiling = min(_BASE_DELAY_S * (2 ** (attempt - 1)), _MAX_DELAY_S)
+    return random.uniform(0.0, ceiling)  # noqa: S311  # jitter, not crypto
+
+
 def _http_json(
     url: str,
     headers: dict[str, str] | None = None,
     timeout: int = 10,
 ) -> tuple[int, dict | None, str]:
-    """Plain urllib GET returning (status, json_or_none, error_message)."""
+    """Plain urllib GET returning (status, json_or_none, error_message).
+
+    Retries transient failures — 408/429/5xx and transport errors — with
+    exponential backoff and jitter, honouring `Retry-After`. Auth
+    failures (401/403) and other 4xx are returned on the first attempt:
+    they are answers, not blips, and the caller reports them to the user.
+    """
     req = urllib.request.Request(url, headers=headers or {})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            data = response.read()
-            try:
-                return response.status, json.loads(data), ""
-            except json.JSONDecodeError:
-                return response.status, None, "non-JSON response"
-    except urllib.error.HTTPError as e:
-        return e.code, None, f"{e.code} {e.reason}"
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        return 0, None, str(e)
+    status, data, err = 0, None, ""
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        retry_after: float | None = None
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                body = response.read()
+                try:
+                    return response.status, json.loads(body), ""
+                except json.JSONDecodeError:
+                    return response.status, None, "non-JSON response"
+        except urllib.error.HTTPError as e:
+            status, data, err = e.code, None, f"{e.code} {e.reason}"
+            if e.code not in _RETRY_STATUSES:
+                return status, data, err
+            retry_after = _retry_after_seconds(e.headers.get("Retry-After"))
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            status, data, err = 0, None, str(e)
+        if attempt < _MAX_ATTEMPTS:
+            time.sleep(_backoff_delay(attempt, retry_after))
+    return status, data, err
 
 
 def _verify_zotero(key: str) -> tuple[bool, str, dict]:
