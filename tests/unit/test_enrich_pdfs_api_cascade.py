@@ -29,6 +29,16 @@ def _make_args(cache_dir: str) -> argparse.Namespace:
     )
 
 
+def _fake_pdf(marker: bytes = b"body") -> bytes:
+    """A structurally plausible PDF.
+
+    `_attach_and_log` validates structure before uploading, because
+    attaching a truncated file makes the item look permanently done.
+    Fixtures therefore need an %%EOF trailer and a realistic size.
+    """
+    return b"%PDF-1.4\n" + marker + b"\n" + b"0" * 2000 + b"\n%%EOF\n"
+
+
 def _make_log_writer():
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=LOG_FIELDS)
@@ -38,7 +48,7 @@ def _make_log_writer():
 
 def test_tags_item_when_recovered_pdf_is_attached(tmp_path: Path) -> None:
     recovered_path = tmp_path / "10.1016_j.example.2020.01.001-tdm-recovered.pdf"
-    recovered_path.write_bytes(b"%PDF-1.4 recovered")
+    recovered_path.write_bytes(_fake_pdf(b"recovered"))
 
     item = {"key": "ITEM1", "data": {"DOI": "10.1016/j.example.2020.01.001", "title": "T"}}
     source = MagicMock(name="elsevier")
@@ -56,7 +66,7 @@ def test_tags_item_when_recovered_pdf_is_attached(tmp_path: Path) -> None:
 
 def test_does_not_tag_item_when_native_pdf_is_attached(tmp_path: Path) -> None:
     native_path = tmp_path / "10.1016_j.example.2020.01.002.pdf"
-    native_path.write_bytes(b"%PDF-1.4 native")
+    native_path.write_bytes(_fake_pdf(b"native"))
 
     item = {"key": "ITEM2", "data": {"DOI": "10.1016/j.example.2020.01.002", "title": "T"}}
     source = MagicMock(name="elsevier")
@@ -74,7 +84,7 @@ def test_does_not_tag_item_when_native_pdf_is_attached(tmp_path: Path) -> None:
 
 def test_does_not_tag_on_dry_run(tmp_path: Path) -> None:
     recovered_path = tmp_path / "10.1016_j.example.2020.01.003-tdm-recovered.pdf"
-    recovered_path.write_bytes(b"%PDF-1.4 recovered")
+    recovered_path.write_bytes(_fake_pdf(b"recovered"))
 
     item = {"key": "ITEM3", "data": {"DOI": "10.1016/j.example.2020.01.003", "title": "T"}}
     source = MagicMock(name="elsevier")

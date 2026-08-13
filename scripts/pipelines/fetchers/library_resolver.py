@@ -59,7 +59,7 @@ import logging
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 from urllib.parse import parse_qs, urlencode, urlparse
 
 if TYPE_CHECKING:
@@ -426,7 +426,15 @@ def _query_target_urls(
     if urls is None:
         return None
 
-    if cfg.cache is not None:
+    # Positive results only. An empty result is a claim about the
+    # library's holdings *as the resolver could see them for this DOI*,
+    # and that claim is wrong often enough to matter: the resolver keys
+    # on DOI, so a journal the library reaches through an aggregator can
+    # come back empty. Persisting that to disk turned a soft miss into a
+    # permanent one — a live run skipped 15 Journal of Business Ethics
+    # articles the user demonstrably had access to, and re-running could
+    # never re-check because the empty answer was cached with no expiry.
+    if cfg.cache is not None and urls:
         cfg.cache.put(cache_key, {"urls": urls})
     return urls
 
@@ -594,24 +602,71 @@ def first_fulltext_target_preferred(
     Ranking uses `priority` (default `SFX_PLATFORM_PRIORITY`). Ties
     broken by SFX's response order (stable — first in list wins).
     Returns None when no target matches.
+
+    Collapses "no coverage" and "couldn't ask" into the same None. Use
+    `lookup_fulltext_target` when that difference matters — for gating
+    decisions it always does.
+    """
+    return lookup_fulltext_target(
+        doi, cfg, priority=priority, in_range_only=in_range_only,
+        required_domains=required_domains, issn=issn, pub_date=pub_date,
+        volume=volume,
+    ).url
+
+
+class TargetLookup(NamedTuple):
+    """Outcome of a link-resolver query.
+
+    `query_ok=False` means the resolver could not answer at all —
+    unset config, transport error, non-200, unparseable XML. That is
+    NOT evidence of missing access, and callers must not treat it as
+    such; `url=None` with `query_ok=True` is the real "library has no
+    licensed route" verdict.
+    """
+
+    url: str | None
+    query_ok: bool
+
+
+def lookup_fulltext_target(
+    doi: str,
+    cfg: LibraryResolverConfig,
+    *,
+    priority: tuple[str, ...] = SFX_PLATFORM_PRIORITY,
+    in_range_only: bool = True,
+    required_domains: tuple[str, ...] = (),
+    issn: str | None = None,
+    pub_date: str | None = None,
+    volume: str | None = None,
+) -> TargetLookup:
+    """`first_fulltext_target_preferred`, but reporting query health too.
+
+    Exists because the pre-flight is a *gate*: an item with no target
+    never opens a browser. Failing that gate closed on an ambiguous
+    signal means a transport blip is indistinguishable from a real
+    entitlement gap, which is exactly what `has_fulltext_access`'s
+    long-standing fail-open docstring said not to do — except nothing
+    in production ever called it.
     """
     if not cfg.openurl_base:
-        return None
+        return TargetLookup(None, False)
 
     urls = _query_target_urls(
         doi, cfg, ignore_date_threshold=not in_range_only,
         issn=issn, pub_date=pub_date, volume=volume,
     )
+    if urls is None:
+        return TargetLookup(None, False)
     if not urls:
-        return None
+        return TargetLookup(None, True)
 
     if required_domains:
         urls = [u for u in urls if _target_matches_domains(u, required_domains)]
         if not urls:
-            return None
+            return TargetLookup(None, True)
 
     # Stable sort: same rank keeps SFX's response order.
-    return min(urls, key=lambda u: _platform_rank(u, priority))
+    return TargetLookup(min(urls, key=lambda u: _platform_rank(u, priority)), True)
 
 
 def _cache_key(doi: str, ignore_date_threshold: bool = False) -> str:

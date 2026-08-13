@@ -45,6 +45,7 @@ import asyncio
 import os
 import re
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date
@@ -61,6 +62,7 @@ for _p in (str(SCRIPT_DIR), str(SCRIPTS_ROOT)):
 import fetchers  # noqa: E402
 import http_client  # noqa: E402
 import pdf_fetch_log  # noqa: E402
+import pdf_run_report  # noqa: E402
 import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
 from core.config_loader import get, require  # noqa: E402
@@ -74,6 +76,13 @@ DEFAULT_CACHE_DIR = os.path.join("output", "pdf_cache")
 DEFAULT_FAILURE_LOG_CSV = os.path.join("output", "pdf_fetch_log.csv")
 
 LOG_FIELDS = PDF_FETCH_FIELDS
+
+# `pdf_fetch_log` rewrites the whole failure CSV on every write (it
+# upserts by item_key), and the API cascade calls it from a
+# ThreadPoolExecutor. Without serialising, concurrent read-modify-write
+# cycles drop each other's rows — see `csv_io.upsert_by_item_key`'s
+# "callers must serialize externally" contract.
+_FAILURE_LOG_LOCK = threading.Lock()
 
 _PLAYWRIGHT_MISSING_MSG = (
     "ERROR: the playwright package is not installed.\n"
@@ -111,9 +120,16 @@ def _open_log(path: str):
     return shared_orchestrators.open_log(path, LOG_FIELDS)
 
 
+# Statuses that mean "this item has its PDF; don't fetch it again".
+# `attached_no_text` counts: the file is attached and re-fetching would
+# produce the same scan. It stays a distinct status so the run report can
+# single those items out as needing OCR.
+DONE_STATUSES = ("attached", "attached_no_text")
+
+
 def _load_done_dois(path: str) -> set[str]:
     return shared_orchestrators.load_done_keys(
-        path, statuses="attached", key_field="doi",
+        path, statuses=DONE_STATUSES, key_field="doi",
     )
 
 
@@ -132,6 +148,183 @@ def _first_issn(issn_field: str) -> str | None:
     fallback query wants a single value, so take the first."""
     first = (issn_field or "").split(",")[0].strip()
     return first or None
+
+
+# ---------------------------------------------------------------------
+# Failure detail + the single attach path
+# ---------------------------------------------------------------------
+
+_DETAIL_MAX = 300
+
+
+def _http_status_of(exc: BaseException) -> int | None:
+    """Best-effort HTTP status from an exception, without importing httpx.
+
+    pyzotero raises `httpx.HTTPStatusError`, which carries `.response.
+    status_code`; requests-based fetchers raise something shaped the
+    same way. Anything else yields None.
+    """
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status if isinstance(status, int) else None
+
+
+def _failure_detail(exc: BaseException) -> str:
+    """One-line, CSV-safe reason string for a failed operation.
+
+    Every non-success log row carries one of these. Before it existed,
+    the reason for a failure was printed to stdout and then dropped, so
+    diagnosing a run meant re-reading terminal scrollback that no longer
+    existed.
+    """
+    parts = [type(exc).__name__]
+    status = _http_status_of(exc)
+    if status is not None:
+        parts.append(f"HTTP {status}")
+    message = " ".join(str(exc).split())
+    if message:
+        parts.append(message)
+    detail = ": ".join(parts)
+    return detail[:_DETAIL_MAX - 1] + "…" if len(detail) > _DETAIL_MAX else detail
+
+
+def _pdf_has_text(pdf_path, item_key: str) -> bool | None:
+    """True if `pdftotext` extracts any text from the PDF.
+
+    None means "couldn't tell" — poppler missing or extraction blew up —
+    which callers treat as "assume fine" rather than flagging a false
+    positive. False means a structurally valid PDF with no text layer,
+    i.e. a genuine scan.
+
+    Only meaningful *after* `_pdf_validate.file_defect` has passed. Zero
+    extractable text has two very different causes, and a live run
+    conflated them: five files that yielded no text were diagnosed as
+    scans needing OCR, when they were actually truncated downloads whose
+    page tree was missing entirely. Structure first, then text.
+
+    Extraction is cached by `pdf_text_cache`, and `fulltext_code.py`
+    reads that same cache, so this is prefetching rather than extra work.
+    """
+    try:
+        import pdf_text_cache
+        text = pdf_text_cache.get_text(item_key, Path(pdf_path))
+    except FileNotFoundError:
+        return None          # poppler not installed
+    except Exception:
+        return None
+    return bool((text or "").strip())
+
+
+def _attach_and_log(
+    zot,
+    log_writer,
+    *,
+    run_date: str,
+    item_key: str,
+    doi: str,
+    title: str,
+    source: str,
+    pdf_path,
+    failure_log_path: str = "",
+    item_type: str = "",
+    check_text: bool = True,
+) -> bool:
+    """Attach one fetched PDF to Zotero and log the outcome. True on success.
+
+    The single upload path for every fetch route (browser handlers, the
+    Pass-2 API retry, and the API cascade). Those were three divergent
+    copies; the browser copy in particular wrote a bare `upload_failed`
+    row, never touched the structured failure log, and had no retry —
+    which is how a live run turned 48 good downloads into 48 dead ends.
+
+    Ordering matters here: the attachment upload is the only step whose
+    failure means "no PDF". Tagging is best-effort *after* it, because
+    folding a tag PATCH into the same try-block records a fully
+    successful attachment as `upload_failed`.
+    """
+    # Structural check before upload. Attaching a corrupt PDF is worse
+    # than attaching nothing: `pdf_map()` then reports the item as
+    # having a real PDF, so every later run skips it and the damage is
+    # permanent. Rejecting here keeps the item in the retry population.
+    from fetchers import _pdf_validate
+
+    defect = _pdf_validate.file_defect(pdf_path)
+    if defect is not None:
+        print(f"→ rejected: {defect}", flush=True)
+        log_writer.writerow({
+            "run_date": run_date, "item_key": item_key, "doi": doi,
+            "title": title, "status": "rejected_corrupt_pdf",
+            "source": source, "detail": defect,
+        })
+        # Drop the bad bytes so the next run re-fetches instead of
+        # rediscovering the same broken file in the cache.
+        try:
+            Path(pdf_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+        if failure_log_path and item_key:
+            try:
+                with _FAILURE_LOG_LOCK:
+                    pdf_fetch_log.log_failure(
+                        failure_log_path,
+                        item_key=item_key, doi=doi, item_type=item_type,
+                        source=source,
+                        cause=pdf_fetch_log.FailureCause.CORRUPT_DOWNLOAD,
+                    )
+            except Exception:
+                pass
+        return False
+
+    try:
+        zot.attach_pdf(item_key, str(pdf_path))
+    except Exception as exc:
+        detail = _failure_detail(exc)
+        print(f"→ upload failed: {detail}", flush=True)
+        log_writer.writerow({
+            "run_date": run_date, "item_key": item_key, "doi": doi,
+            "title": title, "status": "upload_failed", "source": source,
+            "detail": detail,
+        })
+        if failure_log_path and item_key:
+            try:
+                with _FAILURE_LOG_LOCK:
+                    pdf_fetch_log.log_failure(
+                        failure_log_path,
+                        item_key=item_key, doi=doi, item_type=item_type,
+                        source=source, http_status=_http_status_of(exc),
+                        cause=pdf_fetch_log.FailureCause.UPLOAD_FAILED,
+                    )
+            except Exception:
+                pass         # diagnostics must never sink the run
+        return False
+
+    # Attached. Everything below is best-effort annotation.
+    if fetchers.is_tdm_recovered_path(pdf_path):
+        try:
+            zot.update_tags(item_key, add=[fetchers.TDM_RECOVERED_TAG])
+        except Exception as exc:
+            print(f"  WARN: attached, but tagging failed: {_failure_detail(exc)}",
+                  flush=True)
+
+    status, detail = "attached", ""
+    if check_text and _pdf_has_text(pdf_path, item_key) is False:
+        # Structure already validated above, so this really is a scan.
+        status = "attached_no_text"
+        detail = "structurally valid PDF with no text layer (scan) — needs OCR"
+        print("→ attached (no text layer)", flush=True)
+    else:
+        print("→ attached", flush=True)
+
+    log_writer.writerow({
+        "run_date": run_date, "item_key": item_key, "doi": doi,
+        "title": title, "status": status, "source": source, "detail": detail,
+    })
+    if failure_log_path and item_key:
+        try:
+            with _FAILURE_LOG_LOCK:
+                pdf_fetch_log.clear_failure(failure_log_path, item_key)
+        except Exception:
+            pass
+    return True
 
 
 async def _drive_handler(
@@ -316,20 +509,16 @@ async def _drive_handler(
                 })
                 continue
 
-            try:
-                zot.attach_pdf(item["item_key"], str(pdf_path))
-                log_writer.writerow({
-                    "run_date": run_date, "item_key": item["item_key"],
-                    "doi": doi, "title": title,
-                    "status": "attached", "source": handler.name,
-                })
-            except Exception as e:
-                print(f"  [{doi}] upload failed: {e}", flush=True)
-                log_writer.writerow({
-                    "run_date": run_date, "item_key": item["item_key"],
-                    "doi": doi, "title": title,
-                    "status": "upload_failed", "source": handler.name,
-                })
+            print(f"  [{doi}]", end=" ", flush=True)
+            _attach_and_log(
+                zot, log_writer,
+                run_date=run_date, item_key=item["item_key"],
+                doi=doi, title=title, source=handler.name,
+                pdf_path=pdf_path,
+                failure_log_path=getattr(args, "failure_log_csv", "") or "",
+                item_type=item.get("item_type", ""),
+                check_text=not getattr(args, "no_check_text", False),
+            )
 
         print(
             f"\n  Total: {counter.ok} new, {counter.cached} cached, "
@@ -685,6 +874,13 @@ def _exit_no_interactive_surface(args: argparse.Namespace) -> None:
         if getattr(args, "filter_keys_file", "")
         else ""
     )
+    library_arg = " --user" if getattr(args, "user", False) else (
+        f" --group {args.group}" if getattr(args, "group", "") else ""
+    )
+    base = (
+        f"uv run ${{CLAUDE_PLUGIN_ROOT}}/scripts/pipelines/enrich_pdfs.py"
+        f" --sources browser{library_arg}{publisher_arg}{keys_arg}"
+    )
     sys.exit(
         "ERROR: This run needs an interactive terminal — the browser "
         "cascade prompts you for Cloudflare / SSO / Yes-or-No "
@@ -692,11 +888,12 @@ def _exit_no_interactive_surface(args: argparse.Namespace) -> None:
         "\n"
         "  • Run from your own terminal, not Claude's Bash tool.\n"
         "  • macOS: ⌘-Space → Terminal → paste:\n"
-        f"      uv run ${{CLAUDE_PLUGIN_ROOT}}/scripts/pipelines/enrich_pdfs.py "
-        f"--browser{publisher_arg}{keys_arg}\n"
+        f"      {base}\n"
+        "  • To see which publishers this will ask you to solve, without\n"
+        "    opening a browser (safe to run anywhere, including here):\n"
+        f"      {base} --plan\n"
         "  • For unattended runs (no prompts; auto-skip on first "
-        "publisher failure), add `--no-prompt` (sets "
-        "`--on-first-failure=skip`).\n"
+        "publisher failure), add `--no-prompt`.\n"
     )
 
 
@@ -752,7 +949,14 @@ def _run_browser_in_process(
     # exit immediately with a paste-in command for a fresh terminal
     # rather than starting and silently hanging on the first prompt.
     # Bypass via --no-prompt for unattended runs.
-    if not getattr(args, "no_prompt", False) and not _has_interactive_surface():
+    # `--plan` never opens a browser or prompts, so the interactive-surface
+    # requirement doesn't apply — that is the whole point of it: an agent
+    # can run it non-interactively and tell the user what to expect.
+    if (
+        not getattr(args, "no_prompt", False)
+        and not getattr(args, "plan", False)
+        and not _has_interactive_surface()
+    ):
         _exit_no_interactive_surface(args)
 
     from urllib.parse import urlparse
@@ -767,8 +971,8 @@ def _run_browser_in_process(
     from fetchers.doi_resolver import DoiResolverCache, resolve_doi
     from fetchers.library_resolver import (
         SFX_PLATFORM_PRIORITY,
-        first_fulltext_target_preferred,
         load_from_config,
+        lookup_fulltext_target,
         sfx_lookup_dual,
     )
     from fetchers.library_resolver import (
@@ -911,27 +1115,19 @@ def _run_browser_in_process(
                         f"{title70}", flush=True,
                     )
                     break
-                try:
-                    zot.attach_pdf(entry["item_key"], str(pdf_path))
-                    log_writer.writerow({
-                        "run_date": run_date, "item_key": entry["item_key"],
-                        "doi": doi, "title": title70,
-                        "status": "attached", "source": src.name,
-                    })
-                    print(
-                        f"  Pass 2 API retry → attached via {src.name} "
-                        f"{title70}", flush=True,
-                    )
-                except Exception as e:
-                    log_writer.writerow({
-                        "run_date": run_date, "item_key": entry["item_key"],
-                        "doi": doi, "title": title70,
-                        "status": "upload_failed", "source": src.name,
-                    })
-                    print(
-                        f"  Pass 2 API retry {src.name} → upload failed: "
-                        f"{e}", flush=True,
-                    )
+                print(
+                    f"  Pass 2 API retry via {src.name} {title70}",
+                    end=" ", flush=True,
+                )
+                _attach_and_log(
+                    zot, log_writer,
+                    run_date=run_date, item_key=entry["item_key"],
+                    doi=doi, title=title70, source=src.name,
+                    pdf_path=pdf_path,
+                    failure_log_path=getattr(args, "failure_log_csv", "") or "",
+                    item_type=entry.get("item_type", ""),
+                    check_text=not getattr(args, "no_check_text", False),
+                )
                 break
             else:
                 retry_result = None
@@ -991,11 +1187,17 @@ def _run_browser_in_process(
     total_direct = sum(len(v) for v in items_by_pub.values())
     if total_direct or connector_upfront:
         print("\nBrowser queue:", flush=True)
+        solve_publishers: list[str] = []
         for name, pub_items in items_by_pub.items():
-            display = handler_by_name[name].display_name or name
+            handler = handler_by_name[name]
+            display = handler.display_name or name
+            needs_solve = getattr(handler, "needs_interactive_solve", True)
+            if needs_solve:
+                solve_publishers.append(display)
             print(
                 f"  • {display} (direct): {len(pub_items)} "
-                f"paper{'' if len(pub_items) == 1 else 's'}",
+                f"paper{'' if len(pub_items) == 1 else 's'}"
+                + ("  [needs an interactive solve]" if needs_solve else ""),
                 flush=True,
             )
         if connector_upfront:
@@ -1005,8 +1207,29 @@ def _run_browser_in_process(
                 f"paper{'' if len(connector_upfront) == 1 else 's'}",
                 flush=True,
             )
+
+        # State it as a single explicit instruction. The per-publisher
+        # lines above are easy to skim past, and a user who solves only
+        # the publishers they happened to notice leaves whole buckets
+        # untried with no error anywhere.
+        if solve_publishers:
+            print(
+                f"\n  You will be asked to solve a Cloudflare / SSO challenge "
+                f"for {len(solve_publishers)} publisher"
+                f"{'' if len(solve_publishers) == 1 else 's'}, in order: "
+                + ", ".join(solve_publishers),
+                flush=True,
+            )
     else:
         print("\nNothing to do via the browser path.", flush=True)
+        return 0
+
+    if getattr(args, "plan", False):
+        print(
+            "\n--plan: stopping here without opening a browser. Re-run the "
+            "same command without --plan to execute.",
+            flush=True,
+        )
         return 0
 
     # ------------------------------------------------------------------
@@ -1043,9 +1266,11 @@ def _run_browser_in_process(
         [(it, "upfront") for it in connector_upfront]
         + [(it, "retry") for it in connector_retry]
     )
+    ignore_coverage = getattr(args, "ignore_library_coverage", False)
+    failed_open = 0
     for it, origin in origins:
-        target = None
-        if resolver_cfg is not None:
+        target, query_ok = None, True
+        if resolver_cfg is not None and not ignore_coverage:
             # Query B only (date-filtered). When Query B is empty,
             # we do NOT fall back to Query A. The cache data against
             # JYU's SFX (see sfx_cache.json) shows Query A commonly
@@ -1053,14 +1278,33 @@ def _run_browser_in_process(
             # ignore-date list is "SFX knows the journal via these
             # providers", not "you can download this DOI now". Using
             # it as a fallback wastes user time on paywalls.
-            target = first_fulltext_target_preferred(
+            target, query_ok = lookup_fulltext_target(
                 it["doi"], resolver_cfg,
                 priority=SFX_PLATFORM_PRIORITY,
                 in_range_only=True,
                 issn=it.get("issn"), pub_date=it.get("pub_date"),
                 volume=it.get("volume"),
             )
-        if target:
+        elif resolver_cfg is None:
+            # No `[library] openurl_base` configured. There is nothing
+            # to gate on, so gating on it would drop every upfront item
+            # without a single attempt — which is precisely what used to
+            # happen: an unconfigured resolver made the entire Connector
+            # fallback unreachable while logging "no library coverage".
+            query_ok = False
+
+        if target or not query_ok or ignore_coverage:
+            # Fail open. With no resolver answer, hand the Connector the
+            # DOI resolver URL rather than nothing — it skips outright on
+            # a missing target, so failing open without a URL would just
+            # relabel the skip. Opening doi.org lands on the publisher
+            # page, where the browser profile's existing institutional
+            # session (IP range, EZproxy cookie, SSO) may well work.
+            # A failed attempt is a real answer; a skipped one is not.
+            if not target:
+                if origin == "upfront":
+                    failed_open += 1
+                target = f"https://doi.org/{it['doi']}"
             connector_items.append({**it, "sfx_target_url": target})
         else:
             status = (
@@ -1072,6 +1316,7 @@ def _run_browser_in_process(
                 "doi": it["doi"],
                 "title": (it.get("title") or "")[:70],
                 "status": status, "source": "connector",
+                "detail": "link resolver returned no licensed full-text route",
             })
             skipped_no_target += 1
 
@@ -1080,6 +1325,13 @@ def _run_browser_in_process(
             f"\n  {skipped_no_target} item"
             f"{'s' if skipped_no_target != 1 else ''} had no Query-B "
             f"full-text target — logged without opening the Connector.",
+            flush=True,
+        )
+    if failed_open:
+        print(
+            f"  {failed_open} item{'s' if failed_open != 1 else ''} had no "
+            f"resolver answer (unset/unreachable/unparseable) — trying the "
+            f"Connector anyway rather than assuming no access.",
             flush=True,
         )
 
@@ -1118,13 +1370,19 @@ def _try_cascade(
     log to group items by cause and suggest FE codes — see T4-3.
     """
     d = item.get("data", {})
-    doi = (d.get("DOI") or "").strip()
+    # Lower-cased to match the browser path (`_run_browser_in_process`),
+    # which normalises before building its cache filename. Without this
+    # the same mixed-case DOI cached by one path is invisible to the
+    # other, and a PDF already on disk gets re-fetched or declared
+    # missing.
+    doi = (d.get("DOI") or "").strip().lower()
     if not doi:
         return None
     item_type = d.get("itemType", "") or ""
     item_key = item.get("key", "") or d.get("key", "") or ""
     last_source = ""
     raised_exception = False
+    last_status: int | None = None
     for src in sources:
         last_source = src.name
         try:
@@ -1134,6 +1392,9 @@ def _try_cascade(
         except Exception as e:
             print(f"    {src.name}: {e}", flush=True)
             raised_exception = True
+            status = _http_status_of(e)
+            if status is not None:
+                last_status = status
             continue
         if result is None:
             continue
@@ -1143,24 +1404,28 @@ def _try_cascade(
     # Cascade exhausted. Classify and persist if a log path was given.
     if failure_log_path and item_key:
         # Best-effort cause: out-of-scope item types resolve regardless;
-        # otherwise lean on UNAVAILABLE for "all fetchers returned None"
-        # vs NETWORK_ERROR when an exception was raised at least once
-        # (transport problem rather than missing PDF).
+        # otherwise let `classify_failure` read the HTTP status when we
+        # captured one (that is what distinguishes a 403 paywall —
+        # ACCESS_BLOCKED, "flag for ILL" — from a genuine 404). Falling
+        # back to NETWORK_ERROR only when something raised without a
+        # status, and UNAVAILABLE when every source simply returned None.
         cause: pdf_fetch_log.FailureCause | None = None
         if item_type in pdf_fetch_log.DEFAULT_OUT_OF_SCOPE_TYPES:
             cause = pdf_fetch_log.FailureCause.OUT_OF_SCOPE
-        elif raised_exception:
+        elif raised_exception and last_status is None:
             cause = pdf_fetch_log.FailureCause.NETWORK_ERROR
         try:
-            pdf_fetch_log.log_failure(
-                failure_log_path,
-                item_key=item_key,
-                doi=doi,
-                item_type=item_type,
-                attempt=1,
-                source=last_source,
-                cause=cause,
-            )
+            with _FAILURE_LOG_LOCK:
+                pdf_fetch_log.log_failure(
+                    failure_log_path,
+                    item_key=item_key,
+                    doi=doi,
+                    item_type=item_type,
+                    attempt=1,
+                    source=last_source,
+                    http_status=last_status,
+                    cause=cause,
+                )
         except Exception as e:  # noqa: BLE001
             # Logging is best-effort — never let a CSV write break a
             # cascade run. Surface to stderr for diagnostics.
@@ -1261,29 +1526,161 @@ def _run_api_cascade(
             })
             attached += 1
             continue
-        try:
-            zot.attach_pdf(key, str(path))
-            if fetchers.is_tdm_recovered_path(path):
-                zot.update_tags(key, add=[fetchers.TDM_RECOVERED_TAG])
-            print("→ attached", flush=True)
-            log_writer.writerow({
-                "run_date": run_date, "item_key": key, "doi": doi,
-                "title": title, "status": "attached", "source": src_name,
-            })
+        if _attach_and_log(
+            zot, log_writer,
+            run_date=run_date, item_key=key, doi=doi, title=title,
+            source=src_name, pdf_path=path,
+            failure_log_path=args.failure_log_csv,
+            item_type=d.get("itemType", ""),
+            check_text=not getattr(args, "no_check_text", False),
+        ):
             attached += 1
-        except Exception as e:
-            print(f"→ upload failed: {e}", flush=True)
-            log_writer.writerow({
-                "run_date": run_date, "item_key": key, "doi": doi,
-                "title": title, "status": "upload_failed",
-                "source": src_name,
-            })
+        else:
             failed += 1
 
     return attached, no_pdf, failed
 
 
-def main() -> int:
+def _cached_pdf_for(doi: str, cache_dir: str) -> Path | None:
+    """Return a usable cached PDF for `doi`, or None.
+
+    Uses the full structural validator rather than a magic-byte check —
+    a recovery pass that cheerfully re-attached a truncated file would
+    re-create exactly the bug it exists to clean up.
+
+    Tries the lower-cased DOI first (what every path writes now) and
+    then the DOI as Zotero holds it, so caches written before the two
+    paths agreed on case are still found.
+    """
+    from fetchers import _pdf_validate
+    from fetchers.browser.base import cache_path_for
+
+    doi = (doi or "").strip()
+    seen: set[str] = set()
+    for variant in (doi.lower(), doi):
+        if not variant or variant in seen:
+            continue
+        seen.add(variant)
+        path = cache_path_for(cache_dir, variant)
+        if path.exists() and _pdf_validate.file_defect(path) is None:
+            return path
+    return None
+
+
+def _attach_from_cache(
+    to_process: list[dict],
+    zot,
+    log_writer,
+    args: argparse.Namespace,
+    run_date: str,
+) -> list[dict]:
+    """Attach PDFs already sitting in the cache. Returns the items done.
+
+    Runs before any fetching. A previous run that downloaded a PDF but
+    failed to upload it leaves the file on disk with nothing pointing
+    back at it: the run-log says `upload_failed`, the item still has no
+    attachment, and the next run re-enters the full cascade — which for
+    a Cloudflare-gated publisher means it cannot be recovered at all
+    without another interactive browser pass.
+
+    That is not hypothetical. A live run downloaded 68 Sage PDFs behind
+    a solved Cloudflare challenge, attached 20, and lost 48 that were
+    still in `output/pdf_cache/` in perfect condition.
+    """
+    hits = [
+        (it, path)
+        for it in to_process
+        if (path := _cached_pdf_for(
+            it.get("data", {}).get("DOI") or "", args.cache_dir,
+        )) is not None
+    ]
+    if not hits:
+        return []
+
+    print(
+        f"\nRecovering {len(hits)} PDF(s) already in the cache "
+        f"(previously downloaded but not attached)...",
+        flush=True,
+    )
+    done: list[dict] = []
+    for i, (item, path) in enumerate(hits, 1):
+        d = item["data"]
+        title = (d.get("title") or "")[:70]
+        print(f"  [{i}/{len(hits)}] {title:<70} (cache)", end=" ", flush=True)
+        if _attach_and_log(
+            zot, log_writer,
+            run_date=run_date, item_key=item["key"],
+            doi=(d.get("DOI") or "").strip(), title=title, source="cache",
+            pdf_path=path, failure_log_path=args.failure_log_csv,
+            item_type=d.get("itemType", ""),
+            check_text=not args.no_check_text,
+        ):
+            done.append(item)
+    return done
+
+
+def _print_run_report(
+    args: argparse.Namespace, zot=None, item_keys: set[str] | None = None,
+) -> None:
+    """Print the end-of-run report, enriched with Zotero metadata if possible.
+
+    Called from every exit path. Previously only the API-cascade branch
+    printed anything at all, and only three counters — which is why
+    answering "what is still missing?" meant hand-writing CSV forensics.
+
+    `item_keys` scopes the report to the items this invocation
+    considered. Without it a `--filter-keys-file` run would report on
+    the whole accumulated log, burying the 20 items the user asked about
+    under the 900 they didn't.
+    """
+    rows = pdf_run_report.read_log(args.log_csv)
+    if item_keys is not None:
+        rows = [r for r in rows if (r.get("item_key") or "").strip() in item_keys]
+    if not rows:
+        return
+
+    lookup = None
+    if zot is not None:
+        cache: dict[str, dict[str, str]] = {}
+
+        def lookup(item_key: str) -> dict[str, str]:      # noqa: F811
+            if not item_key:
+                return {}
+            if item_key not in cache:
+                try:
+                    data = zot.get_item(item_key).get("data", {})
+                except Exception:
+                    cache[item_key] = {}
+                    return {}
+                creators = data.get("creators") or []
+                names = [
+                    c.get("lastName") or c.get("name") or ""
+                    for c in creators if isinstance(c, dict)
+                ]
+                names = [n for n in names if n]
+                if len(names) > 3:
+                    authors = f"{names[0]} et al."
+                elif names:
+                    authors = " & ".join(names)
+                else:
+                    authors = ""
+                cache[item_key] = {
+                    "authors": authors,
+                    "year": _year_from_zotero_date(data.get("date", "")) or "",
+                    "journal": data.get("publicationTitle", "") or "",
+                    "title": data.get("title", "") or "",
+                }
+            return cache[item_key]
+
+    print(pdf_run_report.format_report(rows, metadata=lookup))
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Construct the CLI parser.
+
+    Split out of `main()` so tests can check that the commands this
+    script tells users to paste are actually commands it accepts.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--sources", default="",
@@ -1348,12 +1745,65 @@ def main() -> int:
              "enrich_pdfs.py --sources browser. Cannot be combined with "
              "--sources.",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--report", action="store_true",
+        help="Print the run report for an existing --log-csv and exit "
+             "without fetching anything. Groups every item by outcome, "
+             "gives citations for the ones still missing a PDF, and names "
+             "the next lever for each failure bucket.",
+    )
+    parser.add_argument(
+        "--plan", action="store_true",
+        help="(browser mode) Classify items and print the publisher queue — "
+             "including which publishers will need an interactive "
+             "Cloudflare / SSO solve — then exit without opening a browser. "
+             "Run this first so you know what the real run will ask of you.",
+    )
+    parser.add_argument(
+        "--ignore-library-coverage", action="store_true",
+        help="Don't let the library link-resolver pre-flight gate the "
+             "Connector pass. Use when the resolver reports no coverage "
+             "for journals your library actually subscribes to (it keys on "
+             "DOI and misses aggregator-hosted holdings).",
+    )
+    parser.add_argument(
+        "--no-check-text", action="store_true",
+        help="Skip the post-attach text-layer check. By default each "
+             "attached PDF is checked for extractable text so scanned, "
+             "image-only PDFs are reported as `attached_no_text` instead "
+             "of counting as clean successes.",
+    )
+    return parser
+
+
+def main() -> int:
+    args = _build_parser().parse_args()
 
     if args.all and args.sources:
         print("ERROR: --all cannot be combined with --sources.",
               file=sys.stderr)
         return 2
+
+    if args.report:
+        rows = pdf_run_report.read_log(args.log_csv)
+        if args.filter_keys_file:
+            # A run-log accumulates across the whole library, so an
+            # unscoped report can bury the 20 items the user asked about
+            # under the 1,500 they didn't.
+            with open(args.filter_keys_file) as f:
+                keys = {line.strip() for line in f if line.strip()}
+            rows = [r for r in rows if (r.get("item_key") or "").strip() in keys]
+        print(pdf_run_report.format_report(rows))
+        return 0
+
+    # `--no-prompt` documents itself as "equivalent to
+    # --on-first-failure=skip plus skipping the upfront guard", but only
+    # ever did the second half: the flag was read once, at the guard, and
+    # never reached `_prompt_on_first_failure`. On a real TTY an
+    # unattended run would still block forever on a readline() the caller
+    # had explicitly opted out of.
+    if args.no_prompt and not args.on_first_failure:
+        args.on_first_failure = "skip"
 
     source_names = [s.strip() for s in args.sources.split(",") if s.strip()]
 
@@ -1380,10 +1830,28 @@ def main() -> int:
     print(f"{len(all_items)} journal articles.", flush=True)
 
     if args.filter_keys_file:
+        if not os.path.isfile(args.filter_keys_file):
+            print(f"ERROR: --filter-keys-file not found: {args.filter_keys_file}",
+                  file=sys.stderr)
+            return 2
         with open(args.filter_keys_file) as f:
             target = {line.strip() for line in f if line.strip()}
         all_items = [it for it in all_items if it["key"] in target]
         print(f"  After --filter-keys-file: {len(all_items)} items.", flush=True)
+        missing = target - {it["key"] for it in all_items}
+        if missing:
+            # Silence here used to hide typo'd keys and non-journalArticle
+            # items, which then looked identical to "nothing to do".
+            print(
+                f"  WARN: {len(missing)} key(s) in the file matched no journal "
+                f"article in this library: {', '.join(sorted(missing)[:5])}"
+                + (" …" if len(missing) > 5 else ""),
+                flush=True,
+            )
+
+    # Everything this invocation is accountable for — the report is
+    # scoped to these so a filtered run doesn't dump the whole log.
+    scope_keys = {it["key"] for it in all_items}
 
     # Items with DOI that haven't already been attached
     candidates = [
@@ -1414,7 +1882,27 @@ def main() -> int:
         flush=True,
     )
     if not to_process:
+        _print_run_report(args, zot, scope_keys)
         return 0
+
+    # Recover PDFs already on disk before fetching anything. A fetch that
+    # succeeded but whose upload failed leaves a perfectly good file in
+    # the cache; nothing used to go back for it, so a live run lost 48
+    # PDFs it had already paid to download.
+    if not args.dry_run:
+        log_fh, log_writer = _open_log(args.log_csv)
+        try:
+            recovered = _attach_from_cache(
+                to_process, zot, log_writer, args, run_date,
+            )
+        finally:
+            log_fh.close()
+        if recovered:
+            done = {it["key"] for it in recovered}
+            to_process = [it for it in to_process if it["key"] not in done]
+            if not to_process:
+                _print_run_report(args, zot, scope_keys)
+                return 0
 
     # Browser path: drives fetchers.browser handlers in-process. The
     # `sources` list is ignored here — handlers are picked per-publisher.
@@ -1423,13 +1911,16 @@ def main() -> int:
     if source_names in (["browser"], ["connector"]):
         log_fh, log_writer = _open_log(args.log_csv)
         try:
-            return _run_browser_in_process(
+            rc = _run_browser_in_process(
                 to_process, zot, log_writer, args, run_date,
                 connector_only=(source_names == ["connector"]),
                 session=session, config=config,
             )
         finally:
             log_fh.close()
+        if not args.plan:
+            _print_run_report(args, zot, scope_keys)
+        return rc
 
     # --all: run API cascade first, then re-read pdf_map for residuals
     # and run the browser pipeline.
@@ -1464,16 +1955,20 @@ def main() -> int:
             flush=True,
         )
         if not residuals:
+            _print_run_report(args, zot, scope_keys)
             return 0
 
         log_fh, log_writer = _open_log(args.log_csv)
         try:
-            return _run_browser_in_process(
+            rc = _run_browser_in_process(
                 residuals, zot, log_writer, args, run_date,
                 session=session, config=config,
             )
         finally:
             log_fh.close()
+        if not args.plan:
+            _print_run_report(args, zot, scope_keys)
+        return rc
 
     # Default / explicit-sources path: API cascade only.
     sources = fetchers.pdf_sources(
@@ -1496,6 +1991,7 @@ def main() -> int:
         f"\nDone. attached={attached}, no-pdf={no_pdf}, failed={failed}",
         flush=True,
     )
+    _print_run_report(args, zot, scope_keys)
     return 0
 
 

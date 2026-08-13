@@ -56,12 +56,33 @@ import httpx
 from pyzotero import zotero
 from tenacity import (
     retry,
+    retry_if_exception,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
 
 logger = logging.getLogger(__name__)
+
+# HTTP statuses worth a second attempt on the attachment upload path:
+# rate-limiting and server-side faults. Anything else (401/403/404/413,
+# a malformed request) will fail identically on retry.
+_RETRYABLE_UPLOAD_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
+def _is_retryable_upload_error(exc: BaseException) -> bool:
+    """True for transient failures of the 3-step S3 attachment upload.
+
+    The upload is three network round-trips (register → auth → PUT), so
+    a transport blip or a 503 anywhere in the chain aborts the whole
+    thing while the local PDF is perfectly good. Those are worth
+    retrying. A `RuntimeError` from `attach_pdf` is NOT — it means the
+    Zotero API accepted the request and explicitly reported the file in
+    its `failure` bucket, which retrying reproduces verbatim.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _RETRYABLE_UPLOAD_STATUSES
+    return isinstance(exc, httpx.TransportError)
 
 
 def parse_slr_coding_note(note_html: str) -> dict | None:
@@ -142,6 +163,41 @@ def _list_accessible_groups(api_key: str, user_id: str) -> list[dict]:
         if gid is not None:
             out.append({"id": gid, "name": name})
     return out
+
+
+def find_group_by_name(
+    name: str,
+    *,
+    api_key: str | None = None,
+    user_id: str | None = None,
+) -> dict | None:
+    """Look up a Zotero group by exact display-name match.
+
+    Queries the user's accessible groups (`_list_accessible_groups`) and
+    returns the `{"id", "name"}` dict for the unique exact match, or
+    `None` if no group has that name. Raises `ValueError` if more than
+    one group shares the name — ambiguous, never guess.
+
+    `api_key` / `user_id` default to the live config (same source
+    `ZoteroClient.from_config` reads via `core.config_loader`).
+    """
+    if api_key is None or user_id is None:
+        from core.config_loader import get, require
+        if api_key is None:
+            api_key = require("zotero", "api_key", env="ZOTERO_API_KEY")
+        if user_id is None:
+            user_id = get("zotero", "user_id", env="ZOTERO_USER_ID")
+    if not user_id:
+        return None
+    groups = _list_accessible_groups(api_key, user_id)
+    matches = [g for g in groups if g.get("name") == name]
+    if len(matches) > 1:
+        raise ValueError(
+            f"Ambiguous Zotero group name {name!r}: {len(matches)} matches "
+            f"(ids {[g['id'] for g in matches]}). Rename one of the groups "
+            f"or resolve by id instead."
+        )
+    return matches[0] if matches else None
 
 
 def format_group_selection_error(groups: list[dict]) -> str:
@@ -881,6 +937,12 @@ class ZoteroClient:
 
         return note_key
 
+    @retry(
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception(_is_retryable_upload_error),
+        wait=wait_exponential(multiplier=1, max=10),
+        reraise=True,
+    )
     def attach_pdf(self, item_key: str, pdf_path: str | Path) -> str | None:
         """Upload a PDF as a child attachment of `item_key`.
 
@@ -895,6 +957,12 @@ class ZoteroClient:
              "unchanged": [item_dict, ...]}
         — all three values are lists of the attachment-item dicts that
         ended up in each bucket.
+
+        Retries transient transport / 429 / 5xx failures (see
+        `_is_retryable_upload_error`). A live run once lost 48
+        successfully-downloaded PDFs here because a single unretried
+        upload blip was terminal for the item; the bytes were still on
+        disk, but nothing ever tried again.
         """
         path_str = str(Path(pdf_path))
         result = self.cloud.attachment_simple([path_str], parentid=item_key)
@@ -922,6 +990,46 @@ class ZoteroClient:
         non-2xx (via `@backoff_check`).
         """
         return bool(self.cloud.update_item(payload))
+
+    def create_collection(
+        self, name: str, *, parent_collection: str = "",
+    ) -> str:
+        """Create a new collection and return its key.
+
+        The Zotero Web API cannot create groups — only items,
+        collections, and saved searches within an existing library —
+        so this is the write-side counterpart to `find_group_by_name`
+        for harnesses that need a scoped scratch collection inside a
+        hand-created group.
+        """
+        payload = [{"name": name, "parentCollection": parent_collection}]
+        resp = self.cloud.create_collections(payload)
+        success = resp.get("success") or resp.get("successful") or {}
+        if isinstance(success, dict) and success:
+            first = next(iter(success.values()))
+            if isinstance(first, dict):
+                return first.get("key") or first.get("data", {}).get("key", "")
+            return str(first)
+        failed = resp.get("failed") or resp.get("failure") or {}
+        raise RuntimeError(
+            f"create_collection failed for {name!r}: {failed!r}"
+        )
+
+    def delete_collection(self, collection_key: str) -> bool:
+        """Delete a collection (used by mini_slr.py's teardown stage).
+
+        Fetches the current version first, matching `delete_item`'s
+        pattern for the If-Unmodified-Since-Version header.
+        """
+        try:
+            current = self.cloud.collection(collection_key)
+        except Exception:
+            return False
+        return bool(
+            self.cloud.delete_collection(
+                current, last_modified=current["version"],
+            )
+        )
 
     def delete_item(self, item_key: str) -> bool:
         """Delete an item (used by enrich_pdfs.py to remove PDF stubs).

@@ -10,6 +10,7 @@ import logging
 import urllib.parse
 from pathlib import Path
 
+from fetchers import _pdf_validate
 from fetchers.base import PdfFetcher
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,15 @@ class SpringerSource(PdfFetcher):
             return None
         path = _cache_pdf_path(cache_dir, doi)
         if path.exists():
-            return path, f"cache://{path}"
+            # Validate before serving: an entry written by an earlier,
+            # unvalidated run may be truncated, and returning it unchecked
+            # made the corruption permanent — every later run
+            # short-circuited on the bad file instead of re-fetching.
+            _defect = _pdf_validate.file_defect(path)
+            if _defect is None:
+                return path, f"cache://{path}"
+            logger.warning("discarding cached PDF for %s — %s", doi, _defect)
+            path.unlink(missing_ok=True)
 
         encoded = urllib.parse.quote(doi, safe="")
         url = f"https://link.springer.com/content/pdf/{encoded}.pdf"
@@ -51,7 +60,12 @@ class SpringerSource(PdfFetcher):
         except Exception as e:
             logger.debug("springer %s failed: %s", doi, e)
             return None
-        if resp.status_code != 200 or resp.content[:4] != b"%PDF":
+        _defect = _pdf_validate.response_defect(resp)
+        if _defect is not None:
+            # None (not an exception) so the cascade falls through to the
+            # next source — a truncated copy at one provider is often
+            # served intact by another.
+            logger.warning("%s: rejected PDF for %s — %s", self.name, doi, _defect)
             return None
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(resp.content)

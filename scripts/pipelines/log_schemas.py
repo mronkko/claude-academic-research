@@ -59,10 +59,23 @@ ABSTRACT_FETCH_FIELDS: list[str] = [
     "run_date", "item_key", "doi", "title", "source", "status",
 ]
 
+# Schema for `enrich_pdfs.py`'s run-log, `output/pdf_attach_log.csv`.
+# (The name predates the split; the *failure* log `pdf_fetch_log.csv` has
+# its own schema in `pdf_fetch_log.FAILURE_FIELDS`. Renaming this constant
+# would touch every caller for no behavioural gain, so the name stays and
+# this comment carries the correction.)
+#
 # Note the column order differs from ABSTRACT_FETCH_FIELDS (status before
-# source); kept as-is so existing `pdf_fetch_log.csv` files stay readable.
+# source); kept as-is so existing files stay readable.
+#
+# `detail` carries the failure reason for non-success statuses —
+# exception type + message, HTTP status where known. Without it an
+# `upload_failed` row was bare and the only copy of the reason lived in
+# terminal scrollback, which is how a live run lost 48 downloaded PDFs
+# without a diagnosable trace. Appended last; `shared_orchestrators.
+# open_log` migrates existing 6-column logs on open.
 PDF_FETCH_FIELDS: list[str] = [
-    "run_date", "item_key", "doi", "title", "status", "source",
+    "run_date", "item_key", "doi", "title", "status", "source", "detail",
 ]
 
 DOI_ENRICH_FIELDS: list[str] = [
