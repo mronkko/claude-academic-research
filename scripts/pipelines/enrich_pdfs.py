@@ -30,7 +30,13 @@ Source selection via `--sources`:
     enrich_pdfs.py                         # default automated cascade
     enrich_pdfs.py --sources wiley         # Wiley TDM only
     enrich_pdfs.py --sources browser       # Cloudflare-gated publishers
-    enrich_pdfs.py --sources elsevier,pmc  # custom subset
+    enrich_pdfs.py --sources elsevier,pmc  # custom subset (aliases OK)
+
+Fetcher names are `sciencedirect`, `springer`, `crossref`,
+`pubmed_central`, `openalex`, `unpaywall`, `wiley`; `elsevier` and
+`pmc` are accepted as aliases for the first and fourth. `browser`
+and `connector` are separate passes and cannot be combined with the
+others in one invocation — use `--all` for cascade-then-browser.
 
 For `--sources browser`, this script drives the per-publisher
 `fetchers.browser` handlers directly — a visible Chromium opens, you
@@ -74,6 +80,19 @@ DEFAULT_CACHE_DIR = os.path.join("output", "pdf_cache")
 DEFAULT_FAILURE_LOG_CSV = os.path.join("output", "pdf_fetch_log.csv")
 
 LOG_FIELDS = PDF_FETCH_FIELDS
+
+#: Names the docs advertise that are not the fetchers' own `name`.
+#: `--sources elsevier,pmc` is the example in this module's docstring
+#: and in `--help`, and it exited 2 with "no PDF fetchers matched"
+#: because the classes are called `sciencedirect` and `pubmed_central`.
+#: Aliasing rather than renaming keeps the `source` column in existing
+#: `pdf_attach_log.csv` files meaningful.
+_SOURCE_ALIASES = {
+    "elsevier": "sciencedirect",
+    "sciencedirect": "sciencedirect",
+    "pmc": "pubmed_central",
+    "pubmed": "pubmed_central",
+}
 
 _PLAYWRIGHT_MISSING_MSG = (
     "ERROR: the playwright package is not installed.\n"
@@ -1544,7 +1563,20 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
-    source_names = [s.strip() for s in args.sources.split(",") if s.strip()]
+    source_names = [
+        _SOURCE_ALIASES.get(s.strip().lower(), s.strip().lower())
+        for s in args.sources.split(",") if s.strip()
+    ]
+    browser_modes = [s for s in source_names if s in ("browser", "connector")]
+    if browser_modes and len(source_names) > 1:
+        print(
+            f"ERROR: --sources {args.sources!r} mixes the browser pass with "
+            f"other fetchers. They are separate passes over the same items, "
+            f"not a single cascade. Use --all to run the API cascade and "
+            f"then the browser pass, or run them one at a time.",
+            file=sys.stderr,
+        )
+        return 2
 
     os.makedirs(args.cache_dir, exist_ok=True)
     run_date = date.today().isoformat()
@@ -1609,12 +1641,12 @@ def main() -> int:
     # `sources` list is ignored here — handlers are picked per-publisher.
     # `--sources connector` skips Pass 1/2 and sends every item
     # directly to the Connector (useful for targeted validation).
-    if source_names in (["browser"], ["connector"]):
+    if browser_modes:
         log_fh, log_writer = _open_log(args.log_csv)
         try:
             return _run_browser_in_process(
                 to_process, zot, log_writer, args, run_date,
-                connector_only=(source_names == ["connector"]),
+                connector_only=(browser_modes == ["connector"]),
                 session=session, config=config,
             )
         finally:

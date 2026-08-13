@@ -19,8 +19,9 @@ For each journal article in the library that does not have an
 patch the Zotero item via `ZoteroClient.update_abstract` (pyzotero's
 `update_item`).
 
-The fetcher priority matches the legacy cascade:
-    Crossref → Semantic Scholar → Scopus → ScienceDirect → OpenAlex GROBID
+The fetcher priority matches `fetchers.abstract_sources`:
+    Crossref → Semantic Scholar → Scopus → WoS → ScienceDirect
+    → OpenAlex GROBID
 
 --sources filters to a subset, same as enrich_pdfs.py.
 """
@@ -120,7 +121,8 @@ def main() -> int:
     parser.add_argument(
         "--sources", default="",
         help="Comma-separated fetcher names. Default: full cascade "
-             "(crossref,semantic_scholar,scopus,sciencedirect,openalex).",
+             "(crossref,semantic_scholar,scopus,wos,sciencedirect,"
+             "openalex).",
     )
     parser.add_argument("--dry-run", action="store_true",
                         help="Fetch abstracts, do not patch Zotero.")

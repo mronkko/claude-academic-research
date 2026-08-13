@@ -15,6 +15,7 @@ network calls to a cascade that has just failed.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import enrich_pdfs
@@ -153,3 +154,76 @@ def test_connector_successes_count_as_done(enrich, tmp_path) -> None:
         encoding="utf-8",
     )
     assert enrich._load_done_dois(str(log)) == {"10.1/a", "10.1/b"}
+
+
+# ---------------------------------------------------------------------------
+# --sources parsing
+#
+# The docstring and --help both advertised `--sources elsevier,pmc`, and
+# it exited 2 with "no PDF fetchers matched" — the fetchers are named
+# `sciencedirect` and `pubmed_central`. And `--sources browser,wiley`
+# silently dropped `browser`, because the dispatch was an exact list
+# comparison against `["browser"]`.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        ("elsevier", "sciencedirect"),
+        ("pmc", "pubmed_central"),
+        ("PMC", "pubmed_central"),
+        ("sciencedirect", "sciencedirect"),
+        ("crossref", "crossref"),  # untouched
+    ],
+)
+def test_documented_source_aliases_resolve(enrich, given, expected) -> None:
+    resolved = enrich._SOURCE_ALIASES.get(given.strip().lower(), given.strip().lower())
+    assert resolved == expected
+
+
+def test_alias_table_only_maps_to_real_fetcher_names() -> None:
+    """An alias pointing at a name no fetcher has is worse than no alias.
+
+    Asks the registry for every fetcher it can build, so renaming a
+    fetcher without updating the alias table fails here.
+    """
+    import fetchers
+    import http_client
+    from enrich_pdfs import _SOURCE_ALIASES
+
+    session = http_client.build_session()
+    every_name = {
+        s.name
+        for s in fetchers.pdf_sources(
+            session, None,
+            names=[
+                "sciencedirect", "springer", "crossref", "pubmed_central",
+                "openalex", "unpaywall", "wiley", "browser",
+            ],
+        )
+    }
+    assert every_name, "registry returned no fetchers; the name list is stale"
+    unknown = {
+        alias: target
+        for alias, target in _SOURCE_ALIASES.items()
+        if target not in every_name
+    }
+    assert not unknown, f"aliases point at non-existent fetchers: {unknown}"
+
+
+def test_mixing_browser_with_api_sources_is_rejected(enrich, monkeypatch, capsys):
+    """`--sources browser,wiley` used to silently drop `browser`.
+
+    The dispatch compared the parsed list against `["browser"]`
+    exactly, so any extra name fell through to the API-only path and
+    the browser pass never ran — with nothing said about it.
+    """
+    monkeypatch.setattr(
+        sys, "argv",
+        ["enrich_pdfs.py", "--user", "--sources", "browser,wiley"],
+    )
+    assert enrich.main() == 2
+    err = capsys.readouterr().err
+    assert "mixes the browser pass" in err
+    assert "--all" in err
