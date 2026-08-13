@@ -1024,6 +1024,63 @@ async def _drive_connector(
         await ctx.close()
 
 
+#: Where `audit_zotero_library.py --pdf-fetch-log` writes its retry sets.
+#: Mirrors that script's `--output` default (`.claude/audit/audit.json`,
+#: stem `.claude/audit/audit`), which is the contract between the two.
+AUDIT_KEYS_STEM = os.path.join(".claude", "audit", "audit")
+
+
+def _auto_publisher_keys(stem: str = AUDIT_KEYS_STEM) -> tuple[str, list[str]]:
+    """The audit's browser retry set, as `(keys_file, publishers)`.
+
+    The audit already worked out which items a browser pass can recover
+    and wrote them to `<stem>.retry.browser.keys`, plus one file per
+    publisher. Re-deriving that here would be a second implementation of
+    the same triage; reading it back means the two cannot disagree.
+
+    Returns `("", [])` when the audit has not been run, which the caller
+    turns into an instruction to run it rather than a silent full-library
+    pass — the difference between 76 targeted items and 1,500.
+    """
+    combined = Path(f"{stem}.retry.browser.keys")
+    if not combined.is_file():
+        return "", []
+    prefix = f"{Path(stem).name}.retry.browser."
+    publishers = sorted(
+        path.name[len(prefix):-len(".keys")]
+        for path in Path(stem).parent.glob(f"{prefix}*.keys")
+    )
+    return str(combined), publishers
+
+
+def _install_interaction_channel(args: argparse.Namespace) -> None:
+    """Choose how this run will ask the user things.
+
+    Precedence: an explicit `--control-file` wins, then `--no-prompt`,
+    then the TTY default. `--control-file` is what makes the browser pass
+    drivable from an agent's Bash subprocess: the human still solves
+    every challenge, but the question travels through a file and the
+    conversation instead of through a controlling terminal nobody has.
+    """
+    from fetchers.browser import interaction
+
+    if getattr(args, "control_file", ""):
+        interaction.set_channel(
+            interaction.ControlFileChannel(
+                args.control_file,
+                timeout_s=float(getattr(args, "control_timeout", 1800) or 1800),
+            )
+        )
+        print(
+            f"Interactive prompts go to {args.control_file}; reply by writing "
+            f'{{"seq": N, "answer": "..."}} to {args.control_file}.reply',
+            flush=True,
+        )
+        return
+    if getattr(args, "no_prompt", False):
+        interaction.set_channel(interaction.AutoSkipChannel())
+
+
 def _has_interactive_surface() -> bool:
     """True iff the script can prompt the user. Checks `/dev/tty`
     (POSIX, the canonical controlling terminal) first, then falls
@@ -1035,6 +1092,10 @@ def _has_interactive_surface() -> bool:
     nor a TTY-shaped stdin, so this returns False there — and the
     caller exits fast with a copy-paste-friendly hint instead of
     silently hanging on the first `_wait_for_user()` prompt.
+
+    A `--control-file` run bypasses this check entirely (see the call
+    site): the file *is* the interactive surface, and requiring a TTY as
+    well would defeat the point.
     """
     try:
         with open("/dev/tty"):
@@ -1071,12 +1132,18 @@ def _exit_no_interactive_surface(args: argparse.Namespace) -> None:
         f" --sources browser{library_arg}{publisher_arg}{keys_arg}"
     )
     sys.exit(
-        "ERROR: This run needs an interactive terminal — the browser "
-        "cascade prompts you for Cloudflare / SSO / Yes-or-No "
-        "confirmations on each publisher.\n"
+        "ERROR: This run needs somewhere to ask you questions — the "
+        "browser cascade prompts for Cloudflare / SSO / Yes-or-No "
+        "confirmations on each publisher, and this process has no "
+        "controlling terminal.\n"
         "\n"
-        "  • Run from your own terminal, not Claude's Bash tool.\n"
-        "  • macOS: ⌘-Space → Terminal → paste:\n"
+        "  • If an agent is driving this: add `--control-file <path>`. The\n"
+        "    Chromium window still opens on your screen and you still solve\n"
+        "    each challenge; the questions travel through that file and the\n"
+        "    conversation rather than through a terminal. Run it in the\n"
+        "    background and watch the file:\n"
+        f"      {base} --control-file .claude/audit/browser.json\n"
+        "  • To run it yourself instead — macOS: ⌘-Space → Terminal → paste:\n"
         f"      {base}\n"
         "  • To see which publishers this will ask you to solve, without\n"
         "    opening a browser (safe to run anywhere, including here):\n"
@@ -1144,6 +1211,7 @@ def _run_browser_in_process(
     if (
         not getattr(args, "no_prompt", False)
         and not getattr(args, "plan", False)
+        and not getattr(args, "control_file", "")
         and not _has_interactive_surface()
     ):
         _exit_no_interactive_surface(args)
@@ -1978,6 +2046,31 @@ def _build_parser() -> argparse.ArgumentParser:
              "bypassed.",
     )
     parser.add_argument(
+        "--control-file", default="",
+        help="Ask interactive questions through this JSON file instead of "
+             "a terminal. The browser window still opens and you still "
+             "solve each challenge yourself; the prompt is written here as "
+             '{\"state\": \"awaiting_user\", \"prompt\": ..., \"seq\": N} '
+             "and the run waits for "
+             '{\"seq\": N, \"answer\": \"...\"} in <path>.reply. This is how '
+             "an agent drives the browser pass from a background process "
+             "with no controlling TTY.",
+    )
+    parser.add_argument(
+        "--auto-publishers", action="store_true",
+        help="Take the item list from the audit's browser retry set "
+             f"({AUDIT_KEYS_STEM}.retry.browser.keys) instead of "
+             "--filter-keys-file. Run `audit_zotero_library.py "
+             "--pdf-fetch-log` first; this reuses its triage rather than "
+             "re-deriving which items a browser pass can recover.",
+    )
+    parser.add_argument(
+        "--control-timeout", type=float, default=1800.0,
+        help="Seconds to wait for a reply on --control-file before giving "
+             "up (default: 1800). Generous by design — the wait is a human "
+             "solving a Cloudflare challenge.",
+    )
+    parser.add_argument(
         "--all", action="store_true",
         help="Run Pass 1 (API cascade) and Pass 2 (browser + Connector) in "
              "one invocation. Pass 2 only processes items Pass 1 couldn't "
@@ -2064,6 +2157,33 @@ def main() -> int:
     os.makedirs(args.cache_dir, exist_ok=True)
     run_date = date.today().isoformat()
     done_dois = _load_done_dois(args.log_csv)
+
+    if args.auto_publishers:
+        if args.filter_keys_file:
+            print(
+                "ERROR: --auto-publishers and --filter-keys-file both choose "
+                "the item list. Pass one.",
+                file=sys.stderr,
+            )
+            return 2
+        keys_file, publishers = _auto_publisher_keys()
+        if not keys_file:
+            print(
+                f"ERROR: --auto-publishers found no retry set at "
+                f"{AUDIT_KEYS_STEM}.retry.browser.keys.\n"
+                f"  Run the triage that produces it first:\n"
+                f"    uv run audit_zotero_library.py --pdf-fetch-log\n"
+                f"  Without it there is nothing to scope this run to, and a "
+                f"browser pass over the whole library is not what you want.",
+                file=sys.stderr,
+            )
+            return 2
+        args.filter_keys_file = keys_file
+        print(
+            f"--auto-publishers: using {keys_file}"
+            + (f" (publishers: {', '.join(publishers)})" if publishers else ""),
+            flush=True,
+        )
 
     config = _load_config()
     session = http_client.build_session(mailto=config.crossref_mailto)
@@ -2163,6 +2283,7 @@ def main() -> int:
     # `--sources connector` skips Pass 1/2 and sends every item
     # directly to the Connector (useful for targeted validation).
     if browser_modes:
+        _install_interaction_channel(args)
         log_fh, log_writer = _open_log(args.log_csv)
         try:
             rc = _run_browser_in_process(
@@ -2212,6 +2333,7 @@ def main() -> int:
             _print_run_report(args, zot, scope_keys)
             return 0
 
+        _install_interaction_channel(args)
         log_fh, log_writer = _open_log(args.log_csv)
         try:
             rc = _run_browser_in_process(

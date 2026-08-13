@@ -22,12 +22,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from . import interaction
 
 if TYPE_CHECKING:
     from playwright.async_api import BrowserContext, Page
@@ -187,34 +188,27 @@ async def launch_context(
 
 
 def _wait_for_user(prompt: str) -> None:
-    """Block until the user presses Enter on the controlling TTY.
+    """Block until the user acknowledges the prompt.
 
-    Reads from /dev/tty so a piped stdin doesn't auto-consume the
-    prompt — the browser flow is interactive by design.
+    Delegates to the installed `InteractionChannel`. It defaults to
+    `TtyChannel`, which is the original `/dev/tty` behaviour, so a run
+    from a real terminal is unchanged. `enrich_pdfs.py` swaps in a
+    control-file or auto-skip channel when asked, which is what lets an
+    agent drive this pass without a controlling terminal — see
+    `interaction.py` for why the transport was worth separating from the
+    human.
     """
-    sys.stdout.write(prompt)
-    sys.stdout.flush()
-    try:
-        with open("/dev/tty") as tty:
-            tty.readline()
-    except Exception:
-        sys.stdin.readline()
+    interaction.get_channel().wait_for_user(prompt)
 
 
 def _read_user_line(prompt: str) -> str:
     """Prompt and return the single line the user typed (stripped).
 
-    Same /dev/tty-first behaviour as `_wait_for_user`; used when the
-    answer matters (e.g. y/n for access confirmation), not just the
-    Enter keystroke.
+    Used where the answer matters (the y/n/A access confirmation), not
+    just the Enter keystroke. Same channel indirection as
+    `_wait_for_user`.
     """
-    sys.stdout.write(prompt)
-    sys.stdout.flush()
-    try:
-        with open("/dev/tty") as tty:
-            return tty.readline().strip()
-    except Exception:
-        return sys.stdin.readline().strip()
+    return interaction.get_channel().read_line(prompt)
 
 
 # ---------------------------------------------------------------------------

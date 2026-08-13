@@ -59,10 +59,15 @@ def test_exit_no_interactive_surface_includes_copy_paste_command(
     with pytest.raises(SystemExit) as exc:
         enrich._exit_no_interactive_surface(args)
     msg = str(exc.value)
-    assert "interactive terminal" in msg
     assert "${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py" in msg
     assert "--sources browser" in msg
     assert "--no-prompt" in msg
+    # `--control-file` must be offered first: an agent hitting this can
+    # keep the user in the loop through the conversation, and telling it
+    # to send the user off to their own terminal is the workaround this
+    # message existed to hand out before that was possible.
+    assert "--control-file" in msg
+    assert msg.index("--control-file") < msg.index("⌘-Space")
     # This message previously suggested `--browser`, a flag that has
     # never existed — pasting it produced "unrecognized arguments" at
     # the exact moment the user was already stuck.
