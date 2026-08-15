@@ -37,7 +37,7 @@ import logging
 import sys
 import warnings
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 # pyzotero ≤1.11 uses a deprecated `whenever.ZonedDateTime.py_datetime()`
@@ -227,7 +227,7 @@ def format_group_selection_error(groups: list[dict]) -> str:
 
 
 def add_library_args(parser: argparse.ArgumentParser) -> None:
-    """Add mutually-exclusive `--group` / `--user` flags to a parser.
+    """Add `--group` / `--user` (mutually exclusive) and `--remote`.
 
     Pipeline scripts call this once on their argparse parser, then
     pass the parsed namespace to `ZoteroClient.from_args(args)`. This
@@ -243,6 +243,21 @@ def add_library_args(parser: argparse.ArgumentParser) -> None:
     target.add_argument(
         "--user", action="store_true",
         help="Use your personal (My Library) instead of a group library.",
+    )
+    # Reads default to Zotero Desktop's local API because it is far faster
+    # and unmetered. That default is wrong in one specific, easy-to-hit
+    # situation: items written through the Web API are invisible to the
+    # local client until Zotero Desktop next syncs. A script that adds
+    # items and then reads them back — or one handed a --filter-keys-file
+    # of freshly created keys — sees nothing, and reports zero items to
+    # process, which reads as "already done" rather than "cannot see them
+    # yet". Added here rather than per script so every pipeline entry
+    # point has the escape hatch.
+    parser.add_argument(
+        "--remote", action="store_true",
+        help="Read via api.zotero.org instead of the local Zotero client. "
+             "Use when items were just written through the Web API and the "
+             "desktop client has not synced them down yet.",
     )
 
 
@@ -356,10 +371,19 @@ class ZoteroClient:
         `--group <id>`) or the user's personal library (`--user`).
         Raises SystemExit with an actionable message if neither is
         set (and `$ZOTERO_GROUP` isn't populated).
+
+        `--remote` forces reads through api.zotero.org. It overrides the
+        `prefer_local` keyword rather than the other way round: the flag is
+        an explicit statement by whoever is running the script that the
+        local client cannot be trusted to have the items yet, which a
+        caller's compiled-in default cannot know.
         """
         import os
 
         from core.config_loader import require
+
+        if getattr(args, "remote", False):
+            prefer_local = False
 
         # Validate library selection BEFORE requiring the API key —
         # a missing --group should produce the actionable
@@ -423,10 +447,37 @@ class ZoteroClient:
     # Reads
     # -----------------------------------------------------------------
 
+    #: Item types that can plausibly carry an abstract, and that a
+    #: systematic review screens. `journalArticle` alone is too narrow for
+    #: screening work: a review's included set routinely holds book
+    #: chapters, reports and preprints, and those records need abstracts
+    #: for exactly the same reason articles do. Excluding them silently
+    #: shrinks the screening frame rather than reporting a gap.
+    ABSTRACTABLE_ITEM_TYPES: tuple[str, ...] = (
+        "journalArticle", "bookSection", "book", "report",
+        "conferencePaper", "preprint", "thesis", "manuscript", "document",
+    )
+
     def journal_articles(self) -> list[dict]:
-        """All journalArticle items in the library."""
+        """All journalArticle items in the library.
+
+        Narrow by design; see `abstractable_items()` for the screening
+        frame, which is what most callers actually want.
+        """
         z = self._read_client()
         return z.everything(z.items(itemType="journalArticle"))
+
+    def abstractable_items(
+        self, item_types: Sequence[str] | None = None,
+    ) -> list[dict]:
+        """Top-level items of every type that can carry an abstract.
+
+        The Zotero API's `itemType` accepts `a || b` for a union, so this
+        is one paginated sweep rather than one per type.
+        """
+        types = tuple(item_types or self.ABSTRACTABLE_ITEM_TYPES)
+        z = self._read_client()
+        return z.everything(z.items(itemType=" || ".join(types)))
 
     def top_items(self) -> list[dict]:
         """All top-level items (includes non-article types: book, report, etc.)."""

@@ -192,6 +192,13 @@ def main() -> int:
                         help=f"GROBID XML cache dir (default: {DEFAULT_CACHE_DIR}).")
     parser.add_argument("--workers", type=int, default=4,
                         help="Parallel fetch threads (default: 4).")
+    parser.add_argument(
+        "--item-types", default="",
+        help="Comma-separated Zotero item types to enrich. Default: every "
+             "type that can carry an abstract (journalArticle, bookSection, "
+             "book, report, conferencePaper, preprint, thesis, manuscript, "
+             "document). Pass journalArticle to restore the old behaviour.",
+    )
     parser.add_argument("--filter-keys-file",
                         help="Text file with Zotero item keys, one per line.")
     zotero_io.add_library_args(parser)
@@ -211,7 +218,9 @@ def main() -> int:
         # group auto-selection (single-group accounts) or error
         # with the accessible-groups list.
         try:
-            zot = zotero_io.ZoteroClient.from_config(group_id=None)
+            zot = zotero_io.ZoteroClient.from_config(
+                group_id=None, prefer_local=not args.remote,
+            )
         except zotero_io.GroupSelectionRequired as e:
             print(zotero_io.format_group_selection_error(e.groups), file=sys.stderr)
             return 2
@@ -219,8 +228,9 @@ def main() -> int:
         zot = zotero_io.ZoteroClient.from_args(args)
 
     print("Fetching Zotero items...", end=" ", flush=True)
-    all_items = zot.journal_articles()
-    print(f"{len(all_items)} journal articles.", flush=True)
+    item_types = [t.strip() for t in args.item_types.split(",") if t.strip()]
+    all_items = zot.abstractable_items(item_types or None)
+    print(f"{len(all_items)} items.", flush=True)
 
     if args.filter_keys_file:
         with open(args.filter_keys_file) as f:

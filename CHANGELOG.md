@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`--remote` on every pipeline entry point.** Reads default to Zotero
+  Desktop's local API because it is faster and unmetered, but items
+  written through the Web API do not exist locally until the desktop
+  client next syncs. A script that adds items and reads them back — or
+  one handed a `--filter-keys-file` of freshly created keys — saw
+  nothing and reported zero items to process, which reads as "already
+  done" rather than "cannot see them yet". Found on a live run that had
+  just written ~1,700 items. The flag lives on `add_library_args`, so
+  every script gets it, and it overrides a caller's `prefer_local`
+  keyword: whoever runs the script knows the client is behind, a
+  compiled-in default cannot.
+
+### Changed
+
+- **`enrich_abstracts.py` no longer skips everything that is not a
+  `journalArticle`.** A systematic review's included set routinely holds
+  book chapters, reports and preprints, which are screened like any other
+  record and need abstracts for the same reason. The old
+  `journal_articles()` frame excluded them silently — on one live library
+  55 items were never examined and nothing said so, which understates
+  screening coverage rather than reporting a gap. New
+  `ZoteroClient.abstractable_items()` queries the union of the nine
+  abstract-bearing types in a single paginated sweep; `--item-types`
+  narrows it, and `--item-types journalArticle` restores the old
+  behaviour exactly.
+
 ### Fixed
 
 - **`not_found` no longer means two different things in the abstract
