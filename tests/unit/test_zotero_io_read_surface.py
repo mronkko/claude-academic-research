@@ -126,3 +126,46 @@ def test_abstractable_items_honours_an_explicit_type_list(monkeypatch):
     assert calls[0]["itemType"] == "journalArticle", (
         "passing journalArticle must restore the old narrow behaviour"
     )
+
+
+def test_items_by_keys_batches_and_does_not_walk_the_library(monkeypatch):
+    """The whole point: cost tracks the request, not the library size.
+
+    Walking ~10,000 items to arrive at a few hundred is what tripped
+    Zotero's rate limiter on a live run, and because the walk happens
+    before any retrieval, no amount of backoff got past it.
+    """
+    calls = []
+
+    class _FakeZot:
+        def items(self, **kwargs):
+            calls.append(kwargs)
+            return [{"key": k} for k in kwargs["itemKey"].split(",")]
+
+        def everything(self, result):
+            return result
+
+        def top(self):
+            raise AssertionError("must not enumerate the library")
+
+    client = ZoteroClient.__new__(ZoteroClient)
+    monkeypatch.setattr(ZoteroClient, "_read_client", lambda self: _FakeZot())
+
+    keys = [f"KEY{i:05d}" for i in range(120)]
+    got = client.items_by_keys(keys)
+
+    assert len(got) == 120
+    assert len(calls) == 3, "120 keys at a 50-key ceiling is three requests"
+    assert all("itemType" not in c for c in calls)
+    assert sum(len(c["itemKey"].split(",")) for c in calls) == 120
+
+
+def test_items_by_keys_is_a_no_op_for_no_keys(monkeypatch):
+    class _FakeZot:
+        def items(self, **kwargs):
+            raise AssertionError("should not issue a request for zero keys")
+
+    client = ZoteroClient.__new__(ZoteroClient)
+    monkeypatch.setattr(ZoteroClient, "_read_client", lambda self: _FakeZot())
+    assert client.items_by_keys([]) == []
+    assert client.items_by_keys(["", "  "]) == []

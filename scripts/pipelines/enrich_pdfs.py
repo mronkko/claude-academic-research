@@ -2284,29 +2284,49 @@ def main() -> int:
     else:
         zot = zotero_io.ZoteroClient.from_args(args)
 
-    print("Fetching Zotero items...", end=" ", flush=True)
-    all_items = zot.journal_articles()
-    print(f"{len(all_items)} journal articles.", flush=True)
-
     if args.filter_keys_file:
+        # Fetch only what was asked for. Walking the whole library and
+        # filtering in Python costs a full paginated sweep per invocation
+        # — repeated on every backoff retry — and a live run against a
+        # ~10,000-item library was rate-limited during that enumeration
+        # and never reached the retrieval it was invoked for.
         if not os.path.isfile(args.filter_keys_file):
             print(f"ERROR: --filter-keys-file not found: {args.filter_keys_file}",
                   file=sys.stderr)
             return 2
         with open(args.filter_keys_file) as f:
             target = {line.strip() for line in f if line.strip()}
-        all_items = [it for it in all_items if it["key"] in target]
-        print(f"  After --filter-keys-file: {len(all_items)} items.", flush=True)
-        missing = target - {it["key"] for it in all_items}
+        print(f"Fetching {len(target)} Zotero items by key...", end=" ", flush=True)
+        fetched = zot.items_by_keys(target)
+        all_items = [
+            it for it in fetched
+            if it.get("data", {}).get("itemType") == "journalArticle"
+        ]
+        print(f"{len(all_items)} journal articles.", flush=True)
+        not_articles = len(fetched) - len(all_items)
+        if not_articles:
+            # Distinguished from "key not found": a book chapter that was
+            # asked for and skipped is a scope decision, not a typo, and
+            # reporting both as "matched no journal article" hid which.
+            print(
+                f"  NOTE: {not_articles} key(s) resolved to non-journalArticle "
+                f"items and were skipped.",
+                flush=True,
+            )
+        missing = target - {it["key"] for it in fetched}
         if missing:
             # Silence here used to hide typo'd keys and non-journalArticle
             # items, which then looked identical to "nothing to do".
             print(
-                f"  WARN: {len(missing)} key(s) in the file matched no journal "
-                f"article in this library: {', '.join(sorted(missing)[:5])}"
+                f"  WARN: {len(missing)} key(s) in the file do not exist in "
+                f"this library: {', '.join(sorted(missing)[:5])}"
                 + (" …" if len(missing) > 5 else ""),
                 flush=True,
             )
+    else:
+        print("Fetching Zotero items...", end=" ", flush=True)
+        all_items = zot.journal_articles()
+        print(f"{len(all_items)} journal articles.", flush=True)
 
     # Everything this invocation is accountable for — the report is
     # scoped to these so a filtered run doesn't dump the whole log.

@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `--filter-keys-file` run no longer enumerates the whole library.**
+  `enrich_pdfs.py` fetched every journal article and then filtered in
+  Python, so asking for 2,229 specific items on a ~10,000-item library
+  cost a full paginated sweep — repeated on every backoff retry. A live
+  run was rate-limited (HTTP 429, no `Retry-After`) *during that
+  enumeration* and so never reached the retrieval it was invoked for; no
+  amount of patience helped, because the walk came first.
+
+  New `ZoteroClient.items_by_keys()` requests exactly the wanted keys in
+  batches of 50, so the cost tracks the request rather than the size of
+  the library. It also separates two diagnostics the old path conflated:
+  a key that does not exist, and a key that resolved to a
+  non-`journalArticle` item and was skipped by scope. Both used to print
+  as "matched no journal article".
+
 - **`attach_pdf` uploaded nothing when the PDF lived in a cache
   directory.** `attachment_simple` sets the attachment item's `filename`
   to the path it is handed, and the Zotero API rejects a stored-file

@@ -479,6 +479,40 @@ class ZoteroClient:
         z = self._read_client()
         return z.everything(z.items(itemType=" || ".join(types)))
 
+    #: Zotero's `itemKey` filter takes a comma-separated list; 50 is the
+    #: documented ceiling per request.
+    ITEM_KEY_BATCH = 50
+
+    def items_by_keys(self, keys: Iterable[str]) -> list[dict]:
+        """Fetch exactly these items, by key, in batches.
+
+        The alternative — walk the whole library and filter in Python — is
+        what the pipeline did whenever it was handed a
+        `--filter-keys-file`, and it does not scale: on a ~10,000-item
+        library that is a full paginated sweep per invocation, repeated on
+        every backoff retry, to arrive at a few hundred items. A live run
+        tripped Zotero's rate limiter during that enumeration and could
+        not get past it, so retrieval made no progress however patiently
+        it retried.
+
+        Asking for 2,229 keys costs 45 requests here against roughly a
+        hundred for the sweep, and — the part that matters under a rate
+        limiter — the cost tracks what was requested rather than the size
+        of the library.
+
+        Missing keys are simply absent from the result: the caller knows
+        what it asked for and is better placed to say what a gap means.
+        """
+        wanted = [k.strip() for k in keys if k and k.strip()]
+        if not wanted:
+            return []
+        z = self._read_client()
+        out: list[dict] = []
+        for i in range(0, len(wanted), self.ITEM_KEY_BATCH):
+            batch = wanted[i:i + self.ITEM_KEY_BATCH]
+            out.extend(z.everything(z.items(itemKey=",".join(batch))))
+        return out
+
     def top_items(self) -> list[dict]:
         """All top-level items (includes non-article types: book, report, etc.)."""
         z = self._read_client()
