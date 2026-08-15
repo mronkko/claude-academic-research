@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`attach_pdf` uploaded nothing when the PDF lived in a cache
+  directory.** `attachment_simple` sets the attachment item's `filename`
+  to the path it is handed, and the Zotero API rejects a stored-file
+  filename containing a directory separator:
+
+      400 Stored-file filename '/abs/path/to/x.pdf' cannot contain a
+          directory path
+
+  So the request failed at *item creation*, before a byte moved. pyzotero
+  then hid the reason: `_create_prelim` discards the server's `failed`
+  map, so the entry never gets a key, lands in the `failure` bucket, and
+  the only symptom is a failure entry echoing the payload that was sent.
+  A live run over 2,229 items downloaded PDFs correctly and attached
+  **zero** of them, logging 38 `upload_failed` rows whose detail was the
+  request body.
+
+  `attach_pdf` now drives `Zupload` directly, sending the basename as
+  `filename` and the directory as `basedir` — which is what that
+  parameter exists for. The local file is still read from the full path;
+  the server gets the bare name it requires. Verified against a live
+  library.
+
+  The retry tests moved onto the same seam. Mocking `attachment_simple`
+  would now assert on a call that never happens — passing while leaving
+  the upload path wholly unexercised.
+
 ### Added
 
 - **`--remote` on every pipeline entry point.** Reads default to Zotero

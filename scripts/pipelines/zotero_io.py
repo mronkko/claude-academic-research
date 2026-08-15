@@ -997,10 +997,34 @@ class ZoteroClient:
     def attach_pdf(self, item_key: str, pdf_path: str | Path) -> str | None:
         """Upload a PDF as a child attachment of `item_key`.
 
-        Delegates to pyzotero.Zotero.attachment_simple which runs the
-        full 3-step S3 upload: create attachment item → auth request
-        → PUT bytes → register. Returns the new attachment key on
-        success, None if pyzotero reports the file was already attached.
+        Runs pyzotero's full 3-step S3 upload — create attachment item →
+        auth request → PUT bytes → register — via `Zupload`, and returns
+        the new attachment key on success, None if the file was already
+        attached.
+
+        **Not** `attachment_simple`, and the difference is load-bearing.
+        That helper sets the attachment item's `filename` field to the
+        path it was handed (`_client.py:1197`), and the Zotero API
+        rejects any stored-file filename containing a directory
+        separator:
+
+            400 Stored-file filename '/abs/path/to/x.pdf' cannot
+                contain a directory path
+
+        So every upload from a cache directory fails at *item creation*,
+        before a byte is sent. pyzotero then compounds it: the failing
+        entry never gets a `key`, so `Zupload.upload` drops it in the
+        `failure` bucket (`_upload.py:230`) while `_create_prelim`
+        discards the server's `failed` map (`:109-112`) — the reason
+        never reaches the caller, and the only symptom is a failure
+        bucket containing the payload that was sent. A live run of 2,229
+        items downloaded PDFs fine and attached zero of them, logging 38
+        `upload_failed` rows whose detail was the echoed payload.
+
+        The fix is to send the basename as `filename` and pass the
+        directory as `Zupload`'s `basedir`, which is what that parameter
+        exists for — the local file is still read from the full path,
+        and the server gets the bare name it requires.
 
         pyzotero's return shape (from _upload.py:218-239):
             {"success": [item_dict, ...],
@@ -1028,8 +1052,14 @@ class ZoteroClient:
         if size == 0:
             raise RuntimeError(f"attach_pdf: refusing to upload empty file {path}")
 
-        path_str = str(path)
-        result = self.cloud.attachment_simple([path_str], parentid=item_key)
+        from pyzotero._upload import Zupload
+
+        template = self.cloud._attachment_template("imported_file")
+        template["title"] = path.name
+        template["filename"] = path.name
+        result = Zupload(
+            self.cloud, [template], item_key, basedir=path.parent,
+        ).upload()
 
         success = result.get("success") or []
         if success:

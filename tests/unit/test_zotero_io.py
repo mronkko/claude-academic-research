@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from contextlib import contextmanager
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 import zotero_io
@@ -238,72 +240,137 @@ def test_pdf_map_unparseable_dateadded_protects_attachment() -> None:
     assert result["PARENT_Y"][1] == []
 
 
-def test_attach_pdf_delegates_to_pyzotero_attachment_simple(tmp_path) -> None:
+def _cloud_with_template():
+    """A fake pyzotero client whose attachment template is a real dict.
+
+    `attach_pdf` fills the template in and hands it to the uploader, so a
+    bare MagicMock would make the payload unreadable — every field would
+    come back as another mock rather than the value that was set.
+    """
+    cloud = MagicMock()
+    cloud._attachment_template.return_value = {
+        "itemType": "attachment",
+        "linkMode": "imported_file",
+        "title": "",
+        "filename": "",
+        "contentType": "",
+    }
+    return cloud
+
+
+@contextmanager
+def _fake_upload(result):
+    """Patch `Zupload` and hand back the call it received.
+
+    `attach_pdf` drives pyzotero's uploader directly rather than through
+    `attachment_simple`, so the seam these tests need is the `Zupload`
+    constructor: it carries both the payload the server will see and the
+    `basedir` the local file is read from.
+    """
+    captured = {}
+
+    class _FakeZupload:
+        def __init__(self, zinstance, payload, parentid=None, basedir=None):
+            captured["payload"] = payload
+            captured["parentid"] = parentid
+            captured["basedir"] = basedir
+
+        def upload(self):
+            return result
+
+    with patch("pyzotero._upload.Zupload", _FakeZupload):
+        yield captured
+
+
+def test_attach_pdf_uploads_through_zupload(tmp_path) -> None:
     """pyzotero's Zupload returns lists of item dicts under success /
     failure / unchanged (see _upload.py:218-239)."""
-    from pathlib import Path as _Path
     zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.attachment_simple.return_value = {
+    zc._cloud = _cloud_with_template()
+
+    pdf_path = _real_pdf(tmp_path)
+    with _fake_upload({
         "success": [{"key": "NEWATT1", "title": "paper.pdf"}],
         "failure": [],
         "unchanged": [],
-    }
-    zc._cloud = fake_cloud
+    }) as call:
+        result = zc.attach_pdf("PARENT1", pdf_path)
 
-    pdf_path = _Path(_real_pdf(tmp_path))
-    result = zc.attach_pdf("PARENT1", str(pdf_path))
-
-    # attach_pdf normalises via str(Path(...)), which uses backslashes on
-    # Windows. Build the expected list through the same transformation so
-    # the assertion matches on every OS.
-    fake_cloud.attachment_simple.assert_called_once_with(
-        [str(_Path(str(pdf_path)))], parentid="PARENT1",
-    )
     assert result == "NEWATT1"
+    assert call["parentid"] == "PARENT1"
+    assert call["basedir"] == Path(pdf_path).parent
+
+
+def test_attach_pdf_sends_a_bare_filename_not_a_path(tmp_path) -> None:
+    """The Zotero API rejects a stored-file filename containing a
+    directory separator:
+
+        400 Stored-file filename '/abs/path/x.pdf' cannot contain a
+            directory path
+
+    pyzotero's `attachment_simple` sets that field to the path it is
+    given (`_client.py:1197`), so uploading from any directory other
+    than the process CWD failed at item creation — before a byte was
+    sent — and surfaced only as an opaque `failure` bucket echoing the
+    payload. A live run of 2,229 items downloaded fine and attached
+    zero. The filename must stay a basename; the directory travels as
+    `basedir`.
+    """
+    zc = _client()
+    zc._cloud = _cloud_with_template()
+
+    pdf_path = _real_pdf(tmp_path)
+    with _fake_upload({
+        "success": [{"key": "K"}], "failure": [], "unchanged": [],
+    }) as call:
+        zc.attach_pdf("PARENT1", pdf_path)
+
+    sent = call["payload"][0]["filename"]
+    assert sent == Path(pdf_path).name
+    assert "/" not in sent and "\\" not in sent
+    # The bytes still have to be findable, which is basedir's job.
+    assert (call["basedir"] / sent).exists()
 
 
 def test_attach_pdf_returns_none_on_unchanged(tmp_path) -> None:
     """pyzotero returns the file under 'unchanged' if the same hash
     is already attached — not an error, just a no-op."""
     zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.attachment_simple.return_value = {
+    zc._cloud = _cloud_with_template()
+
+    with _fake_upload({
         "success": [],
         "failure": [],
         "unchanged": [{"key": "ALREADY_THERE"}],
-    }
-    zc._cloud = fake_cloud
-
-    assert zc.attach_pdf("PARENT1", _real_pdf(tmp_path)) is None
+    }):
+        assert zc.attach_pdf("PARENT1", _real_pdf(tmp_path)) is None
 
 
 def test_attach_pdf_raises_on_failure(tmp_path) -> None:
     zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.attachment_simple.return_value = {
+    zc._cloud = _cloud_with_template()
+
+    with _fake_upload({
         "success": [],
         "failure": [{"title": "Bad File"}],
         "unchanged": [],
-    }
-    zc._cloud = fake_cloud
-
-    with pytest.raises(RuntimeError):
-        zc.attach_pdf("PARENT1", _real_pdf(tmp_path))
+    }):
+        with pytest.raises(RuntimeError):
+            zc.attach_pdf("PARENT1", _real_pdf(tmp_path))
 
 
 def test_attach_pdf_reads_nested_data_key_shape(tmp_path) -> None:
     """Some pyzotero responses nest the key under `data` instead of at
     the top level. The wrapper should handle both."""
     zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.attachment_simple.return_value = {
+    zc._cloud = _cloud_with_template()
+
+    with _fake_upload({
         "success": [{"data": {"key": "NESTED1"}}],
         "failure": [],
         "unchanged": [],
-    }
-    zc._cloud = fake_cloud
-    assert zc.attach_pdf("PARENT1", _real_pdf(tmp_path)) == "NESTED1"
+    }):
+        assert zc.attach_pdf("PARENT1", _real_pdf(tmp_path)) == "NESTED1"
 
 
 def test_update_abstract_patches_item_with_current_version() -> None:
