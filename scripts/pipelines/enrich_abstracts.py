@@ -24,6 +24,21 @@ The fetcher priority matches `fetchers.abstract_sources`:
     → OpenAlex GROBID
 
 --sources filters to a subset, same as enrich_pdfs.py.
+
+Log statuses (`output/abstract_fetch_log.csv`):
+    updated        abstract fetched and written to Zotero
+    dry_run        abstract fetched, Zotero not touched (--dry-run)
+    update_failed  abstract fetched, the Zotero write raised
+    not_found      every source answered and none had an abstract —
+                   the article genuinely has none
+    lookup_failed  at least one source raised, so absence was never
+                   established; the abstract is unknown, not absent
+    no_doi         no DOI on the item, so the cascade never ran
+
+`not_found` and `lookup_failed` used to share the `not_found` label,
+which made "this corpus has N abstract-less records" impossible to
+compute from the log — a real requirement for callers that report
+missingness as a finding. `detail` carries the per-source reason.
 """
 
 from __future__ import annotations
@@ -33,7 +48,7 @@ import os
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
@@ -89,19 +104,60 @@ def _already_done(log_path: str) -> set[str]:
     )
 
 
+@dataclass
+class CascadeResult:
+    """Outcome of one item's trip through the abstract cascade.
+
+    `abstract`/`source` are set only on a hit. When there is no hit,
+    `confirmed_absent` distinguishes the two cases that matter
+    downstream: every source answered cleanly and none had an abstract
+    (True — the article genuinely has none), versus at least one source
+    raised so the question was never actually answered (False — missing
+    data). `errors` holds `(source_name, message)` for each failure and
+    `asked` names the sources that answered cleanly.
+    """
+
+    abstract: str = ""
+    source: str = ""
+    asked: list[str] = field(default_factory=list)
+    errors: list[tuple[str, str]] = field(default_factory=list)
+
+    @property
+    def found(self) -> bool:
+        return bool(self.abstract)
+
+    @property
+    def confirmed_absent(self) -> bool:
+        return not self.found and not self.errors and bool(self.asked)
+
+    def detail(self) -> str:
+        """One-line human-readable summary for the log's `detail` column."""
+        if self.errors:
+            return "; ".join(f"{name}: {msg}" for name, msg in self.errors)
+        if self.asked:
+            return "no abstract at: " + ",".join(self.asked)
+        return ""
+
+
 def _try_cascade(
     item: dict,
     sources: list,
     cache_dir: str,
-) -> tuple[str, str] | None:
+) -> CascadeResult:
     """Try each abstract fetcher in priority order.
 
-    Returns (abstract_text, source_name) on first hit.
+    Returns a `CascadeResult`; `.found` is True on the first source that
+    returns text. A source that raises is recorded in `.errors` rather
+    than being silently skipped, so a run that failed to answer is
+    distinguishable from one that answered "no abstract exists".
+    Sources raising `NotImplementedError` are not counted either way —
+    that means the fetcher does not offer abstracts at all.
     """
+    result = CascadeResult()
     data = item.get("data", {})
     doi = (data.get("DOI") or "").strip()
     if not doi:
-        return None
+        return result
     title = (data.get("title") or "").strip()
     for src in sources:
         try:
@@ -110,10 +166,14 @@ def _try_cascade(
             continue
         except Exception as e:
             print(f"    {src.name}: {e}", flush=True)
+            result.errors.append((src.name, f"{type(e).__name__}: {e}"))
             continue
+        result.asked.append(src.name)
         if text:
-            return text, src.name
-    return None
+            result.abstract = text
+            result.source = src.name
+            return result
+    return result
 
 
 def main() -> int:
@@ -205,17 +265,26 @@ def main() -> int:
             counters["done"] += 1
             prefix = f"[{counters['done']}/{total}]"
 
-        if result is None:
+        if not result.found:
+            if not doi:
+                status, note = "no_doi", "no abstract looked up (item has no DOI)"
+            elif result.confirmed_absent:
+                status, note = "not_found", "no abstract found"
+            else:
+                status, note = "lookup_failed", "lookup failed, absence unconfirmed"
             with log_lock:
-                counters["skipped"] += 1
+                counters[
+                    "skipped" if status == "not_found" else "failed"
+                ] += 1
                 log_writer.writerow({
                     "run_date": run_date, "item_key": key, "doi": doi,
-                    "title": title, "source": "none", "status": "not_found",
+                    "title": title, "source": "none", "status": status,
+                    "detail": result.detail(),
                 })
-            print(f"{prefix} {title:<70} no abstract found", flush=True)
+            print(f"{prefix} {title:<70} {note}", flush=True)
             return
 
-        abstract, source = result
+        abstract, source = result.abstract, result.source
 
         if args.dry_run:
             with log_lock:
@@ -223,17 +292,20 @@ def main() -> int:
                 log_writer.writerow({
                     "run_date": run_date, "item_key": key, "doi": doi,
                     "title": title, "source": source, "status": "dry_run",
+                    "detail": "",
                 })
             print(f"{prefix} {title:<70} found ({source}) [dry-run]",
                   flush=True)
             return
 
+        detail = ""
         try:
             zot.update_abstract(key, abstract)
             status = "updated"
             ok = True
         except Exception as e:
             status = "update_failed"
+            detail = f"{type(e).__name__}: {e}"
             ok = False
             print(f"{prefix} {title:<70} ({source}) update failed: {e}",
                   flush=True)
@@ -246,6 +318,7 @@ def main() -> int:
             log_writer.writerow({
                 "run_date": run_date, "item_key": key, "doi": doi,
                 "title": title, "source": source, "status": status,
+                "detail": detail,
             })
         if ok:
             print(f"{prefix} {title:<70} ({source}) → updated", flush=True)
@@ -258,9 +331,17 @@ def main() -> int:
     log_fh.close()
     print(
         f"\nDone. updated={counters['updated']}, "
-        f"skipped={counters['skipped']}, failed={counters['failed']}",
+        f"confirmed-absent={counters['skipped']}, "
+        f"failed={counters['failed']}",
         flush=True,
     )
+    if counters["failed"]:
+        print(
+            "  Note: `failed` includes items whose lookups errored "
+            "(status=lookup_failed). Their abstracts are unknown, not "
+            "absent — re-run to retry them.",
+            flush=True,
+        )
     return 0
 
 

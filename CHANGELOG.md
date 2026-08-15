@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`not_found` no longer means two different things in the abstract
+  log.** `enrich_abstracts.py` wrote `status=not_found, source=none` for
+  every item it came away from empty-handed — whether every source had
+  answered and none held an abstract, every source had raised, or the
+  item carried no DOI so nothing was ever asked. Only the first is
+  absence. The exception text went to the terminal and never reached the
+  CSV, so once a run finished there was no way to tell the three apart,
+  and no way to recover the count afterwards.
+
+  This matters wherever missingness is itself a result. A review
+  reporting how many of its records genuinely have no abstract — and so
+  cannot be screened by a human or by a model either — would have
+  counted every timeout as a confirmed absence and overstated the
+  figure.
+
+  `_try_cascade` now returns a `CascadeResult` recording which sources
+  answered and which raised, and absence is confirmed only when at least
+  one source answered and none raised. The log gains `lookup_failed`
+  (unknown, retry) and `no_doi` alongside a narrowed `not_found`
+  (confirmed absent), plus a `detail` column carrying the per-source
+  reason. `shared_orchestrators.open_log` migrates existing six-column
+  logs on open, so older logs keep working — but their historical
+  `not_found` rows retain the old, ambiguous meaning and should not be
+  pooled with new ones.
+
 ## [0.11.0] — 2026-08-13
 
 Five defects the first end-to-end runs on 0.10.0 exposed, four of them

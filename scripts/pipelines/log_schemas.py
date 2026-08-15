@@ -55,8 +55,16 @@ def fulltext_screening_fields(coding_field_names: list[str]) -> list[str]:
 # editing every script in sync. They live here so the shared
 # `shared_orchestrators` helpers and the scripts share one definition.
 
+# `detail` carries why a non-success row ended that way — for
+# `lookup_failed`, the per-source exception messages; for `not_found`,
+# which sources were asked and answered cleanly. Without it `not_found`
+# conflated two different facts: "every source confirms this article has
+# no abstract" and "the lookups broke, so we still don't know". Callers
+# that treat missingness as data (a review reporting how many records are
+# genuinely abstract-less) need those separated. Appended last;
+# `shared_orchestrators.open_log` migrates existing 6-column logs on open.
 ABSTRACT_FETCH_FIELDS: list[str] = [
-    "run_date", "item_key", "doi", "title", "source", "status",
+    "run_date", "item_key", "doi", "title", "source", "status", "detail",
 ]
 
 # Schema for `enrich_pdfs.py`'s run-log, `output/pdf_attach_log.csv`.
