@@ -416,7 +416,12 @@ def apply_responses(
         counts[s["skip_reason"]] = counts.get(s["skip_reason"], 0) + 1
 
     print(f"\n{'=' * 60}")
-    print(f"Applied {len(paired)} response(s) from {responses_path.name}.")
+    # Not `len(paired)`: with --skip-already-tagged that number can be
+    # every response in the file while nothing was written at all.
+    print(
+        f"Applied {len(paired) - counts.get('skipped', 0)} of "
+        f"{len(paired)} response(s) from {responses_path.name}."
+    )
     for k in sorted(counts):
         print(f"  {k}: {counts[k]}")
     if unanswered:

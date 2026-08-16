@@ -655,6 +655,23 @@ S10's `csl_json_to_zotero` reasoning) — but it surfaced two live defects.
 
 ### Scripts
 
+- **S13** — `--full-recode` clears every targeted item's stage tag and
+  then codes nothing, because the refresh read is stale.
+  Found twice while live-validating B1 (`fulltext_code.py`, 2026-08-16).
+  The flag writes tag removals through the **Zotero Web API**, then
+  immediately re-reads the collection through the **local** API at
+  `localhost:23119`, which has not synced yet. `_already_tagged` on that
+  stale read still sees `fulltext:include`, so `to_code` comes out empty
+  and the run prints "Nothing to code." and exits 0 — having already
+  destroyed the tags. Re-running a minute later works, so the damage is
+  recoverable, but the failure is silent, destructive, and looks like a
+  no-op. `abstract_screen.py --full-recode` has the same shape.
+  Options: re-read through the Web API after a write-then-read (correct,
+  but slower and quota-bearing); or drop the refresh entirely and
+  subtract the just-cleared keys from `tagged` locally, since the script
+  already knows exactly which items it untagged — that is the cheap fix
+  and needs no network at all.
+
 - **P16** — the OA aggregators can attach a preprint without saying so.
   Found while implementing `--allow-preprints` (Change 2, layer C3).
   `PreprintSource` is off by default and tags everything it produces
