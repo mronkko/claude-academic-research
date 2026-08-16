@@ -22,6 +22,75 @@ directory — not checked in because it references machine-local paths).
 
 ---
 
+## Open — APA PsycNET browser handler needs testing; it fails on reachable PDFs (2026-08-16)
+
+**Reported from a live downstream run** (the AI-literature-review study's
+Phase 2 PDF retrieval, plugin 0.11.0 + `10e3771`). The APA handler failed
+**2 of 2** items in one dataset, on articles the operator then downloaded
+by hand from the same Chromium profile the handler drives. So this is a
+selector/flow defect, not a licensing or access one — the institution has
+access and the PDF is reachable.
+
+**Test cases** — both APA journals, both licensed at the reporting site,
+both confirmed manually downloadable, both currently failing:
+
+| DOI | Article | Observed |
+|---|---|---|
+| `10.1037/apl0000007` | Sinking slowly: Diversity in propensity to trust predicts downward trust spirals | `ERROR: Download button not found`, ~135 s |
+| `10.1037/a0025231` | Bridging team faultlines by combining task role assignment and goal structure | `ERROR: Download button not found`, ~135 s |
+
+Use these as the regression fixtures — an APA test that does not assert a
+real download against a licensed DOI will keep passing while the handler
+is broken, which is how this survived to a live run.
+
+**Why deferred:** needs someone with APA institutional access and a
+browser session to walk the four-step flow and see which step actually
+breaks. Cannot be diagnosed from the log as it stands — see the
+diagnostics point below, which is the part worth fixing first.
+
+**What it would take:**
+
+1. **Make the failure diagnosable.** `apa.py` raises a bare
+   `RuntimeError("Download button not found")` from step 4, so the log
+   cannot distinguish "step 2's Get Access overlay never opened" from
+   "step 3's CHECK ACCESS did not route to `/recordAccess/institutional/`"
+   from "we are on the right page and only the final selector is stale".
+   All three present identically. On failure, capture the final URL, the
+   page title, and a screenshot into the cache dir. This is the highest
+   value change even before any selector is touched, and it generalises
+   to every browser handler.
+2. **Re-derive the step-4 selectors** against current PsycNET. The
+   present list is `a[href*='/fulltext/'][href*='.pdf']`,
+   `button:has-text('Download PDF')`, `a:has-text('Download PDF')`,
+   `button:has-text('DOWNLOAD PDF')`, `a:has-text('Download')`. One
+   plausible cause given the ~135 s duration: the run consumed the full
+   30 s `expect_download` plus the 15 s `try_click` and the earlier
+   waits, i.e. it never found anything to click rather than clicking and
+   getting no download.
+3. **Check the step-2/step-3 assumption.** The comment on step 2 says
+   users with existing institutional access are "auto-routed past this
+   step". If that is what happens at this site, the overlay clicks are
+   no-ops and the flow lands somewhere step 4's selectors do not
+   describe.
+4. **Consider a PDF-URL route** rather than a click chain. PsycNET
+   fulltext URLs are derivable from the record id; fetching directly
+   would remove three of the four failure points.
+
+**Files to look at:**
+
+- `scripts/pipelines/fetchers/browser/apa.py` — the whole flow is lines
+  50–110; step 4 and the bare raise are lines 88–100.
+- `scripts/pipelines/pdf_fetch_log.py` — where richer failure detail
+  would have to land to be visible downstream.
+
+**Related, same reporting run:** the first-failure prompt added in
+`10e3771` works correctly — APA opened with `queued: 2` and asked through
+the control file instead of silently discarding the rest of the queue.
+That fix is what made this defect measurable at all: previously only the
+first APA item was ever attempted, so "2 of 2 fail" could not be observed.
+
+---
+
 ## Done — PDF retrieval reliability + reporting (branch `fix/pdf-retrieval-reporting`, 2026-08-13)
 
 Driven by a real downstream session transcript in which a 244-item
