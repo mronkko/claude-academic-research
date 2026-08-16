@@ -175,6 +175,59 @@ def test_auth_openai_base_url() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Institutional gateway.
+#
+# Nothing here names an institution: the address and the key both come
+# from config or the environment, so this file stays generic while
+# whoever runs it points at whichever gateway they have. Many such
+# gateways are reachable only from the institution's network, so a
+# transport failure skips rather than fails — same reasoning as the
+# local providers below.
+# ---------------------------------------------------------------------------
+
+
+def test_auth_gateway_base_url() -> None:
+    """covers: [gateway].base_url — an OpenAI-compatible endpoint.
+
+    Config-only: the gateway declares no environment variable, so this
+    reads the file. A 401 counts as reachable — see the verifier.
+    """
+    base = require_config("gateway", "base_url")
+    ok, msg, _ = _wizard()._verify_gateway_base_url(base)
+    if not ok and "nothing answered" in msg:
+        pytest.skip(f"no gateway at {base} (VPN down?); skipping ({msg})")
+    assert ok, f"gateway endpoint check failed: {msg}"
+
+
+def test_auth_gateway_key() -> None:
+    """covers: [gateway].api_key — authenticates against that endpoint.
+
+    Resolved through `llm_provider`, not `require_config`, so it follows
+    the same two-step the runtime does: `[gateway] api_key`, or a
+    variable the user named in `[gateway] api_key_env`. Reading the
+    config key directly would silently skip for everyone who chose the
+    indirection — which is the whole reason the indirection exists.
+
+    Skips when the base URL is not on file: a key cannot be checked
+    against nothing.
+    """
+    from core import llm_provider, providers
+
+    spec = providers.require("gateway")
+    key = llm_provider._api_key_for(spec, required=False)
+    if not key:
+        pytest.skip(
+            "no gateway key on file (config [gateway].api_key, or the "
+            "variable named by [gateway].api_key_env); skipping live test."
+        )
+    ok, msg, _ = _wizard()._verify_gateway_key(key)
+    if not ok and ("no gateway base URL on file" in msg
+                   or "could not reach" in msg):
+        pytest.skip(f"gateway not reachable/configured; skipping ({msg})")
+    assert ok, f"gateway auth failed: {msg}"
+
+
+# ---------------------------------------------------------------------------
 # Local providers.
 #
 # No key exists to verify, so reachability is the whole test — and the

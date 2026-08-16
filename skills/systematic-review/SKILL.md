@@ -371,7 +371,7 @@ fails, so a run that dies here has cost nothing.
 | `RATE_LIMITED` | Throttled this second; the quota is intact | Re-run, or lower `--workers`. |
 | `AUTH_FAILED` | The key was rejected | Hand off to `/setup` to rotate it. Never ask for a key in chat. |
 | `MODEL_NOT_FOUND` | The provider does not serve this ID | Re-list and re-pin. Usually a typo or a superseded model. |
-| `UNREACHABLE` | Nothing answered at the endpoint | For `ollama` / `lmstudio`, the local server is not running. |
+| `UNREACHABLE` | Nothing answered at the endpoint | For `ollama` / `lmstudio`, the local server is not running. For `gateway`, either `[gateway] base_url` is unset — the detail line says so — or the endpoint needs the institution's network or VPN. |
 
 The first row is why this section exists. In a real run, an exhausted
 Gemini quota was diagnosed as a network hang: the per-item retry ladder
@@ -391,11 +391,30 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/resolve_models.py
 then confirm and pin as above — the old pins name models the new
 provider does not serve.
 
-Providers: `anthropic`, `google`, `openai`, `openrouter`, and the two
-local ones, `ollama` and `lmstudio`, which need no API key and no
-per-paper spend. If the new provider's credential is missing, the
+Providers: `anthropic`, `google`, `openai`, `openrouter`, `gateway`,
+and the two local ones, `ollama` and `lmstudio`, which need no API key
+and no per-paper spend. If the new provider's credential is missing, the
 script says which variable is needed — **hand that to `/setup`, never
 ask the user to paste a key into the conversation.**
+
+**`gateway`** is an OpenAI-compatible endpoint the user's institution
+runs — often free to the researcher and serving open-weight models.
+Two differences matter when screening against one:
+
+- It needs an **address as well as a key**, and unlike every other
+  provider it has **no environment variable** — both live in
+  `config.toml` under `[gateway]`. Everything reports `UNREACHABLE`
+  until `base_url` is set. A user who already exports a key under their
+  own name can point at it with `[gateway] api_key_env = "THEIR_NAME"`.
+- `resolve_models.py` lists and pins against it normally, but there is
+  **no list price on file**, so `--dry-run` reports the cost as
+  **unknown**. Report that word. Do not translate it to "free" — an
+  institution may recharge internally, and you cannot see that.
+
+Do not reach for `OPENAI_BASE_URL` to do this. It exists to redirect
+OpenAI itself; a gateway configured through it reports as `openai` and
+inherits OpenAI's list prices, which makes the cost estimate wrong.
+`ANTHROPIC_BASE_URL` is for Anthropic-Messages-shaped endpoints only.
 
 **A one-off model change** — "screen these with the cheap one", "use a
 stronger model for the coding pass" — is a `--model` flag, not an edit:
@@ -697,7 +716,8 @@ Principles:
 | Variable | Used by | Purpose |
 |----------|---------|---------|
 | `ZOTERO_API_KEY` | All scripts | Zotero API authentication (required) |
-| `ANTHROPIC_API_KEY` | Screening scripts | Claude API (required for LLM screening) |
+| `ANTHROPIC_API_KEY` | Screening scripts | Claude API — required only while `anthropic` is the selected provider. Each provider has its own variable; `check_llm_provider.py` reports which one this machine needs. |
+| *(none — `[gateway]` in config.toml)* | Screening scripts | The institutional gateway is config-only: `base_url` and `api_key`, plus optional `api_key_env` / `base_url_env` naming variables the user already exports. |
 | `ELSEVIER_API_KEY` | `enrich_pdfs.py`, `enrich_abstracts.py` | Elsevier/ScienceDirect full-text retrieval |
 | `SCOPUS_API_KEY` | Search scripts | Scopus API (often same as `ELSEVIER_API_KEY`; some institutions issue separately) |
 | `WILEY_TDM_TOKEN` | `enrich_pdfs.py --sources wiley` | Wiley TDM UUID token |

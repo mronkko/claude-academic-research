@@ -1,9 +1,12 @@
 """Unified LLM client layer for the academic-research plugin.
 
-Three transports cover six providers. Anthropic and Google need their
-own SDKs; OpenAI, OpenRouter, Ollama and LM Studio all speak the same
+Three transports cover every provider in the registry. Anthropic and
+Google need their own SDKs; OpenAI, OpenRouter, an institutional
+gateway, Ollama and LM Studio all speak the same
 `/v1/chat/completions` shape and share one client — the difference
-between them is an endpoint and a credential, not a protocol.
+between them is an endpoint and a credential, not a protocol. (The
+count used to be written out here and drifted every time the registry
+grew; `core.providers` is the place that knows.)
 
 Routing used to be a `startswith("claude-")` chain, duplicated between
 `get_provider` and `require_credentials`, which meant the plugin could
@@ -69,11 +72,46 @@ def configured_provider() -> str:
     )
 
 
+def credential_env(spec: ProviderSpec) -> str:
+    """Name of the environment variable holding `spec`'s API key, if any.
+
+    Usually the registry's own constant. A bring-your-own-endpoint
+    provider has none — the plugin cannot know what an institution's
+    variable is called — so it may declare one in config:
+
+        [gateway]
+        api_key_env = "UNI_LLM_TOKEN"
+
+    That indirection exists so a user who already exports the secret
+    under their own name is not made to export it a second time under
+    a name this plugin invented. Returns `""` when the key lives only in
+    `config.toml`, which is the ordinary case and what `config_loader`
+    already handles by skipping the environment lookup.
+    """
+    if spec.api_key_env:
+        return spec.api_key_env
+    if spec.byo_endpoint:
+        return get(providers.config_section(spec), "api_key_env") or ""
+    return ""
+
+
+def base_url_env(spec: ProviderSpec) -> str:
+    """Name of the environment variable holding `spec`'s base URL, if any.
+
+    Same rule as `credential_env`, via `[<section>] base_url_env`.
+    """
+    if spec.base_url_env:
+        return spec.base_url_env
+    if spec.byo_endpoint:
+        return get(providers.config_section(spec), "base_url_env") or ""
+    return ""
+
+
 def _configured_base_url(spec: ProviderSpec) -> str:
-    if not spec.base_url_env:
+    if not (spec.base_url_env or spec.byo_endpoint):
         return ""
     return get(
-        providers.config_section(spec), "base_url", env=spec.base_url_env,
+        providers.config_section(spec), "base_url", env=base_url_env(spec),
     ) or ""
 
 
@@ -96,23 +134,29 @@ def anthropic_base_url() -> str:
 def credential_status(spec: ProviderSpec) -> tuple[bool, str]:
     """Whether `spec` can be called as currently configured.
 
-    Returns `(ok, missing_env_var)`. Follows the same rules as
-    `_api_key_for` below — local providers declare no credential, and an
-    Anthropic-compatible endpoint has one it does not check — so an `ok`
-    here means a run will get past credential resolution rather than
-    merely that some key is on file.
+    Returns `(ok, where_it_should_go)` — an environment variable name
+    when the provider has one, else the `config.toml` location, because
+    for a bring-your-own provider there is no variable to name and
+    telling the user to "set ''" would be useless.
+
+    Follows the same rules as `_api_key_for` below — local providers
+    declare no credential, and an Anthropic-compatible endpoint has one
+    it does not check — so an `ok` here means a run will get past
+    credential resolution rather than merely that some key is on file.
 
     Read-only and network-free: the setup scripts use it to report state
     without touching the provider.
     """
-    if not spec.api_key_env:
+    # `local`, not `api_key_env`: a bring-your-own provider also has no
+    # registry-declared variable, but it very much does need a key.
+    if spec.local:
         return True, ""
     if spec.transport == "anthropic" and anthropic_base_url():
         return True, ""
     section = providers.config_section(spec)
-    if get(section, "api_key", env=spec.api_key_env).strip():
+    if get(section, "api_key", env=credential_env(spec)).strip():
         return True, ""
-    return False, spec.api_key_env
+    return False, credential_env(spec) or f"config.toml [{section}].api_key"
 
 
 def _api_key_for(spec: ProviderSpec, *, required: bool = True) -> str:
@@ -122,16 +166,17 @@ def _api_key_for(spec: ProviderSpec, *, required: bool = True) -> str:
     Anthropic-compatible endpoint has one it does not check — in both
     cases demanding a key would block a setup that works.
     """
-    if not spec.api_key_env:
+    if spec.local:
         return "not-required-for-local-endpoint"
     section = providers.config_section(spec)
+    env = credential_env(spec)
     if spec.transport == "anthropic" and anthropic_base_url():
-        return get(section, "api_key", env=spec.api_key_env) or (
+        return get(section, "api_key", env=env) or (
             "not-required-for-local-endpoint"
         )
     if required:
-        return require(section, "api_key", env=spec.api_key_env)
-    return get(section, "api_key", env=spec.api_key_env)
+        return require(section, "api_key", env=env)
+    return get(section, "api_key", env=env)
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +286,15 @@ class OpenAICompatProvider(LLMProvider):
                 f"Ensure 'openai' is installed."
             ) from e
         base = base_url_for(spec)
+        if spec.byo_endpoint and not base:
+            # Otherwise the SDK is handed base_url="/v1" and the failure
+            # surfaces per item, mid-run, as an opaque connection error.
+            raise RuntimeError(
+                f"{spec.label} has no endpoint configured. Set "
+                f"{providers.base_url_location(spec, base_url_env(spec))} "
+                f"(or run `/setup`) — the plugin ships no default "
+                f"address for it."
+            )
         self.client = openai.OpenAI(
             api_key=api_key or "not-required-for-local-endpoint",
             # Every one of these providers serves the OpenAI surface
@@ -322,11 +376,13 @@ def require_credentials(model_name: str = "", provider_hint: str = "") -> None:
     this replaces did not — they could and did disagree.
     """
     spec = resolve_provider(model_name, provider_hint)
-    if not spec.api_key_env:
+    if spec.local:
         return
     if spec.transport == "anthropic" and anthropic_base_url():
         return
-    require(providers.config_section(spec), "api_key", env=spec.api_key_env)
+    require(
+        providers.config_section(spec), "api_key", env=credential_env(spec),
+    )
 
 
 def get_provider(model_name: str = "", provider_hint: str = "") -> LLMProvider:
@@ -358,7 +414,9 @@ def preflight(model_name: str, provider_hint: str = ""):
     return model_health.check_connection(
         spec,
         model_name,
-        api_key=_api_key_for(spec, required=False) if spec.api_key_env else "",
+        # `not spec.local` rather than `spec.api_key_env`: a gateway
+        # declares no variable but still has a key to send.
+        api_key=_api_key_for(spec, required=False) if not spec.local else "",
         base_url=_configured_base_url(spec),
     )
 

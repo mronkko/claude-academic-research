@@ -107,20 +107,35 @@ def test_every_publisher_in_registry_has_a_known_doi() -> None:
 def test_every_keyspec_has_an_auth_test() -> None:
     """Every KeySpec in wizard.py:KEYS has a test in test_auth_workflows.py."""
     wizard = _load_wizard()
-    env_vars = {spec.env_var for spec in wizard.KEYS}
-
     auth_tests = _read(REPO / "tests" / "live" / "test_auth_workflows.py")
 
     missing = []
-    for env_var in env_vars:
-        # The auth test either references the env var name directly or in a
-        # comment/docstring. Accept any mention as sufficient.
-        if env_var not in auth_tests:
-            missing.append(env_var)
+    for spec in wizard.KEYS:
+        if spec.env_var:
+            # The auth test references the env var name directly or in a
+            # comment/docstring. Accept any mention as sufficient.
+            needle = spec.env_var
+        else:
+            # A config-only spec has no variable to search for, and
+            # `"" in text` is vacuously true — which would silently
+            # exempt the specs least likely to be covered.
+            #
+            # Match a declared marker rather than a `require_config(...)`
+            # call: how a test fetches the value is an implementation
+            # detail that legitimately changes (the gateway key moved to
+            # `llm_provider._api_key_for` so it would follow the
+            # `api_key_env` indirection), and a guard that breaks on a
+            # refactor of the thing it guards teaches people to edit the
+            # guard. The marker states the intent instead.
+            needle = f"[{spec.toml_section}].{spec.toml_key}"
+        if needle not in auth_tests:
+            missing.append(spec.env_var or f"[{spec.toml_section}].{spec.toml_key}")
     assert not missing, (
         f"KeySpecs without a matching test in test_auth_workflows.py: "
         f"{missing}. Add a test_auth_{{name}} function that calls the "
-        f"matching _verify_* helper."
+        f"matching _verify_* helper. A config-only spec (no env var) is "
+        f"matched by a `covers: [section].key` marker in that file, "
+        f"since it has no variable name to grep for."
     )
 
 

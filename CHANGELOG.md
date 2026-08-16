@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`gateway` — screen against your institution's own OpenAI-compatible
+  LLM endpoint.** Many universities now run one: a single address
+  serving open-weight models on hardware the institution already owns,
+  usually at no per-paper cost to the researcher. Reaching it previously
+  meant pointing `OPENAI_BASE_URL` at it, which worked but misreported
+  everything downstream — the run showed as `openai`, borrowed OpenAI's
+  tier hints for model IDs that carry a parameter count rather than a
+  vendor's tier word, and priced the review at OpenAI's list rates.
+
+  `gateway` is the first provider the plugin ships **no address** for,
+  because "your university's endpoint" has no guessable value and
+  inventing one would send a user's abstracts to a host they did not
+  choose. That makes "selected but not yet configured" a normal starting
+  state rather than an exotic one, so `ProviderSpec` gained a
+  `byo_endpoint` flag and the three surfaces that build a URL — model
+  listing, the health probe, and the client itself — now name
+  `[gateway] base_url` immediately, instead of handing `urllib` the
+  string `/v1/models` and retrying the resulting `ValueError` three
+  times across eight seconds.
+
+  **It is also the first provider with no environment variable.** Every
+  other one's is an ecosystem convention its own SDK already reads, so
+  naming it costs the user nothing; a gateway has no such convention,
+  and any name invented here would collide with whatever a user already
+  calls theirs. Both settings live in `config.toml` under `[gateway]`,
+  and anyone who prefers an environment variable declares their own name
+  via `[gateway] api_key_env` / `base_url_env`.
+
+  **Cost is reported as unknown, not free.** The shipped catalogue
+  carries no `[gateway]` section deliberately: an institution may
+  recharge internally and the plugin cannot see that. "Free" is the one
+  wrong answer that cannot be walked back after 5,000 abstracts.
+
 - **`[elsevier] render_xml_to_pdf` — Elsevier full-text recovery is now
   opt-in, and asked about in the setup wizard.** When ScienceDirect
   returns a first-page preview, the fetcher can pull the entitled XML

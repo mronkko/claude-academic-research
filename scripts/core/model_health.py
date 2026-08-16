@@ -100,8 +100,13 @@ REMEDY: dict[str, str] = {
         "one with `--stage <stage> --model <id>`."
     ),
     ConnectionStatus.UNREACHABLE.value: (
-        "No response from the endpoint. For a local provider (Ollama, LM "
-        "Studio), confirm the server is running and the base URL is right."
+        "Nothing answered, or the endpoint returned a server error. If "
+        "the provider's own message above says a model is starting or "
+        "warming up, wait a minute and retry — a self-hosted server "
+        "often loads weights on first request. For a local provider "
+        "(Ollama, LM Studio), confirm the server is running and the base "
+        "URL is right. For an institutional gateway, check the address "
+        "and whether you need to be on the VPN."
     ),
     ConnectionStatus.BAD_REQUEST.value: (
         "The provider rejected the request shape. This is a plugin bug "
@@ -349,6 +354,20 @@ def check_connection(
     keeps its own retries for genuinely transient faults mid-run.
     """
     base = providers.base_url_for(spec, base_url)
+    # Checked before the pinned-model test on purpose: without an
+    # endpoint you cannot list models, so you cannot pin one either, and
+    # naming the missing URL is the more actionable of the two answers.
+    if spec.byo_endpoint and not base:
+        return ConnectionResult(
+            status=ConnectionStatus.UNREACHABLE,
+            provider=spec.name,
+            model=model,
+            detail=(
+                f"No endpoint configured for {spec.label}. Set "
+                f"{providers.base_url_location(spec)} — the plugin ships "
+                f"no default address for it."
+            ),
+        )
     if not model:
         return ConnectionResult(
             status=ConnectionStatus.MODEL_NOT_FOUND,

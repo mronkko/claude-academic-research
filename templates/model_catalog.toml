@@ -77,6 +77,13 @@ output_per_mtok = 10.00
 # upstream; no fallback pin is offered, because guessing one would be
 # worse than telling the user discovery failed.
 
+# `gateway` has no section here, deliberately. An institutional gateway
+# serves whichever models that institution chose to host, at whatever it
+# chooses to charge — usually nothing, sometimes an internal recharge.
+# The plugin knows none of that, so it quotes none of it: with no entry,
+# `cost_estimate_line` reports "unknown", which is the honest answer.
+# A zero-price stanza would read as a claim that the run is free.
+
 # Local providers serve whatever the user has pulled, so there is no
 # meaningful default and nothing to charge.
 [ollama.fast]
