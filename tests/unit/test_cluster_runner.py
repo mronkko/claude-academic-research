@@ -28,6 +28,7 @@ import ast
 import importlib.util
 import json
 import sys
+import types
 from pathlib import Path
 
 import batch_manifest as bm
@@ -371,6 +372,102 @@ def test_a_prompt_leaving_no_room_for_an_answer_is_not_sent() -> None:
 
 
 # ---------------------------------------------------------------------------
+# --check-imports: the login-node question about the environment
+#
+# Added after live validation, where a broken module stack passed
+# `--dry-run` (which imports nothing) and then died nine minutes into a
+# real allocation, twice. Importing vLLM needs no GPU, so this is a
+# question the login node can answer for free.
+# ---------------------------------------------------------------------------
+
+
+class _ImportExplodes:
+    """A meta-path finder that fails `import vllm` the way a real site does.
+
+    Modelled on an observed failure: a wheel built against a newer C++
+    runtime than the OS provides, which raises `ImportError` naming a
+    missing GLIBCXX symbol rather than saying anything about vLLM.
+    """
+
+    MESSAGE = "/lib64/libstdc++.so.6: version `GLIBCXX_3.4.31' not found"
+
+    def find_spec(self, name, path=None, target=None):
+        if name == "vllm":
+            raise ImportError(self.MESSAGE)
+        return None
+
+
+def test_check_imports_reports_the_version_when_the_stack_loads(
+    monkeypatch, capsys
+) -> None:
+    fake = types.ModuleType("vllm")
+    fake.__version__ = "0.19.1"
+    monkeypatch.setitem(sys.modules, "vllm", fake)
+
+    assert runner.check_imports() == 0
+    out = capsys.readouterr().out
+    assert "0.19.1" in out
+    assert "IMPORTS OK" in out
+
+
+def test_check_imports_surfaces_the_real_error_and_exits_non_zero(
+    monkeypatch, capsys
+) -> None:
+    """The exit code is the point: a wrapper has to be able to stop.
+
+    And the message has to be the *underlying* one. "vLLM failed to
+    import" sends someone to reinstall vLLM; the GLIBCXX line sends them
+    to the library path, which is where the fix is.
+    """
+    monkeypatch.delitem(sys.modules, "vllm", raising=False)
+    monkeypatch.setattr(sys, "meta_path", [_ImportExplodes(), *sys.meta_path])
+
+    assert runner.check_imports() == 1
+    out = capsys.readouterr().out
+    assert "FAILED" in out
+    assert "GLIBCXX_3.4.31" in out, "the real cause must survive to the operator"
+    assert "ImportError" in out, "the exception class is part of the diagnosis"
+    assert "GLIBCXX" in runner.IMPORT_HELP
+
+
+def test_check_imports_needs_no_manifest(monkeypatch, capsys) -> None:
+    """The whole value is answering before a manifest exists.
+
+    `--manifest` stopped being `required=True` for this; the guard below
+    keeps that relaxation from leaking into the other two modes.
+    """
+    fake = types.ModuleType("vllm")
+    fake.__version__ = "0.19.1"
+    monkeypatch.setitem(sys.modules, "vllm", fake)
+
+    assert runner.main(["--check-imports"]) == 0
+    assert "IMPORTS OK" in capsys.readouterr().out
+
+
+def test_dry_run_still_requires_a_manifest() -> None:
+    """The relaxation of `required=True` must not reach --dry-run."""
+    with pytest.raises(SystemExit) as excinfo:
+        runner.main(["--dry-run"])
+    assert "--manifest is required" in str(excinfo.value)
+
+
+def test_execute_still_requires_a_manifest() -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        runner.main(["--execute", "--confirm"])
+    assert "--manifest is required" in str(excinfo.value)
+
+
+def test_the_site_env_docs_tell_operators_about_the_check() -> None:
+    """A free pre-flight nobody knows about is not a pre-flight.
+
+    The README is the only place an operator setting up a new site is
+    told what to run first.
+    """
+    readme = (REPO / "scripts" / "cluster" / "README.md").read_text(encoding="utf-8")
+    assert "--check-imports" in readme
+
+
+# ---------------------------------------------------------------------------
 # The chat-template ladder
 # ---------------------------------------------------------------------------
 
@@ -618,7 +715,7 @@ def test_execute_without_confirm_refuses(tmp_path) -> None:
 
 def test_neither_mode_is_refused(tmp_path) -> None:
     path = _manifest(tmp_path, [_row()])
-    with pytest.raises(SystemExit, match="--dry-run or --execute"):
+    with pytest.raises(SystemExit, match="--dry-run, --execute or --check-imports"):
         runner.main(["--manifest", str(path), "--model", "org/m"])
 
 

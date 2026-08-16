@@ -783,6 +783,71 @@ def _response_row(base, output, n_in, budget):
 # --------------------------------------------------------------------------
 
 
+#: Printed when `--check-imports` fails. Deliberately names no site, no
+#: module and no distribution: the shape of this failure is universal
+#: even though every site's fix is its own.
+IMPORT_HELP = """\
+The GPU stack is not importable by this Python. Nothing is wrong with the
+manifest or with this script — the environment cannot run vLLM at all.
+
+Usual causes, most common first:
+
+  * The site environment was never loaded. Whatever `module load ...`,
+    conda activate or container entry your site uses has to happen before
+    this runs; in a batch job that belongs in SITE_ENV, not in the job
+    script. See README.md.
+  * A wheel in the environment was built against a newer C++ runtime than
+    the operating system provides, so the import dies on a missing
+    GLIBCXX_... symbol. The environment usually ships its own copy that is
+    simply not on the library path. README.md's "Symptoms and fixes" has
+    the one-line remedy.
+  * vLLM is genuinely not installed in this environment.
+
+Fix it here, on the login node, where the answer costs seconds. The same
+failure inside a queued job costs the wait plus the allocation."""
+
+
+def check_imports():
+    """Import the GPU stack and report it. Needs no GPU and no manifest.
+
+    `--dry-run` imports nothing, which is exactly what makes it free and
+    runnable on a login node — and also what makes it blind to the
+    failure that costs the most. A broken module stack passes the
+    pre-flight and then dies *inside* the allocation, after the queue
+    wait, which is the most expensive possible moment to learn it.
+
+    Importing vLLM does not require a GPU. So the question "can this
+    environment run vLLM at all?" has a two-second answer on the login
+    node, and there is no good reason to pay for it with queue time.
+    """
+    print(f"python : {platform.python_version()} ({sys.executable})")
+    try:
+        import vllm  # noqa: PLC0415 - cluster-only import, checked on purpose
+    except BaseException as exc:  # noqa: BLE001 - a broken stack raises anything
+        # Not just ImportError: a mismatched native library surfaces as
+        # OSError, and a half-initialised CUDA binding has been known to
+        # raise SystemExit. Reporting the class is the diagnosis.
+        print("vllm   : FAILED")
+        print("")
+        print(f"{type(exc).__name__}: {exc}")
+        print("")
+        print(IMPORT_HELP)
+        return 1
+    print(f"vllm   : {getattr(vllm, '__version__', 'unknown')}")
+    # Deliberately no `import torch` to report its version: `vllm` is the
+    # only third-party name this file is allowed to touch, and
+    # test_cluster_runner.py enforces that. The constraint is worth more
+    # than the extra line of diagnosis.
+    #
+    # Deliberately no `torch.cuda.is_available()` either: this is meant to run on
+    # a login node, where the honest answer is False and would read as a
+    # failure. What the GPU is gets recorded from the compute node itself,
+    # in the run record's hardware provenance.
+    print("")
+    print("IMPORTS OK: this environment can load the GPU stack.")
+    return 0
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="python3 run_batch.py",
@@ -792,8 +857,12 @@ def build_parser():
             "as a module on a cluster."
         ),
     )
-    p.add_argument("--manifest", required=True,
-                   help="Manifest JSONL (or .jsonl.gz) to execute.")
+    # Not `required=True`: --check-imports is a question about the
+    # environment and has to be answerable before a manifest exists.
+    # main() enforces it for every other mode.
+    p.add_argument("--manifest", default="",
+                   help="Manifest JSONL (or .jsonl.gz) to execute. Required "
+                        "for --dry-run and --execute.")
     p.add_argument("--model", default="",
                    help="Model to run, as your site's model cache names it. "
                         "Recorded verbatim in every response and in the CSV's "
@@ -826,6 +895,12 @@ def build_parser():
     p.add_argument("--dry-run", action="store_true",
                    help="Print the pre-flight summary and exit. Imports no "
                         "GPU stack, so it works on a login node.")
+    p.add_argument("--check-imports", action="store_true",
+                   help="Import vLLM, report its version and exit. Needs no "
+                        "GPU and no manifest, so it answers on a login node "
+                        "in seconds — which is where a broken module stack "
+                        "should be found, rather than minutes into an "
+                        "allocation. Run it once when setting a site up.")
     p.add_argument("--execute", action="store_true",
                    help="Actually load the model and generate.")
     p.add_argument("--confirm", action="store_true",
@@ -836,10 +911,18 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    # First, and before anything reads a file: it answers a question about
+    # the environment, so it must not be able to fail on a bad manifest.
+    if args.check_imports:
+        return check_imports()
     if not (args.dry_run or args.execute):
-        raise SystemExit("choose --dry-run or --execute")
+        raise SystemExit("choose --dry-run, --execute or --check-imports")
     if args.dry_run and args.execute:
         raise SystemExit("--dry-run and --execute are mutually exclusive")
+    if not args.manifest:
+        raise SystemExit(
+            "ERROR: --manifest is required for --dry-run and --execute."
+        )
 
     try:
         header, rows = read_manifest(args.manifest)

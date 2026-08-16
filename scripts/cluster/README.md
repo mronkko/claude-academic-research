@@ -66,7 +66,29 @@ manifest as one array job. **One array job, not a flood of individual
 jobs** — schedulers and their operators both prefer it, and it is one job
 ID to poll rather than twenty.
 
-Check the pre-flight on a login node first. It imports no GPU stack:
+## Two login-node checks, before anything is queued
+
+Neither needs a GPU, a queue slot or an allocation.
+
+**First: can this environment run vLLM at all?**
+
+```bash
+. ~/llm-site-env.sh                    # or however your site is loaded
+python3 run_batch.py --check-imports
+```
+
+It imports vLLM, prints the version, and exits non-zero with the
+underlying error if it cannot. Run it once when setting a site up, and
+again whenever the site's modules change.
+
+It exists because `--dry-run` deliberately imports nothing — which is
+what makes it free, and also what makes it blind to a broken module
+stack. A stack that cannot `import vllm` passes the pre-flight and then
+fails *inside* the allocation, after the queue wait: the most expensive
+moment to learn it, and one this project has paid for twice. Importing
+vLLM needs no GPU, so the login node can answer in seconds.
+
+**Second: will this manifest run?** The pre-flight imports no GPU stack:
 
 ```bash
 python3 run_batch.py --manifest requests.jsonl --model <org/model-id> --dry-run

@@ -71,6 +71,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the build if a hostname, partition, module or model ID is ever
   shipped.
 
+  Two login-node checks come before any of it, and neither needs a GPU,
+  a queue slot or an allocation: `--check-imports` answers "can this
+  environment run vLLM at all?", and `--dry-run` answers "will this
+  manifest run?". The first exists because the second imports nothing —
+  which is what makes `--dry-run` free, and also what makes it blind to
+  a module stack that cannot `import vllm`. Such a stack passes the
+  pre-flight and then fails *inside* the allocation, after the queue
+  wait, which is the most expensive moment to learn it. Importing vLLM
+  needs no GPU, so the answer costs seconds where the user already is.
+
   The new **`cluster-screening` skill** covers the round trip, and the
   new `[cluster] automation` setting — `manual` (default) / `confirm` /
   `auto`, overridable per run — governs how much of it an assistant may

@@ -250,6 +250,41 @@ def test_the_preflight_runs_on_the_login_node(tmp_path: Path) -> None:
     assert "3" in proc.stdout, "the pre-flight does not report three requests"
 
 
+def test_the_preflight_can_check_the_gpu_stack_imports(tmp_path: Path) -> None:
+    """`--check-imports` under the real `SITE_ENV`. Still no allocation.
+
+    This is the check that would have saved two allocations during the
+    first validation of this path. `--dry-run` imports nothing, so a
+    module stack that cannot `import vllm` sails through it and dies in
+    the job, after the queue wait — which is where it was actually
+    found, twice, on a `GLIBCXX` mismatch in a site wheel.
+
+    Importing vLLM needs no GPU, so the login node can answer it. That
+    makes this the one test here that checks the *environment* rather
+    than the code, and the reason it is worth its ssh round trip.
+    """
+    cfg = _settings()
+    manifest, _ = _emit(tmp_path)
+    remote = _stage_three_files(cfg, manifest)
+
+    proc = _ssh(cfg["host"], " && ".join([
+        f"cd {shlex.quote(remote)}",
+        # Sourced, not assumed: the whole point is to test the environment
+        # a job would get, and a login shell does not have it by default.
+        f". {shlex.quote(cfg['site_env'])}",
+        "python3 run_batch.py --check-imports",
+    ]))
+    assert proc.returncode == 0, (
+        f"the GPU stack does not import under SITE_ENV={cfg['site_env']}. "
+        f"This is a site problem, not a plugin one, and it is the cheapest "
+        f"place to find it:\n{proc.stdout}\n{proc.stderr}"
+    )
+    assert "IMPORTS OK" in proc.stdout
+    # The version is provenance: "which vLLM" is the first question asked
+    # of any run that behaves differently from the last one.
+    assert "vllm   :" in proc.stdout
+
+
 def test_the_runner_refuses_to_execute_without_confirm(tmp_path: Path) -> None:
     """`--execute` alone must not spend anything.
 
