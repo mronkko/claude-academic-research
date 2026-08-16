@@ -967,6 +967,42 @@ S10's `csl_json_to_zotero` reasoning) — but it surfaced two live defects.
   when they do, the asymmetry is the first thing read rather than the
   last thing discovered.
 
+- **S23** — a crashed vLLM job still reports `RUNNING`, so scheduler
+  state is not evidence of progress.
+  Found during live validation on a real cluster (2026-08-16), not by
+  us: reported by a peer session running a working vLLM batch pipeline
+  on the same site, with measurements. vLLM v1 runs its engine in a
+  separate process; an unhandled exception kills the driver while the
+  child survives holding the GPU, and `srun` will not finish the step
+  until the cgroup empties. `set -euo pipefail` exits the shell, not the
+  orphan. Their job sat `RUNNING` for **15 minutes having died at 90
+  seconds**, and would have held two GPUs for the full reservation.
+  Compounding it: **vLLM logs to stderr**, so a crashed job's `.out`
+  ends tidily at "init engine … took NN seconds" and looks healthy —
+  the 15 minutes were spent reading the wrong file.
+  **The direction that matters.** `tests/live/test_cluster_batch.py`'s
+  `_wait_for` infers *absence from `squeue`* → finished, which is sound:
+  a job that has left the queue really is done. The unsound inference is
+  the opposite one — *presence* → still working — and that is what
+  [skills/cluster-screening/SKILL.md](skills/cluster-screening/SKILL.md)
+  tells the agent to do when it polls `squeue` once per turn, and what
+  any future progress or health reporting built on that poll would
+  inherit. So this is a skill-guidance defect first and a test
+  robustness improvement second.
+  **What it would take:** two one-line checks, either of which would
+  have caught it in 90 seconds — on exit, tail the `.err` for a
+  traceback, and separately assert the responses file has the expected
+  number of lines. Plus a sentence in the skill saying scheduler state
+  is not evidence of progress, and that `.err` is where vLLM failures
+  are.
+  **Why deferred:** not reproduced here — our three live runs never
+  orphaned an engine — and this branch's remaining scope was validation,
+  not hardening. Recorded with the peer's measurements so the next
+  person does not pay the 15 minutes to rediscover it.
+  Files: [tests/live/test_cluster_batch.py](tests/live/test_cluster_batch.py),
+  [skills/cluster-screening/SKILL.md](skills/cluster-screening/SKILL.md),
+  [scripts/cluster/README.md](scripts/cluster/README.md).
+
 ### Skills
 
 - **S8** — modular / stage-scoped invocation for `systematic-review`.

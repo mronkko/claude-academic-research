@@ -64,9 +64,20 @@ CLUSTER_DIR = REPO / "scripts" / "cluster"
 #: filesystem, minutes not seconds) is not mistaken for a hang.
 SSH_TIMEOUT = 300
 
+#: Deliberately explicit about the *literal* `DECISION:` token, because a
+#: terser version was not enough. Asking only for "exactly two lines" left
+#: `Qwen2.5-7B-Instruct` answering `exclude\nREASON: ...` on one item in
+#: three: a correct judgement in a shape `parse_screening_response` cannot
+#: read, which it therefore records as `borderline` with a PARSE ERROR.
+#: The assertion at the bottom of this file stays strict because the
+#: production parser is strict — it is the prompt that has to earn the
+#: compliance, and a prompt this test ships is the right place to spend
+#: the words. Real screening prompts should be at least this explicit.
 SYSTEM_PROMPT = (
     "You screen paper abstracts for a systematic review of team "
-    "coordination in software projects. Reply with exactly two lines:\n"
+    "coordination in software projects. Reply with exactly two lines. "
+    "Begin the first line with the literal token DECISION: — the word "
+    "DECISION followed by a colon — even when the answer seems obvious:\n"
     "DECISION: include|exclude|borderline\n"
     "REASON: one sentence."
 )
