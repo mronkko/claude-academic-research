@@ -44,11 +44,12 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers -m 'not live and not live_browser and not live_slr'"
+addopts = "-ra --strict-markers -m 'not live and not live_browser and not live_slr and not live_cluster'"
 markers = [
     "live: direct-HTTP live-endpoint tests (PDF + abstract + auth); opt in with `pytest -m live`",
     "live_browser: Playwright live tests for Cloudflare-gated publishers (user clicks through CF); opt in with `pytest -m live_browser`",
     "live_slr: full live end-to-end mini systematic review against a real Zotero group (~5-12 min, real API spend); opt in with `pytest -m live_slr`",
+    "live_cluster: batch screening against a real GPU cluster over ssh/sbatch; needs ACADEMIC_RESEARCH_CLUSTER_HOST and queue time, and can never run in CI; opt in with `pytest -m live_cluster`",
 ]
 
 [tool.ruff]

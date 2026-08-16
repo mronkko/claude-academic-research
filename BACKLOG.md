@@ -468,6 +468,32 @@ notes on every `fulltext:include`.
 
 ## Re-evaluation candidates
 
+- **S22** — "a cluster is not a provider" (batch-screening design
+  decision, 2026-08-16).
+  The obvious-looking design was `provider = "cluster"` alongside
+  `anthropic`, `openai`, `gateway` and the two local servers. It was
+  rejected, and the reasoning is worth keeping because the shape will
+  look tempting again. A `ProviderSpec` describes something the plugin
+  can *call*: it has an address, a credential, a listable set of models,
+  and a health probe that either answers or does not. A batch scheduler
+  has none of those. There is nothing to probe, nothing to list, and no
+  answer while the script waits — the defining property of the whole
+  provider abstraction. Modelling it as one would have meant a provider
+  whose `verify` cannot verify, whose `list_models` cannot list, and
+  whose `generate` returns hours later or not at all, which pushes a
+  fiction through every surface that reports provider status.
+  The execution mode is orthogonal to the provider instead: emit and
+  apply need **no** provider at all, and the same manifest runs on a
+  cluster, on a laptop, or through a provider the plugin has never heard
+  of.
+  **Reopen if** a real asynchronous Batch API becomes the target — the
+  hosted ones have a real endpoint, a real credential, a real submit and
+  a real poll, so they are callable and therefore genuinely provider-
+  shaped. That is a different thing from a scheduler, and it should be
+  modelled differently.
+  Files: [scripts/pipelines/batch_manifest.py](scripts/pipelines/batch_manifest.py),
+  [scripts/core/providers.py](scripts/core/providers.py).
+
 - **P4** — drop `.claude/` from the default `--output` in
   `audit_zotero_library.py`.
   **Skipped** during Tier 1 because it directly conflicts with the
@@ -823,6 +849,123 @@ S10's `csl_json_to_zotero` reasoning) — but it surfaced two live defects.
   work.
   Files: [scripts/pipelines/searchers/semantic_scholar.py](scripts/pipelines/searchers/semantic_scholar.py)
   (L10-13, L32, L94-132), [scripts/setup/wizard.py:345-360](scripts/setup/wizard.py#L345-L360).
+
+- **S14** — multi-model array sweeps as a first-class workflow.
+  Deferred out of the batch-screening pass (2026-08-16). The mechanism
+  already exists — `MODELS` is colon-separated and indexed by
+  `$SLURM_ARRAY_TASK_ID`, so `--array=0-2` runs three models over one
+  manifest — but nothing downstream knows what to do with three response
+  files for one `run_id`. Applying them all would tag each item three
+  times, last write winning silently.
+  **What it would take:** a decision about what a sweep *is*. If the
+  purpose is choosing a model, the output is a comparison, not a set of
+  tags, and apply should refuse a sweep outright and point at S15. If
+  the purpose is an ensemble, someone has to define the adjudication
+  rule and where the disagreement is recorded.
+  **Why deferred:** it is a research-design question wearing a plumbing
+  costume, and getting it wrong writes decisions into a review's audit
+  trail. The first pass ships the capability and stops short of blessing
+  a use for it.
+  Files: [scripts/cluster/run_batch.sbatch](scripts/cluster/run_batch.sbatch),
+  [scripts/pipelines/batch_manifest.py](scripts/pipelines/batch_manifest.py).
+
+- **S15** — an agreement mart: one cluster run against one API run, on
+  the same manifest.
+  Deferred out of the batch-screening pass (2026-08-16). The single most
+  useful thing a user can do before trusting an open-weight model with a
+  corpus is screen ~50 papers both ways and look at the disagreements —
+  and every input for it already exists, because a manifest is the same
+  file whoever executes it.
+  **What it would take:** a reader that joins two response files on
+  `request_id`, plus percent agreement and Cohen's κ per decision class,
+  and a listing of the disagreements with both reasons side by side.
+  Roughly a hundred lines and no new dependency; the work is deciding
+  where the artefact lives and whether it belongs in the manuscript's
+  methods (it does — it is a validation, and `empirical-integrity`
+  would want it generated rather than hand-typed).
+  **Why deferred:** it is a new output artefact with its own reporting
+  conventions, and the first pass had no real cluster run to compare
+  against yet.
+
+- **S16** — per-document request grouping in the manifest.
+  Deferred out of the batch-screening pass (2026-08-16). The batch-
+  inference literature groups requests by document so a serving engine
+  can reuse the shared prefix. `write_manifest` already sorts by
+  `(item_key, ordinal)` in anticipation, but nothing emits more than one
+  request per item, so the `ordinal` field is always 0.
+  **What it would take:** a stage that asks several questions of one
+  full text — per-construct coding is the obvious candidate — plus an
+  applier that merges N answers into one coding note.
+  **Why deferred:** no caller needs it. Note the inversion recorded in
+  `write_manifest`'s docstring: here the *system prompt* is the shared
+  prefix and the document is the per-item part, so the ordinary
+  system-then-user layout is already prefix-optimal and a naive port of
+  the literature's grouping gets it backwards.
+  Files: [scripts/pipelines/batch_manifest.py](scripts/pipelines/batch_manifest.py).
+
+- **S17** — shipped per-site module profiles for `SITE_ENV`.
+  Deferred out of the batch-screening pass (2026-08-16), and deliberately
+  so: `SITE_ENV` is the one file the user writes, and
+  `tests/unit/test_cluster_is_generic.py` exists to keep any site's
+  `module load` lines out of this repository. A profile directory would
+  be the most reasonable-sounding way to erode that.
+  **What it would take:** a place for profiles that is not this
+  repository — a documented convention for a user-local
+  `~/.config/academic-research/cluster/<name>.sh`, discovered by name
+  rather than shipped — plus wizard support for selecting one.
+  **Why deferred:** the value is real (every user at one site writes the
+  same six lines) but it is a distribution problem, and shipping the
+  contents here is the wrong answer to it.
+
+- **S18** — vLLM guided decoding for the full-text coding stage.
+  Deferred out of the batch-screening pass (2026-08-16). Coding demands
+  strict JSON from what may be an 8B–30B open-weight model, and every
+  parse failure costs a whole GPU pass to repeat — which is why the
+  skill requires a ~10-item pilot first. Guided decoding is the actual
+  fix: vLLM can constrain generation to a JSON schema, so the model
+  cannot emit unparseable output at all.
+  **What it would take:** deriving a JSON schema from `coding_fields`
+  (already frozen into the manifest, so the schema can travel with it),
+  a `guided_json` field on the request row, and a runner that passes it
+  to `SamplingParams` when the installed vLLM supports it and ignores it
+  otherwise.
+  **Why deferred:** it puts a vLLM-version-dependent feature into the
+  manifest schema, and the manifest's whole value is that it is readable
+  by anything. Wants its own pass, after a real corpus has shown how bad
+  the parse-failure rate actually is.
+  Files: [scripts/cluster/run_batch.py](scripts/cluster/run_batch.py),
+  [scripts/pipelines/fulltext_code.py](scripts/pipelines/fulltext_code.py).
+
+- **S19** — two-argument `KeySpec.verify`.
+  Deferred out of the gateway pass (2026-08-16) and untouched by the
+  cluster pass. `verify` takes a key and probes a hosted endpoint; a
+  provider whose *address* is also user-supplied needs both, and the
+  three surfaces that build a URL each work around it differently. The
+  cluster path sidestepped the whole area by having no `KeySpec` at all —
+  an automation level is a policy statement, not a credential — which is
+  also why it needed no `test_live_coverage.py` entry.
+  **What it would take:** `verify(key, base_url)` across every spec, and
+  a re-read of the two guards that were re-anchored on
+  `(toml_section, toml_key)` when the gateway turned out to have no
+  environment variable.
+  **Why deferred:** it is a refactor of a signature every provider
+  implements, for the benefit of one provider that currently works.
+
+- **S20** — the `ca_bundle` contingency: setup probes and the run path
+  do not share a TLS trust store.
+  Deferred out of the gateway pass (2026-08-16); relevant to any
+  institution-hosted endpoint, including a cluster's. `scripts/setup/`
+  is stdlib-only and probes with `urllib`; the run path goes through
+  `openai` → `httpx`. On a site with an internal CA, or with corporate
+  TLS interception, a fix applied to one leaves the other broken — and
+  the failure is asymmetric in the worst direction, where the probe
+  passes and the run fails.
+  **What it would take:** a `[llm] ca_bundle` setting honoured by both,
+  which for `urllib` means an `ssl.SSLContext` and for `httpx` means a
+  client-level `verify=`.
+  **Why deferred:** speculative until someone hits it. Recorded so that
+  when they do, the asymmetry is the first thing read rather than the
+  last thing discovered.
 
 ### Skills
 

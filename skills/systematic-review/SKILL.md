@@ -1,6 +1,6 @@
 ---
 name: systematic-review
-description: Use when running a full systematic literature review (SLR) — PRISMA-style search, screening, coding, and export. Trigger phrases "systematic review", "SLR", "PRISMA", "screen papers", "code papers", "full-text screening". Do NOT use for isolated Zotero enrichment without a screening pipeline — use `zotero-operations`. Targets social sciences; medical-SLR instruments (RoB 2, ROBINS-I, evidence hierarchies, PRISMA-P) are out of scope.
+description: Use when running a full systematic literature review (SLR) — PRISMA-style search, screening, coding, and export. Trigger phrases "systematic review", "SLR", "PRISMA", "screen papers", "code papers", "full-text screening". Do NOT use for isolated Zotero enrichment — use `zotero-operations`; for screening on a GPU cluster or batch scheduler — use `cluster-screening`. Targets social sciences; medical-SLR instruments (RoB 2, ROBINS-I, evidence hierarchies, PRISMA-P) are out of scope.
 ---
 
 # systematic-review
@@ -287,12 +287,39 @@ between scope.md and search_config.py.
 
 ## Choosing the screening model
 
-Model choice has two layers. **The provider** is a machine-wide setting
-— which company's (or which local server's) API the pipelines call.
-**The tier** is a per-stage capability level: `fast` for screening
+Model choice has three layers. **The provider** is a machine-wide
+setting — which company's (or which local server's) API the pipelines
+call. **The tier** is a per-stage capability level: `fast` for screening
 thousands of abstracts, `balanced` for coding full texts. No model ID
 is hardcoded anywhere in the plugin; you ask the provider what it
 serves today and pin a choice.
+
+**The execution mode** is the third, and it is a different kind of
+question: does an LLM answer *while the script waits*? Everything below
+this heading assumes yes — one request per item, a provider on the other
+end, results in the same run. That is the default and almost always the
+right answer.
+
+It stops being possible when the compute is a queued job. A GPU node
+behind a batch scheduler cannot answer synchronously at all: work is
+submitted and collected minutes or hours later, and no `provider` value
+can describe that. For those, both screening scripts split into
+`--emit-manifest` (assemble the requests, write them, exit) and
+`--apply-responses` (write the tags, notes and CSV rows from responses
+produced anywhere). **Load `cluster-screening` for that path** — it
+covers the automation levels, the transfer, polling discipline, and the
+four conditions under which apply must refuse. Do not improvise it from
+here.
+
+Two things to keep straight when a user's institution offers both:
+
+- An institutional **`gateway`** is a *provider* — a synchronous
+  OpenAI-compatible endpoint, configured below, screened against
+  normally. It is not the cluster path.
+- The batch path needs **no provider and no credential at all** during
+  emit and apply. The manifest carries its own system prompt, and
+  whatever executes it is on the other side of a file. Do not configure
+  an LLM provider in order to emit one.
 
 `screening_config.py` records the result (`ABSTRACT_SCREENING_MODEL`,
 `FULLTEXT_CODING_MODEL`) with a provenance comment. That pin is the
@@ -1148,6 +1175,12 @@ phases is a data-quality signal, not a failure to hide.
   decision.
 - **Parallelise with `ThreadPoolExecutor` + `threading.Lock` on the
   CSV log.** Default 8 workers for Haiku / Gemini Flash, 5 for Sonnet / Gemini Pro.
+  **`--workers` is a synchronous-path setting only.** It sizes a pool of
+  concurrent API calls, so it does nothing on the `--emit-manifest` /
+  `--apply-responses` path — there the whole manifest goes to the serving
+  engine in one call and the engine schedules the batch, which is where
+  nearly all of the throughput comes from. Reinstating a per-request loop
+  to "parallelise" a batch run forfeits it. See `cluster-screening`.
 - **Resilient JSON parsing.** Even with "JSON only" system prompts,
   the LLM sometimes emits chain-of-thought before the object. Use
   `llm_helpers.extract_json_from_response()` which walks for the first

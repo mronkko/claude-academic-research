@@ -42,6 +42,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recharge internally and the plugin cannot see that. "Free" is the one
   wrong answer that cannot be walked back after 5,000 abstracts.
 
+- **Screen and code on a GPU cluster instead of an LLM API.** Screening
+  has always required a provider that answers *while the script waits*.
+  That rules out the cheapest compute many universities have: a GPU node
+  behind a batch scheduler, where work is submitted and collected
+  minutes or hours later. Both screening stages now split in two, and
+  the halves are joined by a file rather than by a running process:
+
+      abstract_screen.py --emit-manifest requests.jsonl
+      ... executed anywhere ...
+      abstract_screen.py --apply-responses responses.jsonl \
+                         --manifest requests.jsonl
+
+  A manifest is **self-contained**: every request carries its own
+  rendered system and user message, the prompt's SHA-256, the prompt
+  version, and (for coding) the frozen `coding_fields`. Whatever runs it
+  needs no Zotero, no `screening_config.py`, no plugin checkout and no
+  credential — and emit and apply need no LLM provider at all.
+
+  Shipped alongside: `scripts/cluster/run_batch.py`, a vLLM runner that
+  **imports nothing from this repository** — a cluster gets three files
+  copied to it, never a clone, because `scripts` is an ordinary
+  directory name that a site's own software stack very likely already
+  owns and `PYTHONPATH` does not reliably settle the argument — plus
+  `run_batch.sbatch`, a SLURM wrapper with no site-specific value in it.
+  Everything a site needs to say about itself goes in a `SITE_ENV` shell
+  snippet the user writes; `tests/unit/test_cluster_is_generic.py` fails
+  the build if a hostname, partition, module or model ID is ever
+  shipped.
+
+  The new **`cluster-screening` skill** covers the round trip, and the
+  new `[cluster] automation` setting — `manual` (default) / `confirm` /
+  `auto`, overridable per run — governs how much of it an assistant may
+  drive. **The default is `manual`**, which prints the `ssh` / `sbatch`
+  commands and stops: `confirm`'s safety depends on somebody being there
+  to answer a permission prompt, and a level whose safety needs a TTY is
+  not a safe default for a shared facility account the plugin does not
+  own. `manual` is also the only level that works where reaching the
+  cluster needs VPN, 2FA or Kerberos.
+
+  **`confirm` is a claim about the permission system, not about this
+  plugin**, so the plugin never allow-lists `ssh`, `scp`, `rsync` or
+  `sbatch` — absent an allow rule the prompt *is* the approval, and a
+  guard test fails the build if the wizard ever adds one.
+  `check_cluster_config.py` reads the settings files and reports drift
+  in both directions: `confirm` with an allow rule in place (one "don't
+  ask again" click, possibly months ago, possibly in another project)
+  confirms nothing, and `auto` without one prompts on every call, which
+  in a headless session reads as a hang. `set_cluster_automation.py`
+  writes the level and re-reports the effect through the same code, so
+  the two cannot disagree.
+
+  Four things stop a run rather than being worked around: a **degenerate
+  run record** (mean output at or below two tokens — the failure that
+  looks healthy, since every row reads `call_status=ok` and nothing is
+  in any of them), a `run_id` mismatch, an unknown `schema_version`, and
+  a coding manifest whose `coding_fields` no longer match the config.
+  Over-long requests go to a `.skipped.json` sidecar as
+  `too_long_for_context` at emit time and are refused by token count in
+  the runner, rather than failing inside the serving stack in ways that
+  read as model failure after the allocation is spent. The runner never
+  retries and never writes placeholder text: a failed generation is
+  recorded as one, the item stays untagged, and a re-run picks it up.
+
 - **`[elsevier] render_xml_to_pdf` — Elsevier full-text recovery is now
   opt-in, and asked about in the setup wizard.** When ScienceDirect
   returns a first-page preview, the fetcher can pull the entitled XML

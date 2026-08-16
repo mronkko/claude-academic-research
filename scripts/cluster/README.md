@@ -48,11 +48,17 @@ export HF_HOME=<where your site keeps model weights>
 Then:
 
 ```bash
+mkdir -p logs                      # before the first submit, not after
 MANIFEST=$PWD/requests.jsonl \
 MODELS=<org/model-id> \
 SITE_ENV=~/llm-site-env.sh \
   sbatch --array=0 run_batch.sbatch
 ```
+
+`logs/` has to exist **before** you submit. The scheduler opens the
+`--output` path itself, before the first line of the script runs, so the
+`mkdir -p logs` inside the wrapper is too late to help the very first
+job — which then fails with no log to explain why.
 
 `MODELS` is colon-separated and indexed by `$SLURM_ARRAY_TASK_ID`, so
 `MODELS=<org/a>:<org/b> sbatch --array=0-1` runs two models over the same
