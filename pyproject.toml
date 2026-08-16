@@ -59,6 +59,22 @@ target-version = "py311"
 select = ["E", "F", "W", "I", "B", "UP"]
 ignore = ["E501"]
 
+# `scripts/cluster/run_batch.py` is copied to a GPU cluster and run by
+# whatever interpreter the site's module system provides, which is
+# routinely older than this repository's 3.11 floor. It is the one file
+# here that must stay Python 3.9-compatible, so the pyupgrade rules that
+# rewrite to 3.10+/3.11+ constructs are off for it:
+#   UP017 `timezone.utc` -> `datetime.UTC`   (3.11+)
+#   UP038 isinstance tuple -> `X | Y`        (3.10+ at runtime)
+#   B905  `zip(...)` -> `zip(..., strict=)`  (3.10+)
+# This is not hypothetical: a `ruff check --fix --unsafe-fixes` pass
+# introduced the first and third, and the third was caught only by
+# running the file on a real 3.9. `tests/unit/test_cluster_runner.py`
+# guards both the syntax (parsed at 3.9's feature version) and these
+# specific names, so the exemption and the test back each other up.
+[tool.ruff.lint.per-file-ignores]
+"scripts/cluster/*.py" = ["UP017", "UP038", "B905"]
+
 # IDE static analysis: pipeline scripts add `scripts/` to sys.path at runtime
 # so they can import sibling packages (sources, core). Tell the
 # analyzer about it so imports like `from sources.predatory import ...`
