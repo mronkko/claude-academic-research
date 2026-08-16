@@ -977,6 +977,45 @@ def _resolve_connector_path(base: Path) -> Path | None:
     return subs[-1]
 
 
+def _prompt_elsevier_xml_pdf(interactive: bool, existing: dict) -> dict[str, object]:
+    """Return `{render_xml_to_pdf: bool}` to merge into `[elsevier]`.
+
+    Elsevier serves some articles as a one-page preview even to entitled
+    readers; the full body is available from the XML endpoint, and the
+    pipeline can render it to a text-only PDF so the cascade has
+    something to attach.
+
+    This asks first, and defaults to **no**. The output is a file the
+    tool generates — plain text, no figures, no layout — and finding one
+    of those in your own Zotero library is surprising if you never asked
+    for it: it looks like the article, and nothing about a PDF icon says
+    "reconstructed". Opting in is cheap; discovering afterwards that
+    hundreds of synthesized documents were filed alongside real ones is
+    not.
+    """
+    current = (existing.get("elsevier", {}) or {}).get("render_xml_to_pdf")
+    if not interactive:
+        # Non-interactive re-runs must not silently flip a user's choice.
+        return {"render_xml_to_pdf": bool(current)} if current is not None else {}
+
+    default_yes = bool(current)
+    print("\n  Elsevier full-text recovery (optional):")
+    print(
+        "    Elsevier sometimes returns only the first page of an article.\n"
+        "    The full text is usually still available as XML, which this\n"
+        "    plugin can render into a GENERATED, text-only PDF (no figures,\n"
+        "    no layout) and attach to your library. Recovered files are named\n"
+        "    '-tdm-recovered' so they can be told apart from real PDFs.",
+    )
+    suffix = "[Y/n]" if default_yes else "[y/N]"
+    answer = input(f"    Recover these as generated PDFs? {suffix} ").strip().lower()
+    if not answer:
+        enabled = default_yes
+    else:
+        enabled = answer in ("y", "yes")
+    return {"render_xml_to_pdf": enabled}
+
+
 def _detect_and_prompt_connector(
     interactive: bool,
     existing: dict,
@@ -2329,6 +2368,12 @@ def main() -> int:
     connector_entry = _detect_and_prompt_connector(interactive, existing_cfg)
     if connector_entry:
         values["zotero_connector"] = connector_entry
+
+    # Merge rather than assign: `[elsevier]` already carries `api_key`
+    # from _collect_keys, and overwriting the section would drop it.
+    xml_pdf_entry = _prompt_elsevier_xml_pdf(interactive, existing_cfg)
+    if xml_pdf_entry:
+        values.setdefault("elsevier", {}).update(xml_pdf_entry)
 
     updated_no_access = _offer_no_access_editor(interactive, existing_cfg)
     if updated_no_access:

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`[elsevier] render_xml_to_pdf` — Elsevier full-text recovery is now
+  opt-in, and asked about in the setup wizard.** When ScienceDirect
+  returns a first-page preview, the fetcher can pull the entitled XML
+  body and render it to a text-only PDF. What that produces is a file
+  the tool *generates* — no figures, no layout, tables flattened — and
+  filing one of those in someone's Zotero library unasked is surprising:
+  it sits next to real articles, looks like one, and nothing about a PDF
+  icon says "reconstructed".
+
+  **Default off.** When off, the XML endpoint is not called at all, so no
+  Elsevier quota is spent retrieving text the run would then decline to
+  write; a log line names the config key so the capability is
+  discoverable rather than hidden. Recovered files keep their
+  `-tdm-recovered` filename marker. The wizard defaults to no, preserves
+  an existing choice across re-runs, and never flips the setting
+  non-interactively. Only an explicit truthy token enables it, so a typo
+  cannot switch it on.
+
 ### Fixed
 
 - **A working Zotero Connector was reported as "extension not found",

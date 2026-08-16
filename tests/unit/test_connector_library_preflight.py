@@ -160,3 +160,98 @@ def test_wizard_leaves_an_unrelated_explicit_path_alone(
         False, {"zotero_connector": {"extension_dir": str(custom)}},
     )
     assert out["extension_dir"] == str(custom)
+
+
+# ---------------------------------------------------------------------------
+# Elsevier XML->PDF synthesis is opt-in
+# ---------------------------------------------------------------------------
+
+
+def test_xml_pdf_synthesis_is_off_by_default() -> None:
+    """A generated text-only PDF appearing in someone's Zotero library is
+    surprising unless they asked for it, so the default must be off."""
+    from enrich_pdfs import Config
+
+    assert Config().elsevier_render_xml_to_pdf is False
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (True, True), (False, False),          # TOML native booleans
+        ("true", True), ("1", True), ("yes", True), ("on", True),
+        ("false", False), ("0", False), ("no", False), ("off", False),
+        ("", False),                           # unset
+        ("perhaps", False),                    # unrecognised never enables
+        (None, False),
+    ],
+)
+def test_bool_coercion_only_enables_on_an_explicit_token(raw, expected) -> None:
+    from enrich_pdfs import _as_bool
+
+    assert _as_bool(raw) is expected
+
+
+def test_disabled_synthesis_does_not_call_the_xml_endpoint(monkeypatch) -> None:
+    """When off, the XML request is skipped entirely — no Elsevier quota
+    spent fetching text the run would then refuse to write."""
+    from fetchers.sciencedirect import ScienceDirectSource
+
+    src = ScienceDirectSource.__new__(ScienceDirectSource)
+    src.config = type("C", (), {"elsevier_render_xml_to_pdf": False})()
+    called = []
+    src.http = type("H", (), {"get": lambda *a, **k: called.append(1)})()
+
+    out = src._fetch_xml_fallback("10.1016/j.test.2020.01.001", "key", "url", "/tmp")
+    assert out is None
+    assert called == [], "the XML endpoint must not be called when opted out"
+
+
+def test_wizard_defaults_the_option_to_off_and_keeps_the_api_key(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Non-interactive setup must not enable it, and merging the answer
+    into `[elsevier]` must not drop the api_key collected alongside it."""
+    w = _wizard()
+    entry = w._prompt_elsevier_xml_pdf(False, {})
+    assert entry == {}, "absent means absent; do not write a value nobody chose"
+
+    values = {"elsevier": {"api_key": "SECRET"}}
+    entry = w._prompt_elsevier_xml_pdf(
+        False, {"elsevier": {"render_xml_to_pdf": True}},
+    )
+    values.setdefault("elsevier", {}).update(entry)
+    assert values["elsevier"] == {"api_key": "SECRET", "render_xml_to_pdf": True}
+
+
+def test_wizard_preserves_an_existing_opt_in_non_interactively() -> None:
+    """A re-run with --no-input must not silently revoke consent."""
+    w = _wizard()
+    assert w._prompt_elsevier_xml_pdf(
+        False, {"elsevier": {"render_xml_to_pdf": True}},
+    ) == {"render_xml_to_pdf": True}
+    assert w._prompt_elsevier_xml_pdf(
+        False, {"elsevier": {"render_xml_to_pdf": False}},
+    ) == {"render_xml_to_pdf": False}
+
+
+def test_enabled_synthesis_does_reach_the_xml_endpoint() -> None:
+    """The complement: opting in must actually opt in. A gate that never
+    opens is the same bug as one that never closes."""
+    from fetchers.sciencedirect import ScienceDirectSource
+
+    src = ScienceDirectSource.__new__(ScienceDirectSource)
+    src.config = type("C", (), {"elsevier_render_xml_to_pdf": True})()
+    called = []
+
+    class _Resp:
+        status_code = 500          # bail immediately after the call
+        headers: dict = {}
+
+    def _get(*a, **k):
+        called.append(1)
+        return _Resp()
+
+    src.http = type("H", (), {"get": staticmethod(_get)})()
+    src._fetch_xml_fallback("10.1016/j.test.2020.01.001", "key", "url", "/tmp")
+    assert called == [1], "opting in must reach the XML endpoint"

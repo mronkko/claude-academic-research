@@ -121,6 +121,26 @@ _PLAYWRIGHT_MISSING_MSG = (
 )
 
 
+def _as_bool(value, *, default: bool = False) -> bool:
+    """Coerce a config value to bool.
+
+    TOML gives a real `bool` for `key = true`; an environment variable
+    gives a string; an unset key gives `""`. Only an explicit truthy
+    token turns a feature on — anything unrecognised keeps the default,
+    so a typo silently enabling a surprising behaviour is not possible.
+    """
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if not text:
+        return default
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
 @dataclass
 class Config:
     elsevier_api_key: str = ""
@@ -129,11 +149,20 @@ class Config:
     semantic_scholar_api_key: str = ""
     core_api_key: str = ""
     crossref_mailto: str = ""
+    #: Opt-in. When an Elsevier PDF comes back as a first-page preview,
+    #: render the entitled XML body to a text-only PDF and attach that.
+    #: Off by default: it puts a *generated* file in the user's Zotero
+    #: library, which is a surprising thing to find there unless it was
+    #: asked for. See ScienceDirectSource._fetch_xml_fallback.
+    elsevier_render_xml_to_pdf: bool = False
 
 
 def _load_config() -> Config:
     return Config(
         elsevier_api_key=get("elsevier", "api_key", env="ELSEVIER_API_KEY"),
+        elsevier_render_xml_to_pdf=_as_bool(
+            get("elsevier", "render_xml_to_pdf", env="ELSEVIER_RENDER_XML_TO_PDF"),
+        ),
         openalex_api_key=get("openalex", "api_key", env="OPENALEX_API_KEY"),
         wiley_tdm_token=get("wiley", "tdm_token", env="WILEY_TDM_TOKEN"),
         semantic_scholar_api_key=get(

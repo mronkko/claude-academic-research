@@ -289,7 +289,26 @@ class ScienceDirectSource(AbstractFetcher, PdfFetcher):
         Only called when the PDF endpoint returns `x-els-status: WARNING`.
         Returns the cache path of the recovered text-only PDF, or None
         if the XML endpoint is also unentitled / empty.
+
+        **Opt-in, via `[elsevier] render_xml_to_pdf`.** What this produces
+        is not a publisher PDF but a file this tool generates: plain text,
+        no figures, no layout, tables flattened. Attaching that to
+        someone's Zotero library without being asked is a surprising
+        thing to do — a user opening it later has no reason to expect a
+        synthesized document, and it is easily mistaken for the real
+        article. Default off; when off the XML endpoint is not called at
+        all, so no Elsevier quota is spent discovering text we would then
+        refuse to write.
         """
+        if not getattr(self.config, "elsevier_render_xml_to_pdf", False):
+            logger.info(
+                "elsevier %s returned a first-page preview; full text is "
+                "available via the XML endpoint but PDF synthesis is off. "
+                "Set [elsevier] render_xml_to_pdf = true (or re-run the "
+                "setup wizard) to recover it as a generated text-only PDF.",
+                doi,
+            )
+            return None
         # _fetch_xml_fallback is only reached after a successful PDF
         # call, so self.http is guaranteed non-None at this point. The
         # assert documents the precondition for static analyzers that
