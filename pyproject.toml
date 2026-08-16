@@ -40,6 +40,16 @@ dev = [
     "pybliometrics>=3.6",
     "wiley-tdm>=0.2",
     "zotero-mcp-server>=0.9,<0.10",
+    # Same silent-skip problem again, on `live_browser`: every test in
+    # test_browser_publishers.py sits behind `importorskip("playwright")`,
+    # so without this the entire browser-handler suite reports as passing
+    # while exercising nothing. That is not hypothetical — the APA handler
+    # shipped three defects (dead access-check URL, wrong accession read
+    # off the previous page, entitled sessions never seeing doiLanding)
+    # past a green suite. Installing the package is enough for collection;
+    # actually running still needs `playwright install chromium`, which
+    # the fixture's skip message spells out.
+    "playwright>=1.40",
 ]
 
 [tool.pytest.ini_options]

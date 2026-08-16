@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.live.conftest import KNOWN_DOIS
+from tests.live.conftest import APA_REGRESSION_DOIS, KNOWN_DOIS
 
 pytestmark = pytest.mark.live_browser
 
@@ -102,25 +102,18 @@ def browser_session():
     loop.close()
 
 
-@pytest.mark.parametrize("handler", _handlers(), ids=lambda h: h.name)
-def test_browser_publisher_downloads_pdf(handler, browser_session) -> None:
-    """Every registered handler downloads a `%PDF-` payload for its known DOI."""
-    if handler.name not in KNOWN_DOIS:
-        pytest.skip(
-            f"No test DOI for publisher {handler.name!r} in KNOWN_DOIS. "
-            f"Add one to tests/live/conftest.py."
-        )
-    if handler.name in _no_access_publishers():
-        pytest.skip(
-            f"[{handler.name}] in [library] no_access (config.toml) — "
-            f"your institution has no access; the pipeline routes these "
-            f"items to the Connector fallback. Remove the entry from "
-            f"config.toml to test this publisher again."
-        )
-    doi = KNOWN_DOIS[handler.name]
+def _attempt(handler, doi: str, browser_session):
+    """Run the production `setup()` + `download()` pair for one DOI.
+
+    Returns `(outcome, result)` where outcome is the setup verdict and
+    result is `download()`'s `(path, url)` or None. Shared so the
+    per-publisher smoke test and the APA regression test exercise
+    identical code — a regression test that took a shortcut around
+    `setup()` would not be testing what the pipeline runs.
+    """
     loop, ctx, cache_dir = browser_session
 
-    from fetchers.browser import Counter, cache_path_for, is_cached
+    from fetchers.browser import Counter, cache_path_for
     from fetchers.browser.base import normalise_setup_result
 
     # Force a real download — a cached PDF from a previous run would
@@ -138,7 +131,29 @@ def test_browser_publisher_downloads_pdf(handler, browser_session) -> None:
         )
         return outcome, result
 
-    outcome, result = loop.run_until_complete(run())
+    return loop.run_until_complete(run())
+
+
+@pytest.mark.parametrize("handler", _handlers(), ids=lambda h: h.name)
+def test_browser_publisher_downloads_pdf(handler, browser_session) -> None:
+    """Every registered handler downloads a `%PDF-` payload for its known DOI."""
+    if handler.name not in KNOWN_DOIS:
+        pytest.skip(
+            f"No test DOI for publisher {handler.name!r} in KNOWN_DOIS. "
+            f"Add one to tests/live/conftest.py."
+        )
+    if handler.name in _no_access_publishers():
+        pytest.skip(
+            f"[{handler.name}] in [library] no_access (config.toml) — "
+            f"your institution has no access; the pipeline routes these "
+            f"items to the Connector fallback. Remove the entry from "
+            f"config.toml to test this publisher again."
+        )
+    doi = KNOWN_DOIS[handler.name]
+
+    from fetchers.browser import is_cached
+
+    outcome, result = _attempt(handler, doi, browser_session)
     if outcome == "always_skip":
         # Honour the prompt's promise: persist to [library] no_access,
         # exactly as the enrich_pdfs.py driver does, so future test
@@ -166,4 +181,48 @@ def test_browser_publisher_downloads_pdf(handler, browser_session) -> None:
     assert is_cached(path), (
         f"[{handler.name}] {path} is missing or not a %PDF- payload. "
         f"Likely an HTML wrapper or access-denied page."
+    )
+
+
+# ---------------------------------------------------------------------------
+# APA PsycNET regression corpus
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("doi", sorted(APA_REGRESSION_DOIS), ids=lambda d: d)
+def test_apa_regression_dois_download(doi, browser_session) -> None:
+    """The two DOIs a live 0.11.0 run failed 2-of-2 on.
+
+    Both are licensed at the reporting site and were downloaded by hand
+    from the same Chromium profile that the handler drives, so a failure
+    here is a handler defect and not an access one. The parametrized
+    smoke test above covers a third APA article and passing it told us
+    nothing — it was passing while these two were broken, which is how
+    the defect reached a live run. Keep both.
+    """
+    from fetchers.browser import ApaHandler, is_cached
+
+    handler = ApaHandler()
+    if handler.name in _no_access_publishers():
+        pytest.skip(
+            "[apa] in [library] no_access (config.toml) — your "
+            "institution has no APA access; remove the entry to test."
+        )
+
+    outcome, result = _attempt(handler, doi, browser_session)
+    if outcome != "proceed":
+        pytest.skip(f"[apa] user chose {outcome!r} at setup.")
+
+    assert result is not None, (
+        f"[apa] {doi} ({APA_REGRESSION_DOIS[doi]}) did not download. The "
+        f"handler's ERROR line above names the failing step and the page "
+        f"it stopped on; full artefacts are under "
+        f"<cache_dir>/diagnostics/apa_*.{{png,html,txt}}. If it stopped at "
+        f"sso.apa.org, sign in to APA in the browser window and re-run — "
+        f"that is an entitlement problem, not a handler bug."
+    )
+    path, source_url = result
+    assert is_cached(path), (
+        f"[apa] {doi} saved {path} but it is not a %PDF- payload "
+        f"(source: {source_url})."
     )

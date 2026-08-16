@@ -114,6 +114,116 @@ async def try_click(page: Page, *selectors: str, timeout: int = 8000) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Failure diagnostics.
+# ---------------------------------------------------------------------------
+#
+# Every page-driven flow ends with "click the thing that yields a PDF",
+# and when that click finds nothing the exception says exactly that and
+# nothing more. `Download button not found` is emitted identically
+# whether the browser is sitting on the right article page with a stale
+# selector, or three steps away on a login screen it was silently
+# redirected to. A live APA run failed 2/2 items that way; the real
+# cause (an access check bouncing the session to `sso.apa.org`) was not
+# recoverable from the log, because nothing recorded where the browser
+# actually ended up.
+#
+# `capture_page_diagnostics` records that: final URL, page title, a
+# screenshot, and the rendered HTML. It is cheap, runs only on the
+# failure path, and every page-driven handler routes its failures
+# through `PublisherHandler.report_failure` so none of them can forget.
+
+#: Sub-directory of the PDF cache where failure artefacts are written.
+#: Under the cache dir rather than the project tree because these are
+#: run-local debris, sized in megabytes, that nobody wants committed.
+DIAGNOSTICS_DIRNAME = "diagnostics"
+
+
+def _diagnostic_stem(handler: str, doi: str) -> str:
+    """Filename stem for one item's diagnostic artefacts.
+
+    Same slash/colon escaping as `cache_path_for`, prefixed by handler so
+    two publishers can never collide on a shared DOI suffix.
+    """
+    safe = doi.replace("/", "_").replace(":", "_") or "unknown-doi"
+    return f"{handler or 'browser'}_{safe}"
+
+
+async def capture_page_diagnostics(
+    page: Page,
+    cache_dir: str | Path,
+    *,
+    handler: str,
+    doi: str,
+    note: str = "",
+) -> str:
+    """Record where a failed browser flow actually ended up.
+
+    Writes `<cache_dir>/diagnostics/<handler>_<doi>.{png,html,txt}` and
+    returns a one-line `at <url> ("<title>")` summary for the console —
+    the part that makes the failure classifiable without opening
+    anything. Returns "" when even the URL could not be read.
+
+    Never raises. This runs on the failure path, where an exception
+    would replace the caller's real error with a worse one.
+    """
+    url = ""
+    title = ""
+    try:
+        url = page.url or ""
+    except Exception:
+        pass
+    try:
+        title = (await page.title()) or ""
+    except Exception:
+        pass
+
+    diag_dir = Path(cache_dir) / DIAGNOSTICS_DIRNAME
+    stem = _diagnostic_stem(handler, doi)
+    saved = False
+    try:
+        diag_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        diag_dir = None  # type: ignore[assignment]
+
+    if diag_dir is not None:
+        try:
+            await page.screenshot(path=str(diag_dir / f"{stem}.png"))
+            saved = True
+        except Exception:
+            pass
+        try:
+            (diag_dir / f"{stem}.html").write_text(
+                await page.content(), encoding="utf-8",
+            )
+            saved = True
+        except Exception:
+            pass
+        try:
+            (diag_dir / f"{stem}.txt").write_text(
+                "\n".join([
+                    f"handler: {handler}",
+                    f"doi:     {doi}",
+                    f"url:     {url}",
+                    f"title:   {title}",
+                    f"error:   {note}",
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            saved = True
+        except Exception:
+            pass
+
+    if not url and not title:
+        return ""
+    summary = f"at {url or '<unknown url>'}"
+    if title:
+        summary += f' ("{title[:70]}")'
+    if saved and diag_dir is not None:
+        summary += f" — diagnostics: {diag_dir / stem}.*"
+    return summary
+
+
 def _write_chromium_prefs(user_data_dir: Path) -> None:
     """Force the bundled Chromium to download PDFs instead of opening
     them in the built-in viewer.
@@ -544,6 +654,48 @@ class PublisherHandler(ABC):
         print("*" * 70, flush=True)
 
     # ------------------------------------------------------------------
+    # Failure reporting.
+    # ------------------------------------------------------------------
+
+    async def report_failure(
+        self,
+        exc: BaseException | str,
+        *,
+        counter: Counter,
+        total: int,
+        t_start: float,
+        page: Page | None = None,
+        cache_dir: str | Path | None = None,
+        doi: str = "",
+    ) -> None:
+        """Count one failed item and print it with its page context.
+
+        Every page-driven handler funnels its `except` block here so the
+        console line names *where the browser was* alongside what went
+        wrong. Without that pairing the two are guesswork: the same
+        "button not found" text covers a stale selector on the right
+        page and a silent redirect to a login screen, and only the URL
+        separates them.
+
+        `page` / `cache_dir` are optional so request-mode handlers —
+        whose failure is an HTTP response, not a page state — can reuse
+        the counting and formatting without capturing a misleading
+        screenshot of whatever the shared page happens to show.
+        """
+        counter.failed += 1
+        detail = ""
+        if page is not None and cache_dir is not None:
+            detail = await capture_page_diagnostics(
+                page, cache_dir, handler=self.name, doi=doi, note=str(exc),
+            )
+        print(
+            f"  {progress_tag(counter, total, t_start)} ERROR: {str(exc)[:200]}",
+            flush=True,
+        )
+        if detail:
+            print(f"    {detail}", flush=True)
+
+    # ------------------------------------------------------------------
     # Per-item download — the heart of each handler.
     # ------------------------------------------------------------------
 
@@ -693,11 +845,9 @@ class PageNavigationHandler(PublisherHandler):
             dl = await dl_info.value
             await dl.save_as(str(out))
         except Exception as e:
-            counter.failed += 1
-            print(
-                f"  {progress_tag(counter, total, t_start)} "
-                f"ERROR: {str(e)[:70]}",
-                flush=True,
+            await self.report_failure(
+                e, counter=counter, total=total, t_start=t_start,
+                page=page, cache_dir=cache_dir, doi=doi,
             )
             return None
 
@@ -795,11 +945,9 @@ class PdfLinkNavigationHandler(PublisherHandler):
             out.parent.mkdir(parents=True, exist_ok=True)
             await dl.save_as(str(out))
         except Exception as e:
-            counter.failed += 1
-            print(
-                f"  {progress_tag(counter, total, t_start)} "
-                f"ERROR: {str(e)[:100]}",
-                flush=True,
+            await self.report_failure(
+                e, counter=counter, total=total, t_start=t_start,
+                page=page, cache_dir=cache_dir, doi=doi,
             )
             return None
 
