@@ -118,8 +118,14 @@ STATUS_INFO: dict[str, tuple[str, str]] = {
     ),
     "connector_extension_missing": (
         "Zotero Connector browser extension was not found",
-        "Install the Zotero Connector in the Chromium profile under "
-        "`<cache-dir>/.chrome-profile-connector`, then re-run.",
+        # NOT `<cache-dir>/.chrome-profile-connector`, which this used to
+        # say: that is the Playwright profile the extension is
+        # --load-extension'd into, not somewhere a user installs
+        # anything. It also contradicted the correct hint printed by
+        # enrich_pdfs.py moments earlier.
+        "Install the Zotero Connector in Google Chrome from "
+        "https://www.zotero.org/download/connectors/ (not Chrome for "
+        "Testing), then re-run the setup wizard so it is located.",
     ),
     "connector_setup_failed": (
         "Connector setup did not complete",

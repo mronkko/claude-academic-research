@@ -991,12 +991,30 @@ def _detect_and_prompt_connector(
         "extension_dir", ""
     )
     if existing_dir and (Path(existing_dir) / "manifest.json").exists():
+        # A value written by an older wizard points at the version
+        # subdirectory. Rewrite it to the parent so the next Chrome
+        # auto-update does not strand it; re-running setup is the
+        # documented cure for a stranded pin, so it must actually cure
+        # it rather than write the same fragile value back.
+        kept = Path(existing_dir)
+        if kept.name != _CONNECTOR_EXT_ID and kept.parent.name == _CONNECTOR_EXT_ID:
+            return {"extension_dir": str(kept.parent)}
         return {"extension_dir": existing_dir}
 
+    # Persist the extension BASE folder, never the version subdirectory.
+    # Chrome auto-updates the Connector and removes the old version's
+    # folder, so a stored `.../<ext-id>/5.0.200_0` is a dead path at the
+    # next update -- which is exactly how a working install came to be
+    # reported as "extension not found". The base folder is stable, and
+    # both resolvers pick the newest version under it at run time.
     detected = None
+    detected_base = None
     for base in _connector_probe_paths():
         detected = _resolve_connector_path(base)
         if detected is not None:
+            detected_base = base if base.exists() and not (
+                base / "manifest.json"
+            ).exists() else detected
             break
 
     if detected is None:
@@ -1012,13 +1030,15 @@ def _detect_and_prompt_connector(
         return {}
 
     if not interactive:
-        return {"extension_dir": str(detected)}
+        return {"extension_dir": str(detected_base)}
 
     print("\n  Zotero Connector (for library-routed PDFs via EBSCO/JSTOR/…):")
     print(f"    Detected extension at: {detected}")
+    if detected_base != detected:
+        print(f"    Recording the version-independent base: {detected_base}")
     answer = input("    Use this? [Y/n] ").strip().lower()
     if answer in ("", "y", "yes"):
-        return {"extension_dir": str(detected)}
+        return {"extension_dir": str(detected_base)}
     return {}
 
 

@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A working Zotero Connector was reported as "extension not found",
+  aborting the whole browser stage.** Three defects compounded into one
+  failure, in which `--stage browser` exited 0, attached zero PDFs, and
+  logged `connector_extension_missing` on every row while the Connector
+  sat installed and functioning.
+
+  The wizard stored `[zotero_connector] extension_dir` as the extension's
+  *version* subdirectory (`.../<ext-id>/5.0.200_0`). Chrome auto-updates
+  the Connector and deletes the superseded folder, so the stored path
+  went dead at the next update. `resolve_connector_extension_path()`
+  then returned `None` for an unresolvable explicit path **without ever
+  probing the platform defaults**, so one stale config value masked a
+  perfectly good install one directory up. And the run report's remedy
+  named the wrong place — `<cache-dir>/.chrome-profile-connector`, which
+  is the Playwright profile the extension is loaded *into*, not where a
+  user installs it — contradicting the correct hint printed moments
+  earlier.
+
+  Now: the wizard records the version-independent base folder and
+  rewrites an older version-pinned value when setup is re-run, so the
+  documented cure actually cures; an explicit path that does not resolve
+  falls through to the platform defaults instead of failing; and the run
+  report points at zotero.org/download/connectors. A resolvable explicit
+  path still wins, and a genuinely absent extension still reports
+  `None`.
+
+- **Every `--user` run warned that Connector saves would land in the
+  wrong library.** The Zotero Desktop library-selection pre-flight
+  compared only `groupID`. A personal library never reports one, so
+  `matched` could not become True under `--user`: the run printed
+  "Zotero Desktop has 'My Library' selected, but the pipeline is working
+  on 'group 5591' … every save will land in the wrong place" — on a
+  correctly configured setup, where 5591 was the *user* id and My
+  Library was exactly the target. Alarming, wrong, and it prompted for
+  confirmation on the most common configuration there is.
+
+  The check now branches on `library_type`: for a user target the
+  absence of a group ID *is* the match, and a group being selected is
+  the real mismatch. Messages render through `describe_library()`
+  instead of hardcoding "group `<id>`". Group targets are unchanged,
+  including the name-based fallback for older Zotero builds. Extracted
+  as `library_selection_matches()` so it is testable rather than buried
+  in an async driver; a user target is also no longer matched by a group
+  that happens to share its number.
+
 - **A `--filter-keys-file` run no longer enumerates the whole library.**
   `enrich_pdfs.py` fetched every journal article and then filtered in
   Python, so asking for 2,229 specific items on a ~10,000-item library

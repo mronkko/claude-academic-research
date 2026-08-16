@@ -91,6 +91,16 @@ def resolve_connector_extension_path(
          version subdir we return it as-is.
       2. Platform defaults (macOS → Linux → Windows).
 
+    **An explicit path that does not resolve falls through to step 2**
+    rather than failing outright. Chrome auto-updates the Connector and
+    deletes the superseded version's folder, so a config value pinned to
+    a version subdirectory (`.../<ext-id>/5.0.200_0`) turns into a dead
+    path at the next update. Returning None there reported "extension
+    not found" while a working install sat one directory up, and the
+    only cure was hand-editing config.toml. Preferring the explicit
+    value without trusting it to the exclusion of a working install is
+    what makes that self-healing.
+
     Returns None when nothing is found; callers surface a user-facing
     install hint.
     """
@@ -110,8 +120,12 @@ def resolve_connector_extension_path(
         return subs[-1]
 
     if explicit:
-        path = Path(explicit).expanduser()
-        return _latest_version_subdir(path)
+        resolved = _latest_version_subdir(Path(explicit).expanduser())
+        if resolved is not None:
+            return resolved
+        # Fall through to the platform defaults rather than returning
+        # None — see the docstring. A stale pin must not mask a working
+        # install.
 
     for candidate in _default_extension_search_paths():
         result = _latest_version_subdir(candidate)

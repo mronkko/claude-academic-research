@@ -787,6 +787,40 @@ def _prompt_on_first_failure(
     return "skip"                       # empty (Enter), "s", or anything else
 
 
+def library_selection_matches(zot, selected: dict) -> tuple[bool, str]:
+    """Does Zotero Desktop's selected library match the pipeline's target?
+
+    Connector saves land in whichever library Desktop has highlighted, so
+    a mismatch means every save goes to the wrong place. Returns
+    `(matched, reason)`; `reason` names the evidence used.
+
+    **A personal library must be judged differently from a group.** This
+    compared only `groupID`, and a personal library never reports one —
+    so under `--user` `matched` was always False and every run printed
+    "every save will land in the wrong place" as a false alarm, on what
+    is the most common configuration there is. Desktop signals that My
+    Library is selected by reporting no group ID at all; when the target
+    is a user library, that absence is the match, and a group being
+    selected is the real mismatch.
+    """
+    lib_name = selected.get("libraryName") or "(unknown)"
+    # Zotero Desktop may expose the cloud group ID under either
+    # `groupID` or `groupId` depending on version — accept both.
+    cloud_gid = selected.get("groupID") or selected.get("groupId")
+
+    if zot.library_type == "user":
+        return cloud_gid is None, "personal library (no group ID reported)"
+    if cloud_gid is not None:
+        return str(cloud_gid) == str(zot.group_id), f"group ID {cloud_gid}"
+    target_name = zot.group_name()
+    if target_name:
+        return (
+            lib_name == target_name,
+            f"name-based comparison (target {target_name!r})",
+        )
+    return False, ""
+
+
 async def _drive_connector(
     handler,
     items: list[dict],
@@ -855,18 +889,7 @@ async def _drive_connector(
         # Zotero Desktop may expose the cloud group ID under either
         # `groupID` or `groupId` depending on version — accept both.
         cloud_gid = selected.get("groupID") or selected.get("groupId")
-        matched = False
-        match_reason = ""
-        if cloud_gid is not None:
-            matched = str(cloud_gid) == str(zot.group_id)
-            match_reason = f"group ID {cloud_gid}"
-        else:
-            target_name = zot.group_name()
-            if target_name:
-                matched = lib_name == target_name
-                match_reason = (
-                    f"name-based comparison (target {target_name!r})"
-                )
+        matched, match_reason = library_selection_matches(zot, selected)
 
         if matched:
             print(
@@ -875,23 +898,31 @@ async def _drive_connector(
                 flush=True,
             )
         else:
-            target_desc = (
-                zot.group_name() or f"group {zot.group_id}"
-            )
-            detail = (
-                f"Desktop reports group ID {cloud_gid}, target is "
-                f"{zot.group_id}."
-                if cloud_gid is not None
-                else (
+            # `describe_library()` renders user and group targets in
+            # their own vocabulary. Hardcoding "group <id>" here printed
+            # "the pipeline is working on 'group 5591'" for a personal
+            # library whose *user* id happened to be 5591.
+            if zot.library_type == "user":
+                detail = (
+                    f"Desktop has a group library selected (group ID "
+                    f"{cloud_gid}); the target is your personal library.\n"
+                    "  Select 'My Library' in Zotero Desktop's left pane."
+                )
+            elif cloud_gid is not None:
+                detail = (
+                    f"Desktop reports group ID {cloud_gid}, target is "
+                    f"{zot.group_id}."
+                )
+            else:
+                detail = (
                     "Zotero Desktop did not report a group ID for the\n"
                     "  selected library; the pipeline could not match\n"
                     "  it against the target by ID."
                 )
-            )
             print(
                 f"\n  Zotero Desktop has {lib_name!r} selected, but the\n"
-                f"  pipeline is working on {target_desc!r} (group "
-                f"{zot.group_id}).\n  {detail}\n"
+                f"  pipeline is working on {zot.describe_library()}.\n"
+                f"  {detail}\n"
                 f"  Connector saves go to the selected library, not the\n"
                 f"  target — every save will land in the wrong place\n"
                 f"  unless you fix this.",
@@ -902,9 +933,13 @@ async def _drive_connector(
                     f"  Save to {lib_name!r} anyway? [y/N] "
                 ).strip().lower()
                 if confirm not in ("y", "yes"):
+                    where = (
+                        "'My Library'" if zot.library_type == "user"
+                        else repr(zot.group_name() or f"group {zot.group_id}")
+                    )
                     print(
                         "  Aborting. In Zotero Desktop, click on\n"
-                        f"  {target_desc!r} in the left pane, then re-run.",
+                        f"  {where} in the left pane, then re-run.",
                         flush=True,
                     )
                     for it in items:

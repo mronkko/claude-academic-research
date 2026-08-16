@@ -25,8 +25,68 @@ from fetchers.browser.connector import (
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_connector_path_none_when_base_missing() -> None:
+@pytest.fixture
+def no_installed_connector(monkeypatch):
+    """Stub the platform defaults empty.
+
+    Without this the "returns None" assertions below pass only on a
+    machine that has no Zotero Connector installed — they were quietly
+    environment-dependent, because an explicit path used to short-circuit
+    the platform probe and the probe was never reached.
+    """
+    from fetchers.browser import connector
+    monkeypatch.setattr(
+        connector, "_default_extension_search_paths", lambda: [],
+    )
+
+
+def test_resolve_connector_path_none_when_base_missing(
+    no_installed_connector,
+) -> None:
     assert resolve_connector_extension_path("/does/not/exist/anywhere") is None
+
+
+def test_explicit_path_that_is_stale_falls_back_to_platform_defaults(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """A dead explicit path must not mask a working install.
+
+    Chrome auto-updates the Connector and deletes the superseded version
+    folder, so a config value pinned to `.../<ext-id>/5.0.200_0` becomes
+    a dead path. Returning None there reported "extension not found"
+    while the extension sat installed one directory up, and the browser
+    stage aborted with `connector_extension_missing` on every row.
+    """
+    from fetchers.browser import connector
+
+    installed = tmp_path / "ext" / "5.0.211_0"
+    installed.mkdir(parents=True)
+    (installed / "manifest.json").write_text("{}")
+    monkeypatch.setattr(
+        connector, "_default_extension_search_paths", lambda: [tmp_path / "ext"],
+    )
+
+    stale_pin = tmp_path / "ext" / "5.0.200_0"  # never created
+    assert resolve_connector_extension_path(stale_pin) == installed
+
+
+def test_a_resolvable_explicit_path_still_wins_over_the_defaults(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """The fallback must not demote an explicit value that does resolve."""
+    from fetchers.browser import connector
+
+    chosen = tmp_path / "chosen" / "1.0_0"
+    chosen.mkdir(parents=True)
+    (chosen / "manifest.json").write_text("{}")
+    default = tmp_path / "ext" / "9.9.9_0"
+    default.mkdir(parents=True)
+    (default / "manifest.json").write_text("{}")
+    monkeypatch.setattr(
+        connector, "_default_extension_search_paths", lambda: [tmp_path / "ext"],
+    )
+
+    assert resolve_connector_extension_path(chosen) == chosen
 
 
 def test_resolve_connector_path_explicit_version_dir(tmp_path: Path) -> None:
@@ -49,7 +109,9 @@ def test_resolve_connector_path_picks_latest_version_subdir(tmp_path: Path) -> N
     assert result is not None and result.name == "5.0.130_0"
 
 
-def test_resolve_connector_path_returns_none_on_empty_base(tmp_path: Path) -> None:
+def test_resolve_connector_path_returns_none_on_empty_base(
+    no_installed_connector, tmp_path: Path,
+) -> None:
     (tmp_path / "random_file").write_text("")  # not a dir — ignored
     assert resolve_connector_extension_path(tmp_path) is None
 
