@@ -51,6 +51,8 @@ _SCRIPTS_ROOT = _HERE.parent
 if str(_SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_ROOT))
 
+from check_cluster_config import LEVEL_HELP as _CLUSTER_LEVEL_HELP  # noqa: E402
+from check_cluster_config import LEVELS as _CLUSTER_LEVELS  # noqa: E402
 from core import providers  # noqa: E402
 from zotero_mcp_floor import (  # noqa: E402
     PIP_INSTALL_CMD as ZOTERO_MCP_PIP_INSTALL_CMD,
@@ -1140,6 +1142,90 @@ def _prompt_elsevier_xml_pdf(interactive: bool, existing: dict) -> dict[str, obj
     else:
         enabled = answer in ("y", "yes")
     return {"render_xml_to_pdf": enabled}
+
+
+def _prompt_cluster_automation(interactive: bool, existing: dict) -> dict[str, object]:
+    """Return `{automation: "manual"|"confirm"|"auto"}` for `[cluster]`, or `{}`.
+
+    Screening can run on a GPU node behind a batch scheduler instead of
+    against an LLM API. That path hands work to a shared facility account
+    the plugin does not own, so how much of it the agent may drive
+    unattended is the user's decision and nobody else's.
+
+    **No secret is collected here**, which is why this is a plain prompt
+    rather than a `KeySpec`: a level is a policy statement, and the
+    remote credential is the user's own SSH key, held by their SSH agent
+    and never seen by this plugin.
+
+    Skipped entirely unless the user says they use a cluster, so the 95%
+    who do not never acquire a `[cluster]` section. An absent section
+    means `manual`, which is the safe reading of "never answered".
+
+    The level descriptions come from `check_cluster_config.py` so the
+    wizard cannot describe a level differently from the script that
+    enforces the precedence chain.
+    """
+    current = (existing.get("cluster", {}) or {}).get("automation")
+    if not interactive:
+        # A non-interactive re-run must not invent a level, and must not
+        # drop one the user chose. Same rule as the Elsevier prompt.
+        return {"automation": current} if current in _CLUSTER_LEVELS else {}
+
+    print("\n  GPU cluster screening (optional):")
+    print(_wrap_body(
+        "Screening and coding can be emitted as a request manifest, run "
+        "on a GPU node behind a batch scheduler (SLURM), and applied "
+        "afterwards. If you have access to one, this replaces per-paper "
+        "API spend with an allocation you already have. Answer no if "
+        "none of that means anything to you — nothing else changes.",
+        indent=4,
+    ))
+    default_yes = current in _CLUSTER_LEVELS
+    suffix = "[Y/n]" if default_yes else "[y/N]"
+    try:
+        answer = input(f"    Do you screen on a GPU cluster? {suffix} ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\n    Skipped.")
+        return {"automation": current} if current in _CLUSTER_LEVELS else {}
+    uses_cluster = default_yes if not answer else answer in ("y", "yes")
+    if not uses_cluster:
+        return {}
+
+    print()
+    print(_wrap_body(
+        "How much of the remote loop may the assistant run on its own? "
+        "This is about ssh, scp and sbatch — commands that touch your "
+        "facility account and spend your allocation.",
+        indent=4,
+    ))
+    print()
+    for i, level in enumerate(_CLUSTER_LEVELS, start=1):
+        print(f"      {i}. {level}")
+        print(_wrap_body(_CLUSTER_LEVEL_HELP[level], indent=9))
+    print()
+    print(_wrap_body(
+        "'manual' is the default and the recommendation. It is also the "
+        "only level that works when reaching the cluster needs a VPN, "
+        "2FA or Kerberos — none of which an assistant can do for you. "
+        "Note that 'confirm' relies on you answering a permission "
+        "prompt: the plugin never allow-lists ssh/scp/rsync/sbatch, so "
+        "the prompt is the approval.",
+        indent=4,
+    ))
+    default_level = current if current in _CLUSTER_LEVELS else "manual"
+    try:
+        raw = input(f"    Level [{default_level}]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\n    Skipped.")
+        return {"automation": default_level}
+    if not raw:
+        return {"automation": default_level}
+    if raw.isdigit() and 1 <= int(raw) <= len(_CLUSTER_LEVELS):
+        return {"automation": _CLUSTER_LEVELS[int(raw) - 1]}
+    if raw in _CLUSTER_LEVELS:
+        return {"automation": raw}
+    print(f"    '{raw}' is not a level; keeping '{default_level}'.")
+    return {"automation": default_level}
 
 
 def _detect_and_prompt_connector(
@@ -2520,6 +2606,10 @@ def main() -> int:
     xml_pdf_entry = _prompt_elsevier_xml_pdf(interactive, existing_cfg)
     if xml_pdf_entry:
         values.setdefault("elsevier", {}).update(xml_pdf_entry)
+
+    cluster_entry = _prompt_cluster_automation(interactive, existing_cfg)
+    if cluster_entry:
+        values.setdefault("cluster", {}).update(cluster_entry)
 
     updated_no_access = _offer_no_access_editor(interactive, existing_cfg)
     if updated_no_access:
