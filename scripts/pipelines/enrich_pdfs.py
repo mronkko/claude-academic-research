@@ -777,24 +777,34 @@ def _prompt_on_first_failure(
 ) -> str:
     """Option-4 prompt. Returns one of 'keep' | 'skip' | 'always_skip'.
 
-    Non-TTY stdin or `--on-first-failure=<value>` skips the prompt
-    entirely and returns the configured answer. Default for
-    non-interactive is 'skip' — matches the interactive default on
-    Enter, so piped runs don't block.
+    `--on-first-failure=<value>` answers it without asking. Otherwise the
+    question goes through the interaction channel, exactly like the
+    "can you see the PDF?" prompt — `TtyChannel` for a real terminal,
+    `ControlFileChannel` for an agent-driven run, `AutoSkipChannel` when
+    nobody can be reached.
 
-    Reached only after confirming `sys.stdin.isatty()` above, so
-    stdin is already a real terminal — no need for the `/dev/tty`
-    dance `_wait_for_user`/`_read_user_line` use elsewhere (those are
-    reached without an isatty() guard, via `_has_interactive_surface()`
-    instead, so /dev/tty genuinely can differ from stdin there).
+    **It used to test `sys.stdin.isatty()` directly and return 'skip'.**
+    That conflated "can we ask a human" with "is stdin a terminal", which
+    is the coupling `interaction` exists to undo: under `--control-file`
+    the user is present and answering other prompts in the conversation,
+    yet one failed item silently discarded every remaining item for that
+    publisher. `reinert_2025_sgr` lost its second APA article that way —
+    never attempted, never mentioned, indistinguishable in the log from
+    an article nobody had a route to.
     """
     override = getattr(args, "on_first_failure", "")
     if override:
         return override
-    if not sys.stdin.isatty():
+    # Imported here, not at module scope: `fetchers.browser` pulls in
+    # Playwright, and the non-browser cascades must import this module
+    # without it. Same pattern as the other call sites.
+    from fetchers.browser import interaction
+
+    channel = interaction.get_channel()
+    if not channel.interactive:
         return "skip"
     display = handler.display_name or handler.name
-    print(
+    answer = channel.read_line(
         f"\n{display} failed to download the last item.\n"
         f"{remaining} more {display} item"
         f"{'s are' if remaining != 1 else ' is'} queued for this run. "
@@ -802,13 +812,8 @@ def _prompt_on_first_failure(
         f"  [k] Keep trying {display} direct for the remaining items\n"
         f"  [s] Skip remaining {display} items this run (default)\n"
         f"  [A] Always skip {display} direct — write to config so "
-        f"future runs jump straight to the Connector fallback",
-        flush=True,
-    )
-    sys.stdout.write("> ")
-    sys.stdout.flush()
-    raw = sys.stdin.readline()
-    answer = (raw or "").strip()
+        f"future runs jump straight to the Connector fallback\n> "
+    ).strip()
     if answer == "k" or answer.lower() == "keep":
         return "keep"
     if answer == "A" or answer.lower() in ("always", "always_skip"):

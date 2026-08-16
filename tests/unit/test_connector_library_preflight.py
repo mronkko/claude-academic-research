@@ -255,3 +255,95 @@ def test_enabled_synthesis_does_reach_the_xml_endpoint() -> None:
     src.http = type("H", (), {"get": staticmethod(_get)})()
     src._fetch_xml_fallback("10.1016/j.test.2020.01.001", "key", "url", "/tmp")
     assert called == [1], "opting in must reach the XML endpoint"
+
+
+# ---------------------------------------------------------------------------
+# The after-failure prompt reaches the user through the control file too
+# ---------------------------------------------------------------------------
+
+
+class _Args:
+    def __init__(self, on_first_failure=""):
+        self.on_first_failure = on_first_failure
+
+
+class _Handler:
+    name = "apa"
+    display_name = "APA PsycNET"
+
+
+def test_first_failure_prompt_uses_the_interaction_channel(monkeypatch) -> None:
+    """The regression: it tested `sys.stdin.isatty()` and returned 'skip'.
+
+    Under --control-file the user is present and answering other prompts in
+    the conversation, but one failed item silently discarded every remaining
+    item for that publisher. reinert_2025_sgr lost its second APA article
+    that way -- never attempted, and indistinguishable in the log from an
+    article nobody had a route to.
+    """
+    import enrich_pdfs
+    from fetchers.browser import interaction
+
+    asked = []
+
+    class Chan(interaction.InteractionChannel):
+        interactive = True
+        def wait_for_user(self, prompt): asked.append(prompt)
+        def read_line(self, prompt):
+            asked.append(prompt)
+            return "k"
+
+    monkeypatch.setattr(interaction, "get_channel", lambda: Chan())
+    # stdin is not a tty under pytest -- the old code returned "skip" here
+    # without ever asking.
+    assert enrich_pdfs._prompt_on_first_failure(_Handler(), 1, _Args()) == "keep"
+    assert asked, "the user was never asked"
+    assert "APA PsycNET" in asked[0]
+
+
+@pytest.mark.parametrize(
+    "reply,expected",
+    [("k", "keep"), ("keep", "keep"),
+     ("A", "always_skip"), ("always", "always_skip"),
+     ("s", "skip"), ("", "skip"), ("nonsense", "skip")],
+)
+def test_first_failure_answers_map_as_documented(monkeypatch, reply, expected) -> None:
+    import enrich_pdfs
+    from fetchers.browser import interaction
+
+    class Chan(interaction.InteractionChannel):
+        interactive = True
+        def wait_for_user(self, prompt): pass
+        def read_line(self, prompt): return reply
+
+    monkeypatch.setattr(interaction, "get_channel", lambda: Chan())
+    assert enrich_pdfs._prompt_on_first_failure(_Handler(), 2, _Args()) == expected
+
+
+def test_first_failure_skips_without_asking_when_nobody_is_reachable(monkeypatch) -> None:
+    """AutoSkipChannel means no human is available; skipping is right, and
+    asking would hang an unattended run."""
+    import enrich_pdfs
+    from fetchers.browser import interaction
+
+    class Chan(interaction.InteractionChannel):
+        interactive = False
+        def wait_for_user(self, prompt): raise AssertionError("must not ask")
+        def read_line(self, prompt): raise AssertionError("must not ask")
+
+    monkeypatch.setattr(interaction, "get_channel", lambda: Chan())
+    assert enrich_pdfs._prompt_on_first_failure(_Handler(), 3, _Args()) == "skip"
+
+
+def test_explicit_override_still_wins_without_asking(monkeypatch) -> None:
+    import enrich_pdfs
+    from fetchers.browser import interaction
+
+    class Chan(interaction.InteractionChannel):
+        interactive = True
+        def wait_for_user(self, prompt): raise AssertionError("must not ask")
+        def read_line(self, prompt): raise AssertionError("must not ask")
+
+    monkeypatch.setattr(interaction, "get_channel", lambda: Chan())
+    assert enrich_pdfs._prompt_on_first_failure(
+        _Handler(), 3, _Args(on_first_failure="keep")) == "keep"

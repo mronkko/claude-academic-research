@@ -29,6 +29,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One failed download silently discarded a publisher's whole remaining
+  queue under `--control-file`.** `_prompt_on_first_failure` decided whether
+  it could ask by testing `sys.stdin.isatty()` — the exact coupling
+  `fetchers.browser.interaction` exists to undo. Under an agent-driven run
+  the user is present and answering other prompts in the conversation, but
+  stdin is not a terminal, so this one returned `"skip"` without asking and
+  dropped every remaining item for that publisher. Observed live: a
+  `reinert_2025_sgr` APA article was never attempted, and the run log made
+  it indistinguishable from an article no route existed for.
+
+  The question now goes through the interaction channel like every other
+  prompt — TTY, control file, or auto-skip. An explicit
+  `--on-first-failure=<value>` still answers without asking, and a channel
+  that genuinely cannot reach anyone still skips silently, so unattended
+  runs are unchanged.
+
 - **A working Zotero Connector was reported as "extension not found",
   aborting the whole browser stage.** Three defects compounded into one
   failure, in which `--stage browser` exited 0, attached zero PDFs, and
