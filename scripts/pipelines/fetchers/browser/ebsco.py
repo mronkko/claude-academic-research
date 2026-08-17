@@ -129,6 +129,7 @@ class EbscoHandler(PublisherHandler):
     async def download(self, page, ctx, item, cache_dir, *,
                        counter, total, t_start):
         doi = item["doi"]
+        self.last_error = ""
         out = cache_path_for(cache_dir, doi)
         if is_cached(out):
             counter.cached += 1
@@ -159,6 +160,7 @@ class EbscoHandler(PublisherHandler):
                 await page.goto(target_url, wait_until="commit", timeout=30000)
             except Exception as e:
                 counter.failed += 1
+                self.last_error = str(e)
                 print(
                     f"  {progress_tag(counter, total, t_start)} "
                     f"FAIL: goto {str(e)[:60]}",
@@ -198,6 +200,7 @@ class EbscoHandler(PublisherHandler):
             body = await resp.body()
         except Exception as e:
             counter.failed += 1
+            self.last_error = str(e)
             print(
                 f"  {progress_tag(counter, total, t_start)} "
                 f"FAIL: fetch {str(e)[:60]}",

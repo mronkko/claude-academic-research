@@ -436,6 +436,48 @@ def _read_user_line(prompt: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+#: Chromium / Playwright network-layer error substrings, lower-cased.
+#: These say the request never reached the server — the machine's
+#: connectivity failed — so they are the one class of download failure
+#: that carries no information whatsoever about the article.
+TRANSPORT_ERROR_MARKERS: tuple[str, ...] = (
+    "err_internet_disconnected",
+    "err_name_not_resolved",
+    "err_network_changed",
+    "err_connection_reset",
+    "err_connection_refused",
+    "err_connection_timed_out",
+    "err_connection_closed",
+    "err_address_unreachable",
+    "err_proxy_connection_failed",
+    "err_network_io_suspended",
+)
+
+
+def is_transport_error(text: str) -> bool:
+    """True when a failure message names a network-layer error.
+
+    Exists because a lost connection is indistinguishable, at the call
+    site, from "this publisher has nothing for this article" — both
+    surface as `download()` returning None. A live run lost the network
+    for four minutes and burned 193 items at ~1.2 s each, every one of
+    them recorded as a fetch failure and classified UNAVAILABLE, which
+    is the one cause that licenses a full-text exclusion. Not one of
+    those items had been asked about.
+    """
+    low = (text or "").lower()
+    return any(marker in low for marker in TRANSPORT_ERROR_MARKERS)
+
+
+class NetworkOutage(RuntimeError):
+    """Raised when consecutive transport failures show the network is gone.
+
+    Carries no verdict about any item. The caller stops the pass and
+    leaves un-attempted items unlogged, so a re-run picks them up rather
+    than a re-read of the log concluding they do not exist.
+    """
+
+
 class PublisherHandler(ABC):
     """One handler per publisher. Subclasses set:
 
@@ -460,6 +502,12 @@ class PublisherHandler(ABC):
     display_name: str = ""
     doi_prefixes: tuple[str, ...] = ()
     url_template: str = ""
+    #: Message from the most recent failed `download()`. Handlers print
+    #: their own diagnostics and return None, which loses the reason
+    #: before the orchestrator can classify it; this carries the reason
+    #: back so a lost connection is not filed as a missing article. Set
+    #: on every failure path, cleared on entry.
+    last_error: str = ""
     # Optional: URL the setup phase opens in the browser. Defaults to
     # `url_template`. Override when the download URL would trigger an
     # immediate auto-download (e.g. Emerald's `?download=true` PDF URL),

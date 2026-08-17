@@ -118,6 +118,13 @@ _FAILURE_LOG_LOCK = threading.Lock()
 # fresh row each time the cascade's ordering or membership shifts.
 _API_CASCADE_SOURCE = "api_cascade"
 
+# Consecutive network-layer failures that mean the machine is offline
+# rather than the publisher being unhelpful. Low enough to stop the
+# bleeding fast (the observed outage failed items at ~1.2 s each), high
+# enough that a flaky link dropping the odd request rides through —
+# `consecutive_transport` resets on any non-transport outcome.
+_OUTAGE_THRESHOLD = 5
+
 _PLAYWRIGHT_MISSING_MSG = (
     "ERROR: the playwright package is not installed.\n"
     "  - Invoke this script via `uv run` so its inline dependencies\n"
@@ -305,6 +312,25 @@ def _triage_context(doi: str, cache_dir: str) -> tuple[str, str]:
         # publisher several ways, and the report groups on this.
         return (handler.display_name or publisher), handler.name
     return publisher, ""
+
+
+def _report_outage(exc: Exception) -> None:
+    """Explain a network-outage stop, and say what it does *not* mean.
+
+    The important half is the disclaimer. Items not attempted get no log
+    row at all, so a later audit sees them as untried rather than as
+    articles that could not be found — which is the difference between
+    re-running and excluding them from a review.
+    """
+    print(
+        f"\nSTOPPED: the network went away mid-run ({exc}).\n"
+        f"  Nothing here is a verdict about any article. Items already\n"
+        f"  attempted during the outage are logged NETWORK_ERROR (retry,\n"
+        f"  not an exclusion); items not yet reached are not logged at\n"
+        f"  all. Re-run the same command once you are back online — the\n"
+        f"  cache and the resume set mean it picks up where it left off.",
+        file=sys.stderr, flush=True,
+    )
 
 
 def _pass3_target(item: dict, resolver_cfg, *, ignore_coverage: bool = False):
@@ -684,7 +710,11 @@ async def _drive_handler(
     without re-opening the page — saves 30s × N of timeouts.
     """
     from fetchers.browser import Counter, interaction, launch_context
-    from fetchers.browser.base import normalise_setup_result
+    from fetchers.browser.base import (
+        NetworkOutage,
+        is_transport_error,
+        normalise_setup_result,
+    )
 
     try:
         from playwright.async_api import async_playwright
@@ -785,6 +815,10 @@ async def _drive_handler(
         # handler — subsequent items are routed straight to retry.
         prompt_fired = False
         skip_remaining = False
+        # Reset by any non-transport outcome, so a slow link that drops
+        # one request in ten never trips the breaker — only a genuine
+        # run of them does.
+        consecutive_transport = 0
 
         for idx, item in enumerate(items):
             if skip_remaining:
@@ -812,8 +846,29 @@ async def _drive_handler(
             })
 
             if result is None:
-                # Per-item download failure.
-                if prompt_on_first_failure and not prompt_fired:
+                # Per-item download failure. A network-layer error is a
+                # different animal from "this publisher has nothing":
+                # nothing was asked, so nothing was answered. Both arrive
+                # here as `None`, which is why the handler carries the
+                # reason out on `last_error`.
+                transport = is_transport_error(getattr(handler, "last_error", ""))
+                if transport:
+                    consecutive_transport += 1
+                    # The machine's connection is gone, not this
+                    # publisher's. Keep going and the queue is shredded at
+                    # roughly a second an item — a live run lost the
+                    # network for four minutes and burned 193 items that
+                    # way, every one recorded as a failed fetch.
+                    if consecutive_transport >= _OUTAGE_THRESHOLD:
+                        raise NetworkOutage(
+                            f"{consecutive_transport} consecutive network "
+                            f"errors on {display} "
+                            f"(last: {handler.last_error[:80]})"
+                        )
+                else:
+                    consecutive_transport = 0
+
+                if prompt_on_first_failure and not prompt_fired and not transport:
                     prompt_fired = True
                     remaining = len(items) - idx - 1
                     answer = await asyncio.to_thread(
@@ -842,6 +897,15 @@ async def _drive_handler(
                 _log_browser_failure(
                     args, item,
                     source=handler.name, publisher=handler.display_name,
+                    # NETWORK_ERROR is recoverable and says "retry next
+                    # run". Letting this default would classify it
+                    # UNAVAILABLE — the one cause that licenses a
+                    # full-text exclusion — for an article no server was
+                    # ever asked about.
+                    cause=(
+                        pdf_fetch_log.FailureCause.NETWORK_ERROR
+                        if transport else None
+                    ),
                 )
                 if on_failure == "retry_bucket" and retry_bucket is not None:
                     retry_bucket.append(item)
@@ -1463,6 +1527,7 @@ def _run_browser_in_process(
         resolve_by_doi,
         resolve_by_host,
     )
+    from fetchers.browser.base import NetworkOutage
     from fetchers.doi_resolver import DoiResolverCache, resolve_doi
     from fetchers.library_resolver import (
         load_from_config,
@@ -1853,7 +1918,11 @@ def _run_browser_in_process(
             )
 
     if items_by_pub and not connector_only:
-        asyncio.run(_run_direct())
+        try:
+            asyncio.run(_run_direct())
+        except NetworkOutage as e:
+            _report_outage(e)
+            return 1
 
     # ------------------------------------------------------------------
     # Pass 3 — assign SFX target URLs to Connector items. Use Query B
@@ -1963,15 +2032,19 @@ def _run_browser_in_process(
             f"paper{'' if len(ebsco_items) == 1 else 's'}",
             flush=True,
         )
-        asyncio.run(_drive_handler(
-            EbscoHandler(), ebsco_items, zot, log_writer, args, run_date,
-            on_failure="retry_bucket",
-            # A failure here is not evidence the article is unreachable —
-            # hand it on to the Connector, which drives the same platform
-            # through Zotero's own translator.
-            retry_bucket=connector_items,
-            prompt_on_first_failure=False,
-        ))
+        try:
+            asyncio.run(_drive_handler(
+                EbscoHandler(), ebsco_items, zot, log_writer, args, run_date,
+                on_failure="retry_bucket",
+                # A failure here is not evidence the article is
+                # unreachable — hand it on to the Connector, which drives
+                # the same platform through Zotero's own translator.
+                retry_bucket=connector_items,
+                prompt_on_first_failure=False,
+            ))
+        except NetworkOutage as e:
+            _report_outage(e)
+            return 1
 
     # ------------------------------------------------------------------
     # Pass 4b — single Connector session for whatever is left.
