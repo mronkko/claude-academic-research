@@ -16,15 +16,20 @@ import audit_zotero_library as audit
 import pdf_fetch_log
 import pytest
 
-# The hand-built table from that run.
+# The hand-built table from that run. The third column is the *untried*
+# handler, which is not the same thing as the source the row was
+# attributed to: an API-cascade row is written by the cascade, and names
+# the handler that has yet to have its turn. Modelling those as one
+# value is what let the report print "--publisher core" in production
+# while this file stayed green.
 REAL_RUN = [
     ("Sage", "sage", pdf_fetch_log.FailureCause.BROWSER_REQUIRED, 48),
     ("Academy of Management", "aom",
      pdf_fetch_log.FailureCause.BROWSER_REQUIRED, 28),
-    ("Springer", "springer", pdf_fetch_log.FailureCause.UNAVAILABLE, 15),
+    ("Springer", "", pdf_fetch_log.FailureCause.UNAVAILABLE, 15),
     ("APA PsycNET", "apa", pdf_fetch_log.FailureCause.BROWSER_REQUIRED, 10),
-    ("Wiley", "wiley", pdf_fetch_log.FailureCause.ACCESS_BLOCKED, 8),
-    ("Palgrave", "palgrave", pdf_fetch_log.FailureCause.UNAVAILABLE, 1),
+    ("Wiley", "", pdf_fetch_log.FailureCause.ACCESS_BLOCKED, 8),
+    ("Palgrave", "", pdf_fetch_log.FailureCause.UNAVAILABLE, 1),
 ]
 
 
@@ -35,7 +40,7 @@ def run(tmp_path: Path):
     rows: list[dict] = []
     keys: list[str] = []
     n = 0
-    for publisher, source, cause, count in REAL_RUN:
+    for publisher, handler, cause, count in REAL_RUN:
         for _ in range(count):
             n += 1
             key = f"ITEM{n:04d}"
@@ -44,8 +49,9 @@ def run(tmp_path: Path):
                 "timestamp": "2026-08-13T00:00:00+00:00",
                 "item_key": key, "doi": f"10.1/{key}",
                 "item_type": "journalArticle", "attempt": "1",
-                "source": source, "publisher": publisher,
+                "source": "api_cascade", "publisher": publisher,
                 "http_status": "", "cause": cause.value,
+                "untried_handler": handler,
             })
     with log.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=pdf_fetch_log.FAILURE_FIELDS)
@@ -152,6 +158,60 @@ def test_per_publisher_key_files_let_you_run_one_publisher(run, capsys) -> None:
     assert len(Path(f"{stem}.retry.browser.aom.keys").read_text().split()) == 28
 
 
+def test_every_cause_has_a_retry_bucket(tmp_path, capsys) -> None:
+    """A cause with no bucket is silently dropped from every key file
+    while still counting toward "N still missing", so the report's
+    totals stop adding up — and the causes that were missing were the
+    recoverable ones, the worst possible set to lose.
+    """
+    log = tmp_path / "log.csv"
+    causes = list(pdf_fetch_log.FailureCause)
+    with log.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=pdf_fetch_log.FAILURE_FIELDS)
+        w.writeheader()
+        for i, cause in enumerate(causes):
+            w.writerow({
+                "item_key": f"K{i}", "source": "api_cascade",
+                "publisher": "P", "cause": cause.value,
+            })
+    report = {
+        "total_items": len(causes), "have_pdf": 0,
+        "missing_pdf": [{"key": f"K{i}"} for i in range(len(causes))],
+    }
+    audit._report_retrieval_failures(str(log), report, tmp_path / "a", "a.json")
+    written = sorted(p.read_text().split() for p in tmp_path.glob("a.*.keys"))
+    assert sum(len(keys) for keys in written) == len(causes)
+
+
+def test_a_cascade_row_never_offers_a_fetcher_as_a_publisher(
+    tmp_path, capsys,
+) -> None:
+    """The live report said `--sources browser --publisher core` for 428
+    items: CORE is the last fetcher in the API cascade, not a browser
+    handler, and the command would have failed outright. With no untried
+    handler named, the generic instruction is the honest one.
+    """
+    log = tmp_path / "log.csv"
+    with log.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=pdf_fetch_log.FAILURE_FIELDS)
+        w.writeheader()
+        w.writerow({
+            "item_key": "A", "source": "api_cascade", "publisher": "IEEE",
+            "cause": pdf_fetch_log.FailureCause.BROWSER_REQUIRED.value,
+            "untried_handler": "",
+        })
+    audit._report_retrieval_failures(
+        str(log), {"total_items": 1, "have_pdf": 0, "missing_pdf": [{"key": "A"}]},
+        tmp_path / "a", "a.json",
+    )
+    out = capsys.readouterr().out
+    row = next(ln for ln in out.splitlines() if ln.strip().startswith("IEEE"))
+    assert "--publisher" not in row
+    assert "core" not in row
+    assert "--sources browser" in row
+    assert not list(tmp_path.glob("a.retry.browser.*.keys"))
+
+
 def test_empty_buckets_write_no_file(run, capsys) -> None:
     _out = _run_report(run, capsys)
     _log, _report, stem = run
@@ -201,8 +261,9 @@ def test_an_item_with_any_recoverable_row_is_recoverable(tmp_path, capsys) -> No
                 "cause": pdf_fetch_log.FailureCause.UNAVAILABLE.value,
             })
         w.writerow({
-            "item_key": "A", "source": "sage", "publisher": "Sage",
+            "item_key": "A", "source": "api_cascade", "publisher": "Sage",
             "cause": pdf_fetch_log.FailureCause.BROWSER_REQUIRED.value,
+            "untried_handler": "sage",
         })
     report = {"total_items": 1, "have_pdf": 0, "missing_pdf": [{"key": "A"}]}
     audit._report_retrieval_failures(str(log), report, tmp_path / "a", "a.json")

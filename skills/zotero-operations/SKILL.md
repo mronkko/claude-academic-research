@@ -166,14 +166,14 @@ running these stages:**
 
    | Cause in the report | Next rung |
    |---|---|
-   | `BROWSER_REQUIRED` | `enrich_pdfs.py --sources browser --filter-keys-file <retry.browser.keys>` — a visible Chromium opens; the user solves one Cloudflare challenge per publisher. Narrow to one publisher with `retry.browser.<publisher>.keys`. |
+   | `BROWSER_REQUIRED` | `enrich_pdfs.py --sources browser --filter-keys-file <retry.browser.keys>` — a visible Chromium opens; the user solves one Cloudflare challenge per publisher. Narrow to one publisher with `retry.browser.<publisher>.keys`. Rows that name no publisher belong here too: the link resolver and the Zotero Connector key on the item rather than the DOI prefix, and the same pass reaches both. |
    | `ACCESS_BLOCKED` (Wiley prefix, no token) | Configure `WILEY_TDM_TOKEN` via `/setup`, then `--sources wiley` |
    | `ACCESS_BLOCKED` (anything else) | Hand the user `retry.ill.keys` as an interlibrary-loan list |
    | `NETWORK_ERROR` | Re-run the same stage; the cause is transient |
    | `CORRUPT_DOWNLOAD` | The source served a broken file (usually truncated). Re-running the *same* source returns the same bad bytes — escalate to a different one: the publisher TDM route, or `--sources browser`. |
    | `UPLOAD_FAILED` | The PDF is already in the local cache and only the Zotero attach failed. Re-run `enrich_pdfs.py`; it attaches from cache with no new download. Cheapest rung on the ladder — always offer it first. |
    | `OUT_OF_SCOPE` | A book chapter, thesis, or preprint. No rung applies — the item is excluded on its type, not on retrieval, and chasing a PDF for it wastes the user's time. |
-   | `UNAVAILABLE` | Genuinely unreachable *as published*. One route remains — see below — and only after the user declines it is "not available" the honest report. |
+   | `UNAVAILABLE` | Genuinely unreachable *as published* — every route was tried, so this cannot appear before a browser pass has run. One route remains — see below — and only after the user declines it is "not available" the honest report. |
 
    **The last rung is a different paper, so it is offered, never taken
    silently.** `enrich_pdfs.py --allow-preprints` looks for a copy on

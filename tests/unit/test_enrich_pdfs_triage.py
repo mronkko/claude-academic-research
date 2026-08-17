@@ -120,6 +120,156 @@ def test_unknown_doi_yields_empty_triage(enrich, tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# What the cascade actually writes when it comes up empty.
+#
+# The API cascade is the first of several routes and cannot reach a
+# Cloudflare-gated publisher, a link-resolver platform, or the Zotero
+# Connector. A live run nonetheless logged 227 items as UNAVAILABLE —
+# the one cause that licenses a `fulltext:unavailable` tag — every one
+# with an empty `http_status`, i.e. without a single source having ever
+# answered "not found", and every one attributed to `core` purely
+# because CORE sits last in the cascade.
+# ---------------------------------------------------------------------------
+
+
+class _SilentSource:
+    """A fetcher that returns None: no PDF, no error, no verdict."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def fetch_pdf(self, doi: str, *, cache_dir: str):
+        return None
+
+
+class _HttpError(Exception):
+    """Shaped like the httpx / requests errors `_http_status_of` reads:
+    `.response.status_code`."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__(f"HTTP {status}")
+        self.response = type("R", (), {"status_code": status})()
+
+
+class _RaisingSource(_SilentSource):
+    """A fetcher that fails with an HTTP status attached."""
+
+    def __init__(self, name: str, status: int) -> None:
+        super().__init__(name)
+        self.status = status
+
+    def fetch_pdf(self, doi: str, *, cache_dir: str):
+        raise _HttpError(self.status)
+
+
+class _TimingOutSource(_SilentSource):
+    """A fetcher that fails with no status at all — a transport fault."""
+
+    def fetch_pdf(self, doi: str, *, cache_dir: str):
+        raise TimeoutError("connection timed out")
+
+
+def _cascade_row(enrich, tmp_path, sources, doi="10.2307/2666999"):
+    """Run `_try_cascade` to exhaustion and return the row it logged."""
+    import pdf_fetch_log
+
+    log = tmp_path / "pdf_fetch_log.csv"
+    result = enrich._try_cascade(
+        {"key": "ITEM01", "data": {"DOI": doi, "itemType": "journalArticle"}},
+        sources, str(tmp_path), failure_log_path=str(log),
+    )
+    assert result is None
+    rows = pdf_fetch_log.read_failures(log)
+    assert len(rows) == 1
+    return rows[0]
+
+
+def test_a_silent_cascade_is_not_logged_as_unavailable(enrich, tmp_path) -> None:
+    """A JSTOR DOI no handler covers, that nobody answered for. The
+    resolver and the Connector are both still ahead of it, so FE6 is
+    not a verdict this pass is entitled to reach."""
+    row = _cascade_row(
+        enrich, tmp_path,
+        [_SilentSource("crossref"), _SilentSource("openalex"), _SilentSource("core")],
+    )
+    assert row["http_status"] == ""      # nobody ever said "not found"
+    assert row["cause"] == "BROWSER_REQUIRED"
+
+
+def test_a_silent_cascade_is_not_blamed_on_whoever_ran_last(
+    enrich, tmp_path,
+) -> None:
+    """`core` was merely last in the ordering, not the source that
+    failed meaningfully. With no answer from anyone, the failure belongs
+    to the cascade as a whole."""
+    row = _cascade_row(
+        enrich, tmp_path,
+        [_SilentSource("crossref"), _SilentSource("openalex"), _SilentSource("core")],
+    )
+    assert row["source"] == enrich._API_CASCADE_SOURCE
+    assert row["source"] != "core"
+
+
+def test_the_source_that_answered_is_the_one_blamed(enrich, tmp_path) -> None:
+    """When a fetcher does respond, `source` and `http_status` must name
+    the same event — otherwise the row reads as though CORE returned the
+    403 that ScienceDirect returned."""
+    row = _cascade_row(
+        enrich, tmp_path,
+        [
+            _SilentSource("crossref"),
+            _RaisingSource("sciencedirect", 403),
+            _SilentSource("core"),
+        ],
+    )
+    assert row["source"] == "sciencedirect"
+    assert row["http_status"] == "403"
+    assert row["cause"] == "ACCESS_BLOCKED"     # a real answer is still evidence
+
+
+def test_a_transport_fault_still_names_the_source_that_faulted(
+    enrich, tmp_path,
+) -> None:
+    """No status to classify on, but one fetcher did fail — better to
+    name it than to fall back to the whole-cascade label."""
+    row = _cascade_row(
+        enrich, tmp_path,
+        [_SilentSource("crossref"), _TimingOutSource("openalex"), _SilentSource("core")],
+    )
+    assert row["source"] == "openalex"
+    assert row["http_status"] == ""
+    assert row["cause"] == "NETWORK_ERROR"
+
+
+def test_a_covered_publisher_records_the_handler_it_has_not_run(
+    enrich, tmp_path,
+) -> None:
+    """The handler goes in its own column. Reading it off `source` is
+    what produced "--sources browser --publisher core" in the report."""
+    row = _cascade_row(
+        enrich, tmp_path, [_SilentSource("crossref"), _SilentSource("core")],
+        doi=SAGE_DOI,
+    )
+    assert row["untried_handler"] == "sage"
+    assert row["source"] == enrich._API_CASCADE_SOURCE
+    assert row["cause"] == "BROWSER_REQUIRED"
+
+
+def test_out_of_scope_item_types_are_still_settled_here(enrich, tmp_path) -> None:
+    """Item type is decided independently of retrieval, so an untried
+    route must not upgrade a book chapter into "try harder"."""
+    import pdf_fetch_log
+
+    log = tmp_path / "log.csv"
+    enrich._try_cascade(
+        {"key": "ITEM02",
+         "data": {"DOI": "10.1007/978-3-030-1", "itemType": "bookSection"}},
+        [_SilentSource("crossref")], str(tmp_path), failure_log_path=str(log),
+    )
+    assert pdf_fetch_log.read_failures(log)[0]["cause"] == "OUT_OF_SCOPE"
+
+
+# ---------------------------------------------------------------------------
 # Publisher tidying — grouping is only useful if the labels match
 # ---------------------------------------------------------------------------
 

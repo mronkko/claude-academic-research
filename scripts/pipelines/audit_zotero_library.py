@@ -336,9 +336,16 @@ def _report_retrieval_failures(
     print(f"  (from {log_path})")
     print()
 
-    # publisher × cause, most actionable cause first, biggest bucket first.
+    # publisher × cause, most actionable cause first, biggest bucket
+    # first. Distinct from `pdf_fetch_log.CAUSE_PRECEDENCE`, which ranks
+    # by *authority* when collapsing several rows for one item —
+    # OUT_OF_SCOPE wins there because item type decides regardless of
+    # retrieval, while here it sorts late because there is nothing to do
+    # about it.
     cause_order = [
         pdf_fetch_log.FailureCause.BROWSER_REQUIRED.value,
+        pdf_fetch_log.FailureCause.UPLOAD_FAILED.value,
+        pdf_fetch_log.FailureCause.CORRUPT_DOWNLOAD.value,
         pdf_fetch_log.FailureCause.ACCESS_BLOCKED.value,
         pdf_fetch_log.FailureCause.NETWORK_ERROR.value,
         pdf_fetch_log.FailureCause.OUT_OF_SCOPE.value,
@@ -359,7 +366,14 @@ def _report_retrieval_failures(
     print(f"  {'publisher':<{width}}  {'n':>4}  {'cause':<17}  next step")
     for (publisher, cause), rows in ordered:
         step = pdf_fetch_log.SUGGESTED_FE_CODE.get(cause, "")
-        handler = rows[0].get("source", "")
+        # `untried_handler`, never `source`: the latter names what has
+        # already been tried, so reading it here printed
+        # "--publisher core" — the last fetcher in the API cascade — for
+        # every recoverable item. An empty handler is normal and means
+        # no per-publisher handler covers this DOI; the generic
+        # SUGGESTED_FE_CODE text stands, and the resolver and Connector
+        # routes inside the browser pass still apply.
+        handler = rows[0].get("untried_handler", "")
         if cause == pdf_fetch_log.FailureCause.BROWSER_REQUIRED.value and handler:
             step = f"--sources browser --publisher {handler}"
         print(
@@ -376,7 +390,7 @@ def _report_retrieval_failures(
     print()
     if recoverable:
         publishers = sorted({
-            rows[0].get("source", "")
+            rows[0].get("untried_handler", "")
             for (_p, cause), rows in buckets.items()
             if cause == pdf_fetch_log.FailureCause.BROWSER_REQUIRED.value
         } - {""})
@@ -406,10 +420,16 @@ def _report_retrieval_failures(
 def _write_retry_keys(pdf_fetch_log, verdicts: dict, stem: Path) -> dict[str, Path]:
     """Write one key-file per triage bucket. Returns {label: path}."""
     cause = pdf_fetch_log.FailureCause
+    # Every cause needs a bucket. A cause with no label is dropped from
+    # every key file while still counting toward `len(verdicts)`, so the
+    # report's totals stop adding up — and the items that go missing are
+    # the recoverable ones, which is the worst possible set to lose.
+    # `test_every_cause_has_a_retry_bucket` guards this.
     buckets: dict[str, list[str]] = {
         "retry.browser": [],
         "retry.ill": [],
         "retry.network": [],
+        "retry.reattach": [],
         "true_negative": [],
         "out_of_scope": [],
     }
@@ -417,6 +437,11 @@ def _write_retry_keys(pdf_fetch_log, verdicts: dict, stem: Path) -> dict[str, Pa
         cause.BROWSER_REQUIRED.value: "retry.browser",
         cause.ACCESS_BLOCKED.value: "retry.ill",
         cause.NETWORK_ERROR.value: "retry.network",
+        # Both are fixed by re-running enrich_pdfs.py over the item:
+        # UPLOAD_FAILED attaches straight from the local cache, and
+        # CORRUPT_DOWNLOAD re-fetches after the bad bytes were dropped.
+        cause.UPLOAD_FAILED.value: "retry.reattach",
+        cause.CORRUPT_DOWNLOAD.value: "retry.reattach",
         cause.UNAVAILABLE.value: "true_negative",
         cause.OUT_OF_SCOPE.value: "out_of_scope",
     }
@@ -430,7 +455,7 @@ def _write_retry_keys(pdf_fetch_log, verdicts: dict, stem: Path) -> dict[str, Pa
     per_publisher: dict[str, list[str]] = {}
     for key, row in verdicts.items():
         if row.get("cause") == cause.BROWSER_REQUIRED.value:
-            handler = row.get("source", "")
+            handler = row.get("untried_handler", "")
             if handler:
                 per_publisher.setdefault(f"retry.browser.{handler}", []).append(key)
 

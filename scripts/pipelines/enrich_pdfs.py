@@ -110,6 +110,14 @@ _SOURCE_ALIASES = {
 # "callers must serialize externally" contract.
 _FAILURE_LOG_LOCK = threading.Lock()
 
+# `source` value for an API-cascade row that no fetcher answered: every
+# source returned None without raising. The cascade failed as a unit and
+# no individual member of it did anything worth recording, so the row
+# says that instead of picking one. Also stable across runs, which keeps
+# `pdf_fetch_log`'s (item_key, source) upsert key from accumulating a
+# fresh row each time the cascade's ordering or membership shifts.
+_API_CASCADE_SOURCE = "api_cascade"
+
 _PLAYWRIGHT_MISSING_MSG = (
     "ERROR: the playwright package is not installed.\n"
     "  - Invoke this script via `uv run` so its inline dependencies\n"
@@ -1878,11 +1886,18 @@ def _try_cascade(
         return None
     item_type = d.get("itemType", "") or ""
     item_key = item.get("key", "") or d.get("key", "") or ""
-    last_source = ""
+    # The fetcher whose answer the logged row rests on — the one that
+    # raised, preferring one that carried an HTTP status so `source` and
+    # `http_status` always name the same event. Whichever fetcher merely
+    # happened to be *last* in the cascade is not that: with the current
+    # ordering it is always CORE, so every API-pass row in a 655-row
+    # live log blamed a provider that had only been asked last. When
+    # nobody answered, the failure belongs to the cascade as a whole and
+    # naming any single member of it would be an invention.
+    blamed_source = ""
     raised_exception = False
     last_status: int | None = None
     for src in sources:
-        last_source = src.name
         try:
             result = src.fetch_pdf(doi, cache_dir=cache_dir)
         except NotImplementedError:
@@ -1893,6 +1908,9 @@ def _try_cascade(
             status = _http_status_of(e)
             if status is not None:
                 last_status = status
+                blamed_source = src.name
+            elif not blamed_source:
+                blamed_source = src.name
             continue
         if result is None:
             continue
@@ -1927,11 +1945,19 @@ def _try_cascade(
                     doi=doi,
                     item_type=item_type,
                     attempt=1,
-                    source=last_source,
+                    source=blamed_source or _API_CASCADE_SOURCE,
                     publisher=publisher,
                     http_status=last_status,
                     cause=cause,
                     untried_browser_handler=browser_handler,
+                    # This is the API cascade, and `main()` rejects
+                    # --sources that mix the browser pass into it, so by
+                    # construction nothing here has been through a
+                    # browser handler, the link resolver, or the
+                    # Connector. Saying so keeps UNAVAILABLE — the one
+                    # cause that licenses an exclusion — off items that
+                    # no route has yet actually refused.
+                    browser_pass_untried=True,
                 )
         except Exception as e:  # noqa: BLE001
             # Logging is best-effort — never let a CSV write break a

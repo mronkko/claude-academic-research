@@ -1127,10 +1127,11 @@ PDF retrieval: 125/244 attached · 110 still missing
   publisher                 n  cause              next step
   Sage                     48  BROWSER_REQUIRED   --sources browser --publisher sage
   Academy of Management    28  BROWSER_REQUIRED   --sources browser --publisher aom
+  IEEE                     16  BROWSER_REQUIRED   Not an exclusion — run enrich_pdfs.py --sources browser
+  (unknown)                10  BROWSER_REQUIRED   Not an exclusion — run enrich_pdfs.py --sources browser
   Wiley                     8  ACCESS_BLOCKED     Flag for ILL — paywall, full text exists
-  Springer                 15  UNAVAILABLE        FE6 (no fulltext available)
 
-  86 of the 110 are recoverable — they have not been through every route yet.
+  102 of the 110 are recoverable — they have not been through every route yet.
 ```
 
 **Report this table to the user and offer the next step before
@@ -1138,11 +1139,20 @@ proposing any exclusion.** Say how many items the browser pass would
 recover — that number, not the raw failure count, is what the user needs
 to decide with.
 
+Two things to read correctly. A `BROWSER_REQUIRED` row whose next step
+carries no `--publisher` — the IEEE row above — means no per-publisher
+handler covers that DOI. It does **not** mean nothing can be done: the
+link resolver's licensed platforms (EBSCOhost, JSTOR, ProQuest) and the
+Zotero Connector are keyed on the item, not on the DOI prefix, and the
+plain browser pass reaches both. And after an API-only run, expect *no*
+`UNAVAILABLE` rows at all — that cause means every route was tried, and
+the browser pass has not run yet.
+
 Then act by cause:
 
 | Cause | Meaning | What to do |
 |---|---|---|
-| `BROWSER_REQUIRED` | A Cloudflare-gated publisher this plugin has a handler for, not yet run | Offer the browser pass. **Not an exclusion.** |
+| `BROWSER_REQUIRED` | A route the plain-HTTP cascade cannot take is still untried — either a Cloudflare-gated publisher whose handler has not run, or no handler at all but the browser pass itself has not run, leaving the link resolver and the Connector ahead of the item | Offer the browser pass. **Not an exclusion.** |
 | `ACCESS_BLOCKED` | Paywalled; the full text exists | Offer the ILL list. **Not an exclusion.** |
 | `NETWORK_ERROR` | Transport failure | Re-run. **Not an exclusion.** |
 | `CORRUPT_DOWNLOAD` | A source served bytes that are not a usable PDF — usually a truncated download | Retry via a *different* source, not the same one. **Not an exclusion.** |
@@ -1168,8 +1178,17 @@ its cause in the retrieval report is `UNAVAILABLE`.** If you have not run
 the audit, you do not know the cause, and you may not tag. The audit
 writes the retry sets for you as key files
 (`retry.browser[.<publisher>]`, `retry.ill`, `retry.network`,
-`true_negative`, `out_of_scope`) — feed them straight to
-`--filter-keys-file`; do not assemble key lists by hand.
+`retry.reattach`, `true_negative`, `out_of_scope`) — feed them straight
+to `--filter-keys-file`; do not assemble key lists by hand.
+
+The pipeline now enforces the same rule from its side: `pdf_fetch_log`
+will not classify an item `UNAVAILABLE` while the browser pass is still
+ahead of it, however silent the API cascade was. An empty `http_status`
+on such a row is the tell — it means not one source ever answered "not
+found", and it is not evidence of anything. One live run produced 227
+of them across IEEE, JSTOR, ACM and Elsevier articles; three that had
+been written into `true_negative` opened on the first click through
+EBSCOhost.
 
 **Run the browser pass yourself.** Having no controlling terminal is no
 longer a reason to hand the user a command to paste — `--control-file`
