@@ -57,19 +57,33 @@ def status_lines(spec: ProviderSpec, selected: bool) -> list[str]:
     """The status block, shared with `set_llm_provider.py` so the two
     scripts cannot drift in what they report."""
     ok, missing = llm_provider.credential_status(spec)
-    if not spec.api_key_env:
+    # `local`, not `api_key_env`: a bring-your-own gateway declares no
+    # variable either, and reporting "not required" for a remote
+    # authenticated endpoint is worse than saying nothing.
+    if spec.local:
         credential = "not required (local provider)"
     elif ok:
         credential = "configured"
     else:
         credential = f"missing ({missing})"
+    # A bring-your-own-endpoint provider has no default address, so a
+    # blank here is a missing setting rather than "the default applies".
+    # Saying which variable supplies it is the whole value of this line
+    # for the one provider where it is not obvious.
+    base = llm_provider.base_url_for(spec)
+    if not base and spec.byo_endpoint:
+        base = (
+            f"missing — set "
+            f"{providers.base_url_location(spec, llm_provider.base_url_env(spec))}; "
+            f"no default is shipped"
+        )
     return [
         f"provider: {spec.name}",
         f"label: {spec.label}",
         f"selected: {'yes' if selected else 'no (registry default)'}",
         f"local: {'yes' if spec.local else 'no'}",
         f"credential: {credential}",
-        f"base_url: {llm_provider.base_url_for(spec)}",
+        f"base_url: {base}",
     ]
 
 

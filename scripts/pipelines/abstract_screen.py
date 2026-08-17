@@ -64,6 +64,7 @@ SCRIPTS_ROOT = SCRIPT_DIR.parent
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
+import batch_manifest  # noqa: E402
 import csv_io  # noqa: E402
 import screening_common  # noqa: E402
 import zotero_io  # noqa: E402
@@ -109,6 +110,155 @@ def _format_user_message(title: str, abstract: str, source: str,
 STAGE_TAG_PREFIX = "abstract:"
 
 
+def parse_decision(text: str) -> tuple[str, str]:
+    """`(decision, reason)` from the model's two-line reply.
+
+    **Unparseable output becomes `borderline`, not `error`.** That is a
+    deliberate bias, not a fallback: this stage exists to decide what a
+    human reads at full text, and a paper the screener could not speak
+    about clearly belongs in the read pile. The raw text is kept as the
+    reason so the failure is still visible in the log.
+
+    Shared by the synchronous path and the batch applier on purpose. It
+    is the single most consequential rule in this file, and a second
+    copy is exactly how the two paths would come to disagree about what
+    a given model output means.
+    """
+    decision = "error"
+    reason = text
+    for line in (text or "").splitlines():
+        if line.upper().startswith("DECISION:"):
+            decision = line.split(":", 1)[1].strip().lower()
+        if line.upper().startswith("REASON:"):
+            reason = line.split(":", 1)[1].strip()
+    if decision not in VALID_DECISIONS:
+        decision = "borderline"
+        reason = f"PARSE ERROR — raw: {(text or '')[:200]}"
+    return decision, reason
+
+
+def screening_row(
+    item: dict,
+    *,
+    decision: str,
+    reason: str,
+    model: str,
+    prompt_version: str,
+    query: str = "",
+    timestamp: str = "",
+) -> dict:
+    """One CSV row. The only place the log's shape is decided.
+
+    `timestamp` defaults to now, but the batch applier passes the
+    response's own `generated_at`: the log records when a decision was
+    *made*, not when it was filed, and those can be days apart once a
+    manifest is executed elsewhere.
+    """
+    d = item.get("data", {})
+    return {
+        "timestamp": timestamp or datetime.now(UTC).isoformat(),
+        "item_key": d.get("key", item.get("key", "")),
+        "doi": (d.get("DOI") or "").strip(),
+        "title": (d.get("title") or "")[:100],
+        "source": d.get("publicationTitle", "") or "",
+        "query": query,
+        "decision": decision,
+        "reason": reason,
+        "model": model,
+        "prompt_version": prompt_version,
+    }
+
+
+def _item_from_manifest_row(row: dict) -> dict:
+    """Rebuild the slice of a Zotero item that `screening_row` reads.
+
+    The manifest carries the identity columns precisely so applying does
+    not have to re-fetch the library: between emit and apply an item may
+    have been edited or moved, and the log should describe the paper as
+    it was when the model read it. Zotero is still consulted for tag
+    writes — that is state, not provenance.
+    """
+    return {
+        "key": row.get("item_key", ""),
+        "data": {
+            "key": row.get("item_key", ""),
+            "DOI": row.get("doi", ""),
+            "title": row.get("title", ""),
+            "publicationTitle": row.get("journal", ""),
+        },
+    }
+
+
+def build_manifest_rows(
+    items: list[dict],
+    *,
+    run_id: str,
+    system_prompt: str,
+    model: str,
+    prompt_version: str,
+    doi_to_query: dict[str, str],
+    library: dict,
+    collection: str,
+    max_input_chars: int = 0,
+) -> tuple[list[dict], list[dict]]:
+    """`(manifest_rows, skipped)` for a set of items to screen.
+
+    Each row carries its own rendered prompt, so whatever executes the
+    manifest needs no access to `screening_config.py`, Zotero, or this
+    plugin. `system_sha256` lets the applier notice that the prompt was
+    edited between emit and apply — which would otherwise silently make
+    the log describe a run that did not happen.
+    """
+    rows: list[dict] = []
+    skipped: list[dict] = []
+    for item in items:
+        d = item.get("data", {})
+        doi = (d.get("DOI") or "").strip()
+        user = _format_user_message(
+            d.get("title", ""), d.get("abstractNote", "") or "",
+            d.get("publicationTitle", "") or "",
+            doi_to_query.get(doi.lower(), ""),
+        )
+        if max_input_chars and len(user) > max_input_chars:
+            skipped.append({
+                "item_key": item["key"],
+                "doi": doi,
+                "title": (d.get("title") or "")[:100],
+                "skip_reason": "too_long_for_context",
+                "detail": (
+                    f"{len(user)} chars exceeds --max-input-chars "
+                    f"{max_input_chars}"
+                ),
+            })
+            continue
+        rows.append({
+            "schema_version": batch_manifest.SCHEMA_VERSION,
+            "run_id": run_id,
+            "request_id": batch_manifest.request_id(run_id, item["key"]),
+            "ordinal": 0,
+            "item_key": item["key"],
+            "stage": batch_manifest.STAGE_ABSTRACT,
+            "mode": "screen",
+            "library": library,
+            "collection": collection,
+            "doi": doi,
+            "title": (d.get("title") or "")[:100],
+            "journal": d.get("publicationTitle", "") or "",
+            "year": (d.get("date") or "")[:4],
+            "query": doi_to_query.get(doi.lower(), ""),
+            "prompt_version": prompt_version,
+            "model_hint": model,
+            "system": system_prompt,
+            "user": user,
+            "system_sha256": batch_manifest.sha256(system_prompt),
+            "user_sha256": batch_manifest.sha256(user),
+            "temperature": 0.0,
+            "max_output_tokens": 200,
+            "input_chars": len(user),
+        })
+    return rows, skipped
+
+
 def _already_tagged(items: list[dict]) -> set[str]:
     """Items that already have any `abstract:*` tag in Zotero — these are
     'done' for resume purposes. Canonical source of truth.
@@ -143,6 +293,141 @@ def _run_csv_backfill(
         prefix=STAGE_TAG_PREFIX,
         label="abstract:*",
     )
+
+
+def apply_responses(
+    zot,
+    *,
+    manifest_path: Path,
+    responses_path: Path,
+    output_path: Path,
+    tag_batch_size: int,
+    force: bool,
+    skip_already_tagged: bool,
+) -> int:
+    """Apply an executed manifest: CSV rows, then Zotero stage tags.
+
+    No LLM is called. Everything written here is derived from the two
+    files, which is what lets the generation step happen on a machine
+    this one never talks to.
+    """
+    _, requests = batch_manifest.read_manifest(manifest_path)
+    _, responses = batch_manifest.read_responses(responses_path)
+    paired, unanswered, orphaned = batch_manifest.join_responses(
+        requests, responses,
+    )
+
+    record = batch_manifest.load_run_record(
+        batch_manifest.run_record_path(responses_path),
+    )
+    if record:
+        batch_manifest.refuse_if_degenerate(record, force=force)
+
+    if orphaned:
+        print(
+            f"  WARNING: {len(orphaned)} response(s) name requests absent "
+            f"from this manifest; ignoring them. Check you paired the "
+            f"right two files.",
+            flush=True,
+        )
+    if unanswered:
+        print(
+            f"  {len(unanswered)} request(s) got no response — left "
+            f"untagged so a re-run picks them up.",
+            flush=True,
+        )
+
+    # A manifest and its application can be days apart. Anything tagged
+    # in between was decided by something else, and overwriting it
+    # silently would lose that decision.
+    tagged_since = _already_tagged(
+        zot.collection_items(
+            requests[0].get("collection", ""), item_type="journalArticle",
+        )
+    ) if requests[0].get("collection") else set()
+    clashes = [r for r, _ in paired if r["item_key"] in tagged_since]
+    if clashes:
+        verb = "skipping" if skip_already_tagged else "overwriting"
+        print(
+            f"  WARNING: {len(clashes)} of {len(paired)} item(s) have been "
+            f"tagged since this manifest was emitted; {verb} them.",
+            flush=True,
+        )
+
+    counts: dict[str, int] = {}
+    tag_buffer: list[tuple[str, dict]] = []
+    model_seen = ""
+    for req, resp in paired:
+        if skip_already_tagged and req["item_key"] in tagged_since:
+            counts["skipped"] = counts.get("skipped", 0) + 1
+            continue
+        model_seen = resp.get("model", "") or model_seen
+        status = resp.get("call_status", "error")
+        if status == "ok":
+            _, answer = batch_manifest.split_reasoning(
+                resp.get("response_text") or "",
+            )
+            decision, reason = parse_decision(answer)
+        elif status == "truncated":
+            # A cut-off answer is a run defect, not a verdict. Recording
+            # it as `error` keeps the item untagged and re-runnable.
+            decision = "error"
+            reason = (
+                f"truncated: output hit the "
+                f"{req.get('max_output_tokens')}-token budget"
+            )
+        else:
+            decision = "error"
+            reason = str(resp.get("error") or f"call_status={status}")[:200]
+
+        row = screening_row(
+            _item_from_manifest_row(req),
+            decision=decision,
+            reason=reason,
+            model=resp.get("model", "") or req.get("model_hint", ""),
+            prompt_version=req.get("prompt_version", ""),
+            query=req.get("query", ""),
+            # When the decision was made, not when it was filed.
+            timestamp=resp.get("generated_at", ""),
+        )
+        csv_io.upsert_by_item_key(output_path, row, ABSTRACT_SCREENING_FIELDS)
+        counts[decision] = counts.get(decision, 0) + 1
+        if decision in VALID_DECISIONS:
+            tag_buffer.append((req["item_key"], _stage_tag_op(decision)))
+            if len(tag_buffer) >= max(1, tag_batch_size):
+                _flush_tag_buffer(zot, tag_buffer)
+    _flush_tag_buffer(zot, tag_buffer)
+
+    # Units that never reached the model still owe the log a row.
+    sidecar = batch_manifest.read_skipped(
+        batch_manifest.skipped_path(manifest_path),
+    )
+    for s in sidecar.get("skipped", []):
+        if s.get("skip_reason") not in batch_manifest.SKIP_REASONS_WITH_ROWS:
+            continue
+        row = screening_row(
+            _item_from_manifest_row(s),
+            decision="error",
+            reason=f"{s['skip_reason']}: {s.get('detail', '')}"[:200],
+            model=model_seen,
+            prompt_version="",
+        )
+        csv_io.upsert_by_item_key(output_path, row, ABSTRACT_SCREENING_FIELDS)
+        counts[s["skip_reason"]] = counts.get(s["skip_reason"], 0) + 1
+
+    print(f"\n{'=' * 60}")
+    # Not `len(paired)`: with --skip-already-tagged that number can be
+    # every response in the file while nothing was written at all.
+    print(
+        f"Applied {len(paired) - counts.get('skipped', 0)} of "
+        f"{len(paired)} response(s) from {responses_path.name}."
+    )
+    for k in sorted(counts):
+        print(f"  {k}: {counts[k]}")
+    if unanswered:
+        print(f"  unanswered: {len(unanswered)}")
+    print(f"Log: {output_path}")
+    return 0
 
 
 def _stage_tag_op(decision: str) -> dict:
@@ -221,6 +506,35 @@ def main() -> int:
                              "pressure than per-item writes. Use 1 for strict "
                              "per-item writes. Failed tag writes leave items "
                              "untagged; a re-run re-screens them.")
+    parser.add_argument("--emit-manifest", default="",
+                        help="Assemble the requests this run would send and "
+                             "write them to PATH as JSONL (plus a "
+                             ".skipped.json sidecar), then exit. Makes no LLM "
+                             "calls. Execute the manifest anywhere, then feed "
+                             "the responses back with --apply-responses. "
+                             "A .gz suffix compresses it.")
+    parser.add_argument("--apply-responses", default="",
+                        help="Apply an executed manifest's responses: write "
+                             "CSV rows and Zotero abstract:* tags. Requires "
+                             "--emit-manifest's file too, via --manifest. "
+                             "Makes no LLM calls.")
+    parser.add_argument("--manifest", default="",
+                        help="The manifest that --apply-responses's file "
+                             "answers. Needed because the responses carry "
+                             "only decisions; the requests carry identity.")
+    parser.add_argument("--max-input-chars", type=int, default=0,
+                        help="Send no request whose user message exceeds N "
+                             "characters; over-long items go to the skipped "
+                             "sidecar rather than being silently truncated "
+                             "(0 = no limit).")
+    parser.add_argument("--force-apply", action="store_true",
+                        help="Apply responses even when the run record marks "
+                             "the run degenerate. Prints why that is a bad "
+                             "idea first.")
+    parser.add_argument("--skip-already-tagged", action="store_true",
+                        help="On apply, skip items tagged in Zotero since the "
+                             "manifest was emitted, rather than overwriting "
+                             "their decision.")
     parser.add_argument("--csv-backfill", action="store_true",
                         help="One-time migration from pre-Zotero-as-truth "
                              "deployments: read CSV decisions and apply "
@@ -237,7 +551,8 @@ def main() -> int:
 
     api_key = "" if args.dry_run else require("zotero", "api_key",
                                               env="ZOTERO_API_KEY")
-    if not args.dry_run and not args.csv_backfill:
+    batch_mode = bool(args.emit_manifest or args.apply_responses)
+    if not (args.dry_run or args.csv_backfill or batch_mode):
         llm_provider.require_credentials(model)
         # A present key is not a working one. One ~4-token request here
         # separates "valid key, spent quota" from "bad key" from "model
@@ -262,6 +577,23 @@ def main() -> int:
     if args.csv_backfill:
         return _run_csv_backfill(zot, coll_items, output_path)
 
+    if args.apply_responses:
+        if not args.manifest:
+            sys.exit(
+                "ERROR: --apply-responses needs --manifest too. The "
+                "responses carry decisions; the manifest carries which "
+                "item each decision belongs to."
+            )
+        return apply_responses(
+            zot,
+            manifest_path=Path(args.manifest),
+            responses_path=Path(args.apply_responses),
+            output_path=output_path,
+            tag_batch_size=args.tag_batch_size,
+            force=args.force_apply,
+            skip_already_tagged=args.skip_already_tagged,
+        )
+
     tagged = _already_tagged(coll_items)
     to_screen = [it for it in coll_items if it["key"] not in tagged]
     print(f"  Already tagged (abstract:*): {len(tagged)}, remaining: "
@@ -284,6 +616,51 @@ def main() -> int:
 
     if not to_screen:
         print("Nothing to screen.", flush=True)
+        return 0
+
+    if args.emit_manifest:
+        run_id = batch_manifest.new_run_id(batch_manifest.STAGE_ABSTRACT)
+        manifest_path = Path(args.emit_manifest)
+        rows, skipped = build_manifest_rows(
+            to_screen,
+            run_id=run_id,
+            system_prompt=system_prompt,
+            model=model,
+            prompt_version=prompt_version,
+            doi_to_query=doi_to_query,
+            library=zot.library_ref(),
+            collection=args.collection,
+            max_input_chars=args.max_input_chars,
+        )
+        if not rows:
+            sys.exit(
+                "ERROR: every candidate was skipped; nothing to emit. See "
+                f"{batch_manifest.skipped_path(manifest_path)} for why."
+            )
+        batch_manifest.write_manifest(manifest_path, rows)
+        sidecar = batch_manifest.write_skipped(
+            batch_manifest.skipped_path(manifest_path),
+            run_id=run_id,
+            stage=batch_manifest.STAGE_ABSTRACT,
+            skipped=skipped,
+            n_requested=len(rows),
+            selection={
+                "collection": args.collection,
+                "library": zot.library_ref(),
+                "already_tagged": len(tagged),
+                "sample": args.sample,
+                "max_input_chars": args.max_input_chars,
+                "model_hint": model,
+                "prompt_version": prompt_version,
+            },
+        )
+        print(f"\nWrote {len(rows)} request(s) to {manifest_path}")
+        print(f"Skipped {len(skipped)}; reasons in {sidecar}")
+        print(f"run_id: {run_id}")
+        print(
+            "\nExecute it wherever the compute is, then:\n"
+            f"  --apply-responses <responses.jsonl> --manifest {manifest_path}",
+        )
         return 0
 
     if args.dry_run:
@@ -338,16 +715,7 @@ def main() -> int:
                 system=system_prompt,
                 prompt=msg,
             )
-            decision = "error"
-            reason = text
-            for line in text.splitlines():
-                if line.upper().startswith("DECISION:"):
-                    decision = line.split(":", 1)[1].strip().lower()
-                if line.upper().startswith("REASON:"):
-                    reason = line.split(":", 1)[1].strip()
-            if decision not in VALID_DECISIONS:
-                decision = "borderline"
-                reason = f"PARSE ERROR — raw: {text[:200]}"
+            decision, reason = parse_decision(text)
         except Exception as e:
             # Classify rather than stringify. A run that hits a spent
             # quota fails every remaining item the same way, and the
@@ -368,6 +736,10 @@ def main() -> int:
     print(f"Screening with {args.workers} parallel workers (model={model})...",
           flush=True)
 
+    # `screening_row` builds a row from the item, so the loop needs the
+    # item back from the key its worker returned.
+    by_key = {it["key"]: it for it in to_screen}
+
     # Stage-tag writes are buffered and flushed via one multi-item PATCH
     # every `tag_batch_size` decisions, instead of one PATCH per item.
     tag_batch_size = max(1, args.tag_batch_size)
@@ -381,18 +753,10 @@ def main() -> int:
                 done_count += 1
                 counts[decision] = counts.get(decision, 0) + 1
 
-                row = {
-                    "timestamp": datetime.now(UTC).isoformat(),
-                    "item_key": key,
-                    "doi": doi,
-                    "title": title,
-                    "source": source,
-                    "query": query,
-                    "decision": decision,
-                    "reason": reason,
-                    "model": model,
-                    "prompt_version": prompt_version,
-                }
+                row = screening_row(
+                    by_key[key], decision=decision, reason=reason,
+                    model=model, prompt_version=prompt_version, query=query,
+                )
                 # CSV first (source of truth), then enqueue the tag write.
                 with log_lock:
                     csv_io.upsert_by_item_key(

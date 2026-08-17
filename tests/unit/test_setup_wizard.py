@@ -236,7 +236,10 @@ def test_env_var_names_match_user_convention() -> None:
     """The wizard's env var names must match what the user sets in their shell
     profile. If a name changes here, projects' existing shells break."""
     mod = _load()
-    env_names = {k.env_var for k in mod.KEYS}
+    # Config-only specs contribute no name; `test_which_specs_are_config_only`
+    # below pins exactly which those are, so dropping them here cannot
+    # quietly become a way to skip this guard.
+    env_names = {k.env_var for k in mod.KEYS if k.env_var}
     expected = {
         "ZOTERO_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
         "WOS_API_KEY_EXTENDED", "WOS_API_KEY",
@@ -249,15 +252,38 @@ def test_env_var_names_match_user_convention() -> None:
         # Not a credential: points the screening pipelines at an
         # Anthropic-compatible endpoint (local models — issue #1).
         "ANTHROPIC_BASE_URL",
-        # The other four providers in `core.providers`. Each is only
+        # The other providers in `core.providers`. Each is only
         # prompted for when it is the selected provider, but the name
         # must stay stable regardless — users set these in their shell.
         "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENROUTER_API_KEY",
+        # The institutional gateway contributes nothing here on purpose:
+        # both its settings are config-only (`env_var == ""`), because
+        # any name this plugin invented would collide with whatever the
+        # user already calls theirs. `test_config_only_specs_are_gateway`
+        # below is what keeps that exemption honest.
         # Local providers: a URL is the whole configuration, there is
         # no key at all.
         "OLLAMA_BASE_URL", "LMSTUDIO_BASE_URL",
     }
     assert env_names == expected, f"env var schema drift: {env_names ^ expected}"
+
+
+def test_which_specs_are_config_only() -> None:
+    """Exactly the gateway's two settings may omit an environment variable.
+
+    Omitting one is a real decision, not a default: it means the setting
+    can only be reached through `config.toml`, and it exempts the spec
+    from `test_env_var_names_match_user_convention`. The gateway earns
+    that because any name the plugin invented would collide with the one
+    its user already exports. Nothing else has that excuse — a new spec
+    that forgets its `env_var` should fail here rather than silently
+    become unreachable from a shell.
+    """
+    mod = _load()
+    config_only = {
+        (k.toml_section, k.toml_key) for k in mod.KEYS if not k.env_var
+    }
+    assert config_only == {("gateway", "api_key"), ("gateway", "base_url")}
 
 
 def test_llm_key_specs_name_a_real_provider() -> None:
@@ -287,13 +313,28 @@ def test_every_provider_credential_has_a_key_spec() -> None:
     mod = _load()
     from core import providers
 
-    asked = {spec.env_var for spec in mod.KEYS}
+    # Keyed on (section, key), not on the env var: a bring-your-own
+    # provider declares no variable, and matching on `""` would make
+    # this guard pass vacuously for exactly the provider that needs it
+    # most — the one whose settings have no conventional name.
+    asked = {(spec.toml_section, spec.toml_key) for spec in mod.KEYS}
     missing = []
     for spec in providers.PROVIDERS:
-        # Local providers have no key; the base URL is the whole config.
-        wanted = spec.api_key_env or spec.base_url_env
-        if wanted and wanted not in asked:
-            missing.append(f"{spec.name} (expected a KeySpec for {wanted})")
+        section = providers.config_section(spec)
+        if spec.local:
+            # No key; the base URL is the whole configuration.
+            wanted = [(section, "base_url")]
+        elif spec.byo_endpoint:
+            # Both halves, and neither has a default to fall back on.
+            wanted = [(section, "api_key"), (section, "base_url")]
+        else:
+            wanted = [(section, "api_key")]
+        for want in wanted:
+            if want not in asked:
+                missing.append(
+                    f"{spec.name} (expected a KeySpec for "
+                    f"[{want[0]}].{want[1]})"
+                )
     assert not missing, (
         f"Providers with no KeySpec to configure them: {missing}. "
         f"Add one to wizard.py:KEYS (plus a live auth test)."

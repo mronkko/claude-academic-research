@@ -187,6 +187,14 @@ def test_normalises_each_providers_listing_shape() -> None:
     )
     assert ollama[0].id == "llama3.2:3b"
 
+    # An institutional gateway is plain OpenAI on the wire; the models it
+    # lists are whatever that institution hosts.
+    gateway = md._normalise(
+        providers.get("gateway"),
+        {"data": [{"id": "Qwen/Qwen3-32B", "created": 42}]},
+    )
+    assert gateway[0].id == "Qwen/Qwen3-32B" and gateway[0].created == 42
+
 
 # ---------------------------------------------------------------------------
 # Catalogue fallback — the only path with nobody in the loop
@@ -206,6 +214,10 @@ def test_a_provider_with_no_catalog_entry_offers_nothing(monkeypatch) -> None:
     assert md.catalog_suggestions("openrouter") == []
     assert md.catalog_suggestions("ollama") == [], (
         "a local provider serves whatever the user pulled"
+    )
+    assert md.catalog_suggestions("gateway") == [], (
+        "an institution hosts whichever models it chose; the plugin "
+        "cannot suggest one, and must not price one either"
     )
 
 
@@ -270,10 +282,48 @@ def test_local_providers_need_no_key() -> None:
 
 
 def test_hosted_providers_name_a_key_and_where_to_get_it() -> None:
+    """Three hosting kinds, three obligations.
+
+    A vendor provider must name a key and a page to get it from. A
+    bring-your-own-endpoint provider cannot: its key page is whatever
+    its institution runs, so it owes an address variable instead, and
+    must ship no hostname at all. Local providers are covered above.
+    """
     for spec in providers.PROVIDERS:
-        if not spec.local:
+        if spec.local:
+            continue
+        if spec.byo_endpoint:
+            # The inverse of a vendor provider: nothing is knowable in
+            # advance, so it must declare *no* address, *no* key page,
+            # and no environment variable either. The settings live in
+            # config.toml under the provider's own section.
+            assert not spec.default_base_url, (
+                f"{spec.name} is bring-your-own-endpoint but ships "
+                f"{spec.default_base_url!r} as a default"
+            )
+            assert not spec.api_key_env, (
+                f"{spec.name} is bring-your-own-endpoint but claims the "
+                f"variable {spec.api_key_env} — an invented name would "
+                f"collide with whatever the user already exports"
+            )
+            assert not spec.base_url_env, (
+                f"{spec.name} is bring-your-own-endpoint but claims "
+                f"{spec.base_url_env}"
+            )
+        else:
             assert spec.api_key_env, f"{spec.name} names no credential"
             assert spec.key_url, f"{spec.name} does not say where to get a key"
+            assert spec.default_base_url, f"{spec.name} ships no default URL"
+
+
+def test_hosting_kinds_are_exclusive() -> None:
+    """`local` and `byo_endpoint` answer different questions and cannot
+    both be true: one says the endpoint is on this machine, the other
+    that its address is unknowable to the plugin."""
+    for spec in providers.PROVIDERS:
+        assert not (spec.local and spec.byo_endpoint), (
+            f"{spec.name} claims to be both local and bring-your-own"
+        )
 
 
 def test_transports_are_all_implementable() -> None:

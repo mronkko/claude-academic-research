@@ -98,15 +98,27 @@ def _auth_headers(spec: ProviderSpec, api_key: str) -> dict[str, str]:
     return {}
 
 
-def _normalise(spec: ProviderSpec, payload: dict) -> list[ModelInfo]:
+def _normalise(spec: ProviderSpec, payload: dict | list) -> list[ModelInfo]:
     """Flatten each provider's listing shape into ModelInfo.
 
-    Four shapes in the wild: Anthropic and OpenAI-compatible both use
+    Five shapes in the wild: Anthropic and OpenAI-compatible both use
     `{"data": [...]}` but name the timestamp differently, Google uses
-    `{"models": [{"name": "models/gemini-..."}]}`, and Ollama uses
-    `{"models": [{"name": "llama3:8b", "modified_at": "..."}]}`.
+    `{"models": [{"name": "models/gemini-..."}]}`, Ollama uses
+    `{"models": [{"name": "llama3:8b", "modified_at": "..."}]}`, and some
+    self-hosted OpenAI-compatible servers return the **bare array** with
+    no envelope at all.
+
+    That last one is not hypothetical: an institutional vLLM gateway
+    answered `/v1/models` with `[{"id": "openai/gpt-oss-120b", ...}, …]`,
+    and `payload.get("data")` raised `AttributeError: 'list' object has
+    no attribute 'get'` — a crash, not an empty listing, so model
+    discovery failed outright for that provider. Accept both.
     """
     out: list[ModelInfo] = []
+    if isinstance(payload, list):
+        payload = {"data": payload}
+    if not isinstance(payload, dict):
+        return out
     if spec.transport == "google":
         for m in payload.get("models") or []:
             ident = str(m.get("name", "")).removeprefix("models/")
@@ -120,6 +132,8 @@ def _normalise(spec: ProviderSpec, payload: dict) -> list[ModelInfo]:
                 out.append(ModelInfo(id=ident))
         return out
     for m in payload.get("data") or []:
+        if not isinstance(m, dict):
+            continue
         ident = str(m.get("id", ""))
         if not ident:
             continue
@@ -137,6 +151,16 @@ def list_models(spec: ProviderSpec, api_key: str = "", base_url: str = "") -> li
     if not spec.list_models_url:
         raise DiscoveryError(f"{spec.name} has no model-listing endpoint")
     base = providers.base_url_for(spec, base_url)
+    if not base:
+        # A bring-your-own-endpoint provider with nothing configured
+        # would format to "/v1/models", which `urllib` rejects as an
+        # unknown URL type — a ValueError that `_get_json` catches and
+        # retries three times over ~8 s before reporting something that
+        # names neither the cause nor the fix. Say it once, immediately.
+        raise DiscoveryError(
+            f"{spec.name} has no base URL configured; set "
+            f"{providers.base_url_location(spec)}"
+        )
     url = spec.list_models_url.format(base=base, key=api_key)
     payload = _get_json(url, _auth_headers(spec, api_key))
     models = _normalise(spec, payload)

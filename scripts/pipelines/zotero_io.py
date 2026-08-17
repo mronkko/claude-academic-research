@@ -596,6 +596,17 @@ class ZoteroClient:
         """
         return f"https://api.zotero.org/{self.library_type}s/{self.group_id}"
 
+    def library_ref(self) -> dict[str, str]:
+        """Machine-readable library identity, for provenance records.
+
+        `describe_library` is prose for a log line; this is the version
+        a batch manifest carries so that applying it somewhere else can
+        confirm it is about to write to the library it was emitted from.
+        Tagging the right keys in the wrong library is a quiet, ugly
+        failure — the keys exist in both, so nothing errors.
+        """
+        return {"kind": self.library_type, "id": str(self.group_id)}
+
     def describe_library(self) -> str:
         """Human-readable summary for log lines.
 

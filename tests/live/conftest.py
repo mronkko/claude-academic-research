@@ -99,12 +99,23 @@ KNOWN_DOIS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
-def require_config(section: str, key: str, env: str) -> str:
-    """Fetch a config value; skip the test cleanly if it is unset."""
+def require_config(section: str, key: str, env: str = "") -> str:
+    """Fetch a config value; skip the test cleanly if it is unset.
+
+    `env` is optional because some settings have no conventional
+    environment variable — the institutional gateway's, for instance,
+    live only in `config.toml`, since any name the plugin invented would
+    collide with whatever the user already exports. Omitting it reads
+    the file alone and phrases the skip accordingly.
+    """
     from core.config_loader import get
-    val = get(section, key, env=env)
+    val = get(section, key, env=env or None)
     if not val:
-        pytest.skip(f"{env} (or config [{section}].{key}) not set; skipping live test.")
+        where = (
+            f"{env} (or config [{section}].{key})" if env
+            else f"config [{section}].{key}"
+        )
+        pytest.skip(f"{where} not set; skipping live test.")
     return val
 
 

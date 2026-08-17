@@ -42,9 +42,10 @@ text):
 
 > I'll hand you the setup wizard. It runs in your terminal. It first
 > asks **which LLM provider** should run the screening pipelines —
-> Anthropic, Google, OpenAI, OpenRouter, or a local server (Ollama or
-> LM Studio, which need no API key at all) — and then only asks for
-> that provider's credential rather than all of them. It prompts for
+> Anthropic, Google, OpenAI, OpenRouter, your institution's own
+> OpenAI-compatible gateway, or a local server (Ollama or LM Studio,
+> which need no API key at all) — and then only asks for that
+> provider's credential rather than all of them. It prompts for
 > each API key with hidden input (keystrokes don't appear), then checks
 > five MCP (Model Context Protocol) servers and offers to register any
 > that are missing: **Zotero** (required — every citation skill uses
@@ -134,11 +135,50 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/set_llm_provider.py <name>
 ```
 
 `<name>` is one of `anthropic`, `google`, `openai`, `openrouter`,
-`ollama`, `lmstudio`. The check script prints the provider, whether one
-was ever chosen, and whether its credential is present — never a key
-value. Do NOT try to read `~/.config/academic-research/config.toml`
-yourself; a permission rule denies it precisely so keys cannot reach a
-transcript.
+`gateway`, `ollama`, `lmstudio`. The check script prints the provider,
+whether one was ever chosen, and whether its credential is present —
+never a key value. Do NOT try to read
+`~/.config/academic-research/config.toml` yourself; a permission rule
+denies it precisely so keys cannot reach a transcript.
+
+`gateway` is the only provider the plugin ships no address for, so it
+needs **two** answers — an endpoint URL as well as a key — and it is the
+only provider with **no environment variable**. Both live in
+`config.toml` under `[gateway]`, because every other provider's variable
+is an ecosystem convention its own SDK reads, while any name invented
+for a gateway would just collide with whatever the user already exports.
+Until `[gateway] base_url` is set, every check reports `UNREACHABLE` and
+says so.
+
+A user who would rather keep the key out of the file can point at a
+variable they already have, by name:
+
+```toml
+[gateway]
+base_url = "https://llm.example.edu/api"
+api_key_env = "MY_EXISTING_LLM_KEY"
+test_model = "org/model-id"   # only used by `pytest -m live`
+```
+
+**Gateways often load a model on first request.** Asking for one that
+is not resident gets `503 Model not available yet, try again in a few
+minutes` — retryable, not broken. Pin stages to models the gateway
+keeps warm, and point `test_model` at one too, or the live suite pays a
+cold start it did not need.
+
+**Three settings can point at a self-hosted model, and they are not
+interchangeable.** Pick by the endpoint's wire protocol, not by who
+runs it:
+
+- `gateway` — an OpenAI-compatible endpoint your institution runs. This
+  is the one to reach for; it gets its own config section, its own tier
+  hints for open-weight model names, and an honest **unknown** rather
+  than a fabricated price.
+- `OPENAI_BASE_URL` — only to redirect OpenAI itself, e.g. through a
+  proxy. A gateway configured here reports as `openai` and borrows
+  OpenAI's list prices, which makes the cost estimate wrong.
+- `ANTHROPIC_BASE_URL` — only for an endpoint speaking the Anthropic
+  Messages API, not the OpenAI one.
 
 If `set_llm_provider.py` reports a missing credential, **hand off to
 the wizard for that key** — do not ask for it in the chat. Then re-pin

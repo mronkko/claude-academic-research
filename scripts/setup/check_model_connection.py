@@ -37,7 +37,7 @@ _SCRIPTS_ROOT = _HERE.parent
 if str(_SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_ROOT))
 
-from core import model_health, providers  # noqa: E402
+from core import llm_provider, model_health, providers  # noqa: E402
 from core.config_loader import get  # noqa: E402
 from core.models import TIER_FOR_STAGE  # noqa: E402
 
@@ -57,16 +57,22 @@ def _configured_provider() -> str:
 
 
 def _api_key(spec) -> str:
-    if not spec.api_key_env:
+    # `local`, not `api_key_env`: a bring-your-own gateway declares no
+    # variable but still keeps a key in `[gateway] api_key`.
+    if spec.local:
         return ""
-    return get(providers.config_section(spec), "api_key", env=spec.api_key_env)
+    return get(
+        providers.config_section(spec), "api_key",
+        env=llm_provider.credential_env(spec),
+    )
 
 
 def _base_url(spec) -> str:
-    if not spec.base_url_env:
+    if not (spec.base_url_env or spec.byo_endpoint):
         return ""
     return get(
-        providers.config_section(spec), "base_url", env=spec.base_url_env,
+        providers.config_section(spec), "base_url",
+        env=llm_provider.base_url_env(spec),
     ) or ""
 
 
@@ -138,6 +144,23 @@ def main() -> int:
             print(f"ERROR: {e}", file=sys.stderr)
         return 2
 
+    key = _api_key(spec)
+    base = _base_url(spec)
+    # Checked before the pinned-model test below, not after: the advice
+    # that test gives is "run resolve_models.py --list", and that cannot
+    # work without an endpoint to list from. Reporting the missing model
+    # first would send the user down a path that dead-ends.
+    if spec.byo_endpoint and not base:
+        if not args.quiet:
+            print(
+                f"NOT CONFIGURED: {spec.label} needs its endpoint set "
+                f"in {providers.base_url_location(spec, llm_provider.base_url_env(spec))}.\n"
+                f"  The plugin ships no default address for it — only you "
+                f"know your institution's.\n  Run `/setup` to add it.",
+                file=sys.stderr,
+            )
+        return 2
+
     if args.model:
         targets = {"(explicit)": args.model}
     else:
@@ -157,12 +180,11 @@ def main() -> int:
             return 2
         targets = pinned
 
-    key = _api_key(spec)
-    base = _base_url(spec)
-    if spec.api_key_env and not key and not base:
+    if not spec.local and not key and not base:
         if not args.quiet:
             print(
-                f"NOT CONFIGURED: {spec.label} needs {spec.api_key_env}, "
+                f"NOT CONFIGURED: {spec.label} needs a key in "
+                f"{providers.credential_location(spec, llm_provider.credential_env(spec))}, "
                 f"which is not set.\n  Run `/setup` to add it — keys are "
                 f"entered there so they never enter the conversation.",
                 file=sys.stderr,

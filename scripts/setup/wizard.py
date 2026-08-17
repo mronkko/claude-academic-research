@@ -51,6 +51,8 @@ _SCRIPTS_ROOT = _HERE.parent
 if str(_SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_ROOT))
 
+from check_cluster_config import LEVEL_HELP as _CLUSTER_LEVEL_HELP  # noqa: E402
+from check_cluster_config import LEVELS as _CLUSTER_LEVELS  # noqa: E402
 from core import providers  # noqa: E402
 from zotero_mcp_floor import (  # noqa: E402
     PIP_INSTALL_CMD as ZOTERO_MCP_PIP_INSTALL_CMD,
@@ -286,6 +288,78 @@ def _verify_lmstudio_base_url(url: str) -> tuple[bool, str, dict]:
     return _verify_local_endpoint(url, "/v1/models", "LM Studio", "data")
 
 
+def _verify_gateway_base_url(url: str) -> tuple[bool, str, dict]:
+    """Probe an institutional gateway's model listing, unauthenticated.
+
+    A 401/403 is a *success* here: something is answering at that
+    address and it wants a credential, which is exactly what a gateway
+    should do. The failure worth catching at setup time is a typo in the
+    hostname or a VPN that is not up — both of which look like nothing
+    answering at all.
+    """
+    status, data, err = _http_json(f"{url.rstrip('/')}/v1/models", timeout=8)
+    if status == 0:
+        return False, (
+            f"nothing answered at {url} ({err}). Check the address, and "
+            f"whether the gateway needs you on the institution's network "
+            f"or VPN — saved anyway."
+        ), {}
+    if status in (401, 403):
+        return True, "endpoint reachable; it wants a key (expected)", {}
+    if status != 200:
+        return False, f"gateway returned HTTP {status} from /v1/models", {}
+    # Both envelope shapes: OpenAI's `{"data": [...]}` and the bare array
+    # some self-hosted servers return. A real gateway answered with the
+    # latter and this line raised AttributeError before the check.
+    if isinstance(data, list):
+        n = len(data)
+    else:
+        n = len((data or {}).get("data") or [])
+    return True, f"endpoint reachable; {n} model(s) listed", {}
+
+
+def _verify_gateway_key(key: str) -> tuple[bool, str, dict]:
+    """Check a gateway key against the gateway's own listing endpoint.
+
+    `KeySpec.verify` takes only the value being verified, so this cannot
+    see a base URL the user typed moments ago in the same pass — it has
+    not been written yet. Falling back to env and the existing config
+    covers re-runs and anyone who set the URL first; a genuinely
+    first-time setup gets the honest "nothing to check against yet"
+    instead of a misleading red. BACKLOG carries the two-argument
+    `verify` refactor that would close this.
+    """
+    section = _load_existing_config().get("gateway", {})
+    declared_env = str(section.get("base_url_env") or "").strip()
+    base = (
+        (os.environ.get(declared_env, "") if declared_env else "")
+        or str(section.get("base_url") or "")
+    ).strip()
+    if not base:
+        return False, (
+            "no gateway base URL on file yet — answer the endpoint "
+            "question above and re-run /setup, or check later with "
+            "check_model_connection.py; key saved anyway"
+        ), {}
+    status, data, err = _http_json(
+        f"{base.rstrip('/')}/v1/models",
+        headers={"Authorization": f"Bearer {key}"},
+        timeout=8,
+    )
+    if status == 0:
+        return False, f"could not reach {base} ({err}) — saved anyway", {}
+    if status in (401, 403):
+        return False, "the gateway rejected the key (401/403). Re-check it.", {}
+    if status != 200:
+        return False, f"gateway returned HTTP {status}", {}
+    n = len(data) if isinstance(data, list) else len((data or {}).get("data") or [])
+    # Some gateways serve the listing unauthenticated, so a 200 here does
+    # not by itself prove the key is good — it proves the key was not
+    # rejected. The chat probe in check_model_connection.py is what
+    # actually exercises it.
+    return True, f"key accepted; {n} model(s) available via the gateway", {}
+
+
 def _verify_elsevier(key: str) -> tuple[bool, str, dict]:
     status, _, err = _http_json(
         "https://api.elsevier.com/content/article/doi/10.1016/j.procs.2018.10.404",
@@ -393,6 +467,12 @@ def _verify_none(_key: str) -> tuple[bool, str, dict]:
 
 @dataclass(frozen=True)
 class KeySpec:
+    #: Canonical environment variable, or `""` when the setting has no
+    #: conventional name and lives only in `config.toml`. Empty for a
+    #: bring-your-own-endpoint provider: any name the plugin invented
+    #: would collide with whatever the user already calls theirs. The
+    #: identity of a spec is therefore `(toml_section, toml_key)`, which
+    #: is unique and always present — not `env_var`.
     env_var: str
     toml_section: str
     toml_key: str
@@ -523,6 +603,54 @@ KEYS: tuple[KeySpec, ...] = (
         where="https://openrouter.ai/keys",
         verify=_verify_openrouter,
         llm_provider="openrouter",
+    ),
+    KeySpec(
+        # No environment variable: see ProviderSpec.byo_endpoint. The
+        # value lives in `[gateway] base_url`, and a user who prefers an
+        # env var declares their own name in `[gateway] base_url_env`.
+        "", "gateway", "base_url",
+        "Institutional gateway endpoint URL",
+        required=False, hidden=False,
+        what="Many universities run their own OpenAI-compatible LLM "
+             "gateway — one address serving open-weight models on the "
+             "institution's own hardware, at no per-paper cost to you. "
+             "Not a secret: a plain URL, safe to paste in view.",
+        used_by="systematic-review (abstract screening and full-text "
+                "coding, whenever the gateway is the selected provider).",
+        impact="Screening will fail outright while `gateway` is selected "
+               "and this is blank. There is no fallback address — the "
+               "plugin ships none, because only you know yours.",
+        where="Your research-computing or IT documentation. Give the base "
+              "only (e.g. https://llm.example.edu/api) — the client "
+              "appends /v1/chat/completions itself. Many such gateways "
+              "are reachable only from the institution's network or VPN. "
+              "Stored in config.toml; to read it from an environment "
+              "variable you already export, set `[gateway] base_url_env` "
+              "to that variable's name.",
+        verify=_verify_gateway_base_url,
+        llm_provider="gateway",
+    ),
+    KeySpec(
+        # No environment variable — same reasoning as the base URL
+        # above; `[gateway] api_key_env` names one if the user wants it.
+        "", "gateway", "api_key",
+        "Institutional gateway API key",
+        required=False, hidden=True,
+        what="The credential for the OpenAI-compatible gateway above. "
+             "Sent as a bearer token, exactly as OpenAI's own key is.",
+        used_by="systematic-review (abstract screening and full-text "
+                "coding, whenever the gateway is the selected provider).",
+        impact="Screening will fail while `gateway` is selected, unless "
+               "your gateway happens to need no credential.",
+        where="Issued by whoever runs the gateway — usually a self-service "
+              "key page or a service-desk request. There is no universal "
+              "URL for this; check your institution's documentation. "
+              "Stored in config.toml (0600); to read it from an "
+              "environment variable you already export — whatever yours "
+              "is called — set `[gateway] api_key_env` to that name "
+              "instead.",
+        verify=_verify_gateway_key,
+        llm_provider="gateway",
     ),
     KeySpec(
         "OLLAMA_BASE_URL", "ollama", "base_url", "Ollama server URL",
@@ -1016,6 +1144,90 @@ def _prompt_elsevier_xml_pdf(interactive: bool, existing: dict) -> dict[str, obj
     return {"render_xml_to_pdf": enabled}
 
 
+def _prompt_cluster_automation(interactive: bool, existing: dict) -> dict[str, object]:
+    """Return `{automation: "manual"|"confirm"|"auto"}` for `[cluster]`, or `{}`.
+
+    Screening can run on a GPU node behind a batch scheduler instead of
+    against an LLM API. That path hands work to a shared facility account
+    the plugin does not own, so how much of it the agent may drive
+    unattended is the user's decision and nobody else's.
+
+    **No secret is collected here**, which is why this is a plain prompt
+    rather than a `KeySpec`: a level is a policy statement, and the
+    remote credential is the user's own SSH key, held by their SSH agent
+    and never seen by this plugin.
+
+    Skipped entirely unless the user says they use a cluster, so the 95%
+    who do not never acquire a `[cluster]` section. An absent section
+    means `manual`, which is the safe reading of "never answered".
+
+    The level descriptions come from `check_cluster_config.py` so the
+    wizard cannot describe a level differently from the script that
+    enforces the precedence chain.
+    """
+    current = (existing.get("cluster", {}) or {}).get("automation")
+    if not interactive:
+        # A non-interactive re-run must not invent a level, and must not
+        # drop one the user chose. Same rule as the Elsevier prompt.
+        return {"automation": current} if current in _CLUSTER_LEVELS else {}
+
+    print("\n  GPU cluster screening (optional):")
+    print(_wrap_body(
+        "Screening and coding can be emitted as a request manifest, run "
+        "on a GPU node behind a batch scheduler (SLURM), and applied "
+        "afterwards. If you have access to one, this replaces per-paper "
+        "API spend with an allocation you already have. Answer no if "
+        "none of that means anything to you — nothing else changes.",
+        indent=4,
+    ))
+    default_yes = current in _CLUSTER_LEVELS
+    suffix = "[Y/n]" if default_yes else "[y/N]"
+    try:
+        answer = input(f"    Do you screen on a GPU cluster? {suffix} ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\n    Skipped.")
+        return {"automation": current} if current in _CLUSTER_LEVELS else {}
+    uses_cluster = default_yes if not answer else answer in ("y", "yes")
+    if not uses_cluster:
+        return {}
+
+    print()
+    print(_wrap_body(
+        "How much of the remote loop may the assistant run on its own? "
+        "This is about ssh, scp and sbatch — commands that touch your "
+        "facility account and spend your allocation.",
+        indent=4,
+    ))
+    print()
+    for i, level in enumerate(_CLUSTER_LEVELS, start=1):
+        print(f"      {i}. {level}")
+        print(_wrap_body(_CLUSTER_LEVEL_HELP[level], indent=9))
+    print()
+    print(_wrap_body(
+        "'manual' is the default and the recommendation. It is also the "
+        "only level that works when reaching the cluster needs a VPN, "
+        "2FA or Kerberos — none of which an assistant can do for you. "
+        "Note that 'confirm' relies on you answering a permission "
+        "prompt: the plugin never allow-lists ssh/scp/rsync/sbatch, so "
+        "the prompt is the approval.",
+        indent=4,
+    ))
+    default_level = current if current in _CLUSTER_LEVELS else "manual"
+    try:
+        raw = input(f"    Level [{default_level}]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\n    Skipped.")
+        return {"automation": default_level}
+    if not raw:
+        return {"automation": default_level}
+    if raw.isdigit() and 1 <= int(raw) <= len(_CLUSTER_LEVELS):
+        return {"automation": _CLUSTER_LEVELS[int(raw) - 1]}
+    if raw in _CLUSTER_LEVELS:
+        return {"automation": raw}
+    print(f"    '{raw}' is not a level; keeping '{default_level}'.")
+    return {"automation": default_level}
+
+
 def _detect_and_prompt_connector(
     interactive: bool,
     existing: dict,
@@ -1196,10 +1408,17 @@ def _choose_provider(interactive: bool, existing: dict) -> str:
     for i, spec in enumerate(providers.PROVIDERS, 1):
         current = "  <- current" if spec.name == default else ""
         print(f"    {i}. {spec.label}{current}")
-        need = (
-            f"no API key; runs on your machine at {spec.default_base_url}"
-            if spec.local else f"needs {spec.api_key_env}"
-        )
+        if spec.local:
+            need = (
+                f"no API key; runs on your machine at {spec.default_base_url}"
+            )
+        elif spec.byo_endpoint:
+            # Two answers, not one: a key alone gets this provider
+            # nowhere, because the plugin ships no address for it. Both
+            # are asked for by name in the prompts that follow.
+            need = "needs an endpoint URL and a key (the wizard asks for both)"
+        else:
+            need = f"needs {spec.api_key_env}"
         print(f"       {need}")
     print()
     print(f"  Enter a number or a name; press Enter to keep {default}.")
@@ -1232,7 +1451,9 @@ def _llm_credential_present(
     ignore the wizard, and a missing one lets a run fail on item 1.
     """
     spec = providers.get(provider) or providers.require(providers.DEFAULT_PROVIDER)
-    if not spec.api_key_env:
+    # `local`, not `api_key_env`: a bring-your-own gateway declares no
+    # variable but does need a key.
+    if spec.local:
         return True, ""
     section = providers.config_section(spec)
 
@@ -1249,12 +1470,16 @@ def _llm_credential_present(
     # key, so a base URL alone is a working setup (issue #1).
     if spec.transport == "anthropic" and _value("base_url"):
         return True, ""
-    hint = f"{spec.api_key_env} is not set"
-    if spec.base_url_env and _value("base_url"):
+    where = providers.credential_location(spec)
+    hint = f"{where} is not set"
+    # Name the URL variable when the provider has one; a bring-your-own
+    # provider has no name to give, so describe the setting instead.
+    url_name = spec.base_url_env or ("the base URL" if spec.byo_endpoint else "")
+    if url_name and _value("base_url"):
         hint += (
-            f", and {spec.base_url_env} alone is not enough for this "
-            f"provider — set any non-empty {spec.api_key_env} if your "
-            f"endpoint does not check it"
+            f", and {url_name} alone is not enough for this provider — "
+            f"set any non-empty value at {where} if your endpoint does "
+            f"not check it"
         )
     return False, hint
 
@@ -1302,7 +1527,9 @@ def _collect_keys(
         prior = existing.get(spec.toml_section, {}).get(spec.toml_key, "")
         val, extras = _prompt_key(spec, prior, interactive, verify)
         if spec.required and not val:
-            missing_required.append(spec.env_var)
+            missing_required.append(
+                spec.env_var or f"[{spec.toml_section}].{spec.toml_key}"
+            )
             continue
         if val:
             section = values.setdefault(spec.toml_section, {})
@@ -2351,7 +2578,12 @@ def main() -> int:
     verify = not args.skip_verify
     if interactive:
         _print_header()
-        env_hits = [k.env_var for k in KEYS if os.environ.get(k.env_var, "").strip()]
+        # Config-only specs (env_var == "") are skipped: they have no
+        # variable to detect. See KeySpec.env_var.
+        env_hits = [
+            k.env_var for k in KEYS
+            if k.env_var and os.environ.get(k.env_var, "").strip()
+        ]
         if env_hits:
             print(f"  Detected environment variables: {', '.join(env_hits)}")
             print("  These will be offered as defaults below (press Enter to accept).")
@@ -2374,6 +2606,10 @@ def main() -> int:
     xml_pdf_entry = _prompt_elsevier_xml_pdf(interactive, existing_cfg)
     if xml_pdf_entry:
         values.setdefault("elsevier", {}).update(xml_pdf_entry)
+
+    cluster_entry = _prompt_cluster_automation(interactive, existing_cfg)
+    if cluster_entry:
+        values.setdefault("cluster", {}).update(cluster_entry)
 
     updated_no_access = _offer_no_access_editor(interactive, existing_cfg)
     if updated_no_access:

@@ -43,10 +43,18 @@ from core import config_writer, llm_provider, providers  # noqa: E402
 def _print_choices() -> None:
     print("Available providers:")
     for spec in providers.PROVIDERS:
-        need = (
-            f"no API key (local, {spec.default_base_url})"
-            if spec.local else f"needs {spec.api_key_env}"
-        )
+        if spec.local:
+            need = f"no API key (local, {spec.default_base_url})"
+        elif spec.byo_endpoint:
+            # Both halves, because a key alone gets this provider
+            # nowhere: the plugin ships no address for it. Neither has an
+            # environment variable, so name the config section.
+            need = (
+                f"needs base_url and api_key in config.toml "
+                f"[{providers.config_section(spec)}]"
+            )
+        else:
+            need = f"needs {spec.api_key_env}"
         print(f"  {spec.name:<12} {spec.label} — {need}")
 
 

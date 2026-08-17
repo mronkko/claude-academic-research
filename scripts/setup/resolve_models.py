@@ -59,23 +59,34 @@ _SCRIPTS_ROOT = _HERE.parent
 if str(_SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_ROOT))
 
-from core import model_discovery, model_health, providers  # noqa: E402
+from core import (  # noqa: E402
+    llm_provider,
+    model_discovery,
+    model_health,
+    providers,
+)
 from core.config_loader import get  # noqa: E402
 from core.models import TIER_FOR_STAGE  # noqa: E402
 from core.providers import ProviderSpec  # noqa: E402
 
 
 def _api_key(spec: ProviderSpec) -> str:
-    if not spec.api_key_env:
+    # `local`, not `api_key_env`: a bring-your-own gateway declares no
+    # variable but still keeps a key in `[gateway] api_key`.
+    if spec.local:
         return ""
-    return get(providers.config_section(spec), "api_key", env=spec.api_key_env)
+    return get(
+        providers.config_section(spec), "api_key",
+        env=llm_provider.credential_env(spec),
+    )
 
 
 def _base_url(spec: ProviderSpec) -> str:
-    if not spec.base_url_env:
+    if not (spec.base_url_env or spec.byo_endpoint):
         return ""
     return get(
-        providers.config_section(spec), "base_url", env=spec.base_url_env,
+        providers.config_section(spec), "base_url",
+        env=llm_provider.base_url_env(spec),
     ) or ""
 
 #: Which constant in `screening_config.py` each stage pins. Explicit
@@ -96,12 +107,7 @@ def _credentials(spec: ProviderSpec) -> tuple[str, str]:
     Neither is ever printed. The wizard writes them; this script reads
     them only to make the model-listing call.
     """
-    section = providers.config_section(spec)
-    api_key = get(section, "api_key", env=spec.api_key_env) if spec.api_key_env else ""
-    base_url = (
-        get(section, "base_url", env=spec.base_url_env) if spec.base_url_env else ""
-    )
-    return api_key, base_url
+    return _api_key(spec), _base_url(spec)
 
 
 # ---------------------------------------------------------------------------
@@ -167,8 +173,8 @@ def _print_catalog_fallback(spec: ProviderSpec, reason: str) -> int:
     """
     print(
         f"WARNING: could not ask {spec.name} for its model listing: {reason}.\n"
-        f"         Check the credential for "
-        f"{spec.api_key_env or spec.base_url_env or 'this provider'}, "
+        f"         Check the credential in "
+        f"{providers.credential_location(spec, llm_provider.credential_env(spec))}, "
         f"or pin a model by hand.",
         file=sys.stderr,
     )

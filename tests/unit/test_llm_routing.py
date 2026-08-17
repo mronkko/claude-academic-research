@@ -43,6 +43,7 @@ def _with_config(monkeypatch, **values: str):
         ("google", "google"),
         ("openai", "openai_compat"),
         ("openrouter", "openai_compat"),
+        ("gateway", "openai_compat"),
         ("ollama", "openai_compat"),
         ("lmstudio", "openai_compat"),
     ],
