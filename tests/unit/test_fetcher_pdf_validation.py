@@ -26,7 +26,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fetchers.crossref import CrossrefSource
-from fetchers.openalex import OpenAlexSource
+from fetchers.openalex import OpenAlexContentSource, OpenAlexSource
 from fetchers.springer import SpringerSource
 from fetchers.unpaywall import UnpaywallSource
 
@@ -50,11 +50,23 @@ def _cache_name(doi: str) -> str:
 # OpenAlex — where the incident happened.
 # ---------------------------------------------------------------------
 
-def _openalex(monkeypatch, tmp_path, content: bytes):
+# Both OpenAlex sources download bytes and so both must validate them.
+# Parametrized rather than tested once: the paid Content API is where the
+# truncation incident actually happened, but the free OA tier writes to
+# the same cache path, so an unvalidated write on either side would
+# poison the other's cache hit.
+_OPENALEX_SOURCES = pytest.mark.parametrize(
+    "source_cls", [OpenAlexSource, OpenAlexContentSource],
+    ids=["free_oa_tier", "paid_content_api"],
+)
+
+
+def _openalex(monkeypatch, tmp_path, content: bytes, source_cls=OpenAlexSource):
     cfg = MagicMock()
     cfg.openalex_api_key = "key"
     cfg.crossref_mailto = "a@b.c"
-    src = OpenAlexSource(MagicMock(), config=cfg)
+    cfg.openalex_use_paid_content_api = True
+    src = source_cls(MagicMock(), config=cfg)
     src._ensure_configured = lambda: None
 
     resp = MagicMock()
@@ -63,46 +75,63 @@ def _openalex(monkeypatch, tmp_path, content: bytes):
     resp.headers = {}
     src.http.get.return_value = resp
 
+    # Carries both routes' metadata so one fake work serves either
+    # source: `has_content.pdf` drives the paid Content API, and
+    # `open_access.oa_url` drives the free OA tier.
     fake_pyalex = MagicMock()
     fake_pyalex.Works.return_value = {
-        f"doi:{DOI}": {"id": "https://openalex.org/W1", "has_content": {"pdf": True}},
+        f"doi:{DOI}": {
+            "id": "https://openalex.org/W1",
+            "has_content": {"pdf": True},
+            "open_access": {"oa_url": "https://repo.example.org/paper.pdf"},
+        },
     }
     monkeypatch.setitem(__import__("sys").modules, "pyalex", fake_pyalex)
     return src
 
 
-def test_openalex_rejects_truncated_download(monkeypatch, tmp_path) -> None:
-    src = _openalex(monkeypatch, tmp_path, _truncated_pdf())
+@_OPENALEX_SOURCES
+def test_openalex_rejects_truncated_download(
+    monkeypatch, tmp_path, source_cls,
+) -> None:
+    src = _openalex(monkeypatch, tmp_path, _truncated_pdf(), source_cls)
     assert src.fetch_pdf(DOI, cache_dir=str(tmp_path)) is None
     # Nothing cached — a broken file must not become tomorrow's cache hit.
     assert not (tmp_path / _cache_name(DOI)).exists()
 
 
-def test_openalex_accepts_intact_download(monkeypatch, tmp_path) -> None:
-    src = _openalex(monkeypatch, tmp_path, _good_pdf())
+@_OPENALEX_SOURCES
+def test_openalex_accepts_intact_download(
+    monkeypatch, tmp_path, source_cls,
+) -> None:
+    src = _openalex(monkeypatch, tmp_path, _good_pdf(), source_cls)
     result = src.fetch_pdf(DOI, cache_dir=str(tmp_path))
     assert result is not None
     assert result[0].read_bytes() == _good_pdf()
 
 
-def test_openalex_discards_a_poisoned_cache_entry(monkeypatch, tmp_path) -> None:
+@_OPENALEX_SOURCES
+def test_openalex_discards_a_poisoned_cache_entry(
+    monkeypatch, tmp_path, source_cls,
+) -> None:
     """A truncated file left by an earlier, unvalidated run must not be
     served — and must be removed so the next source gets a chance."""
     cached = tmp_path / _cache_name(DOI)
     cached.write_bytes(_truncated_pdf())
 
-    src = _openalex(monkeypatch, tmp_path, _truncated_pdf())
+    src = _openalex(monkeypatch, tmp_path, _truncated_pdf(), source_cls)
     assert src.fetch_pdf(DOI, cache_dir=str(tmp_path)) is None
     assert not cached.exists()
 
 
+@_OPENALEX_SOURCES
 def test_openalex_serves_a_valid_cache_entry_without_network(
-    monkeypatch, tmp_path,
+    monkeypatch, tmp_path, source_cls,
 ) -> None:
     cached = tmp_path / _cache_name(DOI)
     cached.write_bytes(_good_pdf())
 
-    src = _openalex(monkeypatch, tmp_path, _good_pdf())
+    src = _openalex(monkeypatch, tmp_path, _good_pdf(), source_cls)
     src.http.get.side_effect = AssertionError("must not hit the network")
 
     result = src.fetch_pdf(DOI, cache_dir=str(tmp_path))

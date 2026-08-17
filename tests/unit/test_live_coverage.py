@@ -190,17 +190,18 @@ def test_every_abstract_source_has_a_live_test() -> None:
 
 
 # Source `name` → live-test function names in test_pdf_endpoints.py.
-# OpenAlex maps to two tests — the Content API and the OA-metadata URL
-# are distinct endpoints behind one fetcher class.
+# The two OpenAlex endpoints are two separate sources: `openalex_content`
+# is the paid Content API (version of record, stage 2 of the cascade) and
+# `openalex` is the free OA-metadata tier (stage 3). They were a single
+# class with one pair of live tests until the tiers were split apart, so
+# the two existing tests carry over one apiece.
 PDF_LIVE_TESTS: dict[str, list[str]] = {
     "sciencedirect": ["test_elsevier_sciencedirect_reachable"],
     "springer": ["test_springer_reachable"],
     "crossref": ["test_crossref_tdm_link_present"],
     "pubmed_central": ["test_pmc_doi_to_pmcid_resolves"],
-    "openalex": [
-        "test_openalex_content_api_returns_pdf_bytes",
-        "test_openalex_oa_url_present",
-    ],
+    "openalex": ["test_openalex_oa_url_present"],
+    "openalex_content": ["test_openalex_content_api_returns_pdf_bytes"],
     "unpaywall": ["test_unpaywall_returns_pdf_url"],
     "semantic_scholar": ["test_semantic_scholar_open_access_pdf_url"],
     "core": ["test_core_search_returns_a_download_url"],

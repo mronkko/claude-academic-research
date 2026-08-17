@@ -817,15 +817,22 @@ KEYS: tuple[KeySpec, ...] = (
         what="OpenAlex is a free, open index of scholarly works and authors "
              "(https://openalex.org), the main successor to the shut-down "
              "Microsoft Academic Graph. The free metadata tier is used "
-             "extensively and needs no key. The paid Content API ($0.01 per PDF) "
-             "unlocks bulk PDF retrieval.",
-        used_by="systematic-review (one tier of the multi-source PDF retrieval "
-                "cascade).",
-        impact="PDF cascade drops one optional tier; the other six sources "
-               "(Elsevier, Wiley, Crossref, PubMed Central, Unpaywall, OpenAlex "
-               "OA metadata) still function.",
-        where="https://openalex.org — paid tier only; skip unless you need "
-              "high-volume PDF retrieval.",
+             "extensively and needs no key. The paid Content API adds PDF "
+             "downloads at roughly $0.01 each — current rates, the free daily "
+             "allowance, and the annual plans are at "
+             "https://openalex.org/pricing.",
+        used_by="systematic-review and zotero-operations: the paid "
+                "version-of-record tier of the PDF retrieval cascade (stage 2 "
+                "of 5 — see `fetchers.pdf_sources` for the full sequence).",
+        impact="The cascade drops its only paid tier and runs on free and "
+               "institutionally-subscribed sources alone (Elsevier, Springer, "
+               "Crossref, PubMed Central, OpenAlex OA metadata, Unpaywall, "
+               "Semantic Scholar, CORE). Retrieval still works; the few "
+               "articles only OpenAlex holds as a publisher PDF fall through "
+               "to the browser pass, which is slower and needs you present.",
+        where="https://openalex.org/pricing — paid tier only. Skip it unless "
+              "you retrieve PDFs in volume; setup asks separately whether to "
+              "actually spend on it, so a key here does not commit you.",
         verify=_verify_none,
     ),
     KeySpec(
@@ -1142,6 +1149,78 @@ def _prompt_elsevier_xml_pdf(interactive: bool, existing: dict) -> dict[str, obj
     else:
         enabled = answer in ("y", "yes")
     return {"render_xml_to_pdf": enabled}
+
+
+def _prompt_openalex_paid_content(
+    interactive: bool, existing: dict, collected: dict,
+) -> dict[str, object]:
+    """Return `{use_paid_content_api: bool}` to merge into `[openalex]`.
+
+    The OpenAlex Content API is the only source in the PDF cascade that
+    bills per item, so whether to spend on it is the user's call and not
+    a side effect of having pasted a key. This asks outright.
+
+    Defaults to **yes**, unlike the Elsevier XML prompt. The two differ
+    in what the default risks: an unasked-for synthesized PDF lands in
+    the user's library permanently, whereas this only ever spends about
+    a cent to obtain the correct published article. A configured key is
+    also itself an opt-in signal, so defaulting to no would silently
+    disable a tier that works today for anyone upgrading — see
+    `fetchers.openalex._OpenAlexClient._paid_enabled` for the matching
+    tri-state on the read side.
+
+    Skipped entirely when no OpenAlex key is configured or was just
+    entered: asking whether to spend on a tier that cannot run is noise.
+    `collected` is the freshly gathered key material from
+    `_collect_keys`, checked alongside `existing` so answering in the
+    same session counts.
+    """
+    section = existing.get("openalex", {}) or {}
+    current = section.get("use_paid_content_api")
+    has_key = bool(
+        (collected.get("openalex", {}) or {}).get("api_key")
+        or section.get("api_key")
+        or os.environ.get("OPENALEX_API_KEY", "").strip()
+    )
+    if not has_key:
+        # Preserve an earlier answer; never invent one for a tier that
+        # has no credential to run on.
+        return {"use_paid_content_api": bool(current)} if current is not None else {}
+    if not interactive:
+        # A non-interactive re-run must not flip a deliberate choice.
+        return {"use_paid_content_api": bool(current)} if current is not None else {}
+
+    default_yes = True if current is None else bool(current)
+    print("\n  OpenAlex paid Content API (optional):")
+    print(_wrap_body(
+        "Retrieving PDFs through APIs is the recommended route. It is much "
+        "faster than driving a browser and far less error prone, because "
+        "nothing depends on a page layout, a Cloudflare challenge, or you "
+        "being at the keyboard. The cascade therefore exhausts every free "
+        "and institutionally-subscribed API first, and only falls back to a "
+        "browser for whatever is left.",
+        indent=4,
+    ))
+    print(_wrap_body(
+        "OpenAlex's Content API is the one source that charges per item — "
+        "roughly $0.01 per PDF (rates: https://openalex.org/pricing). It "
+        "still ranks ahead of the free open-access aggregators, because it "
+        "serves the publisher's own file, the version of record, whereas "
+        "Unpaywall, Semantic Scholar and CORE often hold an author "
+        "manuscript whose page numbers do not match the published article. "
+        "Decline and the cascade runs on free sources only.",
+        indent=4,
+    ))
+    suffix = "[Y/n]" if default_yes else "[y/N]"
+    try:
+        answer = input(
+            f"    Spend on the paid OpenAlex Content API? {suffix} ",
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\n    Skipped.")
+        return {"use_paid_content_api": bool(current)} if current is not None else {}
+    enabled = default_yes if not answer else answer in ("y", "yes")
+    return {"use_paid_content_api": enabled}
 
 
 def _prompt_cluster_automation(interactive: bool, existing: dict) -> dict[str, object]:
@@ -2606,6 +2685,14 @@ def main() -> int:
     xml_pdf_entry = _prompt_elsevier_xml_pdf(interactive, existing_cfg)
     if xml_pdf_entry:
         values.setdefault("elsevier", {}).update(xml_pdf_entry)
+
+    # Same merge-not-assign rule as `[elsevier]` above: `[openalex]`
+    # already carries `api_key` from _collect_keys.
+    paid_openalex_entry = _prompt_openalex_paid_content(
+        interactive, existing_cfg, values,
+    )
+    if paid_openalex_entry:
+        values.setdefault("openalex", {}).update(paid_openalex_entry)
 
     cluster_entry = _prompt_cluster_automation(interactive, existing_cfg)
     if cluster_entry:

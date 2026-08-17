@@ -79,12 +79,24 @@ class Config:
     wos_api_key_extended: str = ""
     wos_api_key: str = ""
     crossref_mailto: str = ""
+    #: Opt-in for the paid OpenAlex Content API. Carried here as well as
+    #: in enrich_pdfs.py's Config because OpenAlex's abstract route also
+    #: goes through the paid Content API (GROBID TEI XML) — a user who
+    #: turns the paid tier off means it everywhere, not just for PDFs.
+    openalex_use_paid_content_api: bool = True
 
 
 def _load_config() -> Config:
     return Config(
         elsevier_api_key=get("elsevier", "api_key", env="ELSEVIER_API_KEY"),
         openalex_api_key=get("openalex", "api_key", env="OPENALEX_API_KEY"),
+        openalex_use_paid_content_api=fetchers.openalex.coerce_paid_opt_in(
+            get(
+                "openalex", "use_paid_content_api",
+                env="OPENALEX_USE_PAID_CONTENT_API",
+            ),
+            default=True,
+        ),
         semantic_scholar_api_key=get(
             "semantic_scholar", "api_key", env="SEMANTIC_SCHOLAR_API_KEY",
         ),

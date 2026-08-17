@@ -1005,17 +1005,50 @@ A four-phase cascade that `enrich_pdfs.py` runs automatically. Each
 phase handles a class of item the previous phase can't; nothing is
 ever silently dropped.
 
-**Phase 1 — API cascade (`enrich_pdfs.py` default mode).** Works for
-most open-access and publisher-TDM-enabled items:
+**Prefer the API route.** Retrieval through APIs is both faster and far
+less error prone than driving a browser: nothing depends on a page
+layout, a Cloudflare challenge, or the user being at the keyboard. Run
+the API phases to exhaustion before proposing a browser pass, and expect
+the browser to be a remainder-handling step rather than the main event.
+
+The order is ranked by **version quality first, cost second**, and
+within a quality tier free sources always precede paid ones. Only one
+source in the whole sequence bills per item. The full retrieval sequence,
+and which phase runs each stage:
 
 ```
-publisher TDM API (Elsevier, Wiley)  →  Crossref TDM  →  PMC
-  →  OpenAlex Content  →  Unpaywall  →  OpenAlex OA metadata
+Stage 1 — free version of record            ┐
+  ScienceDirect (Elsevier) → Springer       │
+  → Crossref TDM → PMC                      │
+Stage 2 — paid version of record            ├─ Phase 1 (API cascade,
+  OpenAlex Content API ($0.01/PDF, opt-in)  │   default mode)
+Stage 3 — open access, often author version │
+  OpenAlex OA metadata → Unpaywall          │
+  → Semantic Scholar → CORE                 │
+  → [preprints, only with --allow-preprints]┘
+Stage 4 — browser handlers for gated publishers  ── Phase 2
+  (APA, Sage, AOM, T&F, OUP, Emerald, INFORMS, …)
+Stage 5 — Zotero Connector + library link resolver ── Phase 3
 ```
 
-Elsevier and Wiley TDM require `ELSEVIER_API_KEY` and
-`WILEY_TDM_TOKEN`. OpenAlex Content is paid ($0.01 per download, gated
-on `OPENALEX_API_KEY`).
+Elsevier needs `ELSEVIER_API_KEY`. Springer needs no key — the URL is
+public but gated by institutional network access (campus VPN / FinELib),
+so it works on-network and quietly returns nothing off it. Wiley TDM
+(`WILEY_TDM_TOKEN`) is a stage-1 source too, but excluded from the
+default cascade and selected explicitly with `--sources wiley`.
+
+**Why the one paid tier outranks the free ones below it.** The OpenAlex
+Content API serves the publisher's own file — the version of record,
+correctly paginated. Unpaywall, Semantic Scholar and CORE frequently
+hold an author accepted manuscript instead, whose page numbers do not
+match the published article. When the downstream job is quoting text and
+citing pages, a correct version of record is worth $0.01 more than a
+free manuscript. It is skippable: answer no to the wizard's OpenAlex
+question, or set `[openalex] use_paid_content_api = false`, and the
+cascade runs on free and institutionally-subscribed sources only. CORE
+sits last of the free sources for the same version-quality reason, and
+its attachments carry `pdf:repository-copy` so the distinction survives
+into coding.
 
 **Phase 2 — browser cascade for Cloudflare-gated publishers**
 (`enrich_pdfs.py --sources browser`). HTTP clients cannot solve the

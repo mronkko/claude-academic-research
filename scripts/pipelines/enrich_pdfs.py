@@ -155,6 +155,13 @@ class Config:
     #: library, which is a surprising thing to find there unless it was
     #: asked for. See ScienceDirectSource._fetch_xml_fallback.
     elsevier_render_xml_to_pdf: bool = False
+    #: Opt-in for the paid OpenAlex Content API ($0.01 per PDF), the one
+    #: per-item cost in the cascade. Defaults to True because having set
+    #: `OPENALEX_API_KEY` at all is itself an opt-in signal, and an
+    #: existing setup must not silently lose a working tier on upgrade.
+    #: The wizard asks outright, so new setups record a real answer.
+    #: See fetchers/openalex.py's `_OpenAlexClient._paid_enabled`.
+    openalex_use_paid_content_api: bool = True
 
 
 def _load_config() -> Config:
@@ -164,6 +171,13 @@ def _load_config() -> Config:
             get("elsevier", "render_xml_to_pdf", env="ELSEVIER_RENDER_XML_TO_PDF"),
         ),
         openalex_api_key=get("openalex", "api_key", env="OPENALEX_API_KEY"),
+        openalex_use_paid_content_api=fetchers.openalex.coerce_paid_opt_in(
+            get(
+                "openalex", "use_paid_content_api",
+                env="OPENALEX_USE_PAID_CONTENT_API",
+            ),
+            default=True,
+        ),
         wiley_tdm_token=get("wiley", "tdm_token", env="WILEY_TDM_TOKEN"),
         semantic_scholar_api_key=get(
             "semantic_scholar", "api_key", env="SEMANTIC_SCHOLAR_API_KEY",

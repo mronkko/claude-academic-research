@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The PDF cascade is now ranked by version quality first, cost second
+  — and it asks before spending.** The paid OpenAlex Content API used to
+  be tried *first* inside a combined OpenAlex fetcher that itself sat
+  ahead of Unpaywall, Semantic Scholar and CORE. Anyone with
+  `OPENALEX_API_KEY` configured was therefore billed $0.01 per PDF for
+  articles the free tiers would have served moments later, with no way to
+  express a preference and nothing in the wizard that had ever asked
+  whether to spend at all.
+
+  `OpenAlexSource` is split in two. `openalex` is now the free OA
+  metadata tier only; `openalex_content` is the paid Content API. That
+  split is what lets the cascade state the priority properly:
+
+  ```
+  Stage 1  free version of record       ScienceDirect → Springer
+                                        → Crossref TDM → PMC
+  Stage 2  paid version of record       OpenAlex Content ($0.01, opt-in)
+  Stage 3  open access, often author    OpenAlex OA → Unpaywall
+           accepted manuscript          → Semantic Scholar → CORE
+  Stage 4  browser handlers             APA, Sage, AOM, T&F, OUP, …
+  Stage 5  Zotero Connector             via the library link resolver
+  ```
+
+  The paid tier ranks *above* the free open-access sources rather than
+  last, which is the one place cost does not win: it serves the
+  publisher's own file, so its pagination matches the published article,
+  whereas the OA aggregators frequently hold an author manuscript whose
+  page numbers do not. A cent is the right price for a citable version of
+  record. It remains the only per-item cost anywhere in the sequence.
+
+- **`/setup` now asks whether to spend on the OpenAlex Content API**, and
+  explains why the API route is preferred over the browser at all: APIs
+  are much faster and far less error prone, since nothing depends on a
+  page layout, a Cloudflare challenge, or the user being at the keyboard.
+  The question is skipped when no OpenAlex key is configured — asking
+  about a tier that cannot run is noise.
+
+  The opt-in is deliberately tri-state. An absent setting reads as
+  enabled, so no existing install silently loses a working tier on
+  upgrade; only an explicit `[openalex] use_paid_content_api = false`
+  (or `OPENALEX_USE_PAID_CONTENT_API=off`) turns it off. The coercion
+  that decides this is one shared function, because a plain `bool()` cast
+  reads the string `"false"` as true.
+
+  The switch also gates OpenAlex's *abstract* route, which goes through
+  the same paid Content API for GROBID TEI XML — opting out means opting
+  out everywhere, not just for PDFs.
+
+- The retrieval sequence is documented for users in
+  `skills/systematic-review/SKILL.md` and
+  `skills/zotero-operations/SKILL.md`, with `fetchers.pdf_sources`'s
+  docstring as the single authoritative ordering both point at.
+
 ## [0.12.0] — 2026-08-17
 
 ### Added

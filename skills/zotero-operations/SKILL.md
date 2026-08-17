@@ -95,6 +95,21 @@ The browser route (`--sources browser`) needs a one-time Playwright
 browser install before first use: `uvx playwright install chromium`
 (the setup wizard pre-approves this command).
 
+**Exhaust the API cascade before reaching for the browser.** APIs are
+much faster and far less error prone — nothing hinges on a page layout,
+a Cloudflare challenge, or the user sitting at the keyboard. The default
+`enrich_pdfs.py` run is ranked by version quality first and cost second:
+free version of record (ScienceDirect, Springer, Crossref TDM, PMC) →
+paid version of record (OpenAlex Content API, $0.01/PDF, opt-in) → open
+access that is often the author's manuscript (OpenAlex OA, Unpaywall,
+Semantic Scholar, CORE) → browser handlers → Zotero Connector. The
+OpenAlex Content API is the only per-item cost anywhere in that
+sequence; it outranks the free open-access tiers because it serves the
+correctly paginated published article rather than an author manuscript,
+and it is switched off with `[openalex] use_paid_content_api = false`.
+The authoritative ordering lives in `fetchers.pdf_sources`'s docstring —
+read it there rather than restating it from memory.
+
 The audit script writes both a JSON report and five `.keys` files
 (`.claude/audit/audit.{missing_abstract,missing_pdf,missing_doi,
 empty_stubs,tdm_recovered}.keys`), plus a set of `retry.*` /

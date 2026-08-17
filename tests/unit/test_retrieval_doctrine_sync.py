@@ -95,10 +95,18 @@ _TAG = re.compile(r"`(fulltext:[a-z-]+|abstract:[a-z-]+|pdf:[a-z-]+)`")
 #: Every retrieval/stage tag the plugin defines. A skill naming anything
 #: outside this set is inventing vocabulary, which is exactly what
 #: produced `fulltext-unavailable`.
+#:
+#: The screening tags are hand-listed because they are defined in prose
+#: doctrine, not in code. The `pdf:*` tags are code constants, and this
+#: set drifted from them once — `pdf:repository-copy` shipped in
+#: `fetchers/core.py` but was never added here, so the guard would have
+#: rejected a skill for naming a tag the pipeline genuinely attaches.
+#: `test_known_tags_covers_every_pdf_tag_in_code` now fails instead of
+#: letting that recur.
 KNOWN_TAGS = {
     "abstract:include", "abstract:exclude", "abstract:borderline",
     "fulltext:include", "fulltext:exclude", "fulltext:unavailable",
-    "pdf:tdm-recovered", "pdf:preprint-version",
+    "pdf:tdm-recovered", "pdf:preprint-version", "pdf:repository-copy",
 }
 
 
@@ -107,6 +115,23 @@ def test_skills_invent_no_tags() -> None:
         found = set(_TAG.findall(path.read_text(encoding="utf-8")))
         unknown = found - KNOWN_TAGS
         assert not unknown, f"{path.name} names undefined tag(s): {unknown}"
+
+
+def test_known_tags_covers_every_pdf_tag_in_code() -> None:
+    """The `pdf:*` vocabulary is defined by code constants, so this set
+    must be a superset of them. Guards the direction the hand-maintained
+    list actually drifts: a new tag lands in a fetcher, no one updates
+    the list, and the next skill to document the tag fails the build for
+    the wrong reason."""
+    from fetchers.core import REPOSITORY_COPY_TAG
+    from fetchers.preprint import PREPRINT_VERSION_TAG
+    from fetchers.sciencedirect import TDM_RECOVERED_TAG
+
+    in_code = {REPOSITORY_COPY_TAG, PREPRINT_VERSION_TAG, TDM_RECOVERED_TAG}
+    assert in_code <= KNOWN_TAGS, (
+        f"code defines pdf tag(s) missing from KNOWN_TAGS: "
+        f"{in_code - KNOWN_TAGS}"
+    )
 
 
 def test_the_preprint_tag_is_spelled_the_same_everywhere() -> None:
