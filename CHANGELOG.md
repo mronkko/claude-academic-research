@@ -58,6 +58,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preview trap it exists to catch — the same failure mode that put
   `reportlab`, `pybliometrics`, `wiley-tdm` and `playwright` in that group.
 
+- **Parallel browser retrieval — `--browser-workers N`.** The browser
+  passes drove one page at a time, which put an unattended EBSCOhost run
+  of 401 items at roughly two hours. N lanes now share **one** persistent
+  Chromium context, and that choice is the whole design: the profile
+  directory holds the Cloudflare clearance and the institutional SSO /
+  EZproxy session, Chromium locks that directory, so N separate browsers
+  would mean N profiles and every one of those logins solved again. Tabs
+  in one context inherit them, and Chromium already gives each tab its
+  own renderer process, so the parallelism is real.
+
+  Two ceilings, smaller wins: `--browser-workers` is the user's for the
+  run, `handler.concurrency` is the publisher's. The latter was declared
+  on every handler from the start and never read by any driver;
+  `effective_lanes` now reads it, and a request the handler will not
+  honour is reported rather than quietly reduced. **1 stays the default
+  for every publisher-direct handler** — those modules record measured
+  limits (Sage resets sessions above ~30 requests/minute; T&F and Wiley
+  reject `ctx.request` outright), and N parallel requests from one IP is
+  the shape bot detection looks for, where the cost of guessing is the
+  publisher for the run *plus* the shared profile's clearance.
+  `EbscoHandler` is raised to 4, on evidence: IP auth with no
+  interstitial, most of its ~20 s per item spent waiting on a six-hop
+  redirect and a JS boot, and the bytes fetched from a CDN rather than
+  through the page. The Zotero Connector pass is pinned to 1 regardless —
+  one Zotero desktop, one translator, a human per host.
+
+  Three pieces of state that were locals in the serial loop are now
+  shared through a `LaneCoordinator`: the Option-4 answer, the outage
+  breaker's count, and whether the prompt has fired. It adds a gate with
+  no serial counterpart — while a prompt is open every other lane parks
+  *before* claiming its next item, so "skip the rest" cannot arrive after
+  three more tabs have opened against a publisher just declined. Each
+  lane gets its own handler instance, because `last_error` is per-
+  download state and a shared one would let a lane read another's reason
+  and file a lost connection as a missing article. On an outage the lanes
+  stop claiming rather than being cancelled, so nothing is abandoned
+  mid-download and un-attempted items stay unlogged, hence re-runnable.
+
 ### Fixed
 
 - **A duplicate record no longer inherits its sibling's "done" status.**

@@ -1198,9 +1198,18 @@ the user's screen and the user still solves each challenge:
 ```bash
 uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py \
     --sources browser --auto-publishers \
+    --browser-workers 4 \
     --control-file .claude/audit/browser.json \
     --progress-json .claude/audit/browser-progress.jsonl
 ```
+
+`--browser-workers N` drives each publisher on N tabs of **one** Chromium
+profile, so a single Cloudflare / SSO solve covers all of them. Each
+handler caps it at its own `concurrency` — 1 for the direct publisher
+handlers, 4 for EBSCOhost, always 1 for the Zotero Connector — and says
+so when it does, rather than quietly honouring a smaller number. See
+`zotero-operations`, step 7, for why those 1s are measured limits and not
+defaults to raise.
 
 Start it with `run_in_background: true`. When the file's `state` becomes
 `awaiting_user`, relay its `prompt` to the user verbatim and write their
@@ -1246,7 +1255,9 @@ phases is a data-quality signal, not a failure to hide.
 - **Parallelise with `ThreadPoolExecutor` + `threading.Lock` on the
   CSV log.** Default 8 workers for Haiku / Gemini Flash, 5 for Sonnet / Gemini Pro.
   **`--workers` is a synchronous-path setting only.** It sizes a pool of
-  concurrent API calls, so it does nothing on the `--emit-manifest` /
+  concurrent API calls — it has no effect on the browser passes either,
+  which are sized by `--browser-workers`. So it does nothing on the
+  `--emit-manifest` /
   `--apply-responses` path — there the whole manifest goes to the serving
   engine in one call and the engine schedules the batch, which is where
   nearly all of the throughput comes from. Reinstating a per-request loop

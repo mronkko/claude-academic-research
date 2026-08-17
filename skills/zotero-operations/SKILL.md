@@ -211,9 +211,22 @@ running these stages:**
    ```bash
    uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py \
        --sources browser --auto-publishers \
+       --browser-workers 4 \
        --control-file .claude/audit/browser.json \
        --progress-json .claude/audit/browser-progress.jsonl
    ```
+
+   **`--browser-workers N` is worth passing on any large queue.** N tabs
+   share one Chromium profile, so one Cloudflare / SSO solve covers them
+   all — an unattended EBSCOhost run of 400 items drops from roughly two
+   hours to well under one. Each publisher caps it at its own
+   `concurrency`, which is 1 for every direct publisher handler and 4 for
+   EBSCOhost, so raising the number cannot get a bot-protected publisher
+   throttled; a request that gets capped is printed rather than silently
+   reduced. Do not raise a handler's `concurrency` to make the flag bite
+   harder — those 1s are measured limits, and the cost of exceeding one
+   is the publisher for the whole run plus the shared profile's
+   clearance.
 
    Launch it with `run_in_background: true`, then loop:
 

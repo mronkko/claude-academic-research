@@ -55,6 +55,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
+import copy
 import os
 import re
 import sys
@@ -124,6 +126,131 @@ _API_CASCADE_SOURCE = "api_cascade"
 # enough that a flaky link dropping the odd request rides through —
 # `consecutive_transport` resets on any non-transport outcome.
 _OUTAGE_THRESHOLD = 5
+
+
+# --- Concurrent browser lanes ----------------------------------------------
+#
+# A "lane" is one Playwright page driving one handler instance. All the
+# lanes for a publisher share a single persistent BrowserContext, which
+# is the whole reason this is worth doing: the profile directory holds
+# the Cloudflare clearance cookies and the institutional SSO / EZproxy
+# session, Chromium locks that directory, and a second browser on a
+# second profile would therefore need every one of those logins solved
+# again. Tabs in one context inherit them for free, and Chromium already
+# gives each tab its own renderer process, so the parallelism is real.
+#
+# What this does NOT parallelise: the Zotero Connector pass. It drives a
+# single Zotero desktop through a single translator and asks a human to
+# confirm each new host — `effective_lanes` pins it to 1 regardless.
+
+
+def effective_lanes(handler, requested: int) -> int:
+    """How many pages to drive `handler` with.
+
+    Two ceilings, and the smaller wins. `--browser-workers` is the
+    user's, for the whole run. Each handler's `concurrency` is the
+    publisher's, and it is a finding rather than an unset default —
+    `sage.py`'s module comment ("Keep concurrency at 1 and a 2.5-second
+    delay between") records what a live run established about that
+    platform's tolerance. Raising the flag must not be able to overrule
+    it, or the flag becomes a way to get quietly rate-limited.
+
+    A handler that attaches directly is pinned to one lane whatever
+    either number says: that is the Connector, and there is one Zotero
+    desktop.
+    """
+    if getattr(handler, "attaches_directly", False):
+        return 1
+    declared = int(getattr(handler, "concurrency", 1) or 1)
+    return max(1, min(int(requested or 1), declared))
+
+
+class LaneCoordinator:
+    """Cross-lane state for one concurrent handler run.
+
+    Three facts have to be shared by every lane driving a publisher, and
+    each was a plain local in the serial loop:
+
+    * `skip_remaining` — the user answered the Option-4 prompt with
+      "skip". Every lane must honour that, not only the one that asked.
+    * the outage breaker's count. "Consecutive" stops being literal
+      under concurrency, but the fact it detects — this machine has no
+      network — was never per-lane, and N lanes reach the threshold N
+      times sooner, which is the direction you want when the alternative
+      is shredding the queue at a second an item.
+    * whether the prompt has already fired, so N simultaneous failures
+      ask the human once.
+
+    The gate has no serial counterpart. While a prompt is open every
+    other lane parks *before* claiming its next item, so an answer of
+    "skip the rest" cannot arrive after three more lanes have already
+    opened pages against a publisher the user just declined. Claiming
+    and checking are plain attribute access with no `await` between, so
+    the event loop cannot interleave them and no lock is needed.
+    """
+
+    def __init__(self, *, outage_threshold: int = _OUTAGE_THRESHOLD) -> None:
+        self._outage_threshold = outage_threshold
+        self._gate = asyncio.Event()
+        self._gate.set()
+        self.skip_remaining = False
+        self.prompt_fired = False
+        self.consecutive_transport = 0
+        #: Set once a lane raises `NetworkOutage`. Lanes stop claiming
+        #: work rather than being cancelled, so nothing is abandoned
+        #: mid-download and un-attempted items stay unlogged — which is
+        #: what makes them re-runnable.
+        self.outage: BaseException | None = None
+
+    async def wait_until_open(self) -> None:
+        await self._gate.wait()
+
+    def note_transport_failure(self) -> bool:
+        """True when this run of transport errors means we are offline."""
+        self.consecutive_transport += 1
+        return self.consecutive_transport >= self._outage_threshold
+
+    def note_other_outcome(self) -> None:
+        """Any non-transport outcome clears the breaker."""
+        self.consecutive_transport = 0
+
+    def claim_prompt(self) -> bool:
+        """True for exactly one lane — the one that gets to ask."""
+        if self.prompt_fired:
+            return False
+        self.prompt_fired = True
+        return True
+
+    @contextlib.asynccontextmanager
+    async def prompting(self):
+        """Hold every other lane at the gate while the human answers."""
+        self._gate.clear()
+        try:
+            yield
+        finally:
+            self._gate.set()
+
+
+class _SerialisedWriter:
+    """`log_writer` guarded by a lock, for concurrent lanes.
+
+    `_attach_and_log` runs in a worker thread when lanes > 1 — its
+    Zotero upload is blocking `requests`, and left on the event loop it
+    would stall every other lane for the duration of each upload,
+    collapsing the concurrency to roughly nothing. That puts its log row
+    off-loop while the lanes keep writing theirs on it. One lock over
+    `writerow` covers it: every row is a single call against a shared
+    file handle.
+    """
+
+    def __init__(self, writer) -> None:
+        self._writer = writer
+        self._lock = threading.Lock()
+
+    def writerow(self, row) -> None:
+        with self._lock:
+            self._writer.writerow(row)
+
 
 _PLAYWRIGHT_MISSING_MSG = (
     "ERROR: the playwright package is not installed.\n"
@@ -827,27 +954,55 @@ async def _drive_handler(
         import time
         t_start = time.monotonic()
 
-        # Session-scoped skip state (Option-4 prompt). `skip_remaining`
-        # True means don't open any more direct attempts for this
-        # handler — subsequent items are routed straight to retry.
-        prompt_fired = False
-        skip_remaining = False
-        # Reset by any non-transport outcome, so a slow link that drops
-        # one request in ten never trips the breaker — only a genuine
-        # run of them does.
-        consecutive_transport = 0
+        # How many pages drive this publisher. `--browser-workers` is the
+        # run-wide ceiling; `handler.concurrency` is the publisher's own,
+        # and the smaller of the two wins. At 1 this behaves exactly as
+        # the serial loop it replaces — a single lane claims every item
+        # in order, on the page `setup()` was solved on.
+        requested_lanes = int(getattr(args, "browser_workers", 1) or 1)
+        lanes = effective_lanes(handler, requested_lanes)
+        coord = LaneCoordinator()
+        if requested_lanes > lanes:
+            # Say so rather than quietly honouring a smaller number —
+            # a user who asked for 10 and got 1 should be told which
+            # ceiling bound it and where that ceiling lives.
+            print(
+                f"  {display} caps at {lanes} "
+                f"{'tab' if lanes == 1 else 'parallel tabs'} "
+                f"(--browser-workers {requested_lanes} requested); its "
+                f"`concurrency` is set from what a live run against this "
+                f"platform established.",
+                flush=True,
+            )
+        if lanes > 1:
+            print(f"  Driving {display} on {lanes} parallel tabs.", flush=True)
+            # Every lane writes rows; `_attach_and_log` writes its from a
+            # worker thread. One lock over the shared handle.
+            log_writer = _SerialisedWriter(log_writer)
 
-        for idx, item in enumerate(items):
-            if skip_remaining:
-                # User picked "skip remaining" for this publisher.
-                if on_failure == "retry_bucket" and retry_bucket is not None:
-                    retry_bucket.append(item)
-                continue
+        cursor = 0
 
-            if handler.delay_s > 0:
-                await asyncio.sleep(handler.delay_s)
-            result = await handler.download(
-                page, ctx, item, args.cache_dir,
+        def _claim() -> dict | None:
+            """Hand out the next item, or None when the queue is spent.
+
+            No `await` between the read and the write of `cursor`, so
+            the event loop cannot hand the same item to two lanes. Also
+            the one place the outage stops the run: lanes stop claiming
+            rather than being cancelled, so un-attempted items are never
+            logged and stay re-runnable.
+            """
+            nonlocal cursor
+            if coord.outage is not None or cursor >= total:
+                return None
+            item = items[cursor]
+            cursor += 1
+            return item
+
+        async def _process(lane_handler, lane_page, item: dict) -> None:
+            if lane_handler.delay_s > 0:
+                await asyncio.sleep(lane_handler.delay_s)
+            result = await lane_handler.download(
+                lane_page, ctx, item, args.cache_dir,
                 counter=counter, total=total, t_start=t_start,
             )
             doi = item["doi"]
@@ -857,7 +1012,7 @@ async def _drive_handler(
             # "downloaded" rather than "attached": the upload happens
             # below and has its own row in the run log.
             interaction.report_progress({
-                "event": "item", "publisher": handler.name, "doi": doi,
+                "event": "item", "publisher": lane_handler.name, "doi": doi,
                 "outcome": "failed" if result is None else "downloaded",
                 "done": counter.done, "queued": total,
             })
@@ -867,53 +1022,61 @@ async def _drive_handler(
                 # different animal from "this publisher has nothing":
                 # nothing was asked, so nothing was answered. Both arrive
                 # here as `None`, which is why the handler carries the
-                # reason out on `last_error`.
-                transport = is_transport_error(getattr(handler, "last_error", ""))
+                # reason out on `last_error` — and why each lane needs
+                # its own handler instance, since that attribute would
+                # otherwise be read across lanes.
+                transport = is_transport_error(
+                    getattr(lane_handler, "last_error", ""),
+                )
                 if transport:
-                    consecutive_transport += 1
                     # The machine's connection is gone, not this
                     # publisher's. Keep going and the queue is shredded at
                     # roughly a second an item — a live run lost the
                     # network for four minutes and burned 193 items that
                     # way, every one recorded as a failed fetch.
-                    if consecutive_transport >= _OUTAGE_THRESHOLD:
+                    if coord.note_transport_failure():
                         raise NetworkOutage(
-                            f"{consecutive_transport} consecutive network "
-                            f"errors on {display} "
-                            f"(last: {handler.last_error[:80]})"
+                            f"{coord.consecutive_transport} consecutive "
+                            f"network errors on {display} "
+                            f"(last: {lane_handler.last_error[:80]})"
                         )
                 else:
-                    consecutive_transport = 0
+                    coord.note_other_outcome()
 
-                if prompt_on_first_failure and not prompt_fired and not transport:
-                    prompt_fired = True
-                    remaining = len(items) - idx - 1
-                    answer = await asyncio.to_thread(
-                        _prompt_on_first_failure,
-                        handler, remaining, args,
-                    )
-                    if answer == "always_skip":
-                        skip_remaining = True
-                        if on_always_skip is not None:
-                            try:
-                                on_always_skip(handler.name)
-                            except Exception as e:
-                                print(
-                                    f"  WARN: could not persist "
-                                    f"[library] no_access += "
-                                    f"{handler.name!r}: {e}",
-                                    flush=True,
-                                )
-                    elif answer == "skip":
-                        skip_remaining = True
-                    # "keep" → keep looping, same as before.
+                if prompt_on_first_failure and not transport and coord.claim_prompt():
+                    # Hold the other lanes at the gate while the human
+                    # decides. Without this, an answer of "skip the rest"
+                    # would arrive after the remaining lanes had already
+                    # opened pages against a publisher just declined.
+                    async with coord.prompting():
+                        remaining = max(total - cursor, 0)
+                        answer = await asyncio.to_thread(
+                            _prompt_on_first_failure,
+                            lane_handler, remaining, args,
+                        )
+                        if answer == "always_skip":
+                            coord.skip_remaining = True
+                            if on_always_skip is not None:
+                                try:
+                                    on_always_skip(lane_handler.name)
+                                except Exception as e:
+                                    print(
+                                        f"  WARN: could not persist "
+                                        f"[library] no_access += "
+                                        f"{lane_handler.name!r}: {e}",
+                                        flush=True,
+                                    )
+                        elif answer == "skip":
+                            coord.skip_remaining = True
+                        # "keep" → keep looping, same as before.
                 # Structured record either way: this handler was tried
                 # and did not produce a PDF. That fact is true whether
                 # or not the Connector gets a turn next, and the
                 # composite key keeps both attempts.
                 _log_browser_failure(
                     args, item,
-                    source=handler.name, publisher=handler.display_name,
+                    source=lane_handler.name,
+                    publisher=lane_handler.display_name,
                     # NETWORK_ERROR is recoverable and says "retry next
                     # run". Letting this default would classify it
                     # UNAVAILABLE — the one cause that licenses a
@@ -930,38 +1093,94 @@ async def _drive_handler(
                     log_writer.writerow({
                         "run_date": run_date, "item_key": item["item_key"],
                         "doi": doi, "title": title,
-                        "status": "skipped_no_pdf", "source": handler.name,
+                        "status": "skipped_no_pdf", "source": lane_handler.name,
                     })
-                continue
+                return
 
             pdf_path, source_url = result
             if args.dry_run:
                 log_writer.writerow({
                     "run_date": run_date, "item_key": item["item_key"],
                     "doi": doi, "title": title,
-                    "status": "dry_run", "source": handler.name,
+                    "status": "dry_run", "source": lane_handler.name,
                 })
-                continue
+                return
 
             if not item["item_key"]:
                 print(f"  [{doi}] no Zotero item key — skipping upload", flush=True)
                 log_writer.writerow({
                     "run_date": run_date, "item_key": "",
                     "doi": doi, "title": title,
-                    "status": "downloaded_no_item", "source": handler.name,
+                    "status": "downloaded_no_item", "source": lane_handler.name,
                 })
-                continue
+                return
 
-            print(f"  [{doi}]", end=" ", flush=True)
-            _attach_and_log(
-                zot, log_writer,
+            attach = dict(
                 run_date=run_date, item_key=item["item_key"],
-                doi=doi, title=title, source=handler.name,
+                doi=doi, title=title, source=lane_handler.name,
                 pdf_path=pdf_path,
                 failure_log_path=getattr(args, "failure_log_csv", "") or "",
                 item_type=item.get("item_type", ""),
                 check_text=not getattr(args, "no_check_text", False),
             )
+            if lanes > 1:
+                # A complete line rather than a prefix `_attach_and_log`
+                # finishes: with lanes interleaving, the two halves would
+                # not land next to each other.
+                print(f"  [{doi}] attaching…", flush=True)
+                # Blocking `requests` upload — off the loop, or it stalls
+                # every other lane for its duration.
+                await asyncio.to_thread(
+                    _attach_and_log, zot, log_writer, **attach,
+                )
+            else:
+                print(f"  [{doi}]", end=" ", flush=True)
+                _attach_and_log(zot, log_writer, **attach)
+
+        async def _lane(lane_handler, lane_page) -> None:
+            """One tab, claiming items until the queue or the run ends."""
+            while True:
+                await coord.wait_until_open()
+                item = _claim()
+                if item is None:
+                    return
+                if coord.skip_remaining:
+                    # User picked "skip remaining" for this publisher.
+                    if on_failure == "retry_bucket" and retry_bucket is not None:
+                        retry_bucket.append(item)
+                    continue
+                try:
+                    await _process(lane_handler, lane_page, item)
+                except NetworkOutage as e:
+                    # Stop claiming rather than cancelling the siblings:
+                    # a cancelled lane could abandon a download mid-flight,
+                    # and items nobody attempted must stay unlogged so the
+                    # next run picks them up.
+                    coord.outage = e
+                    return
+
+        # Lane 0 reuses the page `setup()` was solved on. The extra lanes
+        # are new tabs in the *same* context, so they inherit its cookies
+        # — the Cloudflare clearance and the institutional session — and
+        # need no second login. Each gets its own handler instance
+        # because `last_error` is per-download instance state; copying
+        # after `setup()` carries over anything setup established.
+        lane_pages = [page]
+        lane_handlers = [handler]
+        for _ in range(lanes - 1):
+            lane_pages.append(await ctx.new_page())
+            lane_handlers.append(copy.copy(handler))
+        try:
+            await asyncio.gather(*(
+                _lane(h, pg)
+                for h, pg in zip(lane_handlers, lane_pages, strict=True)
+            ))
+        finally:
+            for extra in lane_pages[1:]:
+                with contextlib.suppress(Exception):
+                    await extra.close()
+        if coord.outage is not None:
+            raise coord.outage
 
         print(
             f"\n  Total: {counter.ok} new, {counter.cached} cached, "
@@ -2520,7 +2739,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cache-dir", default=DEFAULT_CACHE_DIR,
                         help=f"PDF cache directory (default: {DEFAULT_CACHE_DIR}).")
     parser.add_argument("--workers", type=int, default=6,
-                        help="Parallel download threads (default: 6).")
+                        help="Parallel download threads (default: 6). "
+                             "API cascade only — see --browser-workers for "
+                             "the browser passes.")
+    parser.add_argument(
+        "--browser-workers", type=int, default=1, metavar="N",
+        help="Parallel tabs per publisher in the browser passes "
+             "(default: 1). All N share one Chromium profile, so one "
+             "Cloudflare / SSO solve covers them all. Capped per "
+             "publisher by that handler's own `concurrency`, and never "
+             "applied to the Zotero Connector pass, which drives a "
+             "single Zotero desktop.",
+    )
     parser.add_argument(
         "--filter-keys-file",
         help="Path to a text file of Zotero item keys (one per line) "

@@ -522,6 +522,21 @@ class PublisherHandler(ABC):
     # — our handler only knows the direct-publisher path. Empty tuple
     # disables the domain filter (any full-text target counts).
     direct_access_domains: tuple[str, ...] = ()
+    #: Max in-flight `download()` calls for this publisher — how many
+    #: tabs `enrich_pdfs.effective_lanes` will drive it with. It caps
+    #: `--browser-workers`, so it is the real ceiling and the flag can
+    #: never raise a publisher past it.
+    #:
+    #: **1 is a finding, not an unset default.** Every publisher here is
+    #: behind Cloudflare or Imperva, and several modules record what a
+    #: live run measured — Sage resets sessions above ~30 requests a
+    #: minute, T&F and Wiley reject `ctx.request` outright. N parallel
+    #: requests from one IP is exactly the shape those systems look for,
+    #: and the cost of guessing wrong is not one item: it is the
+    #: publisher for the run, plus the Cloudflare clearance sitting in
+    #: the shared profile that every other lane depends on. Raise this
+    #: per publisher, on evidence from a live run. `EbscoHandler` is the
+    #: worked example.
     concurrency: int = 1
     delay_s: float = 1.0
     # True when a run against this publisher normally requires the user

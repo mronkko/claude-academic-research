@@ -113,7 +113,22 @@ class EbscoHandler(PublisherHandler):
     # No Cloudflare/Imperva interstitial was observed — IP auth is
     # silent — so a run needs no human at the keyboard for this platform.
     needs_interactive_solve = False
-    concurrency = 1
+    #: The one handler raised above a single lane, because it is the one
+    #: with the evidence. Every publisher handler in this package sits
+    #: behind Cloudflare or Imperva, where N simultaneous requests from
+    #: one IP is the shape bot detection looks for and the cost of being
+    #: wrong is the whole publisher plus the profile's clearance. None of
+    #: that applies here: authentication is by institutional IP with no
+    #: interstitial, and most of the ~20 s an item takes is the six-hop
+    #: redirect chain and the viewer's JS boot — waiting, not load. The
+    #: bytes then come from a CDN via `ctx.request`, not through the page.
+    #:
+    #: Four rather than ten: unattended runs of 400+ items make this the
+    #: pass worth parallelising, and 4 is the conservative first step
+    #: against an aggregator API whose rate limits are undocumented.
+    #: Raise it once a live run at 4 says it holds — `effective_lanes`
+    #: caps `--browser-workers` here, so this number is the real ceiling.
+    concurrency = 4
     delay_s = 1.0
     #: Seconds to wait for the viewer to request its own PDF. The chain is
     #: six redirects plus a JS app boot; 45s is generous rather than tight
