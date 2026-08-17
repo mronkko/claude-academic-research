@@ -469,6 +469,31 @@ def is_transport_error(text: str) -> bool:
     return any(marker in low for marker in TRANSPORT_ERROR_MARKERS)
 
 
+#: Playwright's own timeout wording, from `ctx.request.get(...)` and
+#: `page.goto(...)`: "Timeout 60000ms exceeded."
+_TIMEOUT_MARKERS: tuple[str, ...] = ("timeout", "timed out")
+
+
+def is_download_timeout(text: str) -> bool:
+    """True when a fetch timed out rather than being answered.
+
+    Deliberately **not** folded into `TRANSPORT_ERROR_MARKERS`. That list
+    feeds the outage breaker, which aborts the whole pass after a few
+    consecutive hits; a publisher that is merely slow would trip it and
+    strand the queue. This is the narrower question the *classifier*
+    needs: was there an answer at all?
+
+    Live evidence for it existing at all: a 60 s timeout on EBSCO's
+    signed CDN URL — issued only *after* the viewer had loaded and
+    handed over that URL, so the article demonstrably exists and is
+    reachable — was classified UNAVAILABLE, the one cause that licenses
+    an FE6 exclusion. `10.1287/orsc.11.4.367.14601` sat one adjudication
+    pass from exclusion because a download ran long.
+    """
+    low = (text or "").lower()
+    return any(marker in low for marker in _TIMEOUT_MARKERS)
+
+
 class NetworkOutage(RuntimeError):
     """Raised when consecutive transport failures show the network is gone.
 

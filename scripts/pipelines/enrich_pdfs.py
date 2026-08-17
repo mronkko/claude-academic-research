@@ -639,27 +639,42 @@ def _browser_failure_cause(
 ) -> pdf_fetch_log.FailureCause | None:
     """Classify a browser failure from what the handler carried back.
 
-    Two handlers-worth of evidence reach here, and they rank. A
-    transport error is about the machine's connection, so it outranks
-    anything a page said — nothing was asked, so nothing was answered.
+    The default this exists to prevent is UNAVAILABLE. That is what the
+    shared classifier returns once the browser pass has run, and it is
+    the one cause licensing an FE6 exclusion — so it must mean "we asked
+    every route and were told no", never "we stopped for some reason".
+    A live 7-item run produced three failures and filed all three as
+    UNAVAILABLE: a 60 s download timeout, an *unconfirmed* no-match, and
+    an article whose record we had positively located. None of the three
+    was an answer about whether the full text can be had.
 
-    Below it, `last_verdict` is EBSCO answering about the DOI itself:
-    zero records means the library's resolver is advertising an
-    EBSCOhost route EBSCO cannot honour for this tenant. That is
-    ACCESS_BLOCKED — "flag for ILL, full text exists" — and emphatically
-    not UNAVAILABLE, which licenses an FE6 exclusion. One platform's
-    stale holdings say nothing about whether the article can be had.
+    So the evidence ranks:
 
-    Anything else stays `None` so the shared classifier decides.
+    1. **Transport error** — the machine's connection, outranking
+       anything a page said. Nothing was asked, so nothing was answered.
+    2. **A download timeout** — for EBSCO the signed CDN URL is handed
+       over *after* the viewer loads, so a timeout there proves the
+       article exists and is reachable. Retry, never exclude.
+    3. **Any EBSCO verdict at all.** Each one is EBSCO answering about
+       the DOI, and none of the answers is "no full text exists": zero
+       records means the resolver advertises a route EBSCO cannot honour
+       for this tenant, and the others mean we found the record (or its
+       absence was unconfirmed) and failed at a later hop. All are
+       ACCESS_BLOCKED — "flag for ILL, full text exists".
+
+    Only silence — no verdict, no transport failure — is left to the
+    shared classifier.
     """
     if transport:
         return pdf_fetch_log.FailureCause.NETWORK_ERROR
     # Imported here, not at module scope: everything under
     # `fetchers.browser` pulls in the Playwright-dependent stack, which
     # the API-cascade paths must not need.
-    from fetchers.browser.ebsco import VERDICT_NO_HOLDINGS
+    from fetchers.browser.base import is_download_timeout
 
-    if getattr(handler, "last_verdict", "") == VERDICT_NO_HOLDINGS:
+    if is_download_timeout(getattr(handler, "last_error", "")):
+        return pdf_fetch_log.FailureCause.NETWORK_ERROR
+    if getattr(handler, "last_verdict", ""):
         return pdf_fetch_log.FailureCause.ACCESS_BLOCKED
     return None
 

@@ -367,18 +367,55 @@ def test_a_transport_error_outranks_any_verdict() -> None:
 
 
 @pytest.mark.parametrize("verdict", [
-    ebsco.VERDICT_UNKNOWN,
     ebsco.VERDICT_UNIQUE,
     ebsco.VERDICT_AMBIGUOUS,
     ebsco.VERDICT_NO_MATCH_UNCONFIRMED,
 ])
-def test_every_other_verdict_leaves_classification_to_the_shared_rules(
-    verdict: str,
-) -> None:
-    handler = MagicMock(last_verdict=verdict)
+def test_no_verdict_at_all_is_evidence_of_absence(verdict: str) -> None:
+    """Live regression. A 7-item run filed three failures as UNAVAILABLE —
+    including one whose record we had positively found, and one whose
+    no-match was explicitly unconfirmed. UNAVAILABLE licenses an FE6
+    exclusion; none of these verdicts is an answer about the full text."""
+    handler = MagicMock(last_verdict=verdict, last_error="")
+
+    cause = enrich_pdfs._browser_failure_cause(handler, transport=False)
+
+    assert cause is not pdf_fetch_log.FailureCause.UNAVAILABLE
+    assert cause is pdf_fetch_log.FailureCause.ACCESS_BLOCKED
+
+
+def test_a_download_timeout_is_not_a_missing_article() -> None:
+    """EBSCO hands over the signed CDN URL only after the viewer loads,
+    so a timeout fetching it proves the article exists and is reachable.
+    `10.1287/orsc.11.4.367.14601` was filed UNAVAILABLE for exactly this."""
+    handler = MagicMock(
+        last_verdict=ebsco.VERDICT_UNKNOWN,
+        last_error="fetch APIRequestContext.get: Timeout 60000ms exceeded.",
+    )
+
+    assert enrich_pdfs._browser_failure_cause(handler, transport=False) is (
+        pdf_fetch_log.FailureCause.NETWORK_ERROR)
+
+
+def test_silence_is_left_to_the_shared_classifier() -> None:
+    """No verdict and no transport failure — this function claims nothing."""
+    handler = MagicMock(last_verdict=ebsco.VERDICT_UNKNOWN, last_error="")
     assert enrich_pdfs._browser_failure_cause(handler, transport=False) is None
 
 
 def test_a_handler_without_verdicts_is_unaffected() -> None:
     """Every other browser handler reaches this function too."""
     assert enrich_pdfs._browser_failure_cause(object(), transport=False) is None
+
+
+def test_a_slow_publisher_does_not_trip_the_outage_breaker() -> None:
+    """`is_download_timeout` is deliberately separate from
+    `TRANSPORT_ERROR_MARKERS`: that list feeds the breaker that aborts a
+    whole pass, and a merely slow publisher must not strand the queue."""
+    from fetchers.browser.base import is_download_timeout, is_transport_error
+
+    timeout = "fetch APIRequestContext.get: Timeout 60000ms exceeded."
+    assert is_download_timeout(timeout)
+    assert not is_transport_error(timeout)
+    # And a real dropped connection still counts as both kinds of trouble.
+    assert is_transport_error("net::ERR_INTERNET_DISCONNECTED at https://x")
