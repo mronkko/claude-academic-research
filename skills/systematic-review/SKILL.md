@@ -1031,11 +1031,29 @@ Stage 4 — browser handlers for gated publishers  ── Phase 2
 Stage 5 — Zotero Connector + library link resolver ── Phase 3
 ```
 
-Elsevier needs `ELSEVIER_API_KEY`. Springer needs no key — the URL is
-public but gated by institutional network access (campus VPN / FinELib),
-so it works on-network and quietly returns nothing off it. Wiley TDM
-(`WILEY_TDM_TOKEN`) is a stage-1 source too, but excluded from the
-default cascade and selected explicitly with `--sources wiley`.
+Wiley TDM (`WILEY_TDM_TOKEN`) is a stage-1 source too, but excluded from
+the default cascade and selected explicitly with `--sources wiley`.
+
+**Two stage-1 sources fail in ways that look like "article unavailable"
+and are not.** Check for these before concluding anything about an item:
+
+- **Springer is bot-blocked, not network-gated.**
+  `link.springer.com/content/pdf/<doi>.pdf` answers any HTTP client with
+  an identical ~3 KB `Client Challenge` page — an Imperva JavaScript
+  interstitial — regardless of DOI, entitlement, or whether you are on
+  the campus network. Verified from an on-campus IP across ten DOIs,
+  including titles the institution certainly licenses, and unchanged by
+  a full browser header set. So Springer DOIs reliably fall through
+  stage 1 and must be recovered at stage 4 (browser) instead. A VPN does
+  not help; nothing about the failure is about access.
+- **Elsevier may return a one-page preview with HTTP 200.** The TDM
+  endpoint serves `application/pdf` of plausible size (300 KB+) while
+  `X-ELS-Status` reads `WARNING - Response limited to first page because
+  requestor not entitled to resource`. The fetcher detects this and
+  refuses to attach it, which is correct — but the signal is logged at
+  info level, so a run can produce nothing from Elsevier while looking
+  healthy. If Elsevier yields no PDFs, suspect the key's full-text
+  entitlement rather than the articles.
 
 **Why the one paid tier outranks the free ones below it.** The OpenAlex
 Content API serves the publisher's own file — the version of record,

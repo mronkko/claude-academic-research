@@ -1,7 +1,23 @@
 """SpringerLink — direct PDF download for Springer Nature DOIs.
 
-Requires institutional access (e.g. FinELib or campus VPN) — the URL
-is public but gated by the network. No API key.
+No API key. The URL is public, and this was believed to be gated only by
+institutional network access (FinELib / campus VPN).
+
+**That is not what happens in practice, as of 2026-08.** SpringerLink
+answers `content/pdf/<doi>.pdf` with an identical ~3 KB HTML page titled
+`Client Challenge` — an Imperva JavaScript interstitial — for every
+request from an HTTP client. Measured from an on-campus IP
+(`*.aalto.fi`) across ten DOIs including licensed titles, and unchanged
+by a complete browser header set: the same 3038 bytes every time. Being
+entitled makes no difference, because the challenge is served before
+entitlement is ever evaluated.
+
+So this source reliably returns None in the automated cascade, and
+Springer DOIs have to be recovered through the browser pass instead
+(`fetchers/browser/`), where a real JS engine can clear the challenge.
+It is kept in the stage-1 list because asking costs one cheap request
+that fails fast, and the block may be relaxed at any time — but never
+read a Springer miss as evidence that an article is unavailable.
 """
 
 from __future__ import annotations
