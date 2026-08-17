@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-08-18
+
+A retrieval release. Everything in it came out of running the pipeline
+against real corpora — a 914-item run that recovered 161 PDFs, its
+655-item residual, a 97-item Springer run — and most of it is either a
+route the pipeline could not previously take, or a verdict it was
+reaching without evidence.
+
 ### Added
 
 - **An EBSCOhost handler, driven from the link resolver.** Not a publisher
@@ -96,6 +104,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stop claiming rather than being cancelled, so nothing is abandoned
   mid-download and un-attempted items stay unlogged, hence re-runnable.
 
+- **`[library] openurl_base` takes a list — query several libraries and
+  merge their routes.** A reader with two affiliations has two sets of
+  entitlements, and neither institution's resolver knows the other's.
+  The case that forced it: the configured Alma tenant returned no route
+  at all for nine *Nursing Standard* articles, so the pipeline called
+  them "no licensed route" and sent them to ILL — while the reader's
+  second institution served the same journal through Journals@Ovid and
+  ProQuest Central, full text one click away. Modelling one library made
+  a second library's holdings unrepresentable, and the resulting verdict
+  was confidently wrong. With both configured, all 26 previously
+  unroutable items resolved.
+
+  The first entry stays the primary: it keeps the existing cache keys
+  and breaks ranking ties. `/setup` can now widen the scalar you already
+  have into a list (`promote_scalar`), which matters because a
+  `permissions.deny` rule blocks the Read tool on `config.toml`, so
+  hand-editing is not a fallback an agent can offer.
+
+- **"Your library has this publisher, but not this year" now works on
+  Alma.** Three items in a 97-item run each burned a 30-second download
+  timeout on a paywall; all three were pre-1997 articles whose journal
+  Alma lists under SpringerLink from 1997. The resolver had the answer
+  and nothing read it. That verdict used to be derived from an SFX query
+  parameter Alma ignores; `resolvers/coverage.py` now parses Alma's
+  per-package coverage statements (`Available from 01.01.1997 volume: 16
+  issue: 1.`) into year windows instead. The grammar was sampled from 23
+  real statements across six DOIs.
+
+- **EBSCOhost re-queries by DOI when it answers with a search page.**
+  Alma hands EBSCO an OpenURL carrying journal, year and title, and
+  EBSCO turns that into `(SO <journal>)AND(DT <year>)AND(TI <title>)` —
+  a query that can exclude the very article sitting in the database.
+  Measured on `10.1287/mnsc.2017.2869`: Crossref and the DOI say 2017
+  (online-first), EBSCO holds it as May 2019, so `DT 2017` returned zero
+  and EBSCO fell back to fuzzy SmartText matching. `DI "<doi>"` returns
+  exactly one record. On a seven-item live batch this took retrieval
+  from 0 to 5.
+
+  Results from SmartText are **never** used, and a result count on a
+  page carrying it is never read as a count: those hits answer a
+  different question from the one asked, and attaching the wrong paper
+  to a citation is worse than attaching nothing. A DOI search returning
+  more than one record is likewise left alone. Zero records is reported
+  as what it is — the library's resolver advertising a route EBSCO
+  cannot honour for this tenant — and never as "no full text exists".
+
 ### Fixed
 
 - **A duplicate record no longer inherits its sibling's "done" status.**
@@ -161,6 +215,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   patched: `test_springer_doi_has_no_browser_handler` claimed "the 15
   Springer items really were unreachable", and the registry count was
   pinned at nine handlers.
+
+- **`UNAVAILABLE` must be earned.** It is the one failure cause that
+  licenses a full-text exclusion (FE6), and the pipeline was arriving at
+  it by default from five different directions, in every case without
+  having asked anyone about the article:
+
+  - A lost network connection. One run dropped its network for four
+    minutes and shredded 193 items at ~1.2 s each, recording every one
+    as a failed fetch. Consecutive transport errors now stop the pass
+    instead, leaving un-attempted items unlogged and re-runnable.
+  - A publisher the plain-HTTP cascade structurally cannot reach —
+    silence from a route that was never viable is not evidence.
+  - A 60-second timeout downloading a PDF that turned out to be 27 MB
+    and attached fine on the next attempt.
+  - An article whose record had been positively located, and which
+    failed only at the last hop to its viewer.
+  - A "no exact match" page the pipeline had itself recorded as
+    *unconfirmed*.
+
+  Browser failures now classify from what actually happened, and only
+  genuine silence falls through to the shared classifier. The timeout
+  check is deliberately kept out of the transport-error list that trips
+  the outage breaker, so a merely slow publisher cannot abort a queue.
+
+- **The browser pass no longer opens a publisher the resolver says you
+  cannot reach.** Pass 1 matched a handler by DOI prefix, asked the link
+  resolver whether that publisher was worth opening, then opened it
+  anyway in the case that mattered most. On Alma the platform table was
+  silently doing double duty as the identity map, and it listed nine
+  entries against ten handlers — so five handlers could never satisfy
+  the guard at all.
+
+- **Imported rows are no longer all `journalArticle`.** Scopus and Web
+  of Science return book chapters too, and the row's `source` column —
+  the book's title — went into `publicationTitle`, producing a journal
+  article published in *The Judiciary, the Legislature and the EU
+  Internal Market*. The cost is not cosmetic: a mis-typed chapter passes
+  the journal-article filter, is routed to article-only PDF handlers and
+  cannot succeed there. Five such items in one corpus each burned a
+  browser slot to produce an unexplained failure, and would have done so
+  again on every future run. The type now comes from Crossref, asked
+  once per distinct DOI, under `--dry-run` too.
+
+- **Two counts that described a different run than the one printed.**
+  The skipped-key note counted attachment children as skipped keys, so
+  it *grew as retrieval succeeded* — announcing 11 keys skipped
+  immediately after attaching 11 PDFs, having skipped none. The
+  end-of-run summary counted the whole cumulative log rather than this
+  run's items, so a 14-item run that attached nothing announced "393 of
+  14"; fixing that exposed a second bug underneath, where the summary
+  re-read its own still-buffered log and reported "0 of 17" for a run
+  that had attached 5.
+
+- **The EBSCOhost login prompt asked the wrong question, then opened the
+  wrong page.** It tested whether the *handler* needs an interactive
+  solve rather than whether *this queue* does — so once a second library
+  put EZproxy-wrapped routes into the mix, no login was ever offered and
+  the items died silently on a SAML page. The fix then pointed the solve
+  at a hook name `setup()` never calls, leaving the base implementation
+  in charge and presenting a blank page to sign in on, which is worse
+  than not prompting because the prompt looks answerable.
+
+- **Parallel lanes no longer burst, or race each other through one
+  login.** Each lane slept before its own download, which spaces that
+  lane and nothing else: lanes started together sleep in lockstep and
+  fire simultaneously — the exact shape a rate limiter looks for.
+  Pacing is now reserved across the run. Separately, four lanes opening
+  cold hit the institutional login at the same instant and each
+  invalidated the others' session handshake, which a human cannot
+  resolve; lanes now wait for the first to complete one item.
 
 ### Changed
 
