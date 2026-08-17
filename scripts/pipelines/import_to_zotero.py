@@ -18,7 +18,10 @@ Reads a CSV with at least `doi`, `title`, `authors`, `year`, `source`,
   collection (if given) and backfill a missing abstract.
 - If the title+first-author matches an existing item without a DOI:
   same.
-- Otherwise: create a new `journalArticle` item in the collection.
+- Otherwise: create a new item in the collection, typed from Crossref's
+  `type` for the DOI (`journalArticle`, `bookSection`, `book`,
+  `conferencePaper`, …) and falling back to `journalArticle` when the
+  DOI is missing, unreachable or of an unmapped type.
 
 Also deduplicates **within** the import batch, so two input rows for
 the same paper (e.g. Scopus + WoS where only one has a DOI) merge
@@ -182,7 +185,84 @@ def _parse_authors(author_str: str) -> list[dict]:
     return creators
 
 
-def _row_to_zotero_item(row: dict, collection_key: str | None) -> dict:
+#: Crossref `type` → Zotero `itemType`. Only what a literature search
+#: actually returns; anything absent falls back to the default.
+_CROSSREF_TYPE_TO_ZOTERO = {
+    "journal-article": "journalArticle",
+    "proceedings-article": "conferencePaper",
+    "book-chapter": "bookSection",
+    "book-part": "bookSection",
+    "book-section": "bookSection",
+    "reference-entry": "dictionaryEntry",
+    "book": "book",
+    "monograph": "book",
+    "edited-book": "book",
+    "reference-book": "book",
+    "report": "report",
+    "report-component": "report",
+    "dissertation": "thesis",
+    "posted-content": "preprint",
+}
+
+#: Where a row's `source` column belongs, per item type. A `book`'s
+#: source *is* the book — already in `title` — so it has no container
+#: field here and the value is dropped rather than duplicated. Getting
+#: this wrong is silent: `_filter_valid_fields` would drop
+#: `publicationTitle` from a `bookSection` and the book title would
+#: vanish with only a per-row warning.
+_CONTAINER_FIELD = {
+    "journalArticle": "publicationTitle",
+    "conferencePaper": "proceedingsTitle",
+    "bookSection": "bookTitle",
+    "dictionaryEntry": "dictionaryTitle",
+    "preprint": "repository",
+}
+
+_DEFAULT_ITEM_TYPE = "journalArticle"
+
+
+def resolve_item_type(doi: str, *, session, cache: dict | None = None) -> str:
+    """Zotero itemType for a DOI, from Crossref's own `type`.
+
+    Every imported row used to become a `journalArticle`, because that
+    is what a literature search mostly returns. Mostly is not always:
+    Scopus and WoS return book chapters too, and flattening them costs
+    real work downstream — a mis-typed chapter passes
+    `journal_articles()`, is routed to article-only PDF handlers, and
+    cannot succeed there. Five such items in one live corpus each burned
+    a browser slot to produce an unexplained stall.
+
+    Crossref knows, and this pipeline already talks to it: all five of
+    those DOIs come back correctly typed, including one whole book among
+    four chapters. Anything unknown, unreachable or unmapped falls back
+    to `journalArticle` — both the previous behaviour and the right
+    prior for a literature search.
+    """
+    if not doi:
+        return _DEFAULT_ITEM_TYPE
+    key = doi_utils.doi_cache_key(doi)
+    if cache is not None and key in cache:
+        return cache[key]
+    item_type = _DEFAULT_ITEM_TYPE
+    try:
+        data = http_client.get_json(
+            session, f"https://api.crossref.org/works/{key}",
+        )
+        crossref_type = ((data or {}).get("message") or {}).get("type", "")
+        item_type = _CROSSREF_TYPE_TO_ZOTERO.get(
+            str(crossref_type).strip().lower(), _DEFAULT_ITEM_TYPE,
+        )
+    except Exception:  # noqa: BLE001 — a type lookup must not fail an import
+        item_type = _DEFAULT_ITEM_TYPE
+    if cache is not None:
+        cache[key] = item_type
+    return item_type
+
+
+def _row_to_zotero_item(
+    row: dict, collection_key: str | None,
+    item_type: str = _DEFAULT_ITEM_TYPE,
+) -> dict:
     # Canonicalize at ingest so dedup downstream works across databases:
     # Scopus strips ISSN hyphens (`00401625`) while WoS keeps them
     # (`0040-1625`); journal names abbreviate inconsistently
@@ -193,16 +273,18 @@ def _row_to_zotero_item(row: dict, collection_key: str | None) -> dict:
         row.get("source", ""), canonical_issn,
     )
     item: dict = {
-        "itemType": "journalArticle",
+        "itemType": item_type,
         "title": row.get("title", ""),
         "creators": _parse_authors(row.get("authors", "")),
-        "publicationTitle": canonical_source,
         "date": row.get("year", ""),
         "DOI": row.get("doi", ""),
         "ISSN": canonical_issn,
         "abstractNote": row.get("abstract", ""),
         "extra": "",
     }
+    container = _CONTAINER_FIELD.get(item_type)
+    if container and canonical_source:
+        item[container] = canonical_source
     if collection_key:
         item["collections"] = [collection_key]
     tags: list[dict] = []
@@ -438,6 +520,12 @@ def main() -> int:
     batch_doi_seen: dict[str, int] = {}
     batch_title_seen: dict[str, int] = {}
     dropped_within_batch = 0
+    #: One Crossref lookup per distinct DOI, not per row — a batch that
+    #: merges Scopus and WoS hits sees most DOIs twice. Resolved under
+    #: `--dry-run` too, so the preview shows the types that would
+    #: actually be written rather than an optimistic all-articles list.
+    item_type_cache: dict[str, str] = {}
+    type_session = http_client.build_session()
 
     for row in rows:
         doi = _normalize_doi_key(row.get("doi") or "")
@@ -468,7 +556,11 @@ def main() -> int:
             dropped_within_batch += 1
             continue
 
-        item = _row_to_zotero_item(row, args.collection or None)
+        item = _row_to_zotero_item(
+            row, args.collection or None,
+            resolve_item_type(
+                doi, session=type_session, cache=item_type_cache),
+        )
         idx = len(to_create)
         to_create.append(item)
         if doi:
