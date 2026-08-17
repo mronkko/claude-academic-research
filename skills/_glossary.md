@@ -72,11 +72,25 @@ canonical longer entry.
 - **CSL** — *Citation Style Language*. XML files that describe how
   a citation should be formatted (APA, Chicago, MLA, …). Pandoc /
   Quarto consume them via `--csl=<file>` or YAML `csl:`.
-- **SFX / OpenURL** — institutional link resolvers. SFX is Ex
-  Libris's product; OpenURL is the underlying standard. The
-  library_resolver in this plugin probes the SFX endpoint to know
-  which publishers your institution has full-text access to before
-  trying a direct fetch.
+- **Link resolver / OpenURL** — the service that answers "which
+  licensed routes does my institution have to this article?". OpenURL
+  is the underlying standard; the plugin speaks two dialects of it as
+  equal peers, autodetected from `[library] openurl_base` and
+  overridable with `[library] resolver`:
+  - **SFX** — Ex Libris's older product. Returns `<target>` elements
+    with real publisher or EZproxy URLs, so routes are identifiable by
+    hostname.
+  - **Alma `uresolver`** — what **Primo VE** institutions have, and the
+    majority today. Primo's public OpenURL path only redirects to the
+    HTML discovery UI, so the plugin talks to Alma's
+    `/view/uresolver/<inst_code>/openurl` endpoint instead. Its routes
+    all point at the Alma redirector rather than the publisher, so they
+    are identified by the platform *names* Alma sends
+    (`package_public_name` / `interface_name`) — which is why the
+    plugin ranks platforms by host **or** name.
+
+  The resolver runs only in the browser and Zotero Connector passes, to
+  skip items your library cannot reach before opening Chromium for them.
 - **TDM** — *Text and Data Mining*. Elsevier's TDM API
   (`api.elsevier.com/content/article/doi/...`) is meant for
   programmatic full-text access; the plugin uses it instead of

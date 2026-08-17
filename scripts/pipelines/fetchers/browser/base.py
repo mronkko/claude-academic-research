@@ -781,6 +781,13 @@ class RequestHandler(PublisherHandler):
         preview = body[:2000].decode("utf-8", errors="replace").lower()
         if "just a moment" in preview or "cf-chl" in preview or "cloudflare" in preview:
             hint = "CF challenge"
+        elif "client challenge" in preview or "incapsula" in preview:
+            # Imperva/Incapsula JS interstitial — Springer's block. Named
+            # explicitly because it is otherwise indistinguishable from a
+            # generic failure: it arrives as HTTP 200 with a ~3 KB HTML
+            # body, so it was reported as the useless "other (3038B)" and
+            # read like a broken publisher rather than a bot wall.
+            hint = "Imperva JS challenge"
         elif "access" in preview and (
             "denied" in preview or "not available" in preview or "subscri" in preview
         ):

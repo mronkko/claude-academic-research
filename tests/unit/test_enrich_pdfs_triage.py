@@ -57,11 +57,18 @@ def test_aom_doi_finds_the_aom_handler(enrich, tmp_path) -> None:
     assert publisher == "Academy of Management"
 
 
-def test_springer_doi_has_no_browser_handler(enrich, tmp_path) -> None:
-    """The 15 Springer items really were unreachable.
+def test_springer_doi_finds_the_springer_handler(enrich, tmp_path) -> None:
+    """Springer items are "try harder", not a genuine FE6.
 
-    No handler means the cascade's verdict stands, and the item is a
-    genuine FE6 candidate rather than a "try harder" one.
+    This test asserted the opposite until 2026-08-17: that no handler
+    existed, so "the 15 Springer items really were unreachable" and the
+    cascade's verdict stood. That reading was wrong. SpringerLink answers
+    any HTTP client with an Imperva `Client Challenge` page regardless of
+    entitlement — measured from an on-campus IP across ten DOIs including
+    licensed titles, and unchanged by a full browser header set. The
+    articles were reachable all along; only the HTTP route was blocked.
+    A browser handler now claims them, so triage must route them to a
+    retry rather than toward an exclusion code.
     """
     _seed_cache(tmp_path, {
         SPRINGER_DOI: {
@@ -70,8 +77,8 @@ def test_springer_doi_has_no_browser_handler(enrich, tmp_path) -> None:
         },
     })
     publisher, handler = enrich._triage_context(SPRINGER_DOI, str(tmp_path))
-    assert handler == ""
-    assert publisher == "Springer"
+    assert handler == "springer"
+    assert publisher == "Springer Nature"
 
 
 def test_resolved_host_beats_a_misleading_doi_prefix(enrich, tmp_path) -> None:

@@ -146,7 +146,7 @@ class ZoteroConnectorHandler(PublisherHandler):
          the Connector retry bucket.
 
     Each item's routing decision includes a pre-selected
-    `sfx_target_url` — the full-text target URL from the library's
+    `resolver_target_url` — the full-text target URL from the library's
     SFX response, wrapped in any EZproxy or institutional proxy the
     library requires. The handler opens that URL; the user solves any
     Cloudflare / SSO; the translator fires; Zotero saves.
@@ -318,7 +318,7 @@ class ZoteroConnectorHandler(PublisherHandler):
         del ctx, t_start      # unused; service_worker drives the save
         doi = item["doi"]
         title = (item.get("title") or "")[:50]
-        target_url = item.get("sfx_target_url")
+        target_url = item.get("resolver_target_url")
 
         print(
             f"\n  ┌─ [{counter.done + 1}/{total}] {title}\n"
@@ -328,12 +328,12 @@ class ZoteroConnectorHandler(PublisherHandler):
         )
 
         if not target_url:
-            print("  └─ SKIP: no SFX target URL assigned.", flush=True)
+            print("  └─ SKIP: no resolver target URL assigned.", flush=True)
             counter.failed += 1
             return False
 
-        from fetchers.library_resolver import _effective_host
-        item_host = _effective_host(target_url)
+        from fetchers.library_resolver import effective_host
+        item_host = effective_host(target_url)
 
         # User-skipped host → drop every item for this host without
         # even opening its page.

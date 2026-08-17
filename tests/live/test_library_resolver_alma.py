@@ -23,8 +23,10 @@ from fetchers.library_resolver import (
     LibraryResolverConfig,
     first_fulltext_target_preferred,
     has_fulltext_access,
-    sfx_lookup_dual,
+    lookup_dual,
+    lookup_fulltext_target,
 )
+from fetchers.resolvers import resolver_for
 
 pytestmark = pytest.mark.live
 
@@ -59,7 +61,9 @@ def alma_cfg() -> LibraryResolverConfig:
             f"Aalto Alma uresolver unreachable ({e}) — requires Aalto "
             f"network/VPN access."
         )
-    return LibraryResolverConfig(openurl_base=_ALMA_URESOLVER_BASE, session=session)
+    return LibraryResolverConfig(
+        resolver=resolver_for(_ALMA_URESOLVER_BASE), session=session,
+    )
 
 
 def test_alma_uresolver_reports_access_for_covered_doi(
@@ -109,7 +113,7 @@ def test_alma_uresolver_issn_fallback_recovers_access_when_doi_unmatched(
 def test_alma_uresolver_issn_fallback_applies_to_dual_lookup(
     alma_cfg: LibraryResolverConfig,
 ) -> None:
-    result = sfx_lookup_dual(
+    result = lookup_dual(
         _KNOWN_UNREGISTERED_DOI, alma_cfg,
         issn=_KNOWN_COVERED_ISSN,
         pub_date=_KNOWN_COVERED_PUB_DATE,
@@ -117,3 +121,84 @@ def test_alma_uresolver_issn_fallback_applies_to_dual_lookup(
     )
     assert result.query_ok
     assert len(result.in_range) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Platform ranking on Alma — the regression this refactor exists to fix.
+#
+# Every Alma `resolution_url` points at the Alma redirector, never at a
+# publisher, so the previous host-only ranking scored all of them
+# `len(priority)` (unranked) and `required_domains` matched nothing. That
+# silently disabled the whole platform preference on Alma: a run could be
+# sent to ProQuest's scanned-image copy while EBSCOhost's clean PDF sat
+# in the same response.
+#
+# `_MULTI_PLATFORM_DOI` is chosen because Aalto reports 15 getFullTxt
+# services for it (verified 2026-08-17), spanning EBSCOhost Business
+# Source Ultimate, JSTOR, three ProQuest packages and FinELib
+# SpringerLink — so the ranking has something real to choose between.
+# ---------------------------------------------------------------------------
+
+_MULTI_PLATFORM_DOI = "10.1007/s10551-018-4026-8"   # J Bus Ethics 2018
+
+
+def test_alma_targets_carry_platform_names(
+    alma_cfg: LibraryResolverConfig,
+) -> None:
+    """The names live in a `<keys>` child that the old parser discarded.
+    Without them nothing below can work."""
+    result = lookup_dual(_MULTI_PLATFORM_DOI, alma_cfg)
+    assert result.query_ok
+    assert len(result.in_range) >= 2
+    named = [t for t in result.in_range if t.interface_name]
+    assert named, "no target carried an interface_name"
+    assert any("ebscohost" in t.interface_name.lower() for t in named)
+
+
+def test_alma_ranking_prefers_ebscohost_over_proquest(
+    alma_cfg: LibraryResolverConfig,
+) -> None:
+    """The payoff: EBSCOhost must win against JSTOR and three ProQuest
+    packages, decided on names because the URLs are indistinguishable."""
+    result = lookup_dual(_MULTI_PLATFORM_DOI, alma_cfg)
+    resolver = alma_cfg.resolver
+    best = min(
+        result.in_range, key=lambda t: resolver.rank_key(t, alma_cfg.priority),
+    )
+    assert "ebscohost" in best.interface_name.lower()
+
+
+def test_alma_required_domains_no_longer_reports_a_false_negative(
+    alma_cfg: LibraryResolverConfig,
+) -> None:
+    """Previously returned `(None, True)` — a confident "no licensed
+    route" — for platforms the library demonstrably has."""
+    for domain in ("ebscohost.com", "proquest.com", "springer.com"):
+        got = lookup_fulltext_target(
+            _MULTI_PLATFORM_DOI, alma_cfg, required_domains=(domain,),
+        )
+        assert got.query_ok is True
+        assert got.url is not None, f"no route found for {domain}"
+
+
+def test_alma_required_domains_still_reports_a_true_negative(
+    alma_cfg: LibraryResolverConfig,
+) -> None:
+    """Name matching must not make everything match — otherwise the
+    filter is decorative."""
+    got = lookup_fulltext_target(
+        _MULTI_PLATFORM_DOI, alma_cfg, required_domains=("nosuch.example",),
+    )
+    assert got.query_ok is True
+    assert got.url is None
+
+
+def test_alma_dual_lookup_makes_a_single_request(
+    alma_cfg: LibraryResolverConfig,
+) -> None:
+    """Alma ignores coverage dates, so the second query returned the same
+    answer for double the traffic. `date_filtering_available` is how
+    callers know not to read a coverage verdict out of the comparison."""
+    result = lookup_dual(_MULTI_PLATFORM_DOI, alma_cfg)
+    assert result.date_filtering_available is False
+    assert result.in_range == result.any_range

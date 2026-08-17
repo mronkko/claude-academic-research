@@ -302,7 +302,7 @@ def _triage_context(doi: str, cache_dir: str) -> tuple[str, str]:
 def _year_from_zotero_date(date_str: str) -> str | None:
     """Extract a 4-digit year from Zotero's free-text `date` field
     ("2024", "2024-05-15", "May 2024", ...) for the Alma ISSN-fallback
-    query's `rft.date` (see library_resolver.py's `_query_target_urls`
+    query's `rft.date` (see library_resolver.py's `_query_targets`
     / BACKLOG.md P11). None when no year-shaped substring is found."""
     match = re.search(r"\b(1[89]\d{2}|20\d{2})\b", date_str or "")
     return match.group(1) if match else None
@@ -1073,22 +1073,22 @@ async def _drive_connector(
 
         # Group items by effective host so reCAPTCHA / EZproxy logins
         # only need to be solved once per platform instead of once per
-        # item. `_effective_host` unwraps EZproxy URLs so jstor links
+        # item. `effective_host` unwraps EZproxy URLs so jstor links
         # under ezproxy.jyu.fi cluster with jstor links that aren't.
-        from fetchers.library_resolver import _effective_host
+        from fetchers.library_resolver import effective_host
         items_sorted = sorted(
             items,
-            key=lambda it: _effective_host(it.get("sfx_target_url", "")),
+            key=lambda it: effective_host(it.get("resolver_target_url", "")),
         )
 
         current_host = None
         for item in items_sorted:
-            host = _effective_host(item.get("sfx_target_url", ""))
+            host = effective_host(item.get("resolver_target_url", ""))
             if host != current_host:
                 current_host = host
                 remaining_on_host = sum(
                     1 for it in items_sorted
-                    if _effective_host(it.get("sfx_target_url", "")) == host
+                    if effective_host(it.get("resolver_target_url", "")) == host
                 )
                 print(
                     f"\n  ══ Batch: {host or '(unknown host)'} "
@@ -1110,7 +1110,7 @@ async def _drive_connector(
             # Host-scoped skips (user pressed 's' at the first-item
             # prompt on this host) are a distinct status from "the
             # Connector tried to save but failed".
-            item_host = _effective_host(item.get("sfx_target_url", ""))
+            item_host = effective_host(item.get("resolver_target_url", ""))
             skipped_by_user = item_host in getattr(
                 handler, "_skipped_hosts", set(),
             )
@@ -1354,14 +1354,17 @@ def _run_browser_in_process(
     )
     from fetchers.doi_resolver import DoiResolverCache, resolve_doi
     from fetchers.library_resolver import (
-        SFX_PLATFORM_PRIORITY,
         load_from_config,
+        lookup_dual,
         lookup_fulltext_target,
-        sfx_lookup_dual,
+        targets_match_domains,
     )
-    from fetchers.library_resolver import (
-        _target_matches_domains as target_matches_domains,
-    )
+
+    # Plain hostname test, used on URLs we synthesize ourselves from a
+    # Crossref-resolved host. Distinct from `targets_match_domains`,
+    # which matches resolver *targets* and must also consider platform
+    # names because Alma's URLs never expose a publisher host.
+    from fetchers.resolvers import host_matches_domains
 
     direct_handlers = all_handlers()
     handler_by_name = {h.name: h for h in direct_handlers}
@@ -1468,7 +1471,7 @@ def _run_browser_in_process(
         # its original non-10.1016 DOI prefix.
         if resolved_host and pass2_api_sources:
             for src in pass2_api_sources:
-                if not target_matches_domains(
+                if not host_matches_domains(
                     f"https://{resolved_host}/", src.direct_access_domains,
                 ):
                     continue
@@ -1534,20 +1537,27 @@ def _run_browser_in_process(
             connector_upfront.append(entry)
             continue
 
-        # Classify Case 1 / 2 / 3 via dual SFX lookup.
+        # Classify Case 1 / 2 / 3 via the resolver's coverage queries.
         if resolver_cfg is not None:
-            dual = sfx_lookup_dual(
+            dual = lookup_dual(
                 doi, resolver_cfg,
                 issn=entry["issn"], pub_date=entry["pub_date"],
                 volume=entry["volume"],
             )
             domains = direct.direct_access_domains
-            if domains:
-                in_range = any(
-                    target_matches_domains(u, domains) for u in dual.in_range
+            # Case 2 is only meaningful when the resolver can actually
+            # filter on coverage dates. Alma cannot — it returns the same
+            # answer either way — so `in_range` and `any_range` are one
+            # query there and diffing them would invent a verdict. Skip
+            # straight to running the direct handler in that case, which
+            # is what the old code did by accident (every Alma target
+            # failed the hostname test, so both flags were always False).
+            if domains and dual.date_filtering_available:
+                in_range = targets_match_domains(
+                    dual.in_range, domains, resolver_cfg,
                 )
-                in_any = any(
-                    target_matches_domains(u, domains) for u in dual.any_range
+                in_any = targets_match_domains(
+                    dual.any_range, domains, resolver_cfg,
                 )
                 if in_range:
                     pass                           # Case 3 — run direct
@@ -1657,14 +1667,17 @@ def _run_browser_in_process(
         if resolver_cfg is not None and not ignore_coverage:
             # Query B only (date-filtered). When Query B is empty,
             # we do NOT fall back to Query A. The cache data against
-            # JYU's SFX (see sfx_cache.json) shows Query A commonly
+            # JYU's SFX (see resolver_cache.json) shows Query A commonly
             # returns targets the user genuinely can't access — the
-            # ignore-date list is "SFX knows the journal via these
-            # providers", not "you can download this DOI now". Using
-            # it as a fallback wastes user time on paywalls.
+            # ignore-date list is "the resolver knows the journal via
+            # these providers", not "you can download this DOI now".
+            # Using it as a fallback wastes user time on paywalls.
+            #
+            # Ranking comes from `resolver_cfg.priority`, which honours
+            # `[library] platform_priority`; passing the module default
+            # here would silently ignore the user's configured order.
             target, query_ok = lookup_fulltext_target(
                 it["doi"], resolver_cfg,
-                priority=SFX_PLATFORM_PRIORITY,
                 in_range_only=True,
                 issn=it.get("issn"), pub_date=it.get("pub_date"),
                 volume=it.get("volume"),
@@ -1689,7 +1702,7 @@ def _run_browser_in_process(
                 if origin == "upfront":
                     failed_open += 1
                 target = f"https://doi.org/{it['doi']}"
-            connector_items.append({**it, "sfx_target_url": target})
+            connector_items.append({**it, "resolver_target_url": target})
         else:
             status = (
                 "skipped_no_library_coverage"

@@ -7,7 +7,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A Springer browser handler.** Springer contributed 0 of 98 Springer
+  DOIs to a 914-item run, and the reason was not access.
+  `link.springer.com/content/pdf/<doi>.pdf` answers any HTTP client with
+  a byte-identical ~3 KB HTML page titled `Client Challenge` — an Imperva
+  JavaScript interstitial. Measured from an on-campus IP
+  (`*.aalto.fi`) across ten DOIs including *Journal of Business Ethics*,
+  which the institution licenses, and unchanged by a complete browser
+  header set. The challenge is served *before* entitlement is evaluated,
+  so a VPN makes no difference, and Crossref's TDM record points at the
+  same URL and fails identically.
+
+  No Springer API fixes this: Meta/Metadata return metadata only, the
+  Open Access API covers only OA content, and the TDM API returns
+  full-text **XML** (its official client has `save_xml()` and no PDF
+  method) behind a TDM agreement. So the fix is a real browser, where the
+  JS runs and the clearance cookie is issued. `SpringerHandler` is a
+  25-line `RequestHandler` because the PDF URL is derivable from the DOI
+  — no page scraping — and `ctx.request` shares the browser context's
+  cookie jar, so one interactive solve clears the batch.
+
+  `RequestHandler`'s failure diagnostics learned to name this: a 3038-byte
+  Imperva page used to be reported as the useless `other (3038B)`, which
+  read like a broken publisher rather than a bot wall.
+
+  Two tests asserted the opposite premise and were corrected, not
+  patched: `test_springer_doi_has_no_browser_handler` claimed "the 15
+  Springer items really were unreachable", and the registry count was
+  pinned at nine handlers.
+
 ### Changed
+
+- **SFX and Alma are now peer link-resolver dialects.** The resolver
+  parsed both shapes but everything built on top of the parse assumed
+  SFX's, and on Alma the difference was silent rather than loud. Measured
+  live against an Alma tenant for a DOI with **15** licensed routes
+  including EBSCOhost, JSTOR and three ProQuest packages:
+
+  ```
+  _effective_host(target)        -> <tenant>.alma.exlibrisgroup.com
+  _platform_rank(target, …)      -> len(priority)   i.e. unranked
+  required_domains=ebscohost.com -> no route found
+  ```
+
+  Every Alma `resolution_url` points at the Alma redirector, never a
+  publisher, so any decision keyed on hostname was blind. `required_domains`
+  returned the module's own documented "library has no licensed route"
+  verdict for an article with fifteen, and `SFX_PLATFORM_PRIORITY` — the
+  reasoned preference for EBSCOhost over JSTOR over ProQuest, which
+  sometimes serves scanned images — did nothing at all there.
+
+  `fetchers/resolvers/` now holds a `LibraryResolver` ABC with
+  `SfxResolver` and `AlmaResolver` as equal implementations, selected by
+  `[library] resolver` (`auto` by default) and registered most-specific
+  first. The fix is not an Alma special case: targets became a structured
+  `FulltextTarget` carrying the provider names Alma already sends
+  (`package_public_name` / `interface_name`, previously discarded with the
+  `<keys>` element), and **`rank_key` and `matches_domains` live on the
+  base class and match host *or* name**. SFX keeps matching by domain,
+  Alma starts matching by name, and a third dialect would get both free.
+
+  Alma also declares `supports_date_threshold = False`, so `lookup_dual`
+  makes **one** request instead of two and reports
+  `date_filtering_available=False`. Live testing found Alma returns
+  identical results for correct, wrong and absent `rft.date`/`rft.volume`,
+  and `sfx.ignore_date_threshold` is an SFX parameter it ignores — so the
+  second query bought nothing, and diffing two identical answers into a
+  coverage verdict was worse than nothing. `enrich_pdfs.py` Pass 1 no
+  longer attempts that classification when the dialect cannot support it.
+
+  Verified live that Alma returns the same 15 services with and without
+  the `sfx.*` parameters, so each dialect now sends only its own vendor
+  namespace.
+
+  `[library] platform_priority` is now implemented; it was documented in a
+  comment but nothing had ever read it.
+
+  Renamed with it, since every call site is in-repo: `SfxCache` →
+  `ResolverCache`, `SFX_PLATFORM_PRIORITY` → `PLATFORM_PRIORITY`,
+  `sfx_lookup_dual` → `lookup_dual`, `SfxDualResult` → `DualResult`,
+  `sfx_target_url` → `resolver_target_url`. The cache file is
+  `resolver_cache.json`; the old `sfx_cache.json` is ignored rather than
+  migrated, because a bare URL list cannot answer the platform question
+  and importing it would rank every entry as unranked indefinitely. Cost
+  is one resolver round-trip per DOI on the first run after upgrading.
+
+  Preserved deliberately, each having been a real incident: fail-open
+  `query_ok` semantics, positive-only caching (an empty answer once
+  turned a soft DOI-keying miss permanent for 15 articles the user could
+  read), and `has_fulltext_access`.
+
+  SFX parsing is now covered by inline-XML tests as well as the
+  gitignored institution-specific fixtures. Those fixtures skip on a
+  fresh checkout, so the dialect with weaker automated coverage was the
+  one most likely to rot unnoticed — itself a form of unequal standing.
 
 - **The PDF cascade is now ranked by version quality first, cost second
   — and it asks before spending.** The paid OpenAlex Content API used to
