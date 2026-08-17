@@ -1637,7 +1637,7 @@ def _run_browser_in_process(
 
     if resolver_cfg is not None and not connector_only:
         print(
-            f"\nChecking library access via {resolver_cfg.openurl_base}...",
+            f"\nChecking library access via {resolver_cfg.describe()}...",
             flush=True,
         )
 

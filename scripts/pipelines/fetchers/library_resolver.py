@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -145,13 +145,39 @@ class LibraryResolverConfig:
     #: Source identifier included in the OpenURL request. Helps libraries
     #: correlate resolver traffic to the plugin. Not required.
     sid: str = "academic-research"
+    #: Further institutions, queried after `resolver` and merged into one
+    #: route list. A researcher with two affiliations has two sets of
+    #: entitlements and no single resolver knows both: one live case had
+    #: an Alma tenant reporting *no* route for a journal that the second
+    #: institution's SFX served through Ovid and ProQuest.
+    #:
+    #: `resolver` stays the primary rather than this being a plain list,
+    #: so every existing construction site and cache key is untouched and
+    #: adding a second library cannot invalidate the first one's cache.
+    additional_resolvers: tuple[LibraryResolver, ...] = ()
+
+    @property
+    def resolvers(self) -> tuple[LibraryResolver, ...]:
+        """Every configured resolver, primary first. Empty when unconfigured."""
+        return tuple(
+            r for r in (self.resolver, *self.additional_resolvers) if r is not None
+        )
 
     @property
     def openurl_base(self) -> str:
-        """The configured endpoint, or '' when unconfigured. A property so
+        """The primary endpoint, or '' when unconfigured. A property so
         callers can log where they are querying without reaching through
         to the resolver."""
         return self.resolver.openurl_base if self.resolver else ""
+
+    def describe(self) -> str:
+        """One line naming every endpoint, for the run's opening banner."""
+        bases = [r.openurl_base for r in self.resolvers]
+        if not bases:
+            return "(no link resolver configured)"
+        if len(bases) == 1:
+            return bases[0]
+        return f"{bases[0]} (+{len(bases) - 1} more)"
 
 
 def load_from_config(
@@ -163,16 +189,38 @@ def load_from_config(
     Returns None when `openurl_base` is absent — callers MUST treat None
     as "no pre-flight, fall through to the handler directly", never as
     "the library has no access".
+
+    `openurl_base` takes a string or a **list** of endpoints. A list is
+    for a reader with more than one affiliation: each is queried and the
+    routes are merged, because no single institution's resolver knows
+    another's entitlements. The first entry is the primary — it keeps the
+    existing cache keys and breaks ranking ties — so put the library you
+    are normally authenticated to first.
+
+    `[library] resolver` (auto/sfx/alma) applies to a single endpoint. It
+    is deliberately ignored for a list: each entry is autodetected from
+    its own URL shape, since forcing one dialect onto endpoints of two
+    different products is never right.
     """
     from core.config_loader import get, load_config
 
-    base = get("library", "openurl_base", env="LIBRARY_OPENURL_BASE").strip()
-    if not base:
+    raw_base = load_config().get("library", {}).get("openurl_base", "")
+    if isinstance(raw_base, list):
+        bases = [str(b).strip() for b in raw_base if str(b).strip()]
+        override = ""
+    else:
+        env_or_str = get(
+            "library", "openurl_base", env="LIBRARY_OPENURL_BASE",
+        ).strip()
+        bases = [env_or_str] if env_or_str else []
+        override = get("library", "resolver", env="LIBRARY_RESOLVER").strip()
+    if not bases:
         return None
-    override = get("library", "resolver", env="LIBRARY_RESOLVER").strip()
-    resolver = resolver_for(base, override)
-    if resolver is None:
+
+    built = [r for r in (resolver_for(b, override) for b in bases) if r is not None]
+    if not built:
         return None
+    resolver, additional = built[0], tuple(built[1:])
 
     raw_priority = load_config().get("library", {}).get("platform_priority", "")
     if isinstance(raw_priority, str):
@@ -185,6 +233,7 @@ def load_from_config(
 
     return LibraryResolverConfig(
         resolver=resolver,
+        additional_resolvers=additional,
         session=session,
         cache=ResolverCache(cache_dir) if cache_dir else None,
         priority=priority,
@@ -196,17 +245,34 @@ def load_from_config(
 # ---------------------------------------------------------------------------
 
 
-def _cache_key(doi: str, ignore_date_threshold: bool = False) -> str:
-    """Cache key combining DOI and the ignore-date-threshold flag."""
-    return f"{doi}::any" if ignore_date_threshold else doi
+def _cache_key(
+    doi: str, ignore_date_threshold: bool = False, resolver_id: str = "",
+) -> str:
+    """Cache key combining DOI, the ignore-date-threshold flag and — for
+    a non-primary resolver — which library answered.
+
+    The primary resolver keeps the bare-DOI key it has always used, so
+    adding a second institution does not invalidate a warm cache built
+    against the first. Entries are per-resolver rather than per-merge for
+    the same reason: removing one library must not discard the other's
+    answers.
+    """
+    base = f"{doi}::any" if ignore_date_threshold else doi
+    return f"{base}@@{resolver_id}" if resolver_id else base
 
 
 def _fetch_and_parse(
     url: str, cfg: LibraryResolverConfig, doi: str,
+    resolver: LibraryResolver | None = None,
 ) -> list[FulltextTarget] | None:
-    """GET `url` and parse it. None on transport / non-200 / parse
-    failure; `doi` is only for logging."""
-    if cfg.resolver is None:
+    """GET `url` and parse it with `resolver` (default: the primary).
+
+    None on transport / non-200 / parse failure; `doi` is only for
+    logging. The dialect must be the one that produced `url` — parsing an
+    SFX response with Alma's parser yields nothing, silently.
+    """
+    resolver = resolver if resolver is not None else cfg.resolver
+    if resolver is None:
         return None
     try:
         resp = cfg.session.get(url, timeout=cfg.timeout_s)
@@ -216,7 +282,7 @@ def _fetch_and_parse(
     if resp.status_code != 200:
         logger.debug("resolver returned HTTP %d for %s", resp.status_code, doi)
         return None
-    return cfg.resolver.parse(resp.text)
+    return resolver.parse(resp.text)
 
 
 def _query_targets(
@@ -249,22 +315,58 @@ def _query_targets(
     to, and re-running could never re-check because the empty answer was
     cached with no expiry.
     """
-    if cfg.resolver is None:
+    resolvers = cfg.resolvers
+    if not resolvers:
         return None
-
-    key = _cache_key(doi, ignore_date_threshold)
-    if cfg.cache is not None:
-        cached = cfg.cache.get(key)
-        if cached is not None:
-            return cached
 
     req = ResolverRequest(
         doi=doi, ignore_date_threshold=ignore_date_threshold,
         issn=issn, pub_date=pub_date, volume=volume, sid=cfg.sid,
     )
+
+    merged: list[FulltextTarget] = []
+    answered = False
+    for index, resolver in enumerate(resolvers):
+        one = _query_one(
+            resolver, doi, cfg, req,
+            ignore_date_threshold=ignore_date_threshold,
+            resolver_id="" if index == 0 else resolver.openurl_base,
+        )
+        if one is None:
+            continue          # this library could not be asked
+        answered = True
+        merged.extend(one)
+
+    # None only when *no* library answered. One institution being down
+    # must not read as "nobody has this": with several configured, a
+    # partial answer is still an answer, and the alternative is a
+    # transport blip at one library gating access at the other.
+    if not answered:
+        return None
+    return _dedupe_targets(merged)
+
+
+def _query_one(
+    resolver: LibraryResolver,
+    doi: str,
+    cfg: LibraryResolverConfig,
+    req: ResolverRequest,
+    *,
+    ignore_date_threshold: bool,
+    resolver_id: str,
+) -> list[FulltextTarget] | None:
+    """One library's answer for `doi`, cached per library. None when it
+    could not be asked."""
+    key = _cache_key(doi, ignore_date_threshold, resolver_id)
+    if cfg.cache is not None:
+        cached = cfg.cache.get(key)
+        if cached is not None:
+            return cached
+
+    label = _resolver_label(resolver)
     targets: list[FulltextTarget] | None = None
-    for url in cfg.resolver.query_urls(req):
-        result = _fetch_and_parse(url, cfg, doi)
+    for url in resolver.query_urls(req):
+        result = _fetch_and_parse(url, cfg, doi, resolver)
         if result:
             targets = result
             break
@@ -276,9 +378,58 @@ def _query_targets(
 
     if targets is None:
         return None
+    # Stamp the origin only when it can be ambiguous — a single-resolver
+    # setup keeps writing exactly the cache entries it always has.
+    if resolver_id and targets:
+        targets = [replace(t, resolver_name=label) for t in targets]
     if cfg.cache is not None and targets:
         cfg.cache.put(key, targets)
     return targets
+
+
+def _resolver_label(resolver: LibraryResolver) -> str:
+    """Short human name for a resolver, derived from its endpoint.
+
+    Both products put the institution in the path, differently: Alma as a
+    tenant code (`.../358AALTO_INST/openurl`), SFX as an instance segment
+    (`https://sfx.example.fi/jyu`). The host is the last resort and
+    usually the worst option — an SFX host commonly starts with the
+    literal "sfx", which names the product rather than the library.
+
+    Only ever used in diagnostics and in `FulltextTarget.resolver_name`,
+    so an imperfect label costs nothing.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(resolver.openurl_base)
+    segments = [p for p in parsed.path.split("/") if p]
+    for part in segments:
+        if part.upper().endswith("_INST"):
+            # "358AALTO_INST" -> "Aalto": strip the numeric prefix Alma
+            # prepends to the tenant code.
+            return part.split("_")[0].lstrip("0123456789").title() or part
+    for part in reversed(segments):
+        if part.lower() not in ("openurl", "resolve", "sfx", "view", "uresolver"):
+            return part.title()
+    return (parsed.netloc or resolver.openurl_base).split(".")[0].title()
+
+
+def _dedupe_targets(targets: list[FulltextTarget]) -> list[FulltextTarget]:
+    """Drop exact duplicate URLs, preserving order.
+
+    Two libraries can name the same open-access or free route. Routes
+    that merely share a *platform* are deliberately kept: they are
+    different entitlements behind different logins, and which one works
+    depends on who the reader is.
+    """
+    seen: set[str] = set()
+    out: list[FulltextTarget] = []
+    for target in targets:
+        if target.url in seen:
+            continue
+        seen.add(target.url)
+        out.append(target)
+    return out
 
 
 # ---------------------------------------------------------------------------

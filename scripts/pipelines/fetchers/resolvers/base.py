@@ -87,6 +87,13 @@ class FulltextTarget:
     interface_name: str = ""
     coverage: str = ""
     is_free: bool = False
+    #: Which configured library produced this route. Empty when only one
+    #: resolver is configured, which is the common case. With several,
+    #: routes from different institutions sit in one merged list and the
+    #: URLs are not interchangeable — each is authenticated by *that*
+    #: institution's IP range, EZproxy or SSO — so a user handed a link
+    #: needs to know which login opens it.
+    resolver_name: str = ""
 
     def covers_year(
         self, year: int | str | None, *, today_year: int | None = None,
@@ -114,6 +121,8 @@ class FulltextTarget:
             out["coverage"] = self.coverage
         if self.is_free:
             out["is_free"] = True
+        if self.resolver_name:
+            out["resolver_name"] = self.resolver_name
         return out
 
     @classmethod
@@ -128,6 +137,7 @@ class FulltextTarget:
             interface_name=d.get("interface_name", "") or "",
             coverage=d.get("coverage", "") or "",
             is_free=bool(d.get("is_free", False)),
+            resolver_name=d.get("resolver_name", "") or "",
         )
 
 
