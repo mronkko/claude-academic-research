@@ -913,9 +913,14 @@ async def _drive_handler(
                 # login, not at the handler's default landing page.
                 handler.pending_solve_url = handler.solve_url_for(items)
             if solve_hosts:
+                proxied = (
+                    handler.proxied_route_count(items)
+                    if hasattr(handler, "proxied_route_count")
+                    else len(items)
+                )
                 print(
-                    f"  {display}: {len(solve_hosts)} of this queue's routes "
-                    f"go through a proxy that will ask you to sign in "
+                    f"  {display}: {proxied} of this queue's {len(items)} "
+                    f"routes go through a proxy that will ask you to sign in "
                     f"({', '.join(solve_hosts)}). Solve it once here — the "
                     f"parallel tabs open afterwards and inherit the session.",
                     flush=True,

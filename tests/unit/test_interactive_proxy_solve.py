@@ -92,10 +92,46 @@ class TestSolveTarget:
     def test_setup_url_uses_the_stashed_route(self) -> None:
         h = EbscoHandler()
         h.pending_solve_url = JYU_REWRITTEN
-        assert h.setup_url_for("10.1/x") == JYU_REWRITTEN
+        assert h._setup_url_for("10.1/x") == JYU_REWRITTEN
 
     def test_setup_url_falls_back_to_the_doi(self) -> None:
-        assert EbscoHandler().setup_url_for("10.1/x") == "https://doi.org/10.1/x"
+        assert EbscoHandler()._setup_url_for("10.1/x") == "https://doi.org/10.1/x"
+
+    def test_the_override_is_on_the_hook_setup_actually_calls(self) -> None:
+        """Caught live: the override was on the wrong name and did nothing.
+
+        This class carried a public `setup_url_for` marked "unused" — it
+        genuinely was, because `setup()` calls `_setup_url_for`. An
+        override on the public name silently left the base version in
+        charge, which returns `setup_url_template or url_template`, both
+        empty here. `setup()` navigated nowhere and asked the user to
+        sign in on a blank page.
+        """
+        import inspect
+
+        from fetchers.browser.base import PublisherHandler
+
+        src = inspect.getsource(PublisherHandler.setup)
+        assert "self._setup_url_for(" in src, (
+            "setup() no longer resolves its URL through _setup_url_for; "
+            "EbscoHandler's override now points at nothing"
+        )
+        assert EbscoHandler._setup_url_for is not PublisherHandler._setup_url_for
+
+    def test_route_count_is_routes_not_hosts(self) -> None:
+        """One host commonly fronts a whole queue.
+
+        Reporting the host count as a route count told the user "1 of
+        this queue's routes" when 10 of 17 were behind that one host.
+        """
+        items = [_item(JYU_REWRITTEN), _item(JYU_WRAPPER), _item(ALMA_DIRECT)]
+        h = EbscoHandler()
+        assert h.proxied_route_count(items) == 2
+        assert len(h.solve_hosts_for(items)) == 2  # coincidence here…
+
+        same_host = [_item(JYU_REWRITTEN)] * 5 + [_item(ALMA_DIRECT)]
+        assert h.proxied_route_count(same_host) == 5
+        assert len(h.solve_hosts_for(same_host)) == 1  # …but not here
 
     def test_solve_hosts_name_the_institution_to_sign_in_to(self) -> None:
         """With two libraries configured, "sign in" is ambiguous."""

@@ -144,15 +144,23 @@ class EbscoHandler(PublisherHandler):
     #: Per-instance because each lane copies the handler.
     pending_solve_url = ""
 
-    def setup_url_for(self, doi: str) -> str:
+    def _setup_url_for(self, doi: str) -> str:
         """The URL the solve opens.
 
-        `doi.org/<doi>` is useless here: it lands on the publisher's own
-        site, where there is no institutional login to clear. The login
-        lives on the proxy in front of *this queue's* resolver target,
-        so the driver stashes that target and it is used instead. The
-        DOI form remains the fallback for the case this handler was
-        never routed — where `setup()` is not called anyway.
+        Overrides the base hook — note the underscore. This class used
+        to carry a public `setup_url_for` marked "unused"; it really was
+        unused, because `setup()` calls `_setup_url_for`. Overriding the
+        public name instead left the base implementation in charge, and
+        that returns `setup_url_template or url_template`, both empty
+        here — so `setup()` navigated nowhere and presented a blank page
+        to sign in on.
+
+        `doi.org/<doi>` would be no better: it lands on the publisher's
+        own site, where there is no institutional login to clear. The
+        login lives on the proxy in front of *this queue's* resolver
+        target, so the driver stashes that target and it is used here.
+        The DOI form remains a fallback for the unrouted case, where
+        `setup()` is not called anyway.
         """
         return self.pending_solve_url or f"https://doi.org/{doi}"
 
@@ -184,6 +192,19 @@ class EbscoHandler(PublisherHandler):
         return any(
             needs_interactive_login(it.get("resolver_target_url", ""))
             for it in items
+        )
+
+    def proxied_route_count(self, items: list[dict]) -> int:
+        """How many queued routes sit behind a signing-in proxy.
+
+        Distinct from `len(solve_hosts_for(...))`, which counts hosts —
+        one host commonly fronts most of a queue, so reporting the host
+        count as a route count understates the work by an order of
+        magnitude.
+        """
+        return sum(
+            1 for it in items
+            if needs_interactive_login(it.get("resolver_target_url", ""))
         )
 
     def solve_hosts_for(self, items: list[dict]) -> list[str]:
