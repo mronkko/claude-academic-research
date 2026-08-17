@@ -1545,16 +1545,24 @@ def _run_browser_in_process(
                 volume=entry["volume"],
             )
             domains = direct.direct_access_domains
-            # Case 2 is only meaningful when the resolver can actually
-            # filter on coverage dates. Alma cannot — it returns the same
-            # answer either way — so `in_range` and `any_range` are one
-            # query there and diffing them would invent a verdict. Skip
-            # straight to running the direct handler in that case, which
-            # is what the old code did by accident (every Alma target
-            # failed the hostname test, so both flags were always False).
-            if domains and dual.date_filtering_available:
+            # Case 2 works on both dialects, by two different mechanisms.
+            # SFX answers it in the query (`sfx.ignore_date_threshold`),
+            # so in_range and any_range are genuinely different requests.
+            # Alma cannot filter by date at all, but it reports per-package
+            # coverage — so passing `pub_date` asks "does this platform
+            # hold *this year*", and diffing against the unfiltered answer
+            # reconstructs the same verdict from different evidence.
+            #
+            # This is what stops a pre-1997 article reaching the Springer
+            # handler: Alma lists SpringerLink for the journal, but the
+            # holding starts 1997, so in_range is False while in_any is
+            # True — Case 2, divert to the Connector, and no 30-second
+            # paywall timeout. Three items in one 97-item run hit exactly
+            # that before this existed.
+            if domains:
                 in_range = targets_match_domains(
                     dual.in_range, domains, resolver_cfg,
+                    pub_date=entry["pub_date"],
                 )
                 in_any = targets_match_domains(
                     dual.any_range, domains, resolver_cfg,

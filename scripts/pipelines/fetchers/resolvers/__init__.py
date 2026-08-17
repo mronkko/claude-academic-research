@@ -31,6 +31,7 @@ from .base import (
     local_name,
     platform_priority_from_keys,
 )
+from .coverage import CoverageWindow, covers_year, parse_coverage
 from .sfx import SfxResolver
 
 #: Most specific first; the SFX fallback must stay last. See module docstring.
@@ -66,7 +67,10 @@ def resolver_for(
 
 __all__ = [
     "AlmaResolver",
+    "CoverageWindow",
     "FULLTEXT_SERVICE_TYPE",
+    "covers_year",
+    "parse_coverage",
     "FulltextTarget",
     "LibraryResolver",
     "OPENURL_CONTEXT_PARAMS",

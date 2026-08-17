@@ -346,8 +346,13 @@ def lookup_fulltext_target(
 
     ranking = priority if priority is not None else cfg.priority
     resolver = cfg.resolver
-    # Stable: equal ranks keep the resolver's response order.
-    best = min(targets, key=lambda t: resolver.rank_key(t, ranking))
+    # Stable: equal keys keep the resolver's response order. `pub_date`
+    # makes coverage outrank platform preference, so an embargoed
+    # first-choice platform loses to one that actually holds this year.
+    best = min(
+        targets,
+        key=lambda t: resolver.sort_key(t, ranking, pub_date=pub_date),
+    )
     return TargetLookup(best.url, True)
 
 
@@ -475,16 +480,36 @@ def targets_match_domains(
     targets: list[FulltextTarget],
     domains: tuple[str, ...],
     cfg: LibraryResolverConfig,
+    *,
+    pub_date: int | str | None = None,
 ) -> bool:
     """True when any target is served by one of `domains`.
 
     Exists so callers comparing `DualResult` lists against a handler's
     reachable domains go through the dialect's host-or-name matching
     rather than re-implementing a hostname test that is blind on Alma.
+
+    `pub_date` additionally requires that the matching target's coverage
+    include that year. **This is what restores Case 2 detection on a
+    dialect that cannot filter by date in the query.** Asked with a year,
+    the answer is "the library can reach this platform *for this
+    article*"; asked without one, merely "the library has this
+    platform". Diffing the two is the Case 2 test, reached by per-target
+    coverage instead of SFX's `sfx.ignore_date_threshold`.
+
+    A target whose coverage is absent or unparseable counts as matching —
+    unknown is not evidence of exclusion, and on SFX every target is
+    unknown, so passing `pub_date` there changes nothing.
     """
     if cfg.resolver is None:
         return False
-    return any(cfg.resolver.matches_domains(t, domains) for t in targets)
+    for t in targets:
+        if not cfg.resolver.matches_domains(t, domains):
+            continue
+        if pub_date is not None and t.covers_year(pub_date) is False:
+            continue
+        return True
+    return False
 
 
 __all__ = [

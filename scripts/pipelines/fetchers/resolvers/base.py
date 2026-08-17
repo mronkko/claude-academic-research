@@ -88,6 +88,20 @@ class FulltextTarget:
     coverage: str = ""
     is_free: bool = False
 
+    def covers_year(
+        self, year: int | str | None, *, today_year: int | None = None,
+    ) -> bool | None:
+        """Whether this package holds an article published in `year`.
+
+        Tri-state. None means the coverage statement is absent or
+        unparseable, which callers must treat as *unknown* and proceed —
+        SFX sends no coverage at all, so None is the normal answer there.
+        See `coverage.py` for why guessing False would be worse than
+        useless.
+        """
+        from .coverage import covers_year as _covers
+        return _covers(self.coverage, year, today_year=today_year)
+
     def as_cache_dict(self) -> dict:
         """Serialise for `ResolverCache`. Omits empty fields so a cache
         file written against an SFX endpoint stays readable."""
@@ -343,6 +357,36 @@ class LibraryResolver(ABC):
             if plat.names and _names_match(target, plat.names):
                 return i
         return len(priority)
+
+    def sort_key(
+        self,
+        target: FulltextTarget,
+        priority: tuple[Platform, ...] = PLATFORM_PRIORITY,
+        *,
+        pub_date: int | str | None = None,
+        today_year: int | None = None,
+    ) -> tuple[int, int]:
+        """Ordering key: coverage first, then platform preference.
+
+        Platform priority alone is not enough once coverage is known.
+        EBSCOhost is ranked first because its PDFs are cleanest, but it
+        commonly carries a one-year moving wall — so for a very recent
+        article the preferred platform is the one that cannot serve it,
+        while a lower-ranked publisher route can. Coverage therefore
+        outranks preference.
+
+        Buckets: confidently covering (0) → unknown (1) → confidently
+        not covering (2). Unknown sits in the middle rather than last, so
+        a dialect that reports no coverage at all (SFX) keeps its
+        existing order untouched: every target lands in bucket 1 and
+        `rank_key` decides, exactly as before.
+        """
+        covers = (
+            None if pub_date is None
+            else target.covers_year(pub_date, today_year=today_year)
+        )
+        bucket = 1 if covers is None else (0 if covers else 2)
+        return (bucket, self.rank_key(target, priority))
 
     def matches_domains(
         self, target: FulltextTarget, domains: tuple[str, ...],
