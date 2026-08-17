@@ -22,66 +22,108 @@ directory — not checked in because it references machine-local paths).
 
 ---
 
-## Open — APA PsycNET browser handler needs testing; it fails on reachable PDFs (2026-08-16)
+## Done — APA PsycNET handler failed on reachable PDFs (2026-08-16)
 
 **Reported from a live downstream run** (the AI-literature-review study's
 Phase 2 PDF retrieval, plugin 0.11.0 + `10e3771`). The APA handler failed
 **2 of 2** items in one dataset, on articles the operator then downloaded
-by hand from the same Chromium profile the handler drives. So this is a
-selector/flow defect, not a licensing or access one — the institution has
-access and the PDF is reachable.
+by hand from the same Chromium profile the handler drives — so a
+selector/flow defect, not a licensing one.
 
-**Test cases** — both APA journals, both licensed at the reporting site,
-both confirmed manually downloadable, both currently failing:
-
-| DOI | Article | Observed |
+| DOI | Record | Article |
 |---|---|---|
-| `10.1037/apl0000007` | Sinking slowly: Diversity in propensity to trust predicts downward trust spirals | `ERROR: Download button not found`, ~135 s |
-| `10.1037/a0025231` | Bridging team faultlines by combining task role assignment and goal structure | `ERROR: Download button not found`, ~135 s |
+| `10.1037/apl0000007` | `2015-01016-001` | Sinking slowly: Diversity in propensity to trust predicts downward trust spirals |
+| `10.1037/a0025231` | `2011-19052-001` | Bridging team faultlines by combining task role assignment and goal structure |
 
-Use these as the regression fixtures — an APA test that does not assert a
-real download against a licensed DOI will keep passing while the handler
-is broken, which is how this survived to a live run.
+**Verified fixed on 2026-08-16** against a signed-in, entitled session:
+both DOIs download in **~2 s** each (was ~135 s to failure), via
+`/fulltext/{accession}.pdf`, and the first page of each PDF was checked
+to be the right article.
 
-**Why deferred:** needs someone with APA institutional access and a
-browser session to walk the four-step flow and see which step actually
-breaks. Cannot be diagnosed from the log as it stands — see the
-diagnostics point below, which is the part worth fixing first.
+| DOI | Result |
+|---|---|
+| `10.1037/apl0000007` | OK 437KB via `/fulltext/2015-01016-001.pdf` |
+| `10.1037/a0025231` | OK 755KB via `/fulltext/2011-19052-001.pdf` |
 
-**What it would take:**
+**Three defects, found in order — the second and third only became
+visible once the first was fixed and a live entitled run was possible.**
 
-1. **Make the failure diagnosable.** `apa.py` raises a bare
-   `RuntimeError("Download button not found")` from step 4, so the log
-   cannot distinguish "step 2's Get Access overlay never opened" from
-   "step 3's CHECK ACCESS did not route to `/recordAccess/institutional/`"
-   from "we are on the right page and only the final selector is stale".
-   All three present identically. On failure, capture the final URL, the
-   page title, and a screenshot into the cache dir. This is the highest
-   value change even before any selector is touched, and it generalises
-   to every browser handler.
-2. **Re-derive the step-4 selectors** against current PsycNET. The
-   present list is `a[href*='/fulltext/'][href*='.pdf']`,
-   `button:has-text('Download PDF')`, `a:has-text('Download PDF')`,
-   `button:has-text('DOWNLOAD PDF')`, `a:has-text('Download')`. One
-   plausible cause given the ~135 s duration: the run consumed the full
-   30 s `expect_download` plus the 15 s `try_click` and the earlier
-   waits, i.e. it never found anything to click rather than clicking and
-   getting no download.
-3. **Check the step-2/step-3 assumption.** The comment on step 2 says
-   users with existing institutional access are "auto-routed past this
-   step". If that is what happens at this site, the overlay clicks are
-   no-ops and the flow lands somewhere step 4's selectors do not
-   describe.
-4. **Consider a PDF-URL route** rather than a click chain. PsycNET
-   fulltext URLs are derivable from the record id; fetching directly
-   would remove three of the four failure points.
+1. **`CHECK ACCESS` no longer routes to `/recordAccess/institutional/`.**
+   It navigates to
+   `sso.apa.org/apasso/idm/login?CheckAccess=1&UID={record}&ERIGHTS_TARGET={landing}`.
+   The handler waited 15 s for a URL PsycNET does not produce, swallowed
+   the timeout (`except Exception: pass`), then hunted for a Download
+   PDF button on the SSO login form it was actually looking at, and
+   reported `Download button not found`.
 
-**Files to look at:**
+2. **The accession number was read off the previous item's DOM** —
+   `goto()` returns before the Angular view swaps, and the first
+   `/record/` anchor on an article page is a *reference*. A live run
+   fetched `2010-04200-005` (Curşeu & Schruijer 2010, cited by the
+   requested article) for a DOI whose record is `2015-01016-001`, ending
+   on that paper's $19.95 buy page. This is the serious one: it is not a
+   failed download but **the wrong PDF attached to the right Zotero
+   item**, which no later stage checks. Fixed structurally (blank the
+   page before identifying anything) plus three independent checks — the
+   URL must belong to this DOI, the record link must carry the `?doi=1`
+   marker that distinguishes the resolved article from ones it cites, and
+   RightsLink must agree or the handler refuses.
 
-- `scripts/pipelines/fetchers/browser/apa.py` — the whole flow is lines
-  50–110; step 4 and the bare raise are lines 88–100.
-- `scripts/pipelines/pdf_fetch_log.py` — where richer failure detail
-  would have to land to be visible downstream.
+3. **An entitled session never sees `doiLanding` at all.** `doi.org`
+   redirects it straight to `/record/{accession}`. Requiring the landing
+   page — the fix for defect 2 — cost both DOIs a 20 s timeout on the
+   first entitled run. Both landing shapes are now accepted; the
+   `/record/` URL is in fact the least ambiguous source of the accession.
+
+**Also learned:** APA's session cookie does not survive closing the
+browser, unlike the Cloudflare publishers' `cf_clearance`. Observed
+twice. Users must sign in once per run, and `setup_hint` now says so,
+including that `/record/...` rather than `/doiLanding` in the address bar
+is the signal that the session is entitled.
+
+**What landed:**
+
+1. **Failure diagnostics, generalised** (`base.py`
+   `capture_page_diagnostics` + `PublisherHandler.report_failure`). On
+   any page-driven failure the final URL, page title, a screenshot and
+   the rendered HTML go to `<cache_dir>/diagnostics/<handler>_<doi>.*`,
+   and the console ERROR line names the URL it stopped on. Wired into
+   `PageNavigationHandler`, `PdfLinkNavigationHandler`, `apa`, and
+   `informs` (whose bespoke HTML dump was folded into it).
+2. **Direct full-text route, tried first.** The accession number is read
+   off the landing page's record link and `/fulltext/{accession}.pdf`
+   is fetched directly. An entitled session gets the PDF with no clicks
+   — three failure points gone, per the original item's point 4. An
+   unentitled one is bounced to `/record/{accession}` with no download
+   event, which is cheap to detect and falls through to the click chain.
+3. **Each step reports itself.** The four formerly-identical failures —
+   landing page never rendered, no Get Access control, purchase-only
+   overlay, stranded at the IdP — now produce distinct messages, and the
+   IdP case says to sign in rather than implying a broken selector.
+4. **The OneTrust consent banner is removed from the DOM** before any
+   clicking. It is `position: fixed` at the maximum z-index and can eat
+   clicks meant for the access controls. Removed, not accepted — the
+   download needs no consent granted on the user's behalf.
+5. **Regression fixtures.** Both DOIs are in
+   `tests/live/conftest.py:APA_REGRESSION_DOIS`, asserted by
+   `test_apa_regression_dois_download` (`-m live_browser`), and the flow
+   is covered hermetically by `tests/unit/test_fetchers_browser_apa.py`
+   against a fake page modelling the real PsycNET behaviour — including
+   an AST guard that the retired `/recordAccess/institutional/` wait and
+   the `Download button not found` string do not come back.
+
+**Worth keeping in mind for the next browser handler.** Defects 2 and 3
+were both invisible to an unentitled session and to any test written
+against one — the first live entitled run found both within a minute,
+and the diagnostics from item 1 named the failing step each time
+(`buy/2010-04200-005 "APA PsycNet Buy Page"`, then
+`record/2015-01016-001` on a timeout). A handler verified only against
+the paywalled path is not verified.
+
+Re-check with `pytest -m live_browser tests/live/test_browser_publishers.py -k apa`
+from a session with APA access; expect to sign in at the setup prompt.
+Note `playwright` is not in `[dependency-groups] dev`, so these tests
+`importorskip` unless it is installed separately.
 
 **Related, same reporting run:** the first-failure prompt added in
 `10e3771` works correctly — APA opened with `queued: 2` and asked through

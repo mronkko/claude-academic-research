@@ -146,34 +146,20 @@ class InformsHandler(PublisherHandler):
                             continue
 
             if dl is None:
-                # Diagnostic: save whatever the page currently shows.
-                diag_dir = Path(cache_dir)
-                diag_dir.mkdir(parents=True, exist_ok=True)
-                diag_path = diag_dir / (
-                    f"informs_nodownload_{doi.replace('/', '_')}.html"
-                )
-                try:
-                    html = await page.content()
-                    diag_path.write_text(html, encoding="utf-8")
-                    print(
-                        f"    saved current page HTML → {diag_path}",
-                        flush=True,
-                    )
-                except Exception:
-                    pass
+                # `report_failure` captures the page (URL, title,
+                # screenshot, HTML) into <cache_dir>/diagnostics/ on the
+                # way out, so this no longer dumps its own HTML file.
                 raise RuntimeError(
-                    f"Neither the 'Download PDF' click nor URL rewrite "
-                    f"produced a download. See {diag_path} — usually "
-                    f"means no access from the current session."
+                    "Neither the 'Download PDF' click nor URL rewrite "
+                    "produced a download — usually means no access from "
+                    "the current session"
                 )
             out.parent.mkdir(parents=True, exist_ok=True)
             await dl.save_as(str(out))
         except Exception as e:
-            counter.failed += 1
-            print(
-                f"  {progress_tag(counter, total, t_start)} "
-                f"ERROR: {str(e)[:100]}",
-                flush=True,
+            await self.report_failure(
+                e, counter=counter, total=total, t_start=t_start,
+                page=page, cache_dir=cache_dir, doi=doi,
             )
             return None
 

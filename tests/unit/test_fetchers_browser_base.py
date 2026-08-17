@@ -337,6 +337,97 @@ def test_request_handler_returns_none_on_non_pdf(tmp_path: Path) -> None:
     assert counter.failed == 1
 
 
+# ---------------------------------------------------------------------------
+# Failure diagnostics — shared by every page-driven handler
+# ---------------------------------------------------------------------------
+
+
+class _DeadPage:
+    """Page that never fires a download, as a blocked publisher looks."""
+
+    def __init__(self, url: str = "https://example.com/paywall") -> None:
+        self.url = url
+
+    async def goto(self, url, wait_until="", timeout=0):
+        del url, wait_until, timeout
+
+    def expect_download(self, timeout=0):
+        del timeout
+        page = self
+
+        class _Info:
+            @property
+            def value(self):
+                async def _fail():
+                    raise TimeoutError("no download")
+                return _fail()
+
+        class _CM:
+            async def __aenter__(self):
+                return _Info()
+
+            async def __aexit__(self, *exc):
+                return False
+
+        del page
+        return _CM()
+
+    async def title(self):
+        return "Access denied"
+
+    async def content(self):
+        return "<html>paywall</html>"
+
+    async def screenshot(self, path):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_bytes(b"\x89PNG\r\n\x1a\n")
+
+
+class _NavHandler(PageNavigationHandler):
+    name = "_nav"
+    doi_prefixes = ("10.9998/",)
+    url_template = "https://example.com/{doi}.pdf"
+
+
+def test_page_navigation_handler_writes_diagnostics_on_failure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The APA bug was undiagnosable because nothing recorded where the
+    browser was. Every page-driven handler now records it, so the wiring
+    must not quietly come loose here either."""
+    counter = Counter()
+    result = asyncio.run(_NavHandler().download(
+        page=_DeadPage(), ctx=None, item={"doi": "10.9998/x", "title": "T"},
+        cache_dir=tmp_path, counter=counter, total=1, t_start=time.monotonic(),
+    ))
+
+    assert result is None
+    assert counter.failed == 1
+    meta = (tmp_path / "diagnostics" / "_nav_10.9998_x.txt").read_text()
+    assert "https://example.com/paywall" in meta
+    assert "Access denied" in meta
+    assert (tmp_path / "diagnostics" / "_nav_10.9998_x.png").exists()
+    assert (tmp_path / "diagnostics" / "_nav_10.9998_x.html").exists()
+    assert "at https://example.com/paywall" in capsys.readouterr().out
+
+
+def test_report_failure_without_a_page_still_counts_and_prints(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Request-mode handlers have no meaningful page state; they must be
+    able to reuse the counting/formatting without a misleading
+    screenshot of whatever the shared page happens to show."""
+    counter = Counter()
+    asyncio.run(_NavHandler().report_failure(
+        RuntimeError("HTTP 403"), counter=counter, total=2,
+        t_start=time.monotonic(),
+    ))
+    assert counter.failed == 1
+    out = capsys.readouterr().out
+    assert "HTTP 403" in out
+    assert "diagnostics:" not in out
+
+
 def test_request_handler_uses_cache_on_second_call(tmp_path: Path) -> None:
     """If the PDF is already cached, download() short-circuits without
     hitting the network. Prevents a rate-limited re-run from being

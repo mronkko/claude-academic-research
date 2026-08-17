@@ -95,6 +95,25 @@ KNOWN_DOIS: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
+# APA PsycNET regression corpus.
+#
+# Both failed 2-of-2 in a live 0.11.0 run with `Download button not
+# found` while the operator downloaded each of them by hand from the
+# same Chromium profile — i.e. reachable, licensed, and still broken.
+# The generic one-DOI-per-handler smoke test could not have caught that,
+# so these two are asserted separately by
+# `test_apa_regression_dois_download`.
+# ---------------------------------------------------------------------------
+
+APA_REGRESSION_DOIS: dict[str, str] = {
+    # J. Applied Psychology 2015, record 2015-01016-001
+    "10.1037/apl0000007": "Sinking slowly: Diversity in propensity to trust",
+    # J. Applied Psychology 2012, record 2011-19052-001
+    "10.1037/a0025231": "Bridging team faultlines by combining task role assignment",
+}
+
+
+# ---------------------------------------------------------------------------
 # Config helpers
 # ---------------------------------------------------------------------------
 
