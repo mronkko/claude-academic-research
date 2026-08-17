@@ -24,10 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Open Access API covers only OA content, and the TDM API returns
   full-text **XML** (its official client has `save_xml()` and no PDF
   method) behind a TDM agreement. So the fix is a real browser, where the
-  JS runs and the clearance cookie is issued. `SpringerHandler` is a
-  25-line `RequestHandler` because the PDF URL is derivable from the DOI
-  — no page scraping — and `ctx.request` shares the browser context's
-  cookie jar, so one interactive solve clears the batch.
+  JS runs and the challenge clears.
+
+  `SpringerHandler` is a `PageNavigationHandler`. It was written as a
+  `RequestHandler` first, on the theory that Playwright's request client
+  inherits the browser context's cookies the way Sage and Emerald do for
+  Cloudflare. Measured, and false: with the article page fully rendered
+  and the PDF reachable by hand, `ctx.request.get()` still returned the
+  3038-byte challenge. Imperva binds clearance to more than the cookie,
+  so navigation plus a download event is the only route. Confirmed
+  end-to-end afterwards — a 13-page, 982 KB *Journal of Business Ethics*
+  PDF paginated 565–577, i.e. the version of record.
 
   `RequestHandler`'s failure diagnostics learned to name this: a 3038-byte
   Imperva page used to be reported as the useless `other (3038B)`, which

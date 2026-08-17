@@ -10,18 +10,31 @@ time. The challenge is served *before* entitlement is evaluated, so
 being on the VPN makes no difference, and Crossref's TDM record points
 at the same URL and so fails identically.
 
-A real browser runs the JavaScript, gets the clearance cookie, and the
-institutional IP entitlement then serves the PDF — which is what this
-handler is for. `RequestHandler` fetches through `ctx.request`, which
-shares the browser context's cookie jar, so one interactive solve
-clears the whole batch. That is the same arrangement Sage and Emerald
-use for Cloudflare.
+A real browser runs the JavaScript and clears the challenge — verified
+live: the article page rendered with the PDF reachable and no human
+action needed at all.
 
-The PDF URL is derivable from the DOI, so no page scraping is needed and
-this stays a `url_template` handler. If a future Imperva change binds
-clearance to more than the cookie (TLS fingerprint, a JS-set header),
-switch the base class to `PageNavigationHandler` — a real `page.goto`
-plus download event — rather than trying to defeat the challenge here.
+**But `ctx.request` does not inherit that clearance.** This handler was
+first written as a `RequestHandler`, on the theory that Playwright's
+request client shares the browser context's cookie jar and so would
+inherit the cookie, exactly as Sage and Emerald do for Cloudflare. Tried
+live on 2026-08-17: the page was clear, and `ctx.request.get()` still
+came back HTTP 200 with the 3038-byte `Client Challenge` body. So
+Imperva binds clearance to more than the cookie, and `PageNavigationHandler`
+— a real `page.goto` plus download event — is the only route that works.
+That base class exists for precisely this, per its own docstring:
+publishers whose bot wall rejects `ctx.request` even with valid cookies
+(Taylor & Francis, Wiley, AoM). Do not "optimise" this back to request
+mode; it has been measured.
+
+Downloads work because the bundled Chromium profile sets
+`plugins.always_open_pdf_externally`, so navigating to a PDF URL fires a
+download event instead of opening the built-in viewer.
+
+`setup_url_template` still points at the article page rather than the
+PDF: during setup there is no `expect_download` in flight, so navigating
+straight to the PDF would fire an auto-download that consumes the session
+and leave the user staring at about:blank. Same reasoning as Sage's.
 
 DOI prefixes are imported from the HTTP source rather than retyped, so
 the two cannot drift apart on which DOIs count as Springer.
@@ -31,10 +44,10 @@ from __future__ import annotations
 
 from fetchers.springer import _SPRINGER_PREFIXES
 
-from .base import RequestHandler
+from .base import PageNavigationHandler
 
 
-class SpringerHandler(RequestHandler):
+class SpringerHandler(PageNavigationHandler):
     name = "springer"
     display_name = "Springer Nature"
     doi_prefixes = _SPRINGER_PREFIXES
@@ -45,7 +58,7 @@ class SpringerHandler(RequestHandler):
     # reason Sage points its setup at the article page.
     setup_url_template = "https://link.springer.com/article/{doi}"
     direct_access_domains = ("link.springer.com", "springer.com")
-    # Imperva rate-limits aggressively once it is watching a session.
-    # Start conservative; raise only with evidence from a real run.
+    # Page-navigation mode serialises through the single page regardless,
+    # and Imperva rate-limits aggressively once it is watching a session.
     concurrency = 1
     delay_s = 1.5
