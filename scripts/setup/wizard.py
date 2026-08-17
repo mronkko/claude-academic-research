@@ -1434,6 +1434,72 @@ def _offer_no_access_editor(
 
 
 # ---------------------------------------------------------------------------
+# [library] direct_access editor.
+#
+# The counterpart to `no_access`, and the one question about access the
+# user *can* reliably answer. `no_access` above deliberately does not ask
+# "can you reach publisher X?", on the grounds that access is normally
+# library-mediated and invisible to the user. That reasoning holds for
+# the library's own entitlements — but not for the case this key exists
+# for, which is access the library does not mediate at all: a society
+# membership, or a login at a second institution.
+#
+# It became consequential when Pass 1 learned to divert on Case 1b (see
+# `enrich_pdfs.classify_direct_route`). Before that, a publisher the
+# resolver did not list was tried anyway, so private access needed no
+# declaration; now it is skipped by default and this is how the user
+# says otherwise.
+# ---------------------------------------------------------------------------
+
+
+def _offer_direct_access_editor(
+    interactive: bool,
+    existing: dict,
+) -> list[str]:
+    """Return the updated `[library] direct_access` list."""
+    current_raw = (existing.get("library", {}) or {}).get("direct_access", [])
+    if isinstance(current_raw, list):
+        current = [str(s).strip() for s in current_raw if s]
+    elif isinstance(current_raw, str):
+        current = [s.strip() for s in current_raw.split(",") if s.strip()]
+    else:
+        current = []
+
+    if not interactive:
+        return current
+
+    print(
+        "\n  Publishers you can reach by means your link resolver cannot see\n"
+        "  (a society membership, a login at another institution):"
+    )
+    if current:
+        for i, name in enumerate(current, 1):
+            print(f"    {i}. {name}")
+        print(
+            "  Enter handler names to set the full list, '-' to clear it,\n"
+            "  or press Enter to keep it as is."
+        )
+    else:
+        print("    (none)")
+        print(
+            "  Without this, a publisher your resolver lists no route for is\n"
+            "  skipped rather than opened — which is right unless you have\n"
+            "  your own access. Handler names: aaa, aom, apa, emerald,\n"
+            "  informs, oup, sage, springer, tandf, wiley.\n"
+            "  Enter names separated by spaces, or press Enter to skip."
+        )
+    raw = input("    > ").strip()
+    if not raw:
+        return current
+    if raw == "-":
+        print("    Cleared.")
+        return []
+    chosen = sorted({tok.strip().lower() for tok in raw.replace(",", " ").split() if tok.strip()})
+    print(f"    direct_access = {', '.join(chosen)}")
+    return chosen
+
+
+# ---------------------------------------------------------------------------
 # LLM provider selection.
 #
 # Asked before any key question, because the answer decides which key
@@ -2701,6 +2767,10 @@ def main() -> int:
     updated_no_access = _offer_no_access_editor(interactive, existing_cfg)
     if updated_no_access:
         values.setdefault("library", {})["no_access"] = updated_no_access
+
+    updated_direct_access = _offer_direct_access_editor(interactive, existing_cfg)
+    if updated_direct_access:
+        values.setdefault("library", {})["direct_access"] = updated_direct_access
 
     _write_config(values)
     allow_added, deny_added = _patch_settings(interactive=interactive)

@@ -307,6 +307,97 @@ def _triage_context(doi: str, cache_dir: str) -> tuple[str, str]:
     return publisher, ""
 
 
+def _pass3_target(item: dict, resolver_cfg, *, ignore_coverage: bool = False):
+    """Choose the Pass-3 full-text target for one item.
+
+    Returns `(url, query_ok, chosen_target)`. Extracted so the queue
+    preview and Pass 3 itself cannot disagree about where an item is
+    headed — they used to, and the preview was the one users read: it
+    reported "Zotero Connector (upfront): 571 papers", implying 571
+    manual saves needing Zotero desktop and a human, when two thirds of
+    them resolve to EBSCOhost and are handled unattended by Pass 4a.
+
+    Fail-open semantics are the caller's to apply, and are unchanged:
+    `query_ok=False` means "could not ask", never "no access".
+    """
+    if resolver_cfg is None:
+        return None, False, None
+    if ignore_coverage:
+        return None, True, None
+    # Imported here rather than at module scope, matching how every
+    # other resolver symbol in this file is reached: the browser/resolver
+    # stack is heavy and most entry points never touch it.
+    from fetchers.library_resolver import lookup_fulltext_target
+
+    return lookup_fulltext_target(
+        item["doi"], resolver_cfg,
+        in_range_only=True,
+        issn=item.get("issn"), pub_date=item.get("pub_date"),
+        volume=item.get("volume"),
+    )
+
+
+#: Verdicts from `classify_direct_route`, mapped to whether the
+#: publisher's own browser handler should be opened for the item.
+DIRECT_ROUTE_CASES: dict[str, bool] = {
+    "3-in-coverage": True,       # resolver: this platform holds this year
+    "2-out-of-coverage": False,  # resolver: right platform, wrong year
+    "1b-no-entitlement": False,  # resolver answered; no route via this platform
+    "1a-unknown": True,          # resolver named nothing at all — fail open
+}
+
+
+def classify_direct_route(
+    dual,
+    domains: tuple[str, ...],
+    resolver_cfg,
+    *,
+    pub_date: str | None = None,
+    handler_name: str = "",
+    direct_access: frozenset[str] | set[str] = frozenset(),
+) -> str:
+    """Should the publisher's own handler be opened? Returns a
+    `DIRECT_ROUTE_CASES` key.
+
+    The distinction that matters is between the two Case-1 outcomes,
+    which used to be a single branch commented "try direct anyway":
+
+    - **1a** — the resolver named *nothing*: unset, unreachable,
+      unparseable, or simply a journal it does not know. That is silence,
+      and silence is not evidence of missing access, so fail open. A
+      failed attempt is a real answer; a skipped one is not.
+    - **1b** — the resolver named one or more licensed routes and none of
+      them is this publisher's platform. That is evidence, and opening
+      the publisher can only fail.
+
+    Collapsing 1b into 1a is expensive. On one 655-item corpus it queued
+    60 items for a direct attempt at APA, Academy of Management, Emerald
+    and AAA — none of them licensed by the institution, AoM in particular
+    selling member access rather than institutional — each behind its own
+    Cloudflare/SSO prompt, while the resolver was already naming
+    EBSCOhost for every one of them.
+
+    `direct_access` names publishers the user reaches by other means (a
+    society membership, a second institution's login). It suppresses 1b,
+    never Case 2: 1b is a claim about *entitlement*, which a private
+    credential contradicts, whereas Case 2 is a claim about a platform's
+    *holdings*, which no credential changes.
+    """
+    from fetchers.library_resolver import targets_match_domains
+
+    if not domains:
+        return "1a-unknown"
+    if targets_match_domains(
+        dual.in_range, domains, resolver_cfg, pub_date=pub_date,
+    ):
+        return "3-in-coverage"
+    if targets_match_domains(dual.any_range, domains, resolver_cfg):
+        return "2-out-of-coverage"
+    if dual.any_range and handler_name not in direct_access:
+        return "1b-no-entitlement"
+    return "1a-unknown"
+
+
 def _year_from_zotero_date(date_str: str) -> str | None:
     """Extract a 4-digit year from Zotero's free-text `date` field
     ("2024", "2024-05-15", "May 2024", ...) for the Alma ISSN-fallback
@@ -1376,8 +1467,6 @@ def _run_browser_in_process(
     from fetchers.library_resolver import (
         load_from_config,
         lookup_dual,
-        lookup_fulltext_target,
-        targets_match_domains,
     )
 
     # Plain hostname test, used on URLs we synthesize ourselves from a
@@ -1410,13 +1499,29 @@ def _run_browser_in_process(
     # a TOML list, so we read via load_config() directly — get() only
     # returns strings.
     from core.config_loader import load_config
-    cfg_no_access = load_config().get("library", {}).get("no_access", [])
-    if isinstance(cfg_no_access, list):
-        no_access = {str(s).strip() for s in cfg_no_access if s}
-    elif isinstance(cfg_no_access, str):
-        no_access = {s.strip() for s in cfg_no_access.split(",") if s.strip()}
-    else:
-        no_access = set()
+
+    def _handler_set(key: str) -> set[str]:
+        raw = load_config().get("library", {}).get(key, [])
+        if isinstance(raw, list):
+            return {str(s).strip() for s in raw if s}
+        if isinstance(raw, str):
+            return {s.strip() for s in raw.split(",") if s.strip()}
+        return set()
+
+    no_access = _handler_set("no_access")
+    # [library] direct_access → the opposite declaration: "I can reach
+    # this publisher by means the link resolver cannot see." A personal
+    # society membership, or a second institution's SSO — this user
+    # reaches APA PsycNET through JYU while the configured resolver is
+    # Aalto's, so Aalto's Alma legitimately lists no APA route and the
+    # Case 1b divert below would be wrong for exactly this publisher.
+    #
+    # It suppresses Case 1b only, never Case 2. Case 1b is a claim about
+    # *entitlement* ("the library has no route via this platform"), which
+    # private access does contradict. Case 2 is a claim about the
+    # platform's *holdings* ("that platform's run starts in 1996"), which
+    # no credential changes.
+    direct_access = _handler_set("direct_access")
 
     # Pass 2 API retry: the prefix-filtering API sources (Wiley TDM,
     # Elsevier, Springer). When Crossref resolution reveals a DOI
@@ -1442,6 +1547,15 @@ def _run_browser_in_process(
     items_by_pub: dict[str, list[dict]] = defaultdict(list)
     connector_upfront: list[dict] = []
     no_handler_count = 0
+    # Read once here rather than at Pass 3, because the queue preview
+    # below now models the same routing and the two must agree.
+    ignore_coverage = getattr(args, "ignore_library_coverage", False)
+    # Case 1b diversions, per publisher, for the queue summary. Worth
+    # naming rather than counting silently: the whole point is that the
+    # user is *not* being asked to solve a challenge for these, and the
+    # one case where that is wrong (private access the resolver cannot
+    # see) is fixed by a config key they need to be told about.
+    no_entitlement: dict[str, int] = {}
 
     if resolver_cfg is not None and not connector_only:
         print(
@@ -1557,43 +1671,40 @@ def _run_browser_in_process(
             connector_upfront.append(entry)
             continue
 
-        # Classify Case 1 / 2 / 3 via the resolver's coverage queries.
+        # Classify Case 1a / 1b / 2 / 3 via the resolver's coverage
+        # queries. Case 2 works on both dialects by two mechanisms: SFX
+        # answers it in the query (`sfx.ignore_date_threshold`), so
+        # in_range and any_range are genuinely different requests, while
+        # Alma cannot filter by date at all but reports per-package
+        # coverage — so passing `pub_date` asks "does this platform hold
+        # *this year*", and diffing against the unfiltered answer
+        # reconstructs the same verdict from different evidence.
+        #
+        # This is what stops a pre-1997 article reaching the Springer
+        # handler: Alma lists SpringerLink for the journal, but the
+        # holding starts 1997, so in_range is False while in_any is True
+        # — Case 2, divert, and no 30-second paywall timeout. Three items
+        # in one 97-item run hit exactly that before this existed.
+        #
+        # See `classify_direct_route` for why Case 1 is split in two.
         if resolver_cfg is not None:
             dual = lookup_dual(
                 doi, resolver_cfg,
                 issn=entry["issn"], pub_date=entry["pub_date"],
                 volume=entry["volume"],
             )
-            domains = direct.direct_access_domains
-            # Case 2 works on both dialects, by two different mechanisms.
-            # SFX answers it in the query (`sfx.ignore_date_threshold`),
-            # so in_range and any_range are genuinely different requests.
-            # Alma cannot filter by date at all, but it reports per-package
-            # coverage — so passing `pub_date` asks "does this platform
-            # hold *this year*", and diffing against the unfiltered answer
-            # reconstructs the same verdict from different evidence.
-            #
-            # This is what stops a pre-1997 article reaching the Springer
-            # handler: Alma lists SpringerLink for the journal, but the
-            # holding starts 1997, so in_range is False while in_any is
-            # True — Case 2, divert to the Connector, and no 30-second
-            # paywall timeout. Three items in one 97-item run hit exactly
-            # that before this existed.
-            if domains:
-                in_range = targets_match_domains(
-                    dual.in_range, domains, resolver_cfg,
-                    pub_date=entry["pub_date"],
-                )
-                in_any = targets_match_domains(
-                    dual.any_range, domains, resolver_cfg,
-                )
-                if in_range:
-                    pass                           # Case 3 — run direct
-                elif in_any:
-                    # Case 2 — skip direct, try Connector via Query B.
-                    connector_upfront.append(entry)
-                    continue
-                # else Case 1 — try direct anyway.
+            case = classify_direct_route(
+                dual, direct.direct_access_domains, resolver_cfg,
+                pub_date=entry["pub_date"],
+                handler_name=direct.name,
+                direct_access=direct_access,
+            )
+            if not DIRECT_ROUTE_CASES[case]:
+                if case == "1b-no-entitlement":
+                    label = direct.display_name or direct.name
+                    no_entitlement[label] = no_entitlement.get(label, 0) + 1
+                connector_upfront.append(entry)
+                continue
 
         items_by_pub[direct.name].append(entry)
 
@@ -1623,10 +1734,78 @@ def _run_browser_in_process(
                 flush=True,
             )
         if connector_upfront:
+            # Resolve where these actually go before calling them all
+            # "Connector". Only in --plan: the lookups are the same ones
+            # Pass 3 makes and they are cached, but on a cold cache they
+            # are slow, and a normal run reaches Pass 4a's own banner
+            # soon enough anyway. --plan exists to answer "what will this
+            # cost me", so paying for the answer there is the trade.
+            if getattr(args, "plan", False) and resolver_cfg is not None:
+                print(
+                    f"    (resolving targets for {len(connector_upfront)} "
+                    f"items to split unattended from manual...)",
+                    flush=True,
+                )
+                unattended = manual = no_route = 0
+                for it in connector_upfront:
+                    tgt, ok, chosen = _pass3_target(
+                        it, resolver_cfg, ignore_coverage=ignore_coverage,
+                    )
+                    if tgt and is_ebsco_target(chosen):
+                        unattended += 1
+                    elif tgt or not ok or ignore_coverage:
+                        manual += 1
+                    else:
+                        no_route += 1
+                if unattended:
+                    print(
+                        f"  • EBSCOhost (resolver-routed): {unattended} "
+                        f"paper{'' if unattended == 1 else 's'}"
+                        f"  [no solve, no Zotero desktop]",
+                        flush=True,
+                    )
+                if manual:
+                    print(
+                        f"  • Zotero Connector: {manual} "
+                        f"paper{'' if manual == 1 else 's'}"
+                        f"  [needs Zotero desktop + a human]",
+                        flush=True,
+                    )
+                if no_route:
+                    print(
+                        f"  • No licensed route: {no_route} "
+                        f"paper{'' if no_route == 1 else 's'}"
+                        f"  [ILL candidates — not attempted]",
+                        flush=True,
+                    )
+            else:
+                print(
+                    f"  • Zotero Connector (upfront): "
+                    f"{len(connector_upfront)} "
+                    f"paper{'' if len(connector_upfront) == 1 else 's'}",
+                    flush=True,
+                )
+
+        if no_entitlement:
+            total_nx = sum(no_entitlement.values())
+            detail = ", ".join(
+                f"{name} {n}"
+                for name, n in sorted(
+                    no_entitlement.items(), key=lambda kv: (-kv[1], kv[0])
+                )
+            )
             print(
-                f"  • Zotero Connector (upfront): "
-                f"{len(connector_upfront)} "
-                f"paper{'' if len(connector_upfront) == 1 else 's'}",
+                f"\n  {total_nx} item{'' if total_nx == 1 else 's'} skipped the "
+                f"publisher's own site — the link resolver lists a licensed "
+                f"route for {'it' if total_nx == 1 else 'them'}, but not via "
+                f"that publisher ({detail}).",
+                flush=True,
+            )
+            print(
+                "  If you can reach one of these another way (society "
+                "membership, a second institution's login), add it to "
+                "`[library] direct_access` in config.toml and it will be "
+                "tried directly again.",
                 flush=True,
             )
 
@@ -1694,35 +1873,28 @@ def _run_browser_in_process(
         [(it, "upfront") for it in connector_upfront]
         + [(it, "retry") for it in connector_retry]
     )
-    ignore_coverage = getattr(args, "ignore_library_coverage", False)
     failed_open = 0
     for it, origin in origins:
-        target, query_ok, chosen = None, True, None
-        if resolver_cfg is not None and not ignore_coverage:
-            # Query B only (date-filtered). When Query B is empty,
-            # we do NOT fall back to Query A. The cache data against
-            # JYU's SFX (see resolver_cache.json) shows Query A commonly
-            # returns targets the user genuinely can't access — the
-            # ignore-date list is "the resolver knows the journal via
-            # these providers", not "you can download this DOI now".
-            # Using it as a fallback wastes user time on paywalls.
-            #
-            # Ranking comes from `resolver_cfg.priority`, which honours
-            # `[library] platform_priority`; passing the module default
-            # here would silently ignore the user's configured order.
-            target, query_ok, chosen = lookup_fulltext_target(
-                it["doi"], resolver_cfg,
-                in_range_only=True,
-                issn=it.get("issn"), pub_date=it.get("pub_date"),
-                volume=it.get("volume"),
-            )
-        elif resolver_cfg is None:
-            # No `[library] openurl_base` configured. There is nothing
-            # to gate on, so gating on it would drop every upfront item
-            # without a single attempt — which is precisely what used to
-            # happen: an unconfigured resolver made the entire Connector
-            # fallback unreachable while logging "no library coverage".
-            query_ok = False
+        # Query B only (date-filtered). When Query B is empty, we do NOT
+        # fall back to Query A. The cache data against JYU's SFX (see
+        # resolver_cache.json) shows Query A commonly returns targets the
+        # user genuinely can't access — the ignore-date list is "the
+        # resolver knows the journal via these providers", not "you can
+        # download this DOI now". Using it as a fallback wastes user time
+        # on paywalls.
+        #
+        # Ranking comes from `resolver_cfg.priority`, which honours
+        # `[library] platform_priority`.
+        #
+        # With no `[library] openurl_base` configured `query_ok` is
+        # False, which fails open below. Gating on an unconfigured
+        # resolver would drop every upfront item without a single
+        # attempt — which is precisely what used to happen: it made the
+        # entire Connector fallback unreachable while logging "no
+        # library coverage".
+        target, query_ok, chosen = _pass3_target(
+            it, resolver_cfg, ignore_coverage=ignore_coverage,
+        )
 
         if target or not query_ok or ignore_coverage:
             # Fail open. With no resolver answer, hand the Connector the
@@ -2340,7 +2512,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Don't let the library link-resolver pre-flight gate the "
              "Connector pass. Use when the resolver reports no coverage "
              "for journals your library actually subscribes to (it keys on "
-             "DOI and misses aggregator-hosted holdings).",
+             "DOI and misses aggregator-hosted holdings). To exempt a "
+             "single publisher rather than disabling the gate wholesale — "
+             "one you reach via a society membership or a second "
+             "institution's login — list its handler name in "
+             "[library] direct_access in config.toml.",
     )
     parser.add_argument(
         "--no-check-text", action="store_true",

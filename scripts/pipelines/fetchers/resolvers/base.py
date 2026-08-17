@@ -170,6 +170,27 @@ class Platform:
 # spells one platform several ways across packages ("EBSCOhost Business
 # Source Ultimate", "EBSCOhost Academic Search Premier").
 #
+# **This table is also the identity map, not only the ranking.** On Alma
+# every `resolution_url` is the same redirector, so `matches_domains`
+# cannot use the host and falls back to these `names` — which means a
+# platform absent from this tuple is *invisible* to the Case 1/2/3
+# coverage guard, and its handler can only ever be Case 1. Five browser
+# handlers were missing entries (informs, apa, aom, emerald, aaa), so on
+# an Alma library the guard could never fire for half the registry.
+# **Every handler with `direct_access_domains` needs an entry here** —
+# `test_every_handler_has_a_platform_entry` enforces it.
+#
+# The five additions slot into the publisher-direct block above, since
+# that is what they are — and so JSTOR's cover page and ProQuest's
+# occasional scan stay the last resorts the rationale above says they
+# are. They are here to be *recognised*; on a library that licenses none
+# of them the ranking never comes up.
+#
+# Names are chosen to be unambiguous under substring matching. Note
+# `apa` uses "psycnet" rather than "psycarticles": EBSCOhost resells
+# APA PsycArticles, and matching that would map an EBSCOhost target onto
+# the APA handler, which drives psycnet.apa.org and cannot open it.
+#
 # Users can override via `[library] platform_priority` in config.toml,
 # which takes a comma-separated list of these `key` values.
 PLATFORM_PRIORITY: tuple[Platform, ...] = (
@@ -180,6 +201,11 @@ PLATFORM_PRIORITY: tuple[Platform, ...] = (
     Platform("sage", ("journals.sagepub.com", "sagepub.com"), ("sage",)),
     Platform("tandf", ("tandfonline.com",), ("taylor & francis", "taylor and francis")),
     Platform("oup", ("academic.oup.com", "oup.com"), ("oxford university press",)),
+    Platform("informs", ("pubsonline.informs.org", "informs.org"), ("informs",)),
+    Platform("apa", ("psycnet.apa.org", "apa.org"), ("psycnet",)),
+    Platform("aom", ("journals.aom.org", "aom.org"), ("academy of management",)),
+    Platform("emerald", ("emerald.com",), ("emerald",)),
+    Platform("aaa", ("aaahq.org",), ("american accounting association",)),
     Platform("jstor", ("jstor.org",), ("jstor",)),
     Platform("proquest", ("proquest.com",), ("proquest",)),
 )

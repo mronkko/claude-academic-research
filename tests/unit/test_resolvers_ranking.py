@@ -176,6 +176,76 @@ def test_a_nameless_alma_target_falls_back_to_host_only() -> None:
 
 
 # ---------------------------------------------------------------------------
+# PLATFORM_PRIORITY is the identity map too, not only the ranking.
+#
+# On Alma there is no publisher host to match, so a platform absent from
+# this table is invisible to `matches_domains` — and a handler whose
+# platform is invisible can only ever be Case 1 ("try direct anyway"),
+# whatever the resolver actually said. Five handlers were missing
+# entries, covering 61% of one real 655-item corpus.
+# ---------------------------------------------------------------------------
+
+
+def test_every_handler_has_a_platform_entry() -> None:
+    """Without one the Case 1/2/3 coverage guard is dead for that
+    handler — silently, and only on Alma."""
+    from fetchers.browser import all_handlers
+
+    known = {d.lower() for p in PLATFORM_PRIORITY for d in p.domains}
+    missing = {
+        h.name: h.direct_access_domains
+        for h in all_handlers()
+        if h.direct_access_domains
+        and not any(d.lower() in known for d in h.direct_access_domains)
+    }
+    assert not missing, f"handlers with no PLATFORM_PRIORITY entry: {missing}"
+
+
+def test_the_added_platforms_match_their_alma_naming() -> None:
+    for package, interface, domain in (
+        ("INFORMS PubsOnline", "INFORMS", "informs.org"),
+        ("APA PsycNET", "PsycNET", "psycnet.apa.org"),
+        ("Academy of Management Journals", "Academy of Management", "aom.org"),
+        ("Emerald Premier", "Emerald Insight", "emerald.com"),
+        ("AAA Digital Library", "American Accounting Association", "aaahq.org"),
+    ):
+        assert ALMA.matches_domains(
+            _alma(package, interface), (domain,)
+        ) is True, package
+
+
+def test_added_names_do_not_collide_with_aggregator_packages() -> None:
+    """Substring matching makes near-misses dangerous, and two are real.
+
+    "ABI/INFORM Collection" is ProQuest, not INFORMS. And EBSCOhost
+    resells APA PsycArticles — matching that onto the `apa` handler would
+    send an EBSCOhost-licensed item to psycnet.apa.org, which this
+    library cannot open at all. Hence `apa` is keyed on "psycnet", never
+    "psycarticles".
+    """
+    for package, interface, domain in (
+        ("ABI/INFORM Collection", "ProQuest", "informs.org"),
+        ("ABI/INFORM Global", "ProQuest", "informs.org"),
+        ("EBSCOhost APA PsycArticles", "EBSCOhost", "psycnet.apa.org"),
+        ("EBSCOhost Business Source Ultimate", "EBSCOhost", "aom.org"),
+    ):
+        assert ALMA.matches_domains(
+            _alma(package, interface), (domain,)
+        ) is False, f"{package} wrongly matched {domain}"
+
+
+def test_the_additions_join_the_publisher_block_not_the_end() -> None:
+    """They are publisher-direct, so by this table's own rationale they
+    outrank JSTOR's cover page and ProQuest's occasional scan — which
+    must stay the last resorts."""
+    keys = [p.key for p in PLATFORM_PRIORITY]
+    assert keys[0] == "ebscohost"
+    assert keys[-2:] == ["jstor", "proquest"]
+    for added in ("informs", "apa", "aom", "emerald", "aaa"):
+        assert keys.index("oup") < keys.index(added) < keys.index("jstor"), added
+
+
+# ---------------------------------------------------------------------------
 # platform_priority_from_keys — `[library] platform_priority`
 # ---------------------------------------------------------------------------
 
