@@ -202,9 +202,57 @@ class LaneCoordinator:
         #: mid-download and un-attempted items stay unlogged — which is
         #: what makes them re-runnable.
         self.outage: BaseException | None = None
+        #: Released once one lane has finished an item, so the rest do
+        #: not race it through session establishment. See `await_warm`.
+        self._warm = asyncio.Event()
+        #: Earliest time the next request may leave, shared by all lanes.
+        self._next_request_at = 0.0
+        self._pace_lock = asyncio.Lock()
 
     async def wait_until_open(self) -> None:
         await self._gate.wait()
+
+    async def pace(self, delay_s: float) -> None:
+        """Space requests by `delay_s` across *all* lanes, not per lane.
+
+        Each lane sleeping `delay_s` before its own download spaces that
+        lane and nothing else: N lanes started together sleep in
+        lockstep and then fire simultaneously, which is precisely the
+        burst a rate limiter watches for. A live 4-lane EBSCO run took
+        HTTP 429 from the institutional proxy on the extra tabs.
+
+        Each caller reserves its slot under the lock and sleeps outside
+        it, so lanes queue up at `delay_s` intervals instead of all
+        measuring the same "now" and picking the same moment.
+        """
+        if delay_s <= 0:
+            return
+        loop = asyncio.get_running_loop()
+        async with self._pace_lock:
+            now = loop.time()
+            wait = max(0.0, self._next_request_at - now)
+            self._next_request_at = max(now, self._next_request_at) + delay_s
+        if wait:
+            await asyncio.sleep(wait)
+
+    async def await_warm(self) -> None:
+        """Hold a lane until another has completed one item.
+
+        Pacing spaces requests but cannot fix what the first requests
+        collide *over*. Against EBSCO through an institutional proxy,
+        four cold lanes each began their own OIDC handshake and stopped
+        at `…/oidc/callback` — the session was being established four
+        times at once. The item that ran after those settled succeeded.
+
+        So one lane goes first and the rest join a warm session. The
+        gate opens on the first *completed* item, success or failure:
+        the point is that the handshake is over, and a lane that failed
+        for some unrelated reason must not strand the others.
+        """
+        await self._warm.wait()
+
+    def mark_warm(self) -> None:
+        self._warm.set()
 
     def note_transport_failure(self) -> bool:
         """True when this run of transport errors means we are offline."""
@@ -1034,7 +1082,11 @@ async def _drive_handler(
             return item
 
         async def _process(lane_handler, lane_page, item: dict) -> None:
-            if lane_handler.delay_s > 0:
+            if lanes > 1:
+                # Spaced across lanes rather than within one, or four
+                # lanes sleep in lockstep and fire together.
+                await coord.pace(lane_handler.delay_s)
+            elif lane_handler.delay_s > 0:
                 await asyncio.sleep(lane_handler.delay_s)
             result = await lane_handler.download(
                 lane_page, ctx, item, args.cache_dir,
@@ -1172,12 +1224,22 @@ async def _drive_handler(
                 print(f"  [{doi}]", end=" ", flush=True)
                 _attach_and_log(zot, log_writer, **attach)
 
-        async def _lane(lane_handler, lane_page) -> None:
+        async def _lane(lane_handler, lane_page, index: int) -> None:
             """One tab, claiming items until the queue or the run ends."""
+            if index > 0:
+                # Let lane 0 finish one item first. Four cold lanes each
+                # started their own OIDC handshake against the
+                # institutional proxy and stopped at `…/oidc/callback`;
+                # the item that ran once those settled succeeded.
+                await coord.await_warm()
+            first = True
             while True:
                 await coord.wait_until_open()
                 item = _claim()
                 if item is None:
+                    if index == 0:
+                        # Nothing to warm on — do not strand the others.
+                        coord.mark_warm()
                     return
                 if coord.skip_remaining:
                     # User picked "skip remaining" for this publisher.
@@ -1193,6 +1255,12 @@ async def _drive_handler(
                     # next run picks them up.
                     coord.outage = e
                     return
+                finally:
+                    if index == 0 and first:
+                        # Success or failure — the handshake is over,
+                        # which is the only thing the others waited for.
+                        first = False
+                        coord.mark_warm()
 
         # Lane 0 reuses the page `setup()` was solved on. The extra lanes
         # are new tabs in the *same* context, so they inherit its cookies
@@ -1207,8 +1275,9 @@ async def _drive_handler(
             lane_handlers.append(copy.copy(handler))
         try:
             await asyncio.gather(*(
-                _lane(h, pg)
-                for h, pg in zip(lane_handlers, lane_pages, strict=True)
+                _lane(h, pg, i)
+                for i, (h, pg) in enumerate(
+                    zip(lane_handlers, lane_pages, strict=True))
             ))
         finally:
             for extra in lane_pages[1:]:
@@ -1747,6 +1816,7 @@ def _run_browser_in_process(
     connector_only: bool = False,
     session=None,
     config=None,
+    log_fh=None,
 ) -> int:
     """Classify, drive direct handlers, then drive the Connector fallback.
 
@@ -2346,12 +2416,13 @@ def _run_browser_in_process(
             args, run_date,
         ))
 
-    _print_browser_summary(args, [it["key"] for it in to_process])
+    _print_browser_summary(
+        args, [it["key"] for it in to_process], log_fh=log_fh)
     return 0
 
 
 def _print_browser_summary(
-    args: argparse.Namespace, queued_keys: Collection[str],
+    args: argparse.Namespace, queued_keys: Collection[str], *, log_fh=None,
 ) -> None:
     """End-of-run totals for `--sources browser` / `connector`.
 
@@ -2371,7 +2442,17 @@ def _print_browser_summary(
     `missing: 0` — a machine-readable claim of success on a total
     failure, which is the one thing an unattended caller must never be
     told.
+
+    Reading back also means reading a file this run is still writing.
+    The handle is open and buffered, so the rows for the items just
+    attached are not on disk yet — a live 17-item run that attached 5
+    read them back as 0 and reported "Done. 0 of 17". The whole-log
+    count had hidden this too, by being large enough that a few missing
+    rows made no visible difference. Hence the flush.
     """
+    if log_fh is not None:
+        with contextlib.suppress(Exception):
+            log_fh.flush()
     try:
         attached_ever = shared_orchestrators.load_done_keys(
             args.log_csv,
@@ -3152,7 +3233,7 @@ def main() -> int:
             rc = _run_browser_in_process(
                 to_process, zot, log_writer, args, run_date,
                 connector_only=(browser_modes == ["connector"]),
-                session=session, config=config,
+                session=session, config=config, log_fh=log_fh,
             )
         finally:
             log_fh.close()
@@ -3203,7 +3284,7 @@ def main() -> int:
         try:
             rc = _run_browser_in_process(
                 residuals, zot, log_writer, args, run_date,
-                session=session, config=config,
+                session=session, config=config, log_fh=log_fh,
             )
         finally:
             log_fh.close()

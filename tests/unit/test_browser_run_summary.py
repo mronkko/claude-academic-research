@@ -93,3 +93,40 @@ def test_history_alone_never_inflates_the_count(
     # OLD00001..3 are in the log and attached, but were not queued here.
     assert event["queued"] == 1
     assert event["attached"] == 1
+
+
+def test_rows_still_in_the_write_buffer_are_counted(monkeypatch, capsys, tmp_path) -> None:
+    """The summary reads a file this run is still writing.
+
+    A live 17-item run attached 5 and reported "Done. 0 of 17": the
+    handle was open and buffered, so those rows were not yet on disk.
+    The whole-log count had masked it — a few missing rows out of 393
+    change nothing visible.
+    """
+    import csv as _csv
+
+    path = tmp_path / "pdf_attach_log.csv"
+    fh = open(path, "w", newline="", encoding="utf-8")
+    w = _csv.DictWriter(fh, fieldnames=["item_key", "status"])
+    w.writeheader()
+    w.writerow({"item_key": "NEW00001", "status": "attached"})
+    # Deliberately not flushed — this is the live shape.
+
+    events = []
+    from fetchers.browser import interaction
+    monkeypatch.setattr(interaction, "report_progress", events.append)
+
+    class Args:
+        log_csv = str(path)
+
+    try:
+        enrich_pdfs._print_browser_summary(
+            Args(), ["NEW00001", "NEW00002"], log_fh=fh)
+    finally:
+        fh.close()
+
+    assert events[-1]["attached"] == 1, (
+        "the just-attached row was still in the write buffer and got "
+        "counted as a miss"
+    )
+    assert "1 of 2 queued items" in capsys.readouterr().out
