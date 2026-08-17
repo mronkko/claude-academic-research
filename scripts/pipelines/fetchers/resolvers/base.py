@@ -275,6 +275,38 @@ def effective_host(target_url: str) -> str:
     return host
 
 
+#: Host labels belonging to proxies that authenticate the reader by
+#: interactive sign-in rather than by IP range. Measured against this
+#: repo's two configured libraries, not guessed: JYU's routes arrive as
+#: `research-ebsco-com.ezproxy.jyu.fi` and land on a SAML IdP at
+#: `login.jyu.fi` that stalls without a human, while Aalto's OCLC-hosted
+#: `login.<inst>-libproxy.idm.oclc.org` authenticates silently on the
+#: institutional IP range. Both are EZproxy deployments; only one asks.
+#: Matching is label-exact for that reason — a substring test would drag
+#: the OCLC form in with it and re-introduce the prompt on unattended
+#: Aalto runs that `a8b3d8f` removed.
+INTERACTIVE_PROXY_LABELS = ("ezproxy",)
+
+
+def needs_interactive_login(target_url: str) -> bool:
+    """True when reaching this URL passes through a proxy that will ask
+    the reader to sign in.
+
+    Deliberately reads the *raw* hostname rather than `effective_host`,
+    which unwraps `?url=` wrappers and would hide the very proxy being
+    looked for. Both EZproxy shapes are then covered: the wrapper form
+    `ezproxy.jyu.fi/login?url=<real>` and the hostname-rewriting form
+    `research-ebsco-com.ezproxy.jyu.fi`.
+    """
+    if not target_url:
+        return False
+    host = (urlparse(target_url).hostname or "").lower()
+    if not host:
+        return False
+    labels = set(host.split("."))
+    return any(label in labels for label in INTERACTIVE_PROXY_LABELS)
+
+
 def host_matches_domains(target_url: str, domains: tuple[str, ...]) -> bool:
     """True when the URL's effective host ends with any of the given
     domain suffixes. Suffix-match, so "wiley.com" matches

@@ -547,6 +547,9 @@ class PublisherHandler(ABC):
     # from the terminal. A live run silently under-reported this: the
     # user was told to solve Sage and AoM, was never told APA was also
     # queued, and 10 APA items were skipped without a single attempt.
+    #
+    # A *static* answer, which is only right for handlers whose route is
+    # fixed. See `needs_solve_for` for the ones whose is not.
     needs_interactive_solve: bool = True
     # How long `setup()` waits for a Cloudflare challenge to clear on
     # its own before falling back to asking. Covers the two cases where
@@ -604,6 +607,23 @@ class PublisherHandler(ABC):
         """
         tmpl = self.setup_url_template or self.url_template
         return tmpl.format(doi=doi) if tmpl else ""
+
+    def needs_solve_for(self, items: list[dict]) -> bool:
+        """Whether *this* queue needs an interactive solve before lanes open.
+
+        `needs_interactive_solve` answers for the handler; this answers
+        for the work. They differ whenever the route is chosen per item
+        rather than baked into the handler: `EbscoHandler` reaches one
+        library's holdings on institutional IP and another's through an
+        EZproxy that demands SSO, so the same handler needs a human for
+        one queue and not the next.
+
+        Getting it wrong is costly in both directions — a needless
+        prompt stalls an unattended run until the control-file timeout,
+        and a missing one sends every lane into a login page at once —
+        so the decision is made from the queue rather than declared.
+        """
+        return self.needs_interactive_solve
 
     async def setup(self, page: Page, first_doi: str) -> str:
         """Open the first URL and block until the user signals ready.

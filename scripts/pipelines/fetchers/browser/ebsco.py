@@ -54,8 +54,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from urllib.parse import urlparse
 
 from fetchers import _pdf_validate
+from fetchers.resolvers.base import needs_interactive_login
 
 from .base import PublisherHandler, cache_path_for, is_cached, progress_tag
 
@@ -112,6 +114,8 @@ class EbscoHandler(PublisherHandler):
     direct_access_domains = ()
     # No Cloudflare/Imperva interstitial was observed — IP auth is
     # silent — so a run needs no human at the keyboard for this platform.
+    # True of the library this was measured against, and not of every
+    # library: see `needs_solve_for`, which decides per queue.
     needs_interactive_solve = False
     #: The one handler raised above a single lane, because it is the one
     #: with the evidence. Every publisher handler in this package sits
@@ -136,10 +140,64 @@ class EbscoHandler(PublisherHandler):
     #: are entitled to.
     response_timeout_ms = 45000
 
-    def setup_url_for(self, doi: str) -> str:  # pragma: no cover - unused
-        """Unused: this handler is never set up per publisher, because it
-        is entered from a resolver target rather than a DOI."""
-        return f"https://doi.org/{doi}"
+    #: Set by the driver before `setup()` when this queue needs a login.
+    #: Per-instance because each lane copies the handler.
+    pending_solve_url = ""
+
+    def setup_url_for(self, doi: str) -> str:
+        """The URL the solve opens.
+
+        `doi.org/<doi>` is useless here: it lands on the publisher's own
+        site, where there is no institutional login to clear. The login
+        lives on the proxy in front of *this queue's* resolver target,
+        so the driver stashes that target and it is used instead. The
+        DOI form remains the fallback for the case this handler was
+        never routed — where `setup()` is not called anyway.
+        """
+        return self.pending_solve_url or f"https://doi.org/{doi}"
+
+    def solve_url_for(self, items: list[dict]) -> str:
+        """First queued route that goes through a signing-in proxy."""
+        for it in items:
+            url = it.get("resolver_target_url", "")
+            if needs_interactive_login(url):
+                return url
+        return ""
+
+    def needs_solve_for(self, items: list[dict]) -> bool:
+        """A solve is needed when any queued route goes through a proxy
+        that signs the reader in.
+
+        The static `False` above was measured against a single library
+        whose EBSCO route authenticates on institutional IP. Once
+        `4cead93` let a second library into the merged target list, some
+        EBSCO routes started arriving EZproxy-wrapped and landing on a
+        SAML IdP — and because `a8b3d8f` had just made `False` genuinely
+        skip `setup()`, no login ever happened.
+
+        The failure was silent and total: with `--browser-workers 4`,
+        all four lanes opened cold and hit the IdP simultaneously *on
+        the same SAML execution token*, which a human cannot solve —
+        each tab invalidates the others'. 8 of 14 items died there.
+        Serial hit the same wall one item at a time.
+        """
+        return any(
+            needs_interactive_login(it.get("resolver_target_url", ""))
+            for it in items
+        )
+
+    def solve_hosts_for(self, items: list[dict]) -> list[str]:
+        """Proxy hostnames in this queue, for naming them in the prompt.
+
+        With two institutions configured, "sign in" is an ambiguous
+        instruction — only one of the two logins opens any given route.
+        """
+        hosts = {
+            (urlparse(it.get("resolver_target_url", "")).hostname or "").lower()
+            for it in items
+            if needs_interactive_login(it.get("resolver_target_url", ""))
+        }
+        return sorted(h for h in hosts if h)
 
     async def download(self, page, ctx, item, cache_dir, *,
                        counter, total, t_start):

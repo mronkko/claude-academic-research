@@ -890,7 +890,36 @@ async def _drive_handler(
         # EBSCOhost handler (which authenticates silently on
         # institutional IP) still blocked on a setup question, which would
         # stall an unattended run until the control-file timeout.
-        if getattr(handler, "needs_interactive_solve", True):
+        #
+        # Asked of the queue, not of the handler: EBSCO reaches one
+        # library on IP and another through an EZproxy that demands SSO,
+        # so the answer is a property of where these particular items are
+        # routed. Solving here also matters more than it looks — the
+        # solve lands on lane 0's page *before* the extra tabs exist, and
+        # they inherit its cookies. Skip it and every lane opens cold
+        # into the same login page at once, which is unsolvable.
+        needs_solve = (
+            handler.needs_solve_for(items)
+            if hasattr(handler, "needs_solve_for")
+            else getattr(handler, "needs_interactive_solve", True)
+        )
+        if needs_solve:
+            solve_hosts = (
+                handler.solve_hosts_for(items)
+                if hasattr(handler, "solve_hosts_for") else []
+            )
+            if hasattr(handler, "solve_url_for"):
+                # Point `setup()` at the route that actually carries the
+                # login, not at the handler's default landing page.
+                handler.pending_solve_url = handler.solve_url_for(items)
+            if solve_hosts:
+                print(
+                    f"  {display}: {len(solve_hosts)} of this queue's routes "
+                    f"go through a proxy that will ask you to sign in "
+                    f"({', '.join(solve_hosts)}). Solve it once here — the "
+                    f"parallel tabs open afterwards and inherit the session.",
+                    flush=True,
+                )
             setup_result = normalise_setup_result(
                 await handler.setup(page, items[0]["doi"])
             )

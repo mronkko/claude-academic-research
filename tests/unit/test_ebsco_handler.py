@@ -258,11 +258,15 @@ def test_no_solve_handlers_skip_the_setup_prompt() -> None:
     import enrich_pdfs
 
     src = inspect.getsource(enrich_pdfs._drive_handler)
-    assert "needs_interactive_solve" in src, (
+    # `needs_solve_for` is the live gate; `needs_interactive_solve` is
+    # only the fallback it defers to for handlers predating the hook.
+    # Assert on the gate — the old flag name survives inside that
+    # fallback, so matching it alone would pass even with the gate gone.
+    assert "needs_solve_for" in src, (
         "_drive_handler calls setup() unconditionally; a no-solve handler "
         "will block on a prompt nobody needs to answer"
     )
     # The call must be guarded rather than merely mentioned nearby.
-    guard = src.index("needs_interactive_solve")
+    guard = src.index("needs_solve_for")
     call = src.index("handler.setup(")
-    assert guard < call, "the flag is read after setup() is already called"
+    assert guard < call, "the gate is read after setup() is already called"
