@@ -111,8 +111,26 @@ def _open_log(path: str):
 
 
 def _already_done(log_path: str) -> set[str]:
+    """Zotero item keys this log records as already enriched.
+
+    **Keyed on the item, not the DOI.** It used to key on `doi`, which
+    made a successful update permanently suppress every *other* copy of
+    the same article. Libraries built by a systematic-review import
+    routinely hold several: one real library had 229 duplicate-DOI
+    groups, ~298 extra items. Fill one copy, and the other two could
+    never be filled again — the abstract was in the library and
+    structurally invisible to any consumer that picks one item per DOI.
+
+    Nothing was gained by keying on the DOI in the first place. An item
+    whose update succeeded now *has* an `abstractNote`, so it already
+    fails the emptiness test in `main()` on the next run; the DOI key
+    could only ever exclude siblings. Keying on `item_key` keeps the
+    resume guard (which matters when a Zotero read is served from a
+    desktop copy that has not synced the write yet) and drops the
+    collateral damage.
+    """
     return shared_orchestrators.load_done_keys(
-        log_path, statuses="updated", key_field="doi",
+        log_path, statuses="updated", key_field="item_key",
     )
 
 
@@ -188,6 +206,29 @@ def _try_cascade(
     return result
 
 
+def group_by_doi(items: list[dict]) -> dict[str, list[dict]]:
+    """Group items by normalised DOI, preserving encounter order.
+
+    One lookup per DOI, applied to every copy that carries it. The
+    cascade is the expensive part of a run and its answer depends only
+    on the DOI, so without this the duplicate records that a systematic-
+    review import leaves behind pay for the same abstract N times over.
+
+    Items with no DOI are dropped — they have nothing to look up, and
+    `main()`'s `missing` filter has already excluded them, which is what
+    makes the grouping total there. The normalisation matches
+    `load_done_keys`: strip and lower-case, no prefix handling, so the
+    grouping key and the resume key cannot disagree about identity.
+    """
+    groups: dict[str, list[dict]] = {}
+    for it in items:
+        doi = (it.get("data", {}).get("DOI") or "").strip().lower()
+        if not doi:
+            continue
+        groups.setdefault(doi, []).append(it)
+    return groups
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -221,7 +262,7 @@ def main() -> int:
 
     os.makedirs(args.cache_dir, exist_ok=True)
     run_date = date.today().isoformat()
-    done_dois = _already_done(args.log_csv)
+    done_items = _already_done(args.log_csv)
 
     config = _load_config()
     session = http_client.build_session(mailto=config.crossref_mailto)
@@ -255,11 +296,20 @@ def main() -> int:
         it for it in all_items
         if not (it.get("data", {}).get("abstractNote") or "").strip()
         and (it.get("data", {}).get("DOI") or "").strip()
-        and it["data"]["DOI"].strip().lower() not in done_dois
+        and it["key"].strip().lower() not in done_items
     ]
     print(f"Missing abstracts (with DOI): {len(missing)}", flush=True)
     if not missing:
         return 0
+
+    by_doi = group_by_doi(missing)
+    duplicates = len(missing) - len(by_doi)
+    if duplicates:
+        print(
+            f"  {len(by_doi)} distinct DOIs — {duplicates} of those items "
+            f"are duplicate copies and will share one lookup.",
+            flush=True,
+        )
 
     sources = fetchers.abstract_sources(session, config)
     if source_names:
@@ -275,13 +325,11 @@ def main() -> int:
     counters = {"updated": 0, "skipped": 0, "failed": 0, "done": 0}
     total = len(missing)
 
-    def _process(item: dict) -> None:
+    def _process(item: dict, result: CascadeResult) -> None:
         data = item.get("data", {})
         key = item["key"]
         doi = (data.get("DOI") or "").strip()
         title = (data.get("title") or "")[:70]
-
-        result = _try_cascade(item, sources, args.cache_dir)
 
         with log_lock:
             counters["done"] += 1
@@ -345,8 +393,19 @@ def main() -> int:
         if ok:
             print(f"{prefix} {title:<70} ({source}) → updated", flush=True)
 
+    def _process_group(group: list[dict]) -> None:
+        """Look the DOI up once, then record the outcome for every copy.
+
+        Each copy still gets its own Zotero write and its own log row —
+        they are separate items and a consumer that resolves this DOI
+        may land on any of them. Only the lookup is shared.
+        """
+        result = _try_cascade(group[0], sources, args.cache_dir)
+        for item in group:
+            _process(item, result)
+
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = [pool.submit(_process, it) for it in missing]
+        futures = [pool.submit(_process_group, g) for g in by_doi.values()]
         for fut in as_completed(futures):
             fut.result()          # re-raise unexpected exceptions
 

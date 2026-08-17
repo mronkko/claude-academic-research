@@ -310,7 +310,29 @@ def test_connector_successes_count_as_done(enrich, tmp_path) -> None:
         "2026-08-13,C,10.1/c,C,skipped_no_pdf,connector\n",
         encoding="utf-8",
     )
-    assert enrich._load_done_dois(str(log)) == {"10.1/a", "10.1/b"}
+    assert enrich._load_done_items(str(log)) == {"a", "b"}
+
+
+def test_resume_set_does_not_bar_a_duplicate_record(enrich, tmp_path) -> None:
+    """Keyed on the DOI, one copy's attachment barred every other copy.
+
+    Duplicate records sharing a DOI are normal in a library built by a
+    systematic-review import — one real library held 229 such groups.
+    Item B here is a second copy of A's article and has no PDF of its
+    own; under the old DOI key it was permanently ineligible, so a
+    consumer that resolved 10.1/a to B saw an item that could never
+    acquire a PDF. `pdf_map()` remains the gate that keeps A itself from
+    being re-fetched.
+    """
+    log = tmp_path / "pdf_attach_log.csv"
+    log.write_text(
+        "run_date,item_key,doi,title,status,source\n"
+        "2026-08-13,A,10.1/a,A,attached,crossref\n",
+        encoding="utf-8",
+    )
+    done = enrich._load_done_items(str(log))
+    assert "a" in done
+    assert "b" not in done
 
 
 # ---------------------------------------------------------------------------

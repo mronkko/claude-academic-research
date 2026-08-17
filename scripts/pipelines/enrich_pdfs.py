@@ -229,9 +229,26 @@ def _open_log(path: str):
 DONE_STATUSES = ("attached", "attached_via_connector")
 
 
-def _load_done_dois(path: str) -> set[str]:
+def _load_done_items(path: str) -> set[str]:
+    """Zotero item keys this log records as already carrying a PDF.
+
+    **Keyed on the item, not the DOI** — the same correction made in
+    `enrich_abstracts._already_done`, for the same reason. A library
+    assembled by a systematic-review import holds duplicate records
+    routinely; keying the resume set on the DOI meant attaching a PDF to
+    one copy permanently barred every other copy from getting one, and a
+    consumer that resolves the DOI to a different copy sees an item with
+    no PDF and no way to ever acquire one.
+
+    Nothing is lost by the change. The per-item gate that follows in
+    `main()` — `pdf_map()`, read off the live library — is what actually
+    establishes "this item is done", as the note on `DONE_STATUSES`
+    above already observes. Re-fetching a sibling is near-free besides:
+    `cache_path_for` keys the PDF cache on the DOI, so the second copy
+    attaches from disk without a second download.
+    """
     return shared_orchestrators.load_done_keys(
-        path, statuses=DONE_STATUSES, key_field="doi",
+        path, statuses=DONE_STATUSES, key_field="item_key",
     )
 
 
@@ -2678,7 +2695,7 @@ def main() -> int:
 
     os.makedirs(args.cache_dir, exist_ok=True)
     run_date = date.today().isoformat()
-    done_dois = _load_done_dois(args.log_csv)
+    done_items = _load_done_items(args.log_csv)
 
     if args.auto_publishers:
         if args.filter_keys_file:
@@ -2772,8 +2789,8 @@ def main() -> int:
     # Items with DOI that haven't already been attached
     candidates = [
         it for it in all_items
-        if (doi := (it.get("data", {}).get("DOI") or "").strip())
-        and doi.lower() not in done_dois
+        if (it.get("data", {}).get("DOI") or "").strip()
+        and it["key"].strip().lower() not in done_items
     ]
     print(f"Items not yet processed: {len(candidates)}", flush=True)
 

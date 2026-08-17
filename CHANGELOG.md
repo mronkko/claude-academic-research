@@ -60,6 +60,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A duplicate record no longer inherits its sibling's "done" status.**
+  `enrich_abstracts.py` and `enrich_pdfs.py` both keyed their resume set
+  on the DOI, so enriching one copy of an article permanently excluded
+  every other copy. One real library held `10.1037/0882-7974.9.3.391`
+  three times: two carried the abstract, the third did not, and the third
+  was the copy consumers resolved to. The content was in the library and
+  structurally invisible — 229 duplicate-DOI groups, roughly 298 items in
+  that position.
+
+  The DOI key bought nothing in exchange, which is what makes this a
+  plain defect rather than a trade-off. An item whose update succeeded
+  carries an `abstractNote` afterwards and an item whose PDF attached is
+  caught by `pdf_map()`, so each was already excluded by its own per-item
+  gate; the DOI key could only ever exclude *other* items. Both now key
+  on `item_key`. `enrich_abstracts` additionally groups the work by DOI
+  so duplicates share one cascade — three copies are three Zotero writes
+  but a single lookup — and `enrich_pdfs` needs no equivalent, since its
+  PDF cache is already keyed on the DOI and the sibling attaches from
+  disk.
+
 - **`needs_interactive_solve = False` now actually skips the setup
   prompt.** It only changed the queue message; the driver still called
   `setup()` unconditionally, so the EBSCOhost handler — which
