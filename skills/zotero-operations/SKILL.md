@@ -175,6 +175,19 @@ running these stages:**
    | `OUT_OF_SCOPE` | A book chapter, thesis, or preprint. No rung applies — the item is excluded on its type, not on retrieval, and chasing a PDF for it wastes the user's time. |
    | `UNAVAILABLE` | Genuinely unreachable *as published* — every route was tried, so this cannot appear before a browser pass has run. One route remains — see below — and only after the user declines it is "not available" the honest report. |
 
+   **A publisher the browser pass skips is a finding, not a gap.** The
+   run prints, for example, "16 items skipped the publisher's own site —
+   the link resolver lists a licensed route for them, but not via that
+   publisher (Academy of Management 7, Taylor & Francis 5, …)". Those
+   items are *not* lost: they went to the resolver's own route in the
+   same pass. Report the line rather than treating it as a failure, and
+   only act on it if the user says they can reach one of those
+   publishers by other means — a society membership, a login at a second
+   institution — in which case add that handler name to
+   `[library] direct_access` in config.toml and re-run. Many society
+   publishers (Academy of Management, INFORMS) sell membership rather
+   than institutional access, so this skip is usually correct.
+
    **The last rung is a different paper, so it is offered, never taken
    silently.** `enrich_pdfs.py --allow-preprints` looks for a copy on
    arXiv / SSRN / RePEc. What it finds is the manuscript before peer

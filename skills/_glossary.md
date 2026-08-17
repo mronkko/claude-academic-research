@@ -91,6 +91,18 @@ canonical longer entry.
 
   The resolver runs only in the browser and Zotero Connector passes, to
   skip items your library cannot reach before opening Chromium for them.
+
+  Its verdict about a *publisher* differs from its verdict about an
+  *article*. When it lists licensed routes for an article but none of
+  them is that publisher's own platform, the institution has no
+  entitlement there, and the pipeline stops opening it rather than
+  asking you to solve a login that cannot succeed — many society
+  publishers (Academy of Management, INFORMS) sell membership rather
+  than institutional access and are reached through EBSCOhost or
+  ProQuest instead. Two keys override this per publisher:
+  `[library] no_access` never tries one; `[library] direct_access`
+  always tries one, for access the resolver cannot see such as a society
+  membership or a login at a second institution.
 - **TDM** — *Text and Data Mining*. Elsevier's TDM API
   (`api.elsevier.com/content/article/doi/...`) is meant for
   programmatic full-text access; the plugin uses it instead of
