@@ -137,6 +137,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **APA PsycNET reported failure for PDFs it could reach, and in one case
+  attached the wrong article.** A live 0.11.0 run failed both APA items
+  with `Download button not found` on articles the operator could
+  download by hand from the same browser profile. Three defects, of which
+  the middle one is the serious kind: the accession number was read off
+  the *previous* item's DOM, because `goto()` returns before the page's
+  view swaps and the first record link on an article page is one of its
+  **references** rather than the article. The run therefore fetched a
+  cited paper's PDF and attached it to the right Zotero item — not a
+  failed download but a **wrong PDF filed under a correct citation**,
+  which nothing downstream checks and no error reports.
+
+  Fixed structurally, by blanking the page before anything identifies the
+  article, plus three independent agreement checks — the URL must belong
+  to the requested DOI, the record link must carry the marker that
+  distinguishes the resolved article from ones it cites, and RightsLink
+  must agree, or the handler refuses rather than guesses. Alongside them,
+  `CHECK ACCESS` no longer waits for a URL PsycNET stopped producing, and
+  an entitled session's direct `/record/` route is accepted instead of
+  costing a 20-second timeout each. The direct
+  `/fulltext/{accession}.pdf` route is now preferred over the click
+  chain, removing three of its four failure points.
+
+  Two of the three were invisible to an unentitled session, and so to any
+  test written against one — which is why the browser suite was green
+  throughout. `playwright` is now declared in the dev dependency group
+  for the same reason: every `live_browser` test sits behind an
+  `importorskip`, so the whole suite reported success while exercising
+  nothing.
+
+- **Page-driven failures now say which page they stopped on.** Any
+  browser handler failure records the final URL, title, screenshot and
+  HTML under `<cache_dir>/diagnostics/`, and names the page in the
+  console line. Previously every cause — wrong page, stale DOM, expired
+  session, genuinely absent PDF — reported identically after about 135
+  seconds, which is what made the PsycNET defects above take a live
+  entitled session to find.
+
 - **One failed download silently discarded a publisher's whole remaining
   queue under `--control-file`.** `_prompt_on_first_failure` decided whether
   it could ask by testing `sys.stdin.isatty()` — the exact coupling
