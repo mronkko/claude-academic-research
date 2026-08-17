@@ -634,6 +634,36 @@ def _first_issn(issn_field: str) -> str | None:
     return first or None
 
 
+def _browser_failure_cause(
+    handler, transport: bool,
+) -> pdf_fetch_log.FailureCause | None:
+    """Classify a browser failure from what the handler carried back.
+
+    Two handlers-worth of evidence reach here, and they rank. A
+    transport error is about the machine's connection, so it outranks
+    anything a page said — nothing was asked, so nothing was answered.
+
+    Below it, `last_verdict` is EBSCO answering about the DOI itself:
+    zero records means the library's resolver is advertising an
+    EBSCOhost route EBSCO cannot honour for this tenant. That is
+    ACCESS_BLOCKED — "flag for ILL, full text exists" — and emphatically
+    not UNAVAILABLE, which licenses an FE6 exclusion. One platform's
+    stale holdings say nothing about whether the article can be had.
+
+    Anything else stays `None` so the shared classifier decides.
+    """
+    if transport:
+        return pdf_fetch_log.FailureCause.NETWORK_ERROR
+    # Imported here, not at module scope: everything under
+    # `fetchers.browser` pulls in the Playwright-dependent stack, which
+    # the API-cascade paths must not need.
+    from fetchers.browser.ebsco import VERDICT_NO_HOLDINGS
+
+    if getattr(handler, "last_verdict", "") == VERDICT_NO_HOLDINGS:
+        return pdf_fetch_log.FailureCause.ACCESS_BLOCKED
+    return None
+
+
 def _log_browser_failure(
     args: argparse.Namespace,
     item: dict,
@@ -1169,10 +1199,7 @@ async def _drive_handler(
                     # UNAVAILABLE — the one cause that licenses a
                     # full-text exclusion — for an article no server was
                     # ever asked about.
-                    cause=(
-                        pdf_fetch_log.FailureCause.NETWORK_ERROR
-                        if transport else None
-                    ),
+                    cause=_browser_failure_cause(lane_handler, transport),
                 )
                 if on_failure == "retry_bucket" and retry_bucket is not None:
                     retry_bucket.append(item)
