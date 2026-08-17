@@ -351,6 +351,11 @@ class ZoteroConnectorHandler(PublisherHandler):
             await page.goto(target_url, wait_until="domcontentloaded",
                             timeout=30000)
         except Exception as e:
+            # Carried out for classification: the Connector is the
+            # last rung, so its failures are logged UNAVAILABLE — the
+            # cause that licenses a full-text exclusion. A dead
+            # network must not reach that verdict.
+            self.last_error = str(e)
             print(f"  └─ FAIL: goto error: {str(e)[:80]}", flush=True)
             counter.failed += 1
             return False

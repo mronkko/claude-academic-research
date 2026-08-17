@@ -1301,7 +1301,20 @@ async def _drive_connector(
             if status == "connector_save_failed":
                 # Last rung of the ladder: the library's own route was
                 # opened in a real browser and still produced nothing.
-                _log_browser_failure(args, item, source="connector")
+                # So this is where an item finally earns UNAVAILABLE —
+                # which is exactly why a dead network must not be allowed
+                # to arrive here wearing that label. Same reasoning as the
+                # publisher handlers above, and it matters more here,
+                # because nothing downstream re-examines this verdict.
+                from fetchers.browser.base import is_transport_error
+                _log_browser_failure(
+                    args, item, source="connector",
+                    cause=(
+                        pdf_fetch_log.FailureCause.NETWORK_ERROR
+                        if is_transport_error(getattr(handler, "last_error", ""))
+                        else None
+                    ),
+                )
 
         print(
             f"\n  Total: {counter.ok} new, {counter.failed} failed",
