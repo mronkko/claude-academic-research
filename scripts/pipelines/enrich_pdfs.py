@@ -2702,6 +2702,32 @@ def _print_run_report(
     print(pdf_run_report.format_report(rows, metadata=lookup))
 
 
+def select_requested_articles(
+    fetched: list[dict], requested: set[str],
+) -> tuple[list[dict], int]:
+    """Split a `--filter-keys-file` fetch into articles and skipped keys.
+
+    `ZoteroClient.items_by_keys` returns the items whose keys were asked
+    for *and* their attachment children — a request for 38 keys comes
+    back as 55 items once 17 of them have a PDF. Counting every
+    non-`journalArticle` in that response as a skipped key therefore
+    reported a number that grew as retrieval succeeded: a run that had
+    just attached 11 PDFs announced "11 key(s) resolved to
+    non-journalArticle items and were skipped" having skipped none of
+    them, and the louder it got the better the run had gone.
+
+    Only a key the caller actually asked for can be a scope decision, so
+    the count is taken over those; the children are not an answer about
+    anything and are ignored.
+    """
+    own = [it for it in fetched if it.get("key") in requested]
+    articles = [
+        it for it in own
+        if it.get("data", {}).get("itemType") == "journalArticle"
+    ]
+    return articles, len(own) - len(articles)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Construct the CLI parser.
 
@@ -2982,12 +3008,8 @@ def main() -> int:
             target = {line.strip() for line in f if line.strip()}
         print(f"Fetching {len(target)} Zotero items by key...", end=" ", flush=True)
         fetched = zot.items_by_keys(target)
-        all_items = [
-            it for it in fetched
-            if it.get("data", {}).get("itemType") == "journalArticle"
-        ]
+        all_items, not_articles = select_requested_articles(fetched, target)
         print(f"{len(all_items)} journal articles.", flush=True)
-        not_articles = len(fetched) - len(all_items)
         if not_articles:
             # Distinguished from "key not found": a book chapter that was
             # asked for and skipped is a scope decision, not a typo, and
