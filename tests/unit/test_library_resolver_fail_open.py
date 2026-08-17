@@ -23,9 +23,10 @@ from unittest.mock import MagicMock
 import pytest
 from fetchers.library_resolver import (
     LibraryResolverConfig,
-    SfxCache,
+    ResolverCache,
     lookup_fulltext_target,
 )
+from fetchers.resolvers import resolver_for
 
 DOI = "10.1007/s10551-020-04463-y"
 
@@ -54,8 +55,8 @@ def _cfg(tmp_path, *, response=None, exc=None, base="https://sfx.example.org/sfx
         resp.content = response[1].encode()
         session.get.return_value = resp
     return LibraryResolverConfig(
-        openurl_base=base, sid="test", session=session,
-        cache=SfxCache(tmp_path),
+        resolver=resolver_for(base), sid="test", session=session,
+        cache=ResolverCache(tmp_path),
     )
 
 
@@ -83,7 +84,8 @@ def test_unparseable_xml_reports_query_not_ok(tmp_path) -> None:
 
 def test_unset_openurl_base_reports_query_not_ok(tmp_path) -> None:
     """With no resolver configured there is nothing to gate on — gating
-    anyway made the entire Connector fallback unreachable."""
+    anyway made the entire Connector fallback unreachable. An empty base
+    yields `resolver=None` from the registry, which is the signal."""
     result = lookup_fulltext_target(DOI, _cfg(tmp_path, base="", response=(200, "")))
     assert result.query_ok is False
 
@@ -111,7 +113,7 @@ def test_a_found_target_is_returned(tmp_path) -> None:
 # --- negative caching -------------------------------------------------
 
 def test_empty_results_are_not_cached(tmp_path) -> None:
-    """A DOI-keyed miss was written to `sfx_cache.json` with no expiry,
+    """A DOI-keyed miss was written to `resolver_cache.json` with no expiry,
     so a soft false negative became permanent — and clearing it meant
     deleting a directory that also holds the PDF cache and both
     Chromium profiles."""
@@ -129,7 +131,7 @@ def test_positive_results_are_still_cached(tmp_path) -> None:
 
     cached = cfg.cache.get(DOI)
     assert cached is not None
-    assert cached["urls"]
+    assert [t.url for t in cached]
 
 
 def test_a_later_run_re_queries_after_an_empty_result(tmp_path) -> None:

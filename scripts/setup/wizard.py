@@ -817,15 +817,22 @@ KEYS: tuple[KeySpec, ...] = (
         what="OpenAlex is a free, open index of scholarly works and authors "
              "(https://openalex.org), the main successor to the shut-down "
              "Microsoft Academic Graph. The free metadata tier is used "
-             "extensively and needs no key. The paid Content API ($0.01 per PDF) "
-             "unlocks bulk PDF retrieval.",
-        used_by="systematic-review (one tier of the multi-source PDF retrieval "
-                "cascade).",
-        impact="PDF cascade drops one optional tier; the other six sources "
-               "(Elsevier, Wiley, Crossref, PubMed Central, Unpaywall, OpenAlex "
-               "OA metadata) still function.",
-        where="https://openalex.org — paid tier only; skip unless you need "
-              "high-volume PDF retrieval.",
+             "extensively and needs no key. The paid Content API adds PDF "
+             "downloads at roughly $0.01 each — current rates, the free daily "
+             "allowance, and the annual plans are at "
+             "https://openalex.org/pricing.",
+        used_by="systematic-review and zotero-operations: the paid "
+                "version-of-record tier of the PDF retrieval cascade (stage 2 "
+                "of 5 — see `fetchers.pdf_sources` for the full sequence).",
+        impact="The cascade drops its only paid tier and runs on free and "
+               "institutionally-subscribed sources alone (Elsevier, Springer, "
+               "Crossref, PubMed Central, OpenAlex OA metadata, Unpaywall, "
+               "Semantic Scholar, CORE). Retrieval still works; the few "
+               "articles only OpenAlex holds as a publisher PDF fall through "
+               "to the browser pass, which is slower and needs you present.",
+        where="https://openalex.org/pricing — paid tier only. Skip it unless "
+              "you retrieve PDFs in volume; setup asks separately whether to "
+              "actually spend on it, so a key here does not commit you.",
         verify=_verify_none,
     ),
     KeySpec(
@@ -1144,6 +1151,78 @@ def _prompt_elsevier_xml_pdf(interactive: bool, existing: dict) -> dict[str, obj
     return {"render_xml_to_pdf": enabled}
 
 
+def _prompt_openalex_paid_content(
+    interactive: bool, existing: dict, collected: dict,
+) -> dict[str, object]:
+    """Return `{use_paid_content_api: bool}` to merge into `[openalex]`.
+
+    The OpenAlex Content API is the only source in the PDF cascade that
+    bills per item, so whether to spend on it is the user's call and not
+    a side effect of having pasted a key. This asks outright.
+
+    Defaults to **yes**, unlike the Elsevier XML prompt. The two differ
+    in what the default risks: an unasked-for synthesized PDF lands in
+    the user's library permanently, whereas this only ever spends about
+    a cent to obtain the correct published article. A configured key is
+    also itself an opt-in signal, so defaulting to no would silently
+    disable a tier that works today for anyone upgrading — see
+    `fetchers.openalex._OpenAlexClient._paid_enabled` for the matching
+    tri-state on the read side.
+
+    Skipped entirely when no OpenAlex key is configured or was just
+    entered: asking whether to spend on a tier that cannot run is noise.
+    `collected` is the freshly gathered key material from
+    `_collect_keys`, checked alongside `existing` so answering in the
+    same session counts.
+    """
+    section = existing.get("openalex", {}) or {}
+    current = section.get("use_paid_content_api")
+    has_key = bool(
+        (collected.get("openalex", {}) or {}).get("api_key")
+        or section.get("api_key")
+        or os.environ.get("OPENALEX_API_KEY", "").strip()
+    )
+    if not has_key:
+        # Preserve an earlier answer; never invent one for a tier that
+        # has no credential to run on.
+        return {"use_paid_content_api": bool(current)} if current is not None else {}
+    if not interactive:
+        # A non-interactive re-run must not flip a deliberate choice.
+        return {"use_paid_content_api": bool(current)} if current is not None else {}
+
+    default_yes = True if current is None else bool(current)
+    print("\n  OpenAlex paid Content API (optional):")
+    print(_wrap_body(
+        "Retrieving PDFs through APIs is the recommended route. It is much "
+        "faster than driving a browser and far less error prone, because "
+        "nothing depends on a page layout, a Cloudflare challenge, or you "
+        "being at the keyboard. The cascade therefore exhausts every free "
+        "and institutionally-subscribed API first, and only falls back to a "
+        "browser for whatever is left.",
+        indent=4,
+    ))
+    print(_wrap_body(
+        "OpenAlex's Content API is the one source that charges per item — "
+        "roughly $0.01 per PDF (rates: https://openalex.org/pricing). It "
+        "still ranks ahead of the free open-access aggregators, because it "
+        "serves the publisher's own file, the version of record, whereas "
+        "Unpaywall, Semantic Scholar and CORE often hold an author "
+        "manuscript whose page numbers do not match the published article. "
+        "Decline and the cascade runs on free sources only.",
+        indent=4,
+    ))
+    suffix = "[Y/n]" if default_yes else "[y/N]"
+    try:
+        answer = input(
+            f"    Spend on the paid OpenAlex Content API? {suffix} ",
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\n    Skipped.")
+        return {"use_paid_content_api": bool(current)} if current is not None else {}
+    enabled = default_yes if not answer else answer in ("y", "yes")
+    return {"use_paid_content_api": enabled}
+
+
 def _prompt_cluster_automation(interactive: bool, existing: dict) -> dict[str, object]:
     """Return `{automation: "manual"|"confirm"|"auto"}` for `[cluster]`, or `{}`.
 
@@ -1352,6 +1431,72 @@ def _offer_no_access_editor(
     if removed:
         print(f"    Removed: {', '.join(removed)}")
     return keep
+
+
+# ---------------------------------------------------------------------------
+# [library] direct_access editor.
+#
+# The counterpart to `no_access`, and the one question about access the
+# user *can* reliably answer. `no_access` above deliberately does not ask
+# "can you reach publisher X?", on the grounds that access is normally
+# library-mediated and invisible to the user. That reasoning holds for
+# the library's own entitlements — but not for the case this key exists
+# for, which is access the library does not mediate at all: a society
+# membership, or a login at a second institution.
+#
+# It became consequential when Pass 1 learned to divert on Case 1b (see
+# `enrich_pdfs.classify_direct_route`). Before that, a publisher the
+# resolver did not list was tried anyway, so private access needed no
+# declaration; now it is skipped by default and this is how the user
+# says otherwise.
+# ---------------------------------------------------------------------------
+
+
+def _offer_direct_access_editor(
+    interactive: bool,
+    existing: dict,
+) -> list[str]:
+    """Return the updated `[library] direct_access` list."""
+    current_raw = (existing.get("library", {}) or {}).get("direct_access", [])
+    if isinstance(current_raw, list):
+        current = [str(s).strip() for s in current_raw if s]
+    elif isinstance(current_raw, str):
+        current = [s.strip() for s in current_raw.split(",") if s.strip()]
+    else:
+        current = []
+
+    if not interactive:
+        return current
+
+    print(
+        "\n  Publishers you can reach by means your link resolver cannot see\n"
+        "  (a society membership, a login at another institution):"
+    )
+    if current:
+        for i, name in enumerate(current, 1):
+            print(f"    {i}. {name}")
+        print(
+            "  Enter handler names to set the full list, '-' to clear it,\n"
+            "  or press Enter to keep it as is."
+        )
+    else:
+        print("    (none)")
+        print(
+            "  Without this, a publisher your resolver lists no route for is\n"
+            "  skipped rather than opened — which is right unless you have\n"
+            "  your own access. Handler names: aaa, aom, apa, emerald,\n"
+            "  informs, oup, sage, springer, tandf, wiley.\n"
+            "  Enter names separated by spaces, or press Enter to skip."
+        )
+    raw = input("    > ").strip()
+    if not raw:
+        return current
+    if raw == "-":
+        print("    Cleared.")
+        return []
+    chosen = sorted({tok.strip().lower() for tok in raw.replace(",", " ").split() if tok.strip()})
+    print(f"    direct_access = {', '.join(chosen)}")
+    return chosen
 
 
 # ---------------------------------------------------------------------------
@@ -2607,6 +2752,14 @@ def main() -> int:
     if xml_pdf_entry:
         values.setdefault("elsevier", {}).update(xml_pdf_entry)
 
+    # Same merge-not-assign rule as `[elsevier]` above: `[openalex]`
+    # already carries `api_key` from _collect_keys.
+    paid_openalex_entry = _prompt_openalex_paid_content(
+        interactive, existing_cfg, values,
+    )
+    if paid_openalex_entry:
+        values.setdefault("openalex", {}).update(paid_openalex_entry)
+
     cluster_entry = _prompt_cluster_automation(interactive, existing_cfg)
     if cluster_entry:
         values.setdefault("cluster", {}).update(cluster_entry)
@@ -2614,6 +2767,10 @@ def main() -> int:
     updated_no_access = _offer_no_access_editor(interactive, existing_cfg)
     if updated_no_access:
         values.setdefault("library", {})["no_access"] = updated_no_access
+
+    updated_direct_access = _offer_direct_access_editor(interactive, existing_cfg)
+    if updated_direct_access:
+        values.setdefault("library", {})["direct_access"] = updated_direct_access
 
     _write_config(values)
     allow_added, deny_added = _patch_settings(interactive=interactive)

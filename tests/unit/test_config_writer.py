@@ -310,3 +310,59 @@ def test_append_to_list_escapes_quotes_and_backslashes(_redirect_config) -> None
 
     parsed = tomllib.loads(_redirect_config.read_text())
     assert parsed["library"]["no_access"] == ['weird"name\\back']
+
+
+# ---------------------------------------------------------------------------
+# promote_scalar — turning one endpoint into two
+# ---------------------------------------------------------------------------
+
+
+def test_append_still_refuses_a_scalar_by_default(_redirect_config) -> None:
+    """The default must stay strict: for most keys a scalar is the
+    schema, and widening it silently would bury a typo."""
+    from core import config_writer
+
+    config_writer.set_value("library", "openurl_base", "https://a.example/openurl")
+    with pytest.raises(ValueError):
+        config_writer.append_to_list("library", "openurl_base", "https://b.example/x")
+
+
+def test_promote_scalar_makes_a_two_endpoint_list(_redirect_config) -> None:
+    """A researcher gaining a second affiliation. The incumbent keeps
+    position 0 — for openurl_base the first entry is the primary, which
+    retains the existing cache keys and breaks ranking ties."""
+    from core import config_writer
+
+    config_writer.set_value("library", "openurl_base", "https://alma.example/openurl")
+    config_writer.append_to_list(
+        "library", "openurl_base", "https://sfx.example/inst", promote_scalar=True,
+    )
+    assert config_writer._read()["library"]["openurl_base"] == [
+        "https://alma.example/openurl", "https://sfx.example/inst",
+    ]
+
+
+def test_promote_scalar_is_idempotent(_redirect_config) -> None:
+    from core import config_writer
+
+    config_writer.set_value("library", "openurl_base", "https://alma.example/openurl")
+    for _ in range(2):
+        config_writer.append_to_list(
+            "library", "openurl_base", "https://alma.example/openurl",
+            promote_scalar=True,
+        )
+    assert config_writer._read()["library"]["openurl_base"] == [
+        "https://alma.example/openurl",
+    ]
+
+
+def test_promote_scalar_leaves_an_existing_list_alone(_redirect_config) -> None:
+    from core import config_writer
+
+    config_writer.append_to_list("library", "openurl_base", "https://a.example/x")
+    config_writer.append_to_list(
+        "library", "openurl_base", "https://b.example/y", promote_scalar=True,
+    )
+    assert config_writer._read()["library"]["openurl_base"] == [
+        "https://a.example/x", "https://b.example/y",
+    ]

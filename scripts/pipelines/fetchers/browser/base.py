@@ -436,6 +436,73 @@ def _read_user_line(prompt: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+#: Chromium / Playwright network-layer error substrings, lower-cased.
+#: These say the request never reached the server — the machine's
+#: connectivity failed — so they are the one class of download failure
+#: that carries no information whatsoever about the article.
+TRANSPORT_ERROR_MARKERS: tuple[str, ...] = (
+    "err_internet_disconnected",
+    "err_name_not_resolved",
+    "err_network_changed",
+    "err_connection_reset",
+    "err_connection_refused",
+    "err_connection_timed_out",
+    "err_connection_closed",
+    "err_address_unreachable",
+    "err_proxy_connection_failed",
+    "err_network_io_suspended",
+)
+
+
+def is_transport_error(text: str) -> bool:
+    """True when a failure message names a network-layer error.
+
+    Exists because a lost connection is indistinguishable, at the call
+    site, from "this publisher has nothing for this article" — both
+    surface as `download()` returning None. A live run lost the network
+    for four minutes and burned 193 items at ~1.2 s each, every one of
+    them recorded as a fetch failure and classified UNAVAILABLE, which
+    is the one cause that licenses a full-text exclusion. Not one of
+    those items had been asked about.
+    """
+    low = (text or "").lower()
+    return any(marker in low for marker in TRANSPORT_ERROR_MARKERS)
+
+
+#: Playwright's own timeout wording, from `ctx.request.get(...)` and
+#: `page.goto(...)`: "Timeout 60000ms exceeded."
+_TIMEOUT_MARKERS: tuple[str, ...] = ("timeout", "timed out")
+
+
+def is_download_timeout(text: str) -> bool:
+    """True when a fetch timed out rather than being answered.
+
+    Deliberately **not** folded into `TRANSPORT_ERROR_MARKERS`. That list
+    feeds the outage breaker, which aborts the whole pass after a few
+    consecutive hits; a publisher that is merely slow would trip it and
+    strand the queue. This is the narrower question the *classifier*
+    needs: was there an answer at all?
+
+    Live evidence for it existing at all: a 60 s timeout on EBSCO's
+    signed CDN URL — issued only *after* the viewer had loaded and
+    handed over that URL, so the article demonstrably exists and is
+    reachable — was classified UNAVAILABLE, the one cause that licenses
+    an FE6 exclusion. `10.1287/orsc.11.4.367.14601` sat one adjudication
+    pass from exclusion because a download ran long.
+    """
+    low = (text or "").lower()
+    return any(marker in low for marker in _TIMEOUT_MARKERS)
+
+
+class NetworkOutage(RuntimeError):
+    """Raised when consecutive transport failures show the network is gone.
+
+    Carries no verdict about any item. The caller stops the pass and
+    leaves un-attempted items unlogged, so a re-run picks them up rather
+    than a re-read of the log concluding they do not exist.
+    """
+
+
 class PublisherHandler(ABC):
     """One handler per publisher. Subclasses set:
 
@@ -460,6 +527,12 @@ class PublisherHandler(ABC):
     display_name: str = ""
     doi_prefixes: tuple[str, ...] = ()
     url_template: str = ""
+    #: Message from the most recent failed `download()`. Handlers print
+    #: their own diagnostics and return None, which loses the reason
+    #: before the orchestrator can classify it; this carries the reason
+    #: back so a lost connection is not filed as a missing article. Set
+    #: on every failure path, cleared on entry.
+    last_error: str = ""
     # Optional: URL the setup phase opens in the browser. Defaults to
     # `url_template`. Override when the download URL would trigger an
     # immediate auto-download (e.g. Emerald's `?download=true` PDF URL),
@@ -474,6 +547,21 @@ class PublisherHandler(ABC):
     # — our handler only knows the direct-publisher path. Empty tuple
     # disables the domain filter (any full-text target counts).
     direct_access_domains: tuple[str, ...] = ()
+    #: Max in-flight `download()` calls for this publisher — how many
+    #: tabs `enrich_pdfs.effective_lanes` will drive it with. It caps
+    #: `--browser-workers`, so it is the real ceiling and the flag can
+    #: never raise a publisher past it.
+    #:
+    #: **1 is a finding, not an unset default.** Every publisher here is
+    #: behind Cloudflare or Imperva, and several modules record what a
+    #: live run measured — Sage resets sessions above ~30 requests a
+    #: minute, T&F and Wiley reject `ctx.request` outright. N parallel
+    #: requests from one IP is exactly the shape those systems look for,
+    #: and the cost of guessing wrong is not one item: it is the
+    #: publisher for the run, plus the Cloudflare clearance sitting in
+    #: the shared profile that every other lane depends on. Raise this
+    #: per publisher, on evidence from a live run. `EbscoHandler` is the
+    #: worked example.
     concurrency: int = 1
     delay_s: float = 1.0
     # True when a run against this publisher normally requires the user
@@ -484,6 +572,9 @@ class PublisherHandler(ABC):
     # from the terminal. A live run silently under-reported this: the
     # user was told to solve Sage and AoM, was never told APA was also
     # queued, and 10 APA items were skipped without a single attempt.
+    #
+    # A *static* answer, which is only right for handlers whose route is
+    # fixed. See `needs_solve_for` for the ones whose is not.
     needs_interactive_solve: bool = True
     # How long `setup()` waits for a Cloudflare challenge to clear on
     # its own before falling back to asking. Covers the two cases where
@@ -541,6 +632,23 @@ class PublisherHandler(ABC):
         """
         tmpl = self.setup_url_template or self.url_template
         return tmpl.format(doi=doi) if tmpl else ""
+
+    def needs_solve_for(self, items: list[dict]) -> bool:
+        """Whether *this* queue needs an interactive solve before lanes open.
+
+        `needs_interactive_solve` answers for the handler; this answers
+        for the work. They differ whenever the route is chosen per item
+        rather than baked into the handler: `EbscoHandler` reaches one
+        library's holdings on institutional IP and another's through an
+        EZproxy that demands SSO, so the same handler needs a human for
+        one queue and not the next.
+
+        Getting it wrong is costly in both directions — a needless
+        prompt stalls an unattended run until the control-file timeout,
+        and a missing one sends every lane into a login page at once —
+        so the decision is made from the queue rather than declared.
+        """
+        return self.needs_interactive_solve
 
     async def setup(self, page: Page, first_doi: str) -> str:
         """Open the first URL and block until the user signals ready.
@@ -781,6 +889,13 @@ class RequestHandler(PublisherHandler):
         preview = body[:2000].decode("utf-8", errors="replace").lower()
         if "just a moment" in preview or "cf-chl" in preview or "cloudflare" in preview:
             hint = "CF challenge"
+        elif "client challenge" in preview or "incapsula" in preview:
+            # Imperva/Incapsula JS interstitial — Springer's block. Named
+            # explicitly because it is otherwise indistinguishable from a
+            # generic failure: it arrives as HTTP 200 with a ~3 KB HTML
+            # body, so it was reported as the useless "other (3038B)" and
+            # read like a broken publisher rather than a bot wall.
+            hint = "Imperva JS challenge"
         elif "access" in preview and (
             "denied" in preview or "not available" in preview or "subscri" in preview
         ):

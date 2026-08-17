@@ -1,140 +1,72 @@
-"""Library link-resolver (SFX / OpenURL, and Ex Libris Alma `uresolver`)
-pre-flight access check.
+"""Library link-resolver pre-flight access check.
 
-Runs inside the browser-fetch flow only. The cascade handlers use our
-own API keys and don't need institutional access; only the browser
-flow benefits from knowing up-front whether the library can actually
-reach the PDF.
+Answers "does this institution have a licensed full-text route to this
+DOI, and via which platform?" before the browser flow opens Chromium for
+an item it could never reach. The API cascade uses our own keys and does
+not need this; only the browser and Connector passes benefit.
 
-An SFX / OpenURL response enumerates `<target>` elements describing
-how the library is configured to reach a given DOI. A target with
-`<service_type>getFullTxt</service_type>` means the library has a
-licensed path to the full text. Zero such targets means the library
-has no full-text route — the browser handler would certainly fail, so
-we skip the item without opening Chromium.
+This module owns *policy* — fetching, caching, fail-open semantics and
+platform ranking. It owns no dialect knowledge: SFX and Alma
+`uresolver` (what Primo VE institutions have) are peer implementations
+of `LibraryResolver` in `fetchers/resolvers/`, selected by
+`[library] resolver` or autodetected. See that package's `base.py` for
+why the two are peers rather than one being a variant of the other.
 
-Alma/Primo institutions (the majority of academic libraries today)
-don't expose an SFX-shaped OpenURL endpoint — their public Primo
-openurl path redirects to the HTML discovery UI. Alma's `uresolver`
-endpoint (`https://<host>.alma.exlibrisgroup.com/view/uresolver/
-<inst_code>/openurl`) answers the same `getFullTxt` question in XML,
-just with a different element shape: `<context_service
-service_type="getFullTxt">` (an attribute, not a child element) with
-the resolvable link in a sibling `<resolution_url>` rather than SFX's
-`<target_url>`. Both shapes are recognized by `_fulltext_target_urls`
-below without needing to know in advance which one a response uses;
-only the query builder (`_build_query_url`) needs to know, since Alma
-requires an extra `svc_dat=CTO` param that SFX doesn't use.
+Configuration (`~/.config/academic-research/config.toml`)::
+
+    [library]
+    openurl_base = "https://eu03.alma.exlibrisgroup.com/view/uresolver/<inst>/openurl"
+    resolver = "auto"                     # or "sfx" / "alma"
+    platform_priority = "ebscohost,jstor" # optional reordering
 
 Finding your own institution's `openurl_base`:
     - SFX: your library or its existing OpenURL/citation-manager
-      documentation usually has this already (often the base URL
-      handed to EndNote/RefWorks/Zotero's "institutional proxy").
-    - Alma: open a Primo VE "Get it"/"View it" link for any item and
-      read the outbound request in your browser's Network tab — it's
-      the `.../view/uresolver/<inst_code>/openurl` URL up to the `?`.
-      This URL is routinely shared for third-party integrations
-      (LibKey Nomad, Lean Library, browser extensions), so your
-      library's systems/electronic-resources staff can usually just
-      hand it to you.
+      documentation usually has this already (often the base URL handed
+      to EndNote/RefWorks/Zotero's "institutional proxy").
+    - Alma: open a Primo VE "Get it"/"View it" link for any item and read
+      the outbound request in your browser's Network tab — it is the
+      `.../view/uresolver/<inst_code>/openurl` URL up to the `?`. This
+      URL is routinely shared for third-party integrations (LibKey
+      Nomad, Lean Library, browser extensions), so your library's
+      systems staff can usually just hand it to you.
 
-Usage:
-    from fetchers.library_resolver import has_fulltext_access,
-        SfxCache, LibraryResolverConfig
+Usage::
 
-    cfg = LibraryResolverConfig(
-        openurl_base="https://sfx.finna.fi/nelli09",
-        session=requests_session,
-        cache=SfxCache(cache_dir),
-    )
-    if not has_fulltext_access("10.1111/j.1460-2466.1993.tb01304.x", cfg):
-        # skip this item, log as skipped_no_library_coverage
-        ...
+    from fetchers.library_resolver import load_from_config, lookup_fulltext_target
+
+    cfg = load_from_config(session, cache_dir)
+    if cfg is not None:
+        target, query_ok = lookup_fulltext_target(doi, cfg)
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
-from urllib.parse import parse_qs, urlencode, urlparse
+
+from fetchers.resolvers import (
+    PLATFORM_PRIORITY,
+    FulltextTarget,
+    LibraryResolver,
+    Platform,
+    ResolverRequest,
+    effective_host,
+    host_matches_domains,
+    platform_priority_from_keys,
+    resolver_for,
+)
 
 if TYPE_CHECKING:
     import requests
 
 logger = logging.getLogger(__name__)
 
-
-# Default priority order for full-text platforms when SFX offers
-# several routes for one DOI. Higher-ranked (earlier) entries win.
-#
-# Ranking rationale:
-#   - EBSCOhost: cleanest PDFs in our testing.
-#   - Publisher-direct (Elsevier/Wiley/Springer/Sage/T&F/OUP): also
-#     clean. When offered alongside EBSCOhost, platform choice rarely
-#     matters — prefer EBSCOhost for the UI the Zotero Connector
-#     translator handles most consistently.
-#   - JSTOR: adds a JSTOR-branded cover page.
-#   - ProQuest: sometimes serves a scanned-image PDF where another
-#     route has a digitally-typeset original. Last resort.
-#
-# Users can override via `[library] sfx_platform_priority` in config.
-SFX_PLATFORM_PRIORITY: tuple[str, ...] = (
-    "ebscohost.com",
-    "ebsco.com",
-    "sciencedirect.com",
-    "onlinelibrary.wiley.com",
-    "link.springer.com",
-    "journals.sagepub.com",
-    "tandfonline.com",
-    "academic.oup.com",
-    "jstor.org",
-    "proquest.com",
-)
-
-# OpenURL 1.0 query parameters we send to every SFX request. The DOI
-# goes in `rft_id=info:doi/<DOI>`. `sfx.response_type=multi_obj_xml`
-# makes SFX emit the XML shape we parse below.
-_OPENURL_STATIC_PARAMS: dict[str, str] = {
-    "url_ver": "Z39.88-2004",
-    "ctx_ver": "Z39.88-2004",
-    "ctx_enc": "info:ofi/enc:UTF-8",
-    "url_ctx_fmt": "info:ofi/fmt:kev:mtx:ctx",
-    "svc_val_fmt": "info:ofi/fmt:kev:mtx:sch_svc",
-    "sfx.response_type": "multi_obj_xml",
-}
-
-# SFX's service_type value for "this target serves the full text (PDF/HTML)".
-# Other service types (getHolding, getAuthor, getDOI, getWebSearch, ...)
-# don't imply access. Alma's uresolver reuses the same value, as the
-# service_type of a <context_service> element instead of a <target>'s
-# <service_type> child.
-_FULLTEXT_SERVICE_TYPE = "getFullTxt"
-
-# Alma's uresolver requires this to return the getFullTxt service
-# category as XML; without it, Alma serves its HTML discovery skin
-# instead (HTTP 200, but not parseable — see _build_query_url). SFX
-# ignores the param harmlessly, so it's only added when the configured
-# base looks like an Alma uresolver URL.
-_ALMA_SVC_DAT = "CTO"
-
-# Timeout for a single SFX/Alma request. Usually snappy (sub-second)
-# but can stall on slow targets; cap so we don't block a whole batch.
+# Timeout for a single resolver request. Usually snappy (sub-second) but
+# can stall on slow targets; cap so one DOI cannot block a whole batch.
 _DEFAULT_TIMEOUT_S = 10
-
-
-def _is_alma_uresolver(openurl_base: str) -> bool:
-    """True when `openurl_base` looks like an Ex Libris Alma `uresolver`
-    endpoint rather than an SFX one.
-
-    `/view/uresolver/` is a fixed Alma product path, not something an
-    institution configures differently, so this is reliable without an
-    extra network round-trip to probe the response shape.
-    """
-    return "/view/uresolver/" in openurl_base
 
 
 # ---------------------------------------------------------------------------
@@ -142,19 +74,26 @@ def _is_alma_uresolver(openurl_base: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-class SfxCache:
-    """On-disk DOI → {has_access: bool, targets: int} cache.
+class ResolverCache:
+    """On-disk DOI → `{"targets": [...]}` cache.
 
-    The cache lives alongside the PDF cache directory so clearing the
-    cache (delete the directory) also clears the SFX cache. Stale
-    entries are unlikely to cause harm — if a library adds a new
-    subscription, the worst case is that we keep skipping a DOI the
-    user could now reach; a fresh run after deleting the cache picks
-    up the change.
+    Lives alongside the PDF cache directory, so deleting that directory
+    also clears this. Stale entries are low-risk: if a library adds a
+    subscription, the worst case is that a route we already knew about
+    stays cached, and a fresh run after deleting the cache picks up the
+    change.
+
+    The file is `resolver_cache.json`. Earlier versions wrote
+    `sfx_cache.json` with a bare URL list (`{"urls": [...]}`) and, before
+    that, `{"has_access": bool, "targets": int}`. Neither carried the
+    provider names that ranking now depends on, so rather than migrate a
+    shape that cannot answer the current question, this uses a new
+    filename and lets the old file be ignored. One resolver round-trip
+    per DOI on the first run after upgrading; cached from then on.
     """
 
     def __init__(self, cache_dir: str | Path) -> None:
-        self.path = Path(cache_dir) / "sfx_cache.json"
+        self.path = Path(cache_dir) / "resolver_cache.json"
         self._data: dict[str, dict] = {}
         if self.path.exists():
             try:
@@ -163,216 +102,190 @@ class SfxCache:
                 # Corrupt cache — start fresh, don't fail the whole run.
                 self._data = {}
 
-    def get(self, doi: str) -> dict | None:
-        return self._data.get(doi)
+    def get(self, key: str) -> list[FulltextTarget] | None:
+        entry = self._data.get(key)
+        if not entry or "targets" not in entry:
+            return None
+        out = []
+        for raw in entry["targets"]:
+            target = FulltextTarget.from_cache_dict(raw)
+            if target is not None:
+                out.append(target)
+        return out or None
 
-    def put(self, doi: str, value: dict) -> None:
-        self._data[doi] = value
+    def put(self, key: str, targets: list[FulltextTarget]) -> None:
+        self._data[key] = {"targets": [t.as_cache_dict() for t in targets]}
         # Best-effort write — don't crash the pipeline on a filesystem hiccup.
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(json.dumps(self._data, indent=1))
         except Exception as e:
-            logger.debug("SfxCache write failed: %s", e)
+            logger.debug("ResolverCache write failed: %s", e)
 
 
 # ---------------------------------------------------------------------------
-# Config — passed to each has_fulltext_access call.
+# Config
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class LibraryResolverConfig:
-    """Parameters the resolver needs to run.
+    """Everything a lookup needs.
 
-    `openurl_base` is the library's SFX / OpenURL endpoint, configured
-    under `[library] openurl_base` in config.toml. When unset, callers
-    should skip the pre-flight entirely.
+    `resolver` is the dialect implementation; when it is None the caller
+    has no configured endpoint and must skip the pre-flight entirely
+    rather than treat the absence as "no access".
     """
 
-    openurl_base: str
+    resolver: LibraryResolver | None
     session: requests.Session
-    cache: SfxCache | None = None
+    cache: ResolverCache | None = None
     timeout_s: int = _DEFAULT_TIMEOUT_S
-    # Source identifier included in the OpenURL request. Helps libraries
-    # correlate resolver traffic to the plugin. Not required.
+    priority: tuple[Platform, ...] = PLATFORM_PRIORITY
+    #: Source identifier included in the OpenURL request. Helps libraries
+    #: correlate resolver traffic to the plugin. Not required.
     sid: str = "academic-research"
+    #: Further institutions, queried after `resolver` and merged into one
+    #: route list. A researcher with two affiliations has two sets of
+    #: entitlements and no single resolver knows both: one live case had
+    #: an Alma tenant reporting *no* route for a journal that the second
+    #: institution's SFX served through Ovid and ProQuest.
+    #:
+    #: `resolver` stays the primary rather than this being a plain list,
+    #: so every existing construction site and cache key is untouched and
+    #: adding a second library cannot invalidate the first one's cache.
+    additional_resolvers: tuple[LibraryResolver, ...] = ()
+
+    @property
+    def resolvers(self) -> tuple[LibraryResolver, ...]:
+        """Every configured resolver, primary first. Empty when unconfigured."""
+        return tuple(
+            r for r in (self.resolver, *self.additional_resolvers) if r is not None
+        )
+
+    @property
+    def openurl_base(self) -> str:
+        """The primary endpoint, or '' when unconfigured. A property so
+        callers can log where they are querying without reaching through
+        to the resolver."""
+        return self.resolver.openurl_base if self.resolver else ""
+
+    def describe(self) -> str:
+        """One line naming every endpoint, for the run's opening banner."""
+        bases = [r.openurl_base for r in self.resolvers]
+        if not bases:
+            return "(no link resolver configured)"
+        if len(bases) == 1:
+            return bases[0]
+        return f"{bases[0]} (+{len(bases) - 1} more)"
 
 
-# ---------------------------------------------------------------------------
-# Core — query + parse
-# ---------------------------------------------------------------------------
+def load_from_config(
+    session: requests.Session,
+    cache_dir: str | Path | None = None,
+) -> LibraryResolverConfig | None:
+    """Build a config from `[library]` in config.toml.
 
+    Returns None when `openurl_base` is absent — callers MUST treat None
+    as "no pre-flight, fall through to the handler directly", never as
+    "the library has no access".
 
-def _build_query_url(
-    doi: str,
-    cfg: LibraryResolverConfig,
-    *,
-    ignore_date_threshold: bool = False,
-) -> str:
-    """Build the OpenURL query URL for `doi`.
+    `openurl_base` takes a string or a **list** of endpoints. A list is
+    for a reader with more than one affiliation: each is queried and the
+    routes are merged, because no single institution's resolver knows
+    another's entitlements. The first entry is the primary — it keeps the
+    existing cache keys and breaks ranking ties — so put the library you
+    are normally authenticated to first.
 
-    When `ignore_date_threshold=True`, appends `sfx.ignore_date_threshold=1`
-    so SFX returns every publisher it knows for the journal, not only
-    those whose coverage includes this DOI's year. Used by the dual
-    query that distinguishes "library has no Wiley at all" from
-    "library has Wiley but not this year".
+    `[library] resolver` (auto/sfx/alma) applies to a single endpoint. It
+    is deliberately ignored for a list: each entry is autodetected from
+    its own URL shape, since forcing one dialect onto endpoints of two
+    different products is never right.
     """
-    params = dict(_OPENURL_STATIC_PARAMS)
-    params["rft_id"] = f"info:doi/{doi}"
-    params["sfx.sid"] = cfg.sid
-    if ignore_date_threshold:
-        params["sfx.ignore_date_threshold"] = "1"
-    if _is_alma_uresolver(cfg.openurl_base):
-        params["svc_dat"] = _ALMA_SVC_DAT
-    return f"{cfg.openurl_base}?{urlencode(params)}"
+    from core.config_loader import get, load_config
 
-
-def _build_issn_query_url(
-    cfg: LibraryResolverConfig,
-    *,
-    issn: str,
-    pub_date: str | None = None,
-    volume: str | None = None,
-    ignore_date_threshold: bool = False,
-) -> str:
-    """Alma-only fallback query keyed by journal identity instead of a
-    DOI (see BACKLOG.md P11 / `_query_target_urls`'s fallback logic).
-
-    Omits `rft_id` entirely — some Alma deployments only link holdings
-    at journal level and return nothing for a DOI-keyed query even
-    when they license the journal, so re-asking by ISSN (+ date/volume
-    when known) is a genuinely different query, not a variant of the
-    DOI one.
-    """
-    params = dict(_OPENURL_STATIC_PARAMS)
-    params["rft.issn"] = issn
-    if pub_date:
-        params["rft.date"] = pub_date
-    if volume:
-        params["rft.volume"] = volume
-    params["sfx.sid"] = cfg.sid
-    if ignore_date_threshold:
-        params["sfx.ignore_date_threshold"] = "1"
-    params["svc_dat"] = _ALMA_SVC_DAT
-    return f"{cfg.openurl_base}?{urlencode(params)}"
-
-
-def _local_name(el: ET.Element) -> str:
-    """Element tag without XML namespace prefix."""
-    tag = el.tag
-    return tag.rpartition("}")[2] if "}" in tag else tag
-
-
-def _fulltext_target_urls(xml_text: str) -> list[str] | None:
-    """Every full-text target URL in the response.
-
-    Returns a list (possibly empty) on success, None on parse failure —
-    callers distinguish "no access" from "couldn't parse" by None.
-
-    Recognizes two response shapes in the same walk, since the caller
-    doesn't know in advance which one a given `openurl_base` returns:
-
-    - SFX nests `<target_url>` inside a `<target>` element that also
-      contains `<service_type>`. We iterate any element that might be
-      a target container and emit the pair when the service_type
-      matches. This is robust to variations in how deep `<target>`
-      lives inside the response (SFX wraps things in `<targets>` or
-      `<target_set>` depending on version).
-    - Alma's `uresolver` marks `<context_service service_type=
-      "getFullTxt">` as an XML attribute (not a child element) and
-      carries the resolvable link in a sibling `<resolution_url>`
-      rather than a `<target_url>` child.
-    """
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError as e:
-        logger.debug("SFX/Alma XML parse failed: %s", e)
+    raw_base = load_config().get("library", {}).get("openurl_base", "")
+    if isinstance(raw_base, list):
+        bases = [str(b).strip() for b in raw_base if str(b).strip()]
+        override = ""
+    else:
+        env_or_str = get(
+            "library", "openurl_base", env="LIBRARY_OPENURL_BASE",
+        ).strip()
+        bases = [env_or_str] if env_or_str else []
+        override = get("library", "resolver", env="LIBRARY_RESOLVER").strip()
+    if not bases:
         return None
 
-    urls: list[str] = []
-    for el in root.iter():
-        name = _local_name(el)
-        if name == "target":
-            service = None
-            target_url = None
-            for child in el:
-                child_name = _local_name(child)
-                if child_name == "service_type" and (child.text or "").strip() == _FULLTEXT_SERVICE_TYPE:
-                    service = _FULLTEXT_SERVICE_TYPE
-                elif child_name == "target_url":
-                    target_url = (child.text or "").strip()
-            if service == _FULLTEXT_SERVICE_TYPE and target_url:
-                urls.append(target_url)
-        elif name == "context_service" and el.get("service_type") == _FULLTEXT_SERVICE_TYPE:
-            for child in el:
-                if _local_name(child) == "resolution_url":
-                    resolution_url = (child.text or "").strip()
-                    if resolution_url:
-                        urls.append(resolution_url)
-                    break
-    return urls
+    built = [r for r in (resolver_for(b, override) for b in bases) if r is not None]
+    if not built:
+        return None
+    resolver, additional = built[0], tuple(built[1:])
+
+    raw_priority = load_config().get("library", {}).get("platform_priority", "")
+    if isinstance(raw_priority, str):
+        keys = tuple(k.strip() for k in raw_priority.split(",") if k.strip())
+    elif isinstance(raw_priority, list):
+        keys = tuple(str(k).strip() for k in raw_priority if str(k).strip())
+    else:
+        keys = ()
+    priority = platform_priority_from_keys(keys) if keys else PLATFORM_PRIORITY
+
+    return LibraryResolverConfig(
+        resolver=resolver,
+        additional_resolvers=additional,
+        session=session,
+        cache=ResolverCache(cache_dir) if cache_dir else None,
+        priority=priority,
+    )
 
 
-def _count_fulltext_targets(xml_text: str) -> int:
-    """Back-compat wrapper: returns the count of full-text targets, or
-    -1 when parsing failed. Kept because unit tests pin this shape."""
-    urls = _fulltext_target_urls(xml_text)
-    return -1 if urls is None else len(urls)
+# ---------------------------------------------------------------------------
+# Query + cache
+# ---------------------------------------------------------------------------
 
 
-def _effective_host(target_url: str) -> str:
-    """Hostname the target URL actually takes the user to, unwrapping
-    EZproxy wrappers like `http://ezproxy.jyu.fi/login?url=<real>`.
+def _cache_key(
+    doi: str, ignore_date_threshold: bool = False, resolver_id: str = "",
+) -> str:
+    """Cache key combining DOI, the ignore-date-threshold flag and — for
+    a non-primary resolver — which library answered.
 
-    Returns '' when no hostname can be extracted (malformed URL).
+    The primary resolver keeps the bare-DOI key it has always used, so
+    adding a second institution does not invalidate a warm cache built
+    against the first. Entries are per-resolver rather than per-merge for
+    the same reason: removing one library must not discard the other's
+    answers.
     """
-    if not target_url:
-        return ""
-    parsed = urlparse(target_url)
-    host = (parsed.hostname or "").lower()
-    # EZproxy/ebscohost/etc. patterns: real URL is in a `url=` query arg.
-    if parsed.query:
-        q = parse_qs(parsed.query)
-        inner = q.get("url", [""])[0]
-        if inner:
-            inner_host = (urlparse(inner).hostname or "").lower()
-            if inner_host:
-                return inner_host
-    return host
+    base = f"{doi}::any" if ignore_date_threshold else doi
+    return f"{base}@@{resolver_id}" if resolver_id else base
 
 
-def _target_matches_domains(target_url: str, domains: tuple[str, ...]) -> bool:
-    """True when the target URL's effective host ends with any of the
-    given domain suffixes.  Suffix-match so "wiley.com" matches
-    "onlinelibrary.wiley.com"."""
-    host = _effective_host(target_url)
-    if not host:
-        return False
-    for d in domains:
-        d = d.lower()
-        if host == d or host.endswith("." + d):
-            return True
-    return False
+def _fetch_and_parse(
+    url: str, cfg: LibraryResolverConfig, doi: str,
+    resolver: LibraryResolver | None = None,
+) -> list[FulltextTarget] | None:
+    """GET `url` and parse it with `resolver` (default: the primary).
 
-
-def _fetch_and_parse(url: str, cfg: LibraryResolverConfig, doi: str) -> list[str] | None:
-    """GET `url` and parse it as an SFX/Alma response. None on
-    transport / non-200 / parse failure; `doi` is only for logging."""
+    None on transport / non-200 / parse failure; `doi` is only for
+    logging. The dialect must be the one that produced `url` — parsing an
+    SFX response with Alma's parser yields nothing, silently.
+    """
+    resolver = resolver if resolver is not None else cfg.resolver
+    if resolver is None:
+        return None
     try:
         resp = cfg.session.get(url, timeout=cfg.timeout_s)
     except Exception as e:
-        logger.debug("SFX/Alma request failed for %s: %s", doi, e)
+        logger.debug("resolver request failed for %s: %s", doi, e)
         return None
-
     if resp.status_code != 200:
-        logger.debug("SFX/Alma returned HTTP %d for %s", resp.status_code, doi)
+        logger.debug("resolver returned HTTP %d for %s", resp.status_code, doi)
         return None
+    return resolver.parse(resp.text)
 
-    return _fulltext_target_urls(resp.text)
 
-
-def _query_target_urls(
+def _query_targets(
     doi: str,
     cfg: LibraryResolverConfig,
     *,
@@ -380,63 +293,250 @@ def _query_target_urls(
     issn: str | None = None,
     pub_date: str | None = None,
     volume: str | None = None,
-) -> list[str] | None:
-    """Run one SFX/Alma query for `doi` and return the full-text target
-    URL list.
+) -> list[FulltextTarget] | None:
+    """Full-text targets for `doi`, or None when the resolver could not
+    answer.
 
-    Returns the URL list on success (possibly empty), or None on
-    transport / non-200 / parse failure. Callers distinguish the
-    unknown case (None → fail-open) from the known-empty case ([]).
+    Tries each URL the dialect offers in order, stopping at the first that
+    yields targets — Alma's second, ISSN-keyed URL exists because a
+    DOI-keyed query can come back empty for a journal the library does
+    license.
 
-    Alma fallback (BACKLOG.md P11): when the DOI-keyed query comes
-    back empty and `issn` is given, retries once against an Alma
-    endpoint using `rft.issn`/`rft.date`/`rft.volume` instead of the
-    DOI. Some Alma deployments only link holdings to a journal record,
-    not to individual DOIs, so a DOI-only query can under-report even
-    when the library licenses the journal. Not attempted for SFX
-    (`issn` is simply ignored there) or when the primary query already
-    found something.
+    Results are cached per `(doi, ignore_date_threshold)` whichever query
+    produced them: the cache answers "does the library have this DOI", not
+    "which query strategy worked".
 
-    Results are cached per `(doi, ignore_date_threshold)` regardless
-    of whether the primary or the fallback query produced them — the
-    cache answers "does the library have this DOI", not "which query
-    strategy worked". The cache value shape is `{"urls": [list of
-    strings]}` — derived quantities (has_access bool, preferred
-    target) are computed by the callers so the same cached payload can
-    serve handlers with different direct-access domains.
+    **Positive results only.** An empty result is a claim about holdings
+    *as the resolver could see them for this DOI*, and that claim is wrong
+    often enough to matter — the resolver keys on DOI, so a journal
+    reached through an aggregator can come back empty. Persisting that
+    turned a soft miss into a permanent one: a live run skipped 15
+    *Journal of Business Ethics* articles the user demonstrably had access
+    to, and re-running could never re-check because the empty answer was
+    cached with no expiry.
     """
-    cache_key = _cache_key(doi, ignore_date_threshold)
-    if cfg.cache is not None:
-        cached = cfg.cache.get(cache_key)
-        if cached is not None and "urls" in cached:
-            return list(cached["urls"])
-
-    url = _build_query_url(doi, cfg, ignore_date_threshold=ignore_date_threshold)
-    urls = _fetch_and_parse(url, cfg, doi)
-
-    if urls == [] and issn and _is_alma_uresolver(cfg.openurl_base):
-        fallback_url = _build_issn_query_url(
-            cfg, issn=issn, pub_date=pub_date, volume=volume,
-            ignore_date_threshold=ignore_date_threshold,
-        )
-        fallback_urls = _fetch_and_parse(fallback_url, cfg, doi)
-        if fallback_urls:
-            urls = fallback_urls
-
-    if urls is None:
+    resolvers = cfg.resolvers
+    if not resolvers:
         return None
 
-    # Positive results only. An empty result is a claim about the
-    # library's holdings *as the resolver could see them for this DOI*,
-    # and that claim is wrong often enough to matter: the resolver keys
-    # on DOI, so a journal the library reaches through an aggregator can
-    # come back empty. Persisting that to disk turned a soft miss into a
-    # permanent one — a live run skipped 15 Journal of Business Ethics
-    # articles the user demonstrably had access to, and re-running could
-    # never re-check because the empty answer was cached with no expiry.
-    if cfg.cache is not None and urls:
-        cfg.cache.put(cache_key, {"urls": urls})
-    return urls
+    req = ResolverRequest(
+        doi=doi, ignore_date_threshold=ignore_date_threshold,
+        issn=issn, pub_date=pub_date, volume=volume, sid=cfg.sid,
+    )
+
+    merged: list[FulltextTarget] = []
+    answered = False
+    for index, resolver in enumerate(resolvers):
+        one = _query_one(
+            resolver, doi, cfg, req,
+            ignore_date_threshold=ignore_date_threshold,
+            resolver_id="" if index == 0 else resolver.openurl_base,
+        )
+        if one is None:
+            continue          # this library could not be asked
+        answered = True
+        merged.extend(one)
+
+    # None only when *no* library answered. One institution being down
+    # must not read as "nobody has this": with several configured, a
+    # partial answer is still an answer, and the alternative is a
+    # transport blip at one library gating access at the other.
+    if not answered:
+        return None
+    return _dedupe_targets(merged)
+
+
+def _query_one(
+    resolver: LibraryResolver,
+    doi: str,
+    cfg: LibraryResolverConfig,
+    req: ResolverRequest,
+    *,
+    ignore_date_threshold: bool,
+    resolver_id: str,
+) -> list[FulltextTarget] | None:
+    """One library's answer for `doi`, cached per library. None when it
+    could not be asked."""
+    key = _cache_key(doi, ignore_date_threshold, resolver_id)
+    if cfg.cache is not None:
+        cached = cfg.cache.get(key)
+        if cached is not None:
+            return cached
+
+    label = _resolver_label(resolver)
+    targets: list[FulltextTarget] | None = None
+    for url in resolver.query_urls(req):
+        result = _fetch_and_parse(url, cfg, doi, resolver)
+        if result:
+            targets = result
+            break
+        if result is not None and targets is None:
+            # Reached the resolver, which said nothing. Keep the empty
+            # list so "no route" stays distinct from "could not ask",
+            # but keep trying any remaining query shapes.
+            targets = result
+
+    if targets is None:
+        return None
+    # Stamp the origin only when it can be ambiguous — a single-resolver
+    # setup keeps writing exactly the cache entries it always has.
+    if resolver_id and targets:
+        targets = [replace(t, resolver_name=label) for t in targets]
+    if cfg.cache is not None and targets:
+        cfg.cache.put(key, targets)
+    return targets
+
+
+def _resolver_label(resolver: LibraryResolver) -> str:
+    """Short human name for a resolver, derived from its endpoint.
+
+    Both products put the institution in the path, differently: Alma as a
+    tenant code (`.../358AALTO_INST/openurl`), SFX as an instance segment
+    (`https://sfx.example.fi/jyu`). The host is the last resort and
+    usually the worst option — an SFX host commonly starts with the
+    literal "sfx", which names the product rather than the library.
+
+    Only ever used in diagnostics and in `FulltextTarget.resolver_name`,
+    so an imperfect label costs nothing.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(resolver.openurl_base)
+    segments = [p for p in parsed.path.split("/") if p]
+    for part in segments:
+        if part.upper().endswith("_INST"):
+            # "358AALTO_INST" -> "Aalto": strip the numeric prefix Alma
+            # prepends to the tenant code.
+            return part.split("_")[0].lstrip("0123456789").title() or part
+    for part in reversed(segments):
+        if part.lower() not in ("openurl", "resolve", "sfx", "view", "uresolver"):
+            return part.title()
+    return (parsed.netloc or resolver.openurl_base).split(".")[0].title()
+
+
+def _dedupe_targets(targets: list[FulltextTarget]) -> list[FulltextTarget]:
+    """Drop exact duplicate URLs, preserving order.
+
+    Two libraries can name the same open-access or free route. Routes
+    that merely share a *platform* are deliberately kept: they are
+    different entitlements behind different logins, and which one works
+    depends on who the reader is.
+    """
+    seen: set[str] = set()
+    out: list[FulltextTarget] = []
+    for target in targets:
+        if target.url in seen:
+            continue
+        seen.add(target.url)
+        out.append(target)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Public lookups
+# ---------------------------------------------------------------------------
+
+
+class TargetLookup(NamedTuple):
+    """Outcome of a resolver query.
+
+    `query_ok=False` means the resolver could not answer at all — unset
+    config, transport error, non-200, unparseable XML. That is **not**
+    evidence of missing access, and callers must not treat it as such.
+    `url=None` with `query_ok=True` is the real "library has no licensed
+    route" verdict.
+
+    `target` is the winning `FulltextTarget`, or None when there was no
+    winner. Callers need it to know *which platform* they were sent to:
+    on Alma every URL is the same redirector host, so the platform is
+    only knowable from the target's `interface_name` / `package_name`.
+    That is what lets a platform-specific handler (EBSCO) be chosen over
+    the generic Connector.
+    """
+
+    url: str | None
+    query_ok: bool
+    target: FulltextTarget | None = None
+
+
+def lookup_fulltext_target(
+    doi: str,
+    cfg: LibraryResolverConfig,
+    *,
+    priority: tuple[Platform, ...] | None = None,
+    in_range_only: bool = True,
+    required_domains: tuple[str, ...] = (),
+    issn: str | None = None,
+    pub_date: str | None = None,
+    volume: str | None = None,
+) -> TargetLookup:
+    """One full-text target URL for `doi`, highest-priority platform first.
+
+    Reports query health alongside the URL because this gates a browser
+    open: failing the gate closed on an ambiguous signal makes a transport
+    blip indistinguishable from a real entitlement gap.
+
+    - `in_range_only=True` (default) uses the date-filtered query, i.e.
+      platforms that can unlock this DOI now. On a dialect without date
+      filtering (Alma) both settings ask the same question.
+    - `required_domains` restricts candidates to platforms the caller can
+      actually reach. Matching is host-or-name, so this works on Alma,
+      whose URLs never expose a publisher host.
+    """
+    if cfg.resolver is None:
+        return TargetLookup(None, False)
+
+    targets = _query_targets(
+        doi, cfg, ignore_date_threshold=not in_range_only,
+        issn=issn, pub_date=pub_date, volume=volume,
+    )
+    if targets is None:
+        return TargetLookup(None, False)
+    if not targets:
+        return TargetLookup(None, True)
+
+    if required_domains:
+        targets = [
+            t for t in targets
+            if cfg.resolver.matches_domains(t, required_domains)
+        ]
+        if not targets:
+            return TargetLookup(None, True)
+
+    ranking = priority if priority is not None else cfg.priority
+    resolver = cfg.resolver
+    # Stable: equal keys keep the resolver's response order. `pub_date`
+    # makes coverage outrank platform preference, so an embargoed
+    # first-choice platform loses to one that actually holds this year.
+    best = min(
+        targets,
+        key=lambda t: resolver.sort_key(t, ranking, pub_date=pub_date),
+    )
+    return TargetLookup(best.url, True, best)
+
+
+def first_fulltext_target_preferred(
+    doi: str,
+    cfg: LibraryResolverConfig,
+    *,
+    priority: tuple[Platform, ...] | None = None,
+    in_range_only: bool = True,
+    required_domains: tuple[str, ...] = (),
+    issn: str | None = None,
+    pub_date: str | None = None,
+    volume: str | None = None,
+) -> str | None:
+    """`lookup_fulltext_target`, discarding query health.
+
+    Collapses "no coverage" and "couldn't ask" into the same None. Use
+    `lookup_fulltext_target` when that difference matters — for gating
+    decisions it always does.
+    """
+    return lookup_fulltext_target(
+        doi, cfg, priority=priority, in_range_only=in_range_only,
+        required_domains=required_domains, issn=issn, pub_date=pub_date,
+        volume=volume,
+    ).url
 
 
 def has_fulltext_access(
@@ -450,262 +550,141 @@ def has_fulltext_access(
 ) -> bool:
     """True if the library has at least one full-text route for this DOI.
 
-    When `required_domains` is empty, any full-text target counts as
-    access (legacy behaviour, useful when the caller doesn't care
-    which platform hosts the PDF).
-
-    When `required_domains` is non-empty, only full-text targets whose
-    effective URL host matches one of the domains count. Callers that
-    know their handler can only reach a specific publisher domain
-    (e.g. `InformsHandler` only knows `pubsonline.informs.org`) pass
-    their direct-access domains here so SFX-reported EBSCOhost/JSTOR
-    targets don't create a false positive.
-
-    `issn`/`pub_date`/`volume` are optional and only matter for Alma
-    endpoints — see `_query_target_urls`'s fallback logic (BACKLOG.md
-    P11).
-
-    Fail-open semantics: any transport error, parse error, or unset
-    config returns True (i.e. "proceed, the handler may still work").
-    The whole point of this pre-flight is to SKIP hopeless items; when
-    the signal is ambiguous we lean toward letting the handler try.
+    Fail-open: any transport error, parse error, or unset config returns
+    True ("proceed, the handler may still work"). The point of the
+    pre-flight is to skip *hopeless* items; when the signal is ambiguous,
+    lean toward letting the handler try.
     """
-    if not cfg.openurl_base:
+    if cfg.resolver is None:
         return True
-
-    urls = _query_target_urls(
-        doi, cfg, issn=issn, pub_date=pub_date, volume=volume,
+    result = lookup_fulltext_target(
+        doi, cfg, required_domains=required_domains,
+        issn=issn, pub_date=pub_date, volume=volume,
     )
-    if urls is None:
-        # Query failed → unknown → fail-open.
+    if not result.query_ok:
         return True
-
-    if required_domains:
-        return any(
-            _target_matches_domains(u, required_domains) for u in urls
-        )
-    return bool(urls)
+    return result.url is not None
 
 
 # ---------------------------------------------------------------------------
-# Dual query — the two SFX lookups that distinguish the three routing
-# cases (library has no relationship | library has publisher but year
-# out of range | library covers this DOI now). Callers diff `in_range`
-# against `any_range` to classify.
+# Dual query — distinguishes "no relationship with the publisher" from
+# "has the publisher but this year is out of coverage".
 # ---------------------------------------------------------------------------
 
 
 @dataclass
-class SfxDualResult:
-    """Result of two SFX queries per DOI.
+class DualResult:
+    """Result of the coverage-range comparison.
 
-    - `in_range`: target URLs returned by the default (date-filtered)
-      query — publishers whose coverage range actually includes this
-      DOI. These are the routes the library can unlock right now.
-    - `any_range`: target URLs returned with `sfx.ignore_date_threshold=1`
-      — every publisher SFX knows has this journal, regardless of
-      whether coverage reaches this DOI's year. Always a superset of
-      `in_range`.
-    - `query_ok`: False if either SFX call failed. Callers may still
-      see partial data but should lean toward fail-open.
+    - `in_range`: targets from the date-filtered query — routes the
+      library can unlock right now.
+    - `any_range`: targets ignoring coverage dates — every platform the
+      resolver knows for the journal. A superset of `in_range`.
+    - `query_ok`: False if either call failed.
+    - `date_filtering_available`: False when the dialect cannot filter on
+      coverage dates at all (Alma). Both lists are then the *same* query,
+      so a caller must not read `in_range == any_range` as evidence that
+      this DOI is inside coverage — it is evidence of nothing.
     """
 
-    in_range: list[str]
-    any_range: list[str]
+    in_range: list[FulltextTarget]
+    any_range: list[FulltextTarget]
     query_ok: bool = True
+    date_filtering_available: bool = True
 
 
-def sfx_lookup_dual(
+def lookup_dual(
     doi: str, cfg: LibraryResolverConfig,
     *,
     issn: str | None = None,
     pub_date: str | None = None,
     volume: str | None = None,
-) -> SfxDualResult:
-    """Run both SFX queries (date-filtered + ignore-date) and return
-    the target URL lists together.
+) -> DualResult:
+    """Both coverage queries, or one when the dialect cannot filter dates.
 
-    Each call is cached independently per `(doi, ignore_date_threshold)`
-    — expected to be a cache hit on every run after the first per-DOI
-    pair. On the first run, cost is ~2 × 1s per DOI.
-
-    `issn`/`pub_date`/`volume` are optional and only matter for Alma
-    endpoints — see `_query_target_urls`'s fallback logic (BACKLOG.md
-    P11).
+    On SFX this is two calls (`sfx.ignore_date_threshold` off then on),
+    each cached independently — a cache hit on every run after the first.
+    On Alma it is **one** call reused for both fields, because live
+    testing found Alma returns identical results for correct, wrong and
+    absent date/volume values; a second request would double traffic for
+    the same answer.
     """
-    if not cfg.openurl_base:
-        return SfxDualResult(in_range=[], any_range=[], query_ok=False)
+    if cfg.resolver is None:
+        return DualResult([], [], query_ok=False)
 
-    in_range = _query_target_urls(
+    in_range = _query_targets(
         doi, cfg, ignore_date_threshold=False,
         issn=issn, pub_date=pub_date, volume=volume,
     )
-    any_range = _query_target_urls(
+    if not cfg.resolver.supports_date_threshold:
+        return DualResult(
+            in_range=in_range or [],
+            any_range=in_range or [],
+            query_ok=in_range is not None,
+            date_filtering_available=False,
+        )
+
+    any_range = _query_targets(
         doi, cfg, ignore_date_threshold=True,
         issn=issn, pub_date=pub_date, volume=volume,
     )
-    query_ok = in_range is not None and any_range is not None
-    return SfxDualResult(
+    return DualResult(
         in_range=in_range or [],
         any_range=any_range or [],
-        query_ok=query_ok,
+        query_ok=in_range is not None and any_range is not None,
     )
 
 
-# ---------------------------------------------------------------------------
-# Preferred target selection — when SFX offers several full-text
-# routes, pick the one whose platform we've found most reliable for
-# automated saves.
-# ---------------------------------------------------------------------------
-
-
-def _platform_rank(url: str, priority: tuple[str, ...]) -> int:
-    """Rank for `url`: index into `priority` (lower = better). URLs whose
-    effective host doesn't match any priority entry return len(priority)
-    — they lose the tie-break to any ranked platform but still beat
-    "no target at all"."""
-    host = _effective_host(url)
-    if not host:
-        return len(priority)
-    for i, dom in enumerate(priority):
-        dom = dom.lower()
-        if host == dom or host.endswith("." + dom):
-            return i
-    return len(priority)
-
-
-def first_fulltext_target_preferred(
-    doi: str,
+def targets_match_domains(
+    targets: list[FulltextTarget],
+    domains: tuple[str, ...],
     cfg: LibraryResolverConfig,
     *,
-    priority: tuple[str, ...] = SFX_PLATFORM_PRIORITY,
-    in_range_only: bool = True,
-    required_domains: tuple[str, ...] = (),
-    issn: str | None = None,
-    pub_date: str | None = None,
-    volume: str | None = None,
-) -> str | None:
-    """Return one SFX full-text target URL for `doi`, picking the
-    highest-priority platform.
+    pub_date: int | str | None = None,
+) -> bool:
+    """True when any target is served by one of `domains`.
 
-    - `in_range_only=True` (default): use the date-filtered query —
-      platforms that can actually unlock this DOI. Set False to use
-      the ignore-date query (informs the Case-2 skip decision, rarely
-      the right choice for handing a URL to a downloader).
-    - `required_domains`: when non-empty, restrict candidates to
-      targets whose effective host matches one of these domains.
-      Empty means "any platform".
-    - `issn`/`pub_date`/`volume`: optional, only matter for Alma
-      endpoints — see `_query_target_urls`'s fallback logic
-      (BACKLOG.md P11).
+    Exists so callers comparing `DualResult` lists against a handler's
+    reachable domains go through the dialect's host-or-name matching
+    rather than re-implementing a hostname test that is blind on Alma.
 
-    Ranking uses `priority` (default `SFX_PLATFORM_PRIORITY`). Ties
-    broken by SFX's response order (stable — first in list wins).
-    Returns None when no target matches.
+    `pub_date` additionally requires that the matching target's coverage
+    include that year. **This is what restores Case 2 detection on a
+    dialect that cannot filter by date in the query.** Asked with a year,
+    the answer is "the library can reach this platform *for this
+    article*"; asked without one, merely "the library has this
+    platform". Diffing the two is the Case 2 test, reached by per-target
+    coverage instead of SFX's `sfx.ignore_date_threshold`.
 
-    Collapses "no coverage" and "couldn't ask" into the same None. Use
-    `lookup_fulltext_target` when that difference matters — for gating
-    decisions it always does.
+    A target whose coverage is absent or unparseable counts as matching —
+    unknown is not evidence of exclusion, and on SFX every target is
+    unknown, so passing `pub_date` there changes nothing.
     """
-    return lookup_fulltext_target(
-        doi, cfg, priority=priority, in_range_only=in_range_only,
-        required_domains=required_domains, issn=issn, pub_date=pub_date,
-        volume=volume,
-    ).url
+    if cfg.resolver is None:
+        return False
+    for t in targets:
+        if not cfg.resolver.matches_domains(t, domains):
+            continue
+        if pub_date is not None and t.covers_year(pub_date) is False:
+            continue
+        return True
+    return False
 
 
-class TargetLookup(NamedTuple):
-    """Outcome of a link-resolver query.
-
-    `query_ok=False` means the resolver could not answer at all —
-    unset config, transport error, non-200, unparseable XML. That is
-    NOT evidence of missing access, and callers must not treat it as
-    such; `url=None` with `query_ok=True` is the real "library has no
-    licensed route" verdict.
-    """
-
-    url: str | None
-    query_ok: bool
-
-
-def lookup_fulltext_target(
-    doi: str,
-    cfg: LibraryResolverConfig,
-    *,
-    priority: tuple[str, ...] = SFX_PLATFORM_PRIORITY,
-    in_range_only: bool = True,
-    required_domains: tuple[str, ...] = (),
-    issn: str | None = None,
-    pub_date: str | None = None,
-    volume: str | None = None,
-) -> TargetLookup:
-    """`first_fulltext_target_preferred`, but reporting query health too.
-
-    Exists because the pre-flight is a *gate*: an item with no target
-    never opens a browser. Failing that gate closed on an ambiguous
-    signal means a transport blip is indistinguishable from a real
-    entitlement gap, which is exactly what `has_fulltext_access`'s
-    long-standing fail-open docstring said not to do — except nothing
-    in production ever called it.
-    """
-    if not cfg.openurl_base:
-        return TargetLookup(None, False)
-
-    urls = _query_target_urls(
-        doi, cfg, ignore_date_threshold=not in_range_only,
-        issn=issn, pub_date=pub_date, volume=volume,
-    )
-    if urls is None:
-        return TargetLookup(None, False)
-    if not urls:
-        return TargetLookup(None, True)
-
-    if required_domains:
-        urls = [u for u in urls if _target_matches_domains(u, required_domains)]
-        if not urls:
-            return TargetLookup(None, True)
-
-    # Stable sort: same rank keeps SFX's response order.
-    return TargetLookup(min(urls, key=lambda u: _platform_rank(u, priority)), True)
-
-
-def _cache_key(doi: str, ignore_date_threshold: bool = False) -> str:
-    """Cache key combining DOI and the ignore-date-threshold flag.
-
-    When `ignore_date_threshold=False` (the default date-filtered
-    query) the key is just `doi`, so existing cache entries written
-    by v0.3.x keep the same key and earlier tests' `c.put("10.1/x", …)`
-    calls still collide with the canonical Query-B key — the test
-    shape doesn't change.
-    """
-    if ignore_date_threshold:
-        return f"{doi}::any"
-    return doi
-
-
-# ---------------------------------------------------------------------------
-# Config loader — turns `[library]` in config.toml into a concrete
-# resolver config, or None when the user hasn't set it up.
-# ---------------------------------------------------------------------------
-
-
-def load_from_config(
-    session: requests.Session,
-    cache_dir: str | Path | None = None,
-) -> LibraryResolverConfig | None:
-    """Build a resolver config from `[library] openurl_base` in config.toml.
-
-    Returns None when the config key is absent — callers MUST treat
-    None as "no pre-flight, fall through to the handler directly".
-    """
-    from core.config_loader import get
-
-    base = get("library", "openurl_base", env="LIBRARY_OPENURL_BASE").strip()
-    if not base:
-        return None
-    cache = SfxCache(cache_dir) if cache_dir else None
-    return LibraryResolverConfig(
-        openurl_base=base,
-        session=session,
-        cache=cache,
-    )
+__all__ = [
+    "DualResult",
+    "FulltextTarget",
+    "LibraryResolverConfig",
+    "PLATFORM_PRIORITY",
+    "Platform",
+    "ResolverCache",
+    "TargetLookup",
+    "effective_host",
+    "first_fulltext_target_preferred",
+    "has_fulltext_access",
+    "host_matches_domains",
+    "load_from_config",
+    "lookup_dual",
+    "lookup_fulltext_target",
+    "targets_match_domains",
+]

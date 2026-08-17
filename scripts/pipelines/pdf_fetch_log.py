@@ -10,9 +10,12 @@ real example from the session log) which Claude then has to translate.
 
 This module:
 - Defines the canonical schema (`FAILURE_FIELDS`).
-- Classifies failures from `(item_type, http_status)` into one of
-  four causes (`FailureCause`) using rules that match the
-  systematic-review skill's exclusion-code conventions.
+- Classifies failures into a `FailureCause` using rules that match the
+  systematic-review skill's exclusion-code conventions. The inputs are
+  `(item_type, http_status)` plus the caller's account of what it has
+  *not* yet tried — because the one cause that licenses an exclusion,
+  `UNAVAILABLE`, is a claim about every route rather than about the
+  pass that happens to be running.
 - Appends rows to a `pdf_fetch_log.csv` at the user's chosen path,
   schema-stable + idempotent via `csv_io.upsert_by_item_key` keyed
   by `(item_key, source)` — re-running the same fetcher on the same
@@ -49,26 +52,50 @@ class FailureCause(StrEnum):
     Suggested action: flag for institutional ILL — not an exclusion."""
 
     BROWSER_REQUIRED = "BROWSER_REQUIRED"
-    """The DOI resolves to a publisher this plugin has a browser handler
-    for, and that handler has not been run for this item.
+    """A route the plain-HTTP cascade cannot take is still untried, and
+    that route is `enrich_pdfs.py --sources browser`.
 
-    Cloudflare-gated publishers (Sage, Academy of Management, APA,
-    Emerald, INFORMS, OUP, Taylor & Francis, AAA) block the plain-HTTP
-    cascade before any API key matters, so the automated pass returns
-    either a 403 or nothing at all. Both used to land in ACCESS_BLOCKED
-    or UNAVAILABLE, whose suggested actions ("flag for ILL", "FE6, no
-    fulltext available") are *wrong* here: the PDF is reachable, it just
-    needs `enrich_pdfs.py --sources browser`.
+    Items reach this cause two ways. Either the DOI resolves to a
+    publisher this plugin has a browser handler for and that handler has
+    not been run — Cloudflare-gated publishers (Sage, Academy of
+    Management, APA, Emerald, INFORMS, OUP, Taylor & Francis, AAA,
+    Springer) block the cascade before any API key matters, so the
+    automated pass returns either a 403 or nothing at all. Or no handler
+    covers the publisher *and the browser pass has not run at all*, in
+    which case two publisher-agnostic routes are still ahead of the
+    item: the link resolver's licensed platforms (EBSCOhost, JSTOR,
+    ProQuest, reached via `[library] openurl_base`) and the Zotero
+    Connector. Neither is keyed on the DOI prefix, which is why "no
+    handler matched" never means "nothing left to try".
+
+    Both used to land in ACCESS_BLOCKED or UNAVAILABLE, whose suggested
+    actions ("flag for ILL", "FE6, no fulltext available") are *wrong*
+    here: the PDF is reachable, it just needs the browser pass.
 
     This is not an exclusion and must never be adjudicated as one until
     the browser pass has actually been tried."""
 
     UNAVAILABLE = "UNAVAILABLE"
-    """No fetcher matched (DOI not in any provider) or every provider
-    returned 404 / 5xx, *and* no untried browser handler covers the
-    publisher. The PDF probably doesn't exist online in any form the
-    pipeline can reach. Suggested FE code: FE6 (no fulltext
-    available)."""
+    """Every route the pipeline has was tried, and none produced a PDF.
+
+    The only cause that licenses a full-text-unavailable exclusion (FE6
+    — see `SUGGESTED_FE_CODE`), so it demands the strongest evidence of
+    any cause here, and callers may only reach it once they have run out
+    of routes (`browser_pass_untried=False`).
+
+    Two things it is *not*. It is not "the API cascade came back empty":
+    that cascade cannot reach a Cloudflare-gated publisher, a
+    link-resolver platform, or anything the Zotero Connector saves, so
+    its silence is no evidence at all about those routes. And it is not
+    one source's 404 while another route remains untried.
+
+    The rule is written in blood: a live run logged 227 of these, every
+    single one with an empty `http_status` — meaning not one source ever
+    answered "not found" — across IEEE, JSTOR, ACM, Cambridge and
+    Elsevier articles. Three of them (Zotero keys PD2ZFM9M, JTMVVXI5,
+    FEE68VW2) then opened on the first click through EBSCOhost. Each had
+    been written into the audit's `true_negative` key file, one
+    adjudication pass away from a `fulltext:unavailable` tag."""
 
     NETWORK_ERROR = "NETWORK_ERROR"
     """Transport-level failure (timeout, DNS, connection refused). Not
@@ -99,9 +126,19 @@ class FailureCause(StrEnum):
 # `publisher` is the human-readable publisher behind the DOI, resolved
 # from `doi_resolver_cache.json` — the dimension a triage report needs
 # and the one thing the old schema could not express.
+#
+# `untried_handler` is the browser handler that has *not* had its turn
+# yet — the answer to "what next", where `source` answers "what already
+# happened". They were one column for a while, and the audit read
+# `source` as if it were the handler slug. It never was: the API cascade
+# wrote whichever fetcher it had asked last, so a live report offered
+# `--sources browser --publisher core` for 428 recoverable items. Two
+# columns, two questions. `csv_io.upsert_by_item_key` empty-fills this
+# for rows written before it existed, so old logs still read.
 FAILURE_FIELDS: list[str] = [
     "timestamp", "item_key", "doi", "item_type",
     "attempt", "source", "publisher", "http_status", "cause",
+    "untried_handler",
 ]
 
 # Keyed by (item_key, source): one row per item *per attempt*.
@@ -134,6 +171,7 @@ def classify_failure(
     *,
     scope_types: frozenset[str] | None = None,
     untried_browser_handler: str = "",
+    browser_pass_untried: bool = False,
 ) -> FailureCause:
     """Classify a PDF-fetch failure based on item type and HTTP response.
 
@@ -149,20 +187,29 @@ def classify_failure(
          and in both cases the right next step is the browser pass, not
          an ILL request or an FE6 exclusion.
       3. http_status in (401, 402, 403) → ACCESS_BLOCKED.
-      4. http_status in (404, 410) → UNAVAILABLE.
-      5. http_status >= 500 (server error) → NETWORK_ERROR (treat as
+      4. http_status >= 500 (server error) → NETWORK_ERROR (treat as
          transient — server may recover).
-      6. http_status is None and no exception info → UNAVAILABLE
-         (every fetcher returned None without raising; PDF probably
-         doesn't exist).
+      5. Everything else — a 404 / 410, or no verdict from anyone —
+         → UNAVAILABLE, *unless* `browser_pass_untried`, in which case
+         BROWSER_REQUIRED.
 
-    `untried_browser_handler` is the *caller's* judgement, not a lookup
-    done here: only the orchestrator knows which pass it is in and
-    therefore whether the handler has already had its turn. Passing a
-    handler name that was already tried and failed would relabel a true
-    negative as recoverable. `pdf_fetch_log` stays free of any
-    `fetchers.browser` import for the same reason this function is
-    documented as pure.
+    Both flags are the *caller's* judgement, not a lookup done here:
+    only the orchestrator knows which pass it is in and therefore what
+    has already had its turn. Passing a handler name that was already
+    tried and failed, or claiming the browser pass is untried after
+    running it, would relabel a true negative as recoverable.
+    `pdf_fetch_log` stays free of any `fetchers.browser` import for the
+    same reason this function is documented as pure.
+
+    On `browser_pass_untried`: the API cascade is one route among
+    several and it is the *first*. Reading its silence as "no full text
+    exists" is reading absence of evidence as evidence of absence, and
+    UNAVAILABLE is the one cause that licenses an exclusion, so that
+    misreading is the expensive one — see `FailureCause.UNAVAILABLE`
+    for the 227-row live run this guard comes from. Note the guard is
+    deliberately confined to the would-be-UNAVAILABLE branch: rule 3
+    and rule 4 rest on a real answer from a real server, and both name
+    a next step that is already correct and already not an exclusion.
 
     Pure function — safe to call from any thread / fetcher.
     """
@@ -173,10 +220,10 @@ def classify_failure(
         return FailureCause.BROWSER_REQUIRED
     if http_status in (401, 402, 403):
         return FailureCause.ACCESS_BLOCKED
-    if http_status in (404, 410):
-        return FailureCause.UNAVAILABLE
     if http_status is not None and http_status >= 500:
         return FailureCause.NETWORK_ERROR
+    if browser_pass_untried:
+        return FailureCause.BROWSER_REQUIRED
     return FailureCause.UNAVAILABLE
 
 
@@ -192,6 +239,7 @@ def log_failure(
     http_status: int | None = None,
     cause: FailureCause | None = None,
     untried_browser_handler: str = "",
+    browser_pass_untried: bool = False,
 ) -> FailureCause:
     """Append a row to `pdf_fetch_log.csv` describing why this fetch failed.
 
@@ -207,6 +255,7 @@ def log_failure(
             item_type=item_type,
             http_status=http_status,
             untried_browser_handler=untried_browser_handler,
+            browser_pass_untried=browser_pass_untried,
         )
     row = {
         "timestamp": datetime.now(UTC).isoformat(),
@@ -218,6 +267,7 @@ def log_failure(
         "publisher": publisher,
         "http_status": "" if http_status is None else str(http_status),
         "cause": cause.value,
+        "untried_handler": untried_browser_handler,
     }
     csv_io.upsert_by_item_key(
         log_path, row, FAILURE_FIELDS, key_field=FAILURE_KEY_FIELDS,
@@ -282,6 +332,29 @@ def group_by_cause(failures: list[dict[str, str]]) -> dict[str, list[dict[str, s
     return out
 
 
+#: Verdict precedence for `latest_per_item`, most actionable first.
+#: OUT_OF_SCOPE leads because item type is decided independently of
+#: retrieval and outranks it; UNAVAILABLE trails because it is the only
+#: verdict that ends in an exclusion.
+#:
+#: The invariant that matters: **every cause in `RECOVERABLE_CAUSES`
+#: must sort ahead of UNAVAILABLE.** CORRUPT_DOWNLOAD and UPLOAD_FAILED
+#: were absent from this table for a while, which scored them *below*
+#: UNAVAILABLE via the lookup default — so an item whose PDF had been
+#: downloaded successfully and was sitting in the local cache collapsed
+#: to "FE6 (no fulltext available)" the moment any API source had also
+#: logged a miss for it. `test_every_cause_has_a_precedence` guards it.
+CAUSE_PRECEDENCE: tuple[str, ...] = (
+    FailureCause.OUT_OF_SCOPE.value,
+    FailureCause.BROWSER_REQUIRED.value,
+    FailureCause.UPLOAD_FAILED.value,
+    FailureCause.CORRUPT_DOWNLOAD.value,
+    FailureCause.ACCESS_BLOCKED.value,
+    FailureCause.NETWORK_ERROR.value,
+    FailureCause.UNAVAILABLE.value,
+)
+
+
 def latest_per_item(failures: list[dict[str, str]]) -> dict[str, dict[str, str]]:
     """Collapse per-source rows to one verdict per item, worst-first.
 
@@ -291,13 +364,7 @@ def latest_per_item(failures: list[dict[str, str]]) -> dict[str, dict[str, str]]
     BROWSER_REQUIRED row is recoverable regardless of how many API
     sources returned 404 alongside it.
     """
-    priority = {
-        FailureCause.OUT_OF_SCOPE.value: 0,
-        FailureCause.BROWSER_REQUIRED.value: 1,
-        FailureCause.ACCESS_BLOCKED.value: 2,
-        FailureCause.NETWORK_ERROR.value: 3,
-        FailureCause.UNAVAILABLE.value: 4,
-    }
+    priority = {cause: i for i, cause in enumerate(CAUSE_PRECEDENCE)}
     best: dict[str, dict[str, str]] = {}
     for row in failures:
         key = row.get("item_key", "")

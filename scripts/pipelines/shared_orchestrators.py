@@ -4,9 +4,14 @@ Each of `enrich_abstracts.py`, `enrich_pdfs.py`, and `enrich_dois.py`
 writes an append-only CSV run-log, and the resumable ones read it back
 to skip already-processed items. That logic used to be re-implemented in
 all three scripts: a private `_open_log` (identical), and an
-`_already_done` / `_load_done_dois` pair that differed only in the
+`_already_done` / `_load_done_items` pair that differed only in the
 status string it filtered on (`"updated"` vs `"attached"`). Centralising
 it here means a schema or behaviour change happens in one place.
+
+Both resumable orchestrators key their resume set on `item_key`. They
+used to key it on `doi`, which quietly let one record stand in for every
+duplicate of the same article — see either `_load_done_items` docstring
+for why that was never a trade-off worth making.
 
 The column lists themselves live in `log_schemas` (imported by both the
 scripts and any downstream template that has to read these CSVs).

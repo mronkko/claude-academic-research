@@ -72,13 +72,29 @@ def _write(values: dict) -> None:
     load_config.cache_clear()
 
 
-def append_to_list(section: str, key: str, value: str) -> None:
+def append_to_list(
+    section: str, key: str, value: str, *, promote_scalar: bool = False,
+) -> None:
     """Append `value` to the list at `[section] key`, creating the
     section/key if missing.
 
     Idempotent: appending a value already in the list is a no-op.
     Raises ValueError if the existing key is present but is not a list
     — refuses to overwrite a scalar.
+
+    `promote_scalar=True` rewrites an existing scalar as a one-element
+    list and appends to that instead of raising. Off by default, because
+    for most keys a scalar *is* the schema and widening it silently
+    would bury a typo. It exists for the keys that genuinely accept
+    either shape: `[library] openurl_base` takes one endpoint or
+    several, and a researcher who gains a second affiliation has to be
+    able to get from the first shape to the second. Hand-editing is not
+    the answer — a `permissions.deny` rule blocks the Read tool on
+    config.toml, so an agent cannot see the file to edit it safely.
+
+    The incumbent keeps position 0. For `openurl_base` that is load
+    bearing: the first entry is the primary, which retains the existing
+    cache keys and breaks ranking ties.
     """
     values = _read()
     sect = values.setdefault(section, {})
@@ -88,6 +104,9 @@ def append_to_list(section: str, key: str, value: str) -> None:
     elif isinstance(existing, list):
         if value not in existing:
             existing.append(value)
+    elif promote_scalar:
+        incumbent = str(existing)
+        sect[key] = [incumbent] if incumbent == value else [incumbent, value]
     else:
         raise ValueError(
             f"[{section}] {key} is not a list "

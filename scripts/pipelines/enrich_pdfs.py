@@ -55,10 +55,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
+import copy
 import os
 import re
 import sys
 import threading
+from collections.abc import Collection
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date
@@ -110,6 +113,194 @@ _SOURCE_ALIASES = {
 # "callers must serialize externally" contract.
 _FAILURE_LOG_LOCK = threading.Lock()
 
+# `source` value for an API-cascade row that no fetcher answered: every
+# source returned None without raising. The cascade failed as a unit and
+# no individual member of it did anything worth recording, so the row
+# says that instead of picking one. Also stable across runs, which keeps
+# `pdf_fetch_log`'s (item_key, source) upsert key from accumulating a
+# fresh row each time the cascade's ordering or membership shifts.
+_API_CASCADE_SOURCE = "api_cascade"
+
+# Consecutive network-layer failures that mean the machine is offline
+# rather than the publisher being unhelpful. Low enough to stop the
+# bleeding fast (the observed outage failed items at ~1.2 s each), high
+# enough that a flaky link dropping the odd request rides through —
+# `consecutive_transport` resets on any non-transport outcome.
+_OUTAGE_THRESHOLD = 5
+
+
+# --- Concurrent browser lanes ----------------------------------------------
+#
+# A "lane" is one Playwright page driving one handler instance. All the
+# lanes for a publisher share a single persistent BrowserContext, which
+# is the whole reason this is worth doing: the profile directory holds
+# the Cloudflare clearance cookies and the institutional SSO / EZproxy
+# session, Chromium locks that directory, and a second browser on a
+# second profile would therefore need every one of those logins solved
+# again. Tabs in one context inherit them for free, and Chromium already
+# gives each tab its own renderer process, so the parallelism is real.
+#
+# What this does NOT parallelise: the Zotero Connector pass. It drives a
+# single Zotero desktop through a single translator and asks a human to
+# confirm each new host — `effective_lanes` pins it to 1 regardless.
+
+
+def effective_lanes(handler, requested: int) -> int:
+    """How many pages to drive `handler` with.
+
+    Two ceilings, and the smaller wins. `--browser-workers` is the
+    user's, for the whole run. Each handler's `concurrency` is the
+    publisher's, and it is a finding rather than an unset default —
+    `sage.py`'s module comment ("Keep concurrency at 1 and a 2.5-second
+    delay between") records what a live run established about that
+    platform's tolerance. Raising the flag must not be able to overrule
+    it, or the flag becomes a way to get quietly rate-limited.
+
+    A handler that attaches directly is pinned to one lane whatever
+    either number says: that is the Connector, and there is one Zotero
+    desktop.
+    """
+    if getattr(handler, "attaches_directly", False):
+        return 1
+    declared = int(getattr(handler, "concurrency", 1) or 1)
+    return max(1, min(int(requested or 1), declared))
+
+
+class LaneCoordinator:
+    """Cross-lane state for one concurrent handler run.
+
+    Three facts have to be shared by every lane driving a publisher, and
+    each was a plain local in the serial loop:
+
+    * `skip_remaining` — the user answered the Option-4 prompt with
+      "skip". Every lane must honour that, not only the one that asked.
+    * the outage breaker's count. "Consecutive" stops being literal
+      under concurrency, but the fact it detects — this machine has no
+      network — was never per-lane, and N lanes reach the threshold N
+      times sooner, which is the direction you want when the alternative
+      is shredding the queue at a second an item.
+    * whether the prompt has already fired, so N simultaneous failures
+      ask the human once.
+
+    The gate has no serial counterpart. While a prompt is open every
+    other lane parks *before* claiming its next item, so an answer of
+    "skip the rest" cannot arrive after three more lanes have already
+    opened pages against a publisher the user just declined. Claiming
+    and checking are plain attribute access with no `await` between, so
+    the event loop cannot interleave them and no lock is needed.
+    """
+
+    def __init__(self, *, outage_threshold: int = _OUTAGE_THRESHOLD) -> None:
+        self._outage_threshold = outage_threshold
+        self._gate = asyncio.Event()
+        self._gate.set()
+        self.skip_remaining = False
+        self.prompt_fired = False
+        self.consecutive_transport = 0
+        #: Set once a lane raises `NetworkOutage`. Lanes stop claiming
+        #: work rather than being cancelled, so nothing is abandoned
+        #: mid-download and un-attempted items stay unlogged — which is
+        #: what makes them re-runnable.
+        self.outage: BaseException | None = None
+        #: Released once one lane has finished an item, so the rest do
+        #: not race it through session establishment. See `await_warm`.
+        self._warm = asyncio.Event()
+        #: Earliest time the next request may leave, shared by all lanes.
+        self._next_request_at = 0.0
+        self._pace_lock = asyncio.Lock()
+
+    async def wait_until_open(self) -> None:
+        await self._gate.wait()
+
+    async def pace(self, delay_s: float) -> None:
+        """Space requests by `delay_s` across *all* lanes, not per lane.
+
+        Each lane sleeping `delay_s` before its own download spaces that
+        lane and nothing else: N lanes started together sleep in
+        lockstep and then fire simultaneously, which is precisely the
+        burst a rate limiter watches for. A live 4-lane EBSCO run took
+        HTTP 429 from the institutional proxy on the extra tabs.
+
+        Each caller reserves its slot under the lock and sleeps outside
+        it, so lanes queue up at `delay_s` intervals instead of all
+        measuring the same "now" and picking the same moment.
+        """
+        if delay_s <= 0:
+            return
+        loop = asyncio.get_running_loop()
+        async with self._pace_lock:
+            now = loop.time()
+            wait = max(0.0, self._next_request_at - now)
+            self._next_request_at = max(now, self._next_request_at) + delay_s
+        if wait:
+            await asyncio.sleep(wait)
+
+    async def await_warm(self) -> None:
+        """Hold a lane until another has completed one item.
+
+        Pacing spaces requests but cannot fix what the first requests
+        collide *over*. Against EBSCO through an institutional proxy,
+        four cold lanes each began their own OIDC handshake and stopped
+        at `…/oidc/callback` — the session was being established four
+        times at once. The item that ran after those settled succeeded.
+
+        So one lane goes first and the rest join a warm session. The
+        gate opens on the first *completed* item, success or failure:
+        the point is that the handshake is over, and a lane that failed
+        for some unrelated reason must not strand the others.
+        """
+        await self._warm.wait()
+
+    def mark_warm(self) -> None:
+        self._warm.set()
+
+    def note_transport_failure(self) -> bool:
+        """True when this run of transport errors means we are offline."""
+        self.consecutive_transport += 1
+        return self.consecutive_transport >= self._outage_threshold
+
+    def note_other_outcome(self) -> None:
+        """Any non-transport outcome clears the breaker."""
+        self.consecutive_transport = 0
+
+    def claim_prompt(self) -> bool:
+        """True for exactly one lane — the one that gets to ask."""
+        if self.prompt_fired:
+            return False
+        self.prompt_fired = True
+        return True
+
+    @contextlib.asynccontextmanager
+    async def prompting(self):
+        """Hold every other lane at the gate while the human answers."""
+        self._gate.clear()
+        try:
+            yield
+        finally:
+            self._gate.set()
+
+
+class _SerialisedWriter:
+    """`log_writer` guarded by a lock, for concurrent lanes.
+
+    `_attach_and_log` runs in a worker thread when lanes > 1 — its
+    Zotero upload is blocking `requests`, and left on the event loop it
+    would stall every other lane for the duration of each upload,
+    collapsing the concurrency to roughly nothing. That puts its log row
+    off-loop while the lanes keep writing theirs on it. One lock over
+    `writerow` covers it: every row is a single call against a shared
+    file handle.
+    """
+
+    def __init__(self, writer) -> None:
+        self._writer = writer
+        self._lock = threading.Lock()
+
+    def writerow(self, row) -> None:
+        with self._lock:
+            self._writer.writerow(row)
+
+
 _PLAYWRIGHT_MISSING_MSG = (
     "ERROR: the playwright package is not installed.\n"
     "  - Invoke this script via `uv run` so its inline dependencies\n"
@@ -155,6 +346,13 @@ class Config:
     #: library, which is a surprising thing to find there unless it was
     #: asked for. See ScienceDirectSource._fetch_xml_fallback.
     elsevier_render_xml_to_pdf: bool = False
+    #: Opt-in for the paid OpenAlex Content API ($0.01 per PDF), the one
+    #: per-item cost in the cascade. Defaults to True because having set
+    #: `OPENALEX_API_KEY` at all is itself an opt-in signal, and an
+    #: existing setup must not silently lose a working tier on upgrade.
+    #: The wizard asks outright, so new setups record a real answer.
+    #: See fetchers/openalex.py's `_OpenAlexClient._paid_enabled`.
+    openalex_use_paid_content_api: bool = True
 
 
 def _load_config() -> Config:
@@ -164,6 +362,13 @@ def _load_config() -> Config:
             get("elsevier", "render_xml_to_pdf", env="ELSEVIER_RENDER_XML_TO_PDF"),
         ),
         openalex_api_key=get("openalex", "api_key", env="OPENALEX_API_KEY"),
+        openalex_use_paid_content_api=fetchers.openalex.coerce_paid_opt_in(
+            get(
+                "openalex", "use_paid_content_api",
+                env="OPENALEX_USE_PAID_CONTENT_API",
+            ),
+            default=True,
+        ),
         wiley_tdm_token=get("wiley", "tdm_token", env="WILEY_TDM_TOKEN"),
         semantic_scholar_api_key=get(
             "semantic_scholar", "api_key", env="SEMANTIC_SCHOLAR_API_KEY",
@@ -200,9 +405,26 @@ def _open_log(path: str):
 DONE_STATUSES = ("attached", "attached_via_connector")
 
 
-def _load_done_dois(path: str) -> set[str]:
+def _load_done_items(path: str) -> set[str]:
+    """Zotero item keys this log records as already carrying a PDF.
+
+    **Keyed on the item, not the DOI** — the same correction made in
+    `enrich_abstracts._already_done`, for the same reason. A library
+    assembled by a systematic-review import holds duplicate records
+    routinely; keying the resume set on the DOI meant attaching a PDF to
+    one copy permanently barred every other copy from getting one, and a
+    consumer that resolves the DOI to a different copy sees an item with
+    no PDF and no way to ever acquire one.
+
+    Nothing is lost by the change. The per-item gate that follows in
+    `main()` — `pdf_map()`, read off the live library — is what actually
+    establishes "this item is done", as the note on `DONE_STATUSES`
+    above already observes. Re-fetching a sibling is near-free besides:
+    `cache_path_for` keys the PDF cache on the DOI, so the second copy
+    attaches from disk without a second download.
+    """
     return shared_orchestrators.load_done_keys(
-        path, statuses=DONE_STATUSES, key_field="doi",
+        path, statuses=DONE_STATUSES, key_field="item_key",
     )
 
 
@@ -285,10 +507,120 @@ def _triage_context(doi: str, cache_dir: str) -> tuple[str, str]:
     return publisher, ""
 
 
+def _report_outage(exc: Exception) -> None:
+    """Explain a network-outage stop, and say what it does *not* mean.
+
+    The important half is the disclaimer. Items not attempted get no log
+    row at all, so a later audit sees them as untried rather than as
+    articles that could not be found — which is the difference between
+    re-running and excluding them from a review.
+    """
+    print(
+        f"\nSTOPPED: the network went away mid-run ({exc}).\n"
+        f"  Nothing here is a verdict about any article. Items already\n"
+        f"  attempted during the outage are logged NETWORK_ERROR (retry,\n"
+        f"  not an exclusion); items not yet reached are not logged at\n"
+        f"  all. Re-run the same command once you are back online — the\n"
+        f"  cache and the resume set mean it picks up where it left off.",
+        file=sys.stderr, flush=True,
+    )
+
+
+def _pass3_target(item: dict, resolver_cfg, *, ignore_coverage: bool = False):
+    """Choose the Pass-3 full-text target for one item.
+
+    Returns `(url, query_ok, chosen_target)`. Extracted so the queue
+    preview and Pass 3 itself cannot disagree about where an item is
+    headed — they used to, and the preview was the one users read: it
+    reported "Zotero Connector (upfront): 571 papers", implying 571
+    manual saves needing Zotero desktop and a human, when two thirds of
+    them resolve to EBSCOhost and are handled unattended by Pass 4a.
+
+    Fail-open semantics are the caller's to apply, and are unchanged:
+    `query_ok=False` means "could not ask", never "no access".
+    """
+    if resolver_cfg is None:
+        return None, False, None
+    if ignore_coverage:
+        return None, True, None
+    # Imported here rather than at module scope, matching how every
+    # other resolver symbol in this file is reached: the browser/resolver
+    # stack is heavy and most entry points never touch it.
+    from fetchers.library_resolver import lookup_fulltext_target
+
+    return lookup_fulltext_target(
+        item["doi"], resolver_cfg,
+        in_range_only=True,
+        issn=item.get("issn"), pub_date=item.get("pub_date"),
+        volume=item.get("volume"),
+    )
+
+
+#: Verdicts from `classify_direct_route`, mapped to whether the
+#: publisher's own browser handler should be opened for the item.
+DIRECT_ROUTE_CASES: dict[str, bool] = {
+    "3-in-coverage": True,       # resolver: this platform holds this year
+    "2-out-of-coverage": False,  # resolver: right platform, wrong year
+    "1b-no-entitlement": False,  # resolver answered; no route via this platform
+    "1a-unknown": True,          # resolver named nothing at all — fail open
+}
+
+
+def classify_direct_route(
+    dual,
+    domains: tuple[str, ...],
+    resolver_cfg,
+    *,
+    pub_date: str | None = None,
+    handler_name: str = "",
+    direct_access: frozenset[str] | set[str] = frozenset(),
+) -> str:
+    """Should the publisher's own handler be opened? Returns a
+    `DIRECT_ROUTE_CASES` key.
+
+    The distinction that matters is between the two Case-1 outcomes,
+    which used to be a single branch commented "try direct anyway":
+
+    - **1a** — the resolver named *nothing*: unset, unreachable,
+      unparseable, or simply a journal it does not know. That is silence,
+      and silence is not evidence of missing access, so fail open. A
+      failed attempt is a real answer; a skipped one is not.
+    - **1b** — the resolver named one or more licensed routes and none of
+      them is this publisher's platform. That is evidence, and opening
+      the publisher can only fail.
+
+    Collapsing 1b into 1a is expensive. On one 655-item corpus it queued
+    60 items for a direct attempt at APA, Academy of Management, Emerald
+    and AAA — none of them licensed by the institution, AoM in particular
+    selling member access rather than institutional — each behind its own
+    Cloudflare/SSO prompt, while the resolver was already naming
+    EBSCOhost for every one of them.
+
+    `direct_access` names publishers the user reaches by other means (a
+    society membership, a second institution's login). It suppresses 1b,
+    never Case 2: 1b is a claim about *entitlement*, which a private
+    credential contradicts, whereas Case 2 is a claim about a platform's
+    *holdings*, which no credential changes.
+    """
+    from fetchers.library_resolver import targets_match_domains
+
+    if not domains:
+        return "1a-unknown"
+    if targets_match_domains(
+        dual.in_range, domains, resolver_cfg, pub_date=pub_date,
+    ):
+        return "3-in-coverage"
+    if targets_match_domains(dual.any_range, domains, resolver_cfg):
+        return "2-out-of-coverage"
+    if dual.any_range and handler_name not in direct_access:
+        return "1b-no-entitlement"
+    return "1a-unknown"
+
+
 def _year_from_zotero_date(date_str: str) -> str | None:
     """Extract a 4-digit year from Zotero's free-text `date` field
     ("2024", "2024-05-15", "May 2024", ...) for the Alma ISSN-fallback
-    query's `rft.date` (see library_resolver.py's `_query_target_urls`
+    query's `rft.date` (see library_resolver.py's `_query_targets`
     / BACKLOG.md P11). None when no year-shaped substring is found."""
     match = re.search(r"\b(1[89]\d{2}|20\d{2})\b", date_str or "")
     return match.group(1) if match else None
@@ -300,6 +632,51 @@ def _first_issn(issn_field: str) -> str | None:
     fallback query wants a single value, so take the first."""
     first = (issn_field or "").split(",")[0].strip()
     return first or None
+
+
+def _browser_failure_cause(
+    handler, transport: bool,
+) -> pdf_fetch_log.FailureCause | None:
+    """Classify a browser failure from what the handler carried back.
+
+    The default this exists to prevent is UNAVAILABLE. That is what the
+    shared classifier returns once the browser pass has run, and it is
+    the one cause licensing an FE6 exclusion — so it must mean "we asked
+    every route and were told no", never "we stopped for some reason".
+    A live 7-item run produced three failures and filed all three as
+    UNAVAILABLE: a 60 s download timeout, an *unconfirmed* no-match, and
+    an article whose record we had positively located. None of the three
+    was an answer about whether the full text can be had.
+
+    So the evidence ranks:
+
+    1. **Transport error** — the machine's connection, outranking
+       anything a page said. Nothing was asked, so nothing was answered.
+    2. **A download timeout** — for EBSCO the signed CDN URL is handed
+       over *after* the viewer loads, so a timeout there proves the
+       article exists and is reachable. Retry, never exclude.
+    3. **Any EBSCO verdict at all.** Each one is EBSCO answering about
+       the DOI, and none of the answers is "no full text exists": zero
+       records means the resolver advertises a route EBSCO cannot honour
+       for this tenant, and the others mean we found the record (or its
+       absence was unconfirmed) and failed at a later hop. All are
+       ACCESS_BLOCKED — "flag for ILL, full text exists".
+
+    Only silence — no verdict, no transport failure — is left to the
+    shared classifier.
+    """
+    if transport:
+        return pdf_fetch_log.FailureCause.NETWORK_ERROR
+    # Imported here, not at module scope: everything under
+    # `fetchers.browser` pulls in the Playwright-dependent stack, which
+    # the API-cascade paths must not need.
+    from fetchers.browser.base import is_download_timeout
+
+    if is_download_timeout(getattr(handler, "last_error", "")):
+        return pdf_fetch_log.FailureCause.NETWORK_ERROR
+    if getattr(handler, "last_verdict", ""):
+        return pdf_fetch_log.FailureCause.ACCESS_BLOCKED
+    return None
 
 
 def _log_browser_failure(
@@ -571,7 +948,11 @@ async def _drive_handler(
     without re-opening the page — saves 30s × N of timeouts.
     """
     from fetchers.browser import Counter, interaction, launch_context
-    from fetchers.browser.base import normalise_setup_result
+    from fetchers.browser.base import (
+        NetworkOutage,
+        is_transport_error,
+        normalise_setup_result,
+    )
 
     try:
         from playwright.async_api import async_playwright
@@ -595,9 +976,53 @@ async def _drive_handler(
         ctx = await launch_context(p, args.cache_dir)
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
 
-        setup_result = normalise_setup_result(
-            await handler.setup(page, items[0]["doi"])
+        # `needs_interactive_solve = False` means what it says: no bot
+        # wall, no institutional login, nothing for a human to clear — so
+        # do not open a prompt nobody needs to answer. Until this check
+        # existed the flag only changed the queue *message*, and the
+        # EBSCOhost handler (which authenticates silently on
+        # institutional IP) still blocked on a setup question, which would
+        # stall an unattended run until the control-file timeout.
+        #
+        # Asked of the queue, not of the handler: EBSCO reaches one
+        # library on IP and another through an EZproxy that demands SSO,
+        # so the answer is a property of where these particular items are
+        # routed. Solving here also matters more than it looks — the
+        # solve lands on lane 0's page *before* the extra tabs exist, and
+        # they inherit its cookies. Skip it and every lane opens cold
+        # into the same login page at once, which is unsolvable.
+        needs_solve = (
+            handler.needs_solve_for(items)
+            if hasattr(handler, "needs_solve_for")
+            else getattr(handler, "needs_interactive_solve", True)
         )
+        if needs_solve:
+            solve_hosts = (
+                handler.solve_hosts_for(items)
+                if hasattr(handler, "solve_hosts_for") else []
+            )
+            if hasattr(handler, "solve_url_for"):
+                # Point `setup()` at the route that actually carries the
+                # login, not at the handler's default landing page.
+                handler.pending_solve_url = handler.solve_url_for(items)
+            if solve_hosts:
+                proxied = (
+                    handler.proxied_route_count(items)
+                    if hasattr(handler, "proxied_route_count")
+                    else len(items)
+                )
+                print(
+                    f"  {display}: {proxied} of this queue's {len(items)} "
+                    f"routes go through a proxy that will ask you to sign in "
+                    f"({', '.join(solve_hosts)}). Solve it once here — the "
+                    f"parallel tabs open afterwards and inherit the session.",
+                    flush=True,
+                )
+            setup_result = normalise_setup_result(
+                await handler.setup(page, items[0]["doi"])
+            )
+        else:
+            setup_result = "proceed"
         if setup_result in ("skip", "always_skip"):
             # User bailed out before any item ran. "always_skip" also
             # persists the publisher to [library] no_access so future
@@ -657,23 +1082,59 @@ async def _drive_handler(
         import time
         t_start = time.monotonic()
 
-        # Session-scoped skip state (Option-4 prompt). `skip_remaining`
-        # True means don't open any more direct attempts for this
-        # handler — subsequent items are routed straight to retry.
-        prompt_fired = False
-        skip_remaining = False
+        # How many pages drive this publisher. `--browser-workers` is the
+        # run-wide ceiling; `handler.concurrency` is the publisher's own,
+        # and the smaller of the two wins. At 1 this behaves exactly as
+        # the serial loop it replaces — a single lane claims every item
+        # in order, on the page `setup()` was solved on.
+        requested_lanes = int(getattr(args, "browser_workers", 1) or 1)
+        lanes = effective_lanes(handler, requested_lanes)
+        coord = LaneCoordinator()
+        if requested_lanes > lanes:
+            # Say so rather than quietly honouring a smaller number —
+            # a user who asked for 10 and got 1 should be told which
+            # ceiling bound it and where that ceiling lives.
+            print(
+                f"  {display} caps at {lanes} "
+                f"{'tab' if lanes == 1 else 'parallel tabs'} "
+                f"(--browser-workers {requested_lanes} requested); its "
+                f"`concurrency` is set from what a live run against this "
+                f"platform established.",
+                flush=True,
+            )
+        if lanes > 1:
+            print(f"  Driving {display} on {lanes} parallel tabs.", flush=True)
+            # Every lane writes rows; `_attach_and_log` writes its from a
+            # worker thread. One lock over the shared handle.
+            log_writer = _SerialisedWriter(log_writer)
 
-        for idx, item in enumerate(items):
-            if skip_remaining:
-                # User picked "skip remaining" for this publisher.
-                if on_failure == "retry_bucket" and retry_bucket is not None:
-                    retry_bucket.append(item)
-                continue
+        cursor = 0
 
-            if handler.delay_s > 0:
-                await asyncio.sleep(handler.delay_s)
-            result = await handler.download(
-                page, ctx, item, args.cache_dir,
+        def _claim() -> dict | None:
+            """Hand out the next item, or None when the queue is spent.
+
+            No `await` between the read and the write of `cursor`, so
+            the event loop cannot hand the same item to two lanes. Also
+            the one place the outage stops the run: lanes stop claiming
+            rather than being cancelled, so un-attempted items are never
+            logged and stay re-runnable.
+            """
+            nonlocal cursor
+            if coord.outage is not None or cursor >= total:
+                return None
+            item = items[cursor]
+            cursor += 1
+            return item
+
+        async def _process(lane_handler, lane_page, item: dict) -> None:
+            if lanes > 1:
+                # Spaced across lanes rather than within one, or four
+                # lanes sleep in lockstep and fire together.
+                await coord.pace(lane_handler.delay_s)
+            elif lane_handler.delay_s > 0:
+                await asyncio.sleep(lane_handler.delay_s)
+            result = await lane_handler.download(
+                lane_page, ctx, item, args.cache_dir,
                 counter=counter, total=total, t_start=t_start,
             )
             doi = item["doi"]
@@ -683,42 +1144,77 @@ async def _drive_handler(
             # "downloaded" rather than "attached": the upload happens
             # below and has its own row in the run log.
             interaction.report_progress({
-                "event": "item", "publisher": handler.name, "doi": doi,
+                "event": "item", "publisher": lane_handler.name, "doi": doi,
                 "outcome": "failed" if result is None else "downloaded",
                 "done": counter.done, "queued": total,
             })
 
             if result is None:
-                # Per-item download failure.
-                if prompt_on_first_failure and not prompt_fired:
-                    prompt_fired = True
-                    remaining = len(items) - idx - 1
-                    answer = await asyncio.to_thread(
-                        _prompt_on_first_failure,
-                        handler, remaining, args,
-                    )
-                    if answer == "always_skip":
-                        skip_remaining = True
-                        if on_always_skip is not None:
-                            try:
-                                on_always_skip(handler.name)
-                            except Exception as e:
-                                print(
-                                    f"  WARN: could not persist "
-                                    f"[library] no_access += "
-                                    f"{handler.name!r}: {e}",
-                                    flush=True,
-                                )
-                    elif answer == "skip":
-                        skip_remaining = True
-                    # "keep" → keep looping, same as before.
+                # Per-item download failure. A network-layer error is a
+                # different animal from "this publisher has nothing":
+                # nothing was asked, so nothing was answered. Both arrive
+                # here as `None`, which is why the handler carries the
+                # reason out on `last_error` — and why each lane needs
+                # its own handler instance, since that attribute would
+                # otherwise be read across lanes.
+                transport = is_transport_error(
+                    getattr(lane_handler, "last_error", ""),
+                )
+                if transport:
+                    # The machine's connection is gone, not this
+                    # publisher's. Keep going and the queue is shredded at
+                    # roughly a second an item — a live run lost the
+                    # network for four minutes and burned 193 items that
+                    # way, every one recorded as a failed fetch.
+                    if coord.note_transport_failure():
+                        raise NetworkOutage(
+                            f"{coord.consecutive_transport} consecutive "
+                            f"network errors on {display} "
+                            f"(last: {lane_handler.last_error[:80]})"
+                        )
+                else:
+                    coord.note_other_outcome()
+
+                if prompt_on_first_failure and not transport and coord.claim_prompt():
+                    # Hold the other lanes at the gate while the human
+                    # decides. Without this, an answer of "skip the rest"
+                    # would arrive after the remaining lanes had already
+                    # opened pages against a publisher just declined.
+                    async with coord.prompting():
+                        remaining = max(total - cursor, 0)
+                        answer = await asyncio.to_thread(
+                            _prompt_on_first_failure,
+                            lane_handler, remaining, args,
+                        )
+                        if answer == "always_skip":
+                            coord.skip_remaining = True
+                            if on_always_skip is not None:
+                                try:
+                                    on_always_skip(lane_handler.name)
+                                except Exception as e:
+                                    print(
+                                        f"  WARN: could not persist "
+                                        f"[library] no_access += "
+                                        f"{lane_handler.name!r}: {e}",
+                                        flush=True,
+                                    )
+                        elif answer == "skip":
+                            coord.skip_remaining = True
+                        # "keep" → keep looping, same as before.
                 # Structured record either way: this handler was tried
                 # and did not produce a PDF. That fact is true whether
                 # or not the Connector gets a turn next, and the
                 # composite key keeps both attempts.
                 _log_browser_failure(
                     args, item,
-                    source=handler.name, publisher=handler.display_name,
+                    source=lane_handler.name,
+                    publisher=lane_handler.display_name,
+                    # NETWORK_ERROR is recoverable and says "retry next
+                    # run". Letting this default would classify it
+                    # UNAVAILABLE — the one cause that licenses a
+                    # full-text exclusion — for an article no server was
+                    # ever asked about.
+                    cause=_browser_failure_cause(lane_handler, transport),
                 )
                 if on_failure == "retry_bucket" and retry_bucket is not None:
                     retry_bucket.append(item)
@@ -726,38 +1222,111 @@ async def _drive_handler(
                     log_writer.writerow({
                         "run_date": run_date, "item_key": item["item_key"],
                         "doi": doi, "title": title,
-                        "status": "skipped_no_pdf", "source": handler.name,
+                        "status": "skipped_no_pdf", "source": lane_handler.name,
                     })
-                continue
+                return
 
             pdf_path, source_url = result
             if args.dry_run:
                 log_writer.writerow({
                     "run_date": run_date, "item_key": item["item_key"],
                     "doi": doi, "title": title,
-                    "status": "dry_run", "source": handler.name,
+                    "status": "dry_run", "source": lane_handler.name,
                 })
-                continue
+                return
 
             if not item["item_key"]:
                 print(f"  [{doi}] no Zotero item key — skipping upload", flush=True)
                 log_writer.writerow({
                     "run_date": run_date, "item_key": "",
                     "doi": doi, "title": title,
-                    "status": "downloaded_no_item", "source": handler.name,
+                    "status": "downloaded_no_item", "source": lane_handler.name,
                 })
-                continue
+                return
 
-            print(f"  [{doi}]", end=" ", flush=True)
-            _attach_and_log(
-                zot, log_writer,
+            attach = dict(
                 run_date=run_date, item_key=item["item_key"],
-                doi=doi, title=title, source=handler.name,
+                doi=doi, title=title, source=lane_handler.name,
                 pdf_path=pdf_path,
                 failure_log_path=getattr(args, "failure_log_csv", "") or "",
                 item_type=item.get("item_type", ""),
                 check_text=not getattr(args, "no_check_text", False),
             )
+            if lanes > 1:
+                # A complete line rather than a prefix `_attach_and_log`
+                # finishes: with lanes interleaving, the two halves would
+                # not land next to each other.
+                print(f"  [{doi}] attaching…", flush=True)
+                # Blocking `requests` upload — off the loop, or it stalls
+                # every other lane for its duration.
+                await asyncio.to_thread(
+                    _attach_and_log, zot, log_writer, **attach,
+                )
+            else:
+                print(f"  [{doi}]", end=" ", flush=True)
+                _attach_and_log(zot, log_writer, **attach)
+
+        async def _lane(lane_handler, lane_page, index: int) -> None:
+            """One tab, claiming items until the queue or the run ends."""
+            if index > 0:
+                # Let lane 0 finish one item first. Four cold lanes each
+                # started their own OIDC handshake against the
+                # institutional proxy and stopped at `…/oidc/callback`;
+                # the item that ran once those settled succeeded.
+                await coord.await_warm()
+            first = True
+            while True:
+                await coord.wait_until_open()
+                item = _claim()
+                if item is None:
+                    if index == 0:
+                        # Nothing to warm on — do not strand the others.
+                        coord.mark_warm()
+                    return
+                if coord.skip_remaining:
+                    # User picked "skip remaining" for this publisher.
+                    if on_failure == "retry_bucket" and retry_bucket is not None:
+                        retry_bucket.append(item)
+                    continue
+                try:
+                    await _process(lane_handler, lane_page, item)
+                except NetworkOutage as e:
+                    # Stop claiming rather than cancelling the siblings:
+                    # a cancelled lane could abandon a download mid-flight,
+                    # and items nobody attempted must stay unlogged so the
+                    # next run picks them up.
+                    coord.outage = e
+                    return
+                finally:
+                    if index == 0 and first:
+                        # Success or failure — the handshake is over,
+                        # which is the only thing the others waited for.
+                        first = False
+                        coord.mark_warm()
+
+        # Lane 0 reuses the page `setup()` was solved on. The extra lanes
+        # are new tabs in the *same* context, so they inherit its cookies
+        # — the Cloudflare clearance and the institutional session — and
+        # need no second login. Each gets its own handler instance
+        # because `last_error` is per-download instance state; copying
+        # after `setup()` carries over anything setup established.
+        lane_pages = [page]
+        lane_handlers = [handler]
+        for _ in range(lanes - 1):
+            lane_pages.append(await ctx.new_page())
+            lane_handlers.append(copy.copy(handler))
+        try:
+            await asyncio.gather(*(
+                _lane(h, pg, i)
+                for i, (h, pg) in enumerate(
+                    zip(lane_handlers, lane_pages, strict=True))
+            ))
+        finally:
+            for extra in lane_pages[1:]:
+                with contextlib.suppress(Exception):
+                    await extra.close()
+        if coord.outage is not None:
+            raise coord.outage
 
         print(
             f"\n  Total: {counter.ok} new, {counter.cached} cached, "
@@ -1059,22 +1628,22 @@ async def _drive_connector(
 
         # Group items by effective host so reCAPTCHA / EZproxy logins
         # only need to be solved once per platform instead of once per
-        # item. `_effective_host` unwraps EZproxy URLs so jstor links
+        # item. `effective_host` unwraps EZproxy URLs so jstor links
         # under ezproxy.jyu.fi cluster with jstor links that aren't.
-        from fetchers.library_resolver import _effective_host
+        from fetchers.library_resolver import effective_host
         items_sorted = sorted(
             items,
-            key=lambda it: _effective_host(it.get("sfx_target_url", "")),
+            key=lambda it: effective_host(it.get("resolver_target_url", "")),
         )
 
         current_host = None
         for item in items_sorted:
-            host = _effective_host(item.get("sfx_target_url", ""))
+            host = effective_host(item.get("resolver_target_url", ""))
             if host != current_host:
                 current_host = host
                 remaining_on_host = sum(
                     1 for it in items_sorted
-                    if _effective_host(it.get("sfx_target_url", "")) == host
+                    if effective_host(it.get("resolver_target_url", "")) == host
                 )
                 print(
                     f"\n  ══ Batch: {host or '(unknown host)'} "
@@ -1096,7 +1665,7 @@ async def _drive_connector(
             # Host-scoped skips (user pressed 's' at the first-item
             # prompt on this host) are a distinct status from "the
             # Connector tried to save but failed".
-            item_host = _effective_host(item.get("sfx_target_url", ""))
+            item_host = effective_host(item.get("resolver_target_url", ""))
             skipped_by_user = item_host in getattr(
                 handler, "_skipped_hosts", set(),
             )
@@ -1114,7 +1683,20 @@ async def _drive_connector(
             if status == "connector_save_failed":
                 # Last rung of the ladder: the library's own route was
                 # opened in a real browser and still produced nothing.
-                _log_browser_failure(args, item, source="connector")
+                # So this is where an item finally earns UNAVAILABLE —
+                # which is exactly why a dead network must not be allowed
+                # to arrive here wearing that label. Same reasoning as the
+                # publisher handlers above, and it matters more here,
+                # because nothing downstream re-examines this verdict.
+                from fetchers.browser.base import is_transport_error
+                _log_browser_failure(
+                    args, item, source="connector",
+                    cause=(
+                        pdf_fetch_log.FailureCause.NETWORK_ERROR
+                        if is_transport_error(getattr(handler, "last_error", ""))
+                        else None
+                    ),
+                )
 
         print(
             f"\n  Total: {counter.ok} new, {counter.failed} failed",
@@ -1276,6 +1858,7 @@ def _run_browser_in_process(
     connector_only: bool = False,
     session=None,
     config=None,
+    log_fh=None,
 ) -> int:
     """Classify, drive direct handlers, then drive the Connector fallback.
 
@@ -1333,21 +1916,25 @@ def _run_browser_in_process(
 
     from core import config_writer
     from fetchers.browser import (
+        EbscoHandler,
         ZoteroConnectorHandler,
         all_handlers,
+        is_ebsco_target,
         resolve_by_doi,
         resolve_by_host,
     )
+    from fetchers.browser.base import NetworkOutage
     from fetchers.doi_resolver import DoiResolverCache, resolve_doi
     from fetchers.library_resolver import (
-        SFX_PLATFORM_PRIORITY,
         load_from_config,
-        lookup_fulltext_target,
-        sfx_lookup_dual,
+        lookup_dual,
     )
-    from fetchers.library_resolver import (
-        _target_matches_domains as target_matches_domains,
-    )
+
+    # Plain hostname test, used on URLs we synthesize ourselves from a
+    # Crossref-resolved host. Distinct from `targets_match_domains`,
+    # which matches resolver *targets* and must also consider platform
+    # names because Alma's URLs never expose a publisher host.
+    from fetchers.resolvers import host_matches_domains
 
     direct_handlers = all_handlers()
     handler_by_name = {h.name: h for h in direct_handlers}
@@ -1373,13 +1960,29 @@ def _run_browser_in_process(
     # a TOML list, so we read via load_config() directly — get() only
     # returns strings.
     from core.config_loader import load_config
-    cfg_no_access = load_config().get("library", {}).get("no_access", [])
-    if isinstance(cfg_no_access, list):
-        no_access = {str(s).strip() for s in cfg_no_access if s}
-    elif isinstance(cfg_no_access, str):
-        no_access = {s.strip() for s in cfg_no_access.split(",") if s.strip()}
-    else:
-        no_access = set()
+
+    def _handler_set(key: str) -> set[str]:
+        raw = load_config().get("library", {}).get(key, [])
+        if isinstance(raw, list):
+            return {str(s).strip() for s in raw if s}
+        if isinstance(raw, str):
+            return {s.strip() for s in raw.split(",") if s.strip()}
+        return set()
+
+    no_access = _handler_set("no_access")
+    # [library] direct_access → the opposite declaration: "I can reach
+    # this publisher by means the link resolver cannot see." A personal
+    # society membership, or a second institution's SSO — this user
+    # reaches APA PsycNET through JYU while the configured resolver is
+    # Aalto's, so Aalto's Alma legitimately lists no APA route and the
+    # Case 1b divert below would be wrong for exactly this publisher.
+    #
+    # It suppresses Case 1b only, never Case 2. Case 1b is a claim about
+    # *entitlement* ("the library has no route via this platform"), which
+    # private access does contradict. Case 2 is a claim about the
+    # platform's *holdings* ("that platform's run starts in 1996"), which
+    # no credential changes.
+    direct_access = _handler_set("direct_access")
 
     # Pass 2 API retry: the prefix-filtering API sources (Wiley TDM,
     # Elsevier, Springer). When Crossref resolution reveals a DOI
@@ -1405,10 +2008,19 @@ def _run_browser_in_process(
     items_by_pub: dict[str, list[dict]] = defaultdict(list)
     connector_upfront: list[dict] = []
     no_handler_count = 0
+    # Read once here rather than at Pass 3, because the queue preview
+    # below now models the same routing and the two must agree.
+    ignore_coverage = getattr(args, "ignore_library_coverage", False)
+    # Case 1b diversions, per publisher, for the queue summary. Worth
+    # naming rather than counting silently: the whole point is that the
+    # user is *not* being asked to solve a challenge for these, and the
+    # one case where that is wrong (private access the resolver cannot
+    # see) is fixed by a config key they need to be told about.
+    no_entitlement: dict[str, int] = {}
 
     if resolver_cfg is not None and not connector_only:
         print(
-            f"\nChecking library access via {resolver_cfg.openurl_base}...",
+            f"\nChecking library access via {resolver_cfg.describe()}...",
             flush=True,
         )
 
@@ -1454,7 +2066,7 @@ def _run_browser_in_process(
         # its original non-10.1016 DOI prefix.
         if resolved_host and pass2_api_sources:
             for src in pass2_api_sources:
-                if not target_matches_domains(
+                if not host_matches_domains(
                     f"https://{resolved_host}/", src.direct_access_domains,
                 ):
                     continue
@@ -1520,28 +2132,40 @@ def _run_browser_in_process(
             connector_upfront.append(entry)
             continue
 
-        # Classify Case 1 / 2 / 3 via dual SFX lookup.
+        # Classify Case 1a / 1b / 2 / 3 via the resolver's coverage
+        # queries. Case 2 works on both dialects by two mechanisms: SFX
+        # answers it in the query (`sfx.ignore_date_threshold`), so
+        # in_range and any_range are genuinely different requests, while
+        # Alma cannot filter by date at all but reports per-package
+        # coverage — so passing `pub_date` asks "does this platform hold
+        # *this year*", and diffing against the unfiltered answer
+        # reconstructs the same verdict from different evidence.
+        #
+        # This is what stops a pre-1997 article reaching the Springer
+        # handler: Alma lists SpringerLink for the journal, but the
+        # holding starts 1997, so in_range is False while in_any is True
+        # — Case 2, divert, and no 30-second paywall timeout. Three items
+        # in one 97-item run hit exactly that before this existed.
+        #
+        # See `classify_direct_route` for why Case 1 is split in two.
         if resolver_cfg is not None:
-            dual = sfx_lookup_dual(
+            dual = lookup_dual(
                 doi, resolver_cfg,
                 issn=entry["issn"], pub_date=entry["pub_date"],
                 volume=entry["volume"],
             )
-            domains = direct.direct_access_domains
-            if domains:
-                in_range = any(
-                    target_matches_domains(u, domains) for u in dual.in_range
-                )
-                in_any = any(
-                    target_matches_domains(u, domains) for u in dual.any_range
-                )
-                if in_range:
-                    pass                           # Case 3 — run direct
-                elif in_any:
-                    # Case 2 — skip direct, try Connector via Query B.
-                    connector_upfront.append(entry)
-                    continue
-                # else Case 1 — try direct anyway.
+            case = classify_direct_route(
+                dual, direct.direct_access_domains, resolver_cfg,
+                pub_date=entry["pub_date"],
+                handler_name=direct.name,
+                direct_access=direct_access,
+            )
+            if not DIRECT_ROUTE_CASES[case]:
+                if case == "1b-no-entitlement":
+                    label = direct.display_name or direct.name
+                    no_entitlement[label] = no_entitlement.get(label, 0) + 1
+                connector_upfront.append(entry)
+                continue
 
         items_by_pub[direct.name].append(entry)
 
@@ -1571,10 +2195,78 @@ def _run_browser_in_process(
                 flush=True,
             )
         if connector_upfront:
+            # Resolve where these actually go before calling them all
+            # "Connector". Only in --plan: the lookups are the same ones
+            # Pass 3 makes and they are cached, but on a cold cache they
+            # are slow, and a normal run reaches Pass 4a's own banner
+            # soon enough anyway. --plan exists to answer "what will this
+            # cost me", so paying for the answer there is the trade.
+            if getattr(args, "plan", False) and resolver_cfg is not None:
+                print(
+                    f"    (resolving targets for {len(connector_upfront)} "
+                    f"items to split unattended from manual...)",
+                    flush=True,
+                )
+                unattended = manual = no_route = 0
+                for it in connector_upfront:
+                    tgt, ok, chosen = _pass3_target(
+                        it, resolver_cfg, ignore_coverage=ignore_coverage,
+                    )
+                    if tgt and is_ebsco_target(chosen):
+                        unattended += 1
+                    elif tgt or not ok or ignore_coverage:
+                        manual += 1
+                    else:
+                        no_route += 1
+                if unattended:
+                    print(
+                        f"  • EBSCOhost (resolver-routed): {unattended} "
+                        f"paper{'' if unattended == 1 else 's'}"
+                        f"  [no solve, no Zotero desktop]",
+                        flush=True,
+                    )
+                if manual:
+                    print(
+                        f"  • Zotero Connector: {manual} "
+                        f"paper{'' if manual == 1 else 's'}"
+                        f"  [needs Zotero desktop + a human]",
+                        flush=True,
+                    )
+                if no_route:
+                    print(
+                        f"  • No licensed route: {no_route} "
+                        f"paper{'' if no_route == 1 else 's'}"
+                        f"  [ILL candidates — not attempted]",
+                        flush=True,
+                    )
+            else:
+                print(
+                    f"  • Zotero Connector (upfront): "
+                    f"{len(connector_upfront)} "
+                    f"paper{'' if len(connector_upfront) == 1 else 's'}",
+                    flush=True,
+                )
+
+        if no_entitlement:
+            total_nx = sum(no_entitlement.values())
+            detail = ", ".join(
+                f"{name} {n}"
+                for name, n in sorted(
+                    no_entitlement.items(), key=lambda kv: (-kv[1], kv[0])
+                )
+            )
             print(
-                f"  • Zotero Connector (upfront): "
-                f"{len(connector_upfront)} "
-                f"paper{'' if len(connector_upfront) == 1 else 's'}",
+                f"\n  {total_nx} item{'' if total_nx == 1 else 's'} skipped the "
+                f"publisher's own site — the link resolver lists a licensed "
+                f"route for {'it' if total_nx == 1 else 'them'}, but not via "
+                f"that publisher ({detail}).",
+                flush=True,
+            )
+            print(
+                "  If you can reach one of these another way (society "
+                "membership, a second institution's login), add it to "
+                "`[library] direct_access` in config.toml and it will be "
+                "tried directly again.",
                 flush=True,
             )
 
@@ -1622,7 +2314,11 @@ def _run_browser_in_process(
             )
 
     if items_by_pub and not connector_only:
-        asyncio.run(_run_direct())
+        try:
+            asyncio.run(_run_direct())
+        except NetworkOutage as e:
+            _report_outage(e)
+            return 1
 
     # ------------------------------------------------------------------
     # Pass 3 — assign SFX target URLs to Connector items. Use Query B
@@ -1631,37 +2327,39 @@ def _run_browser_in_process(
     # ------------------------------------------------------------------
 
     connector_items: list[dict] = []
+    # Items whose resolver target is EBSCOhost. They get a dedicated
+    # handler rather than the Connector: EBSCO's OpenURL link lands on a
+    # multi-result page where the Zotero translator shows a picker (see
+    # connector.py), whereas that page self-redirects to a single-article
+    # PDF viewer we can drive directly. No Zotero desktop needed either.
+    ebsco_items: list[dict] = []
     skipped_no_target = 0
     origins = (
         [(it, "upfront") for it in connector_upfront]
         + [(it, "retry") for it in connector_retry]
     )
-    ignore_coverage = getattr(args, "ignore_library_coverage", False)
     failed_open = 0
     for it, origin in origins:
-        target, query_ok = None, True
-        if resolver_cfg is not None and not ignore_coverage:
-            # Query B only (date-filtered). When Query B is empty,
-            # we do NOT fall back to Query A. The cache data against
-            # JYU's SFX (see sfx_cache.json) shows Query A commonly
-            # returns targets the user genuinely can't access — the
-            # ignore-date list is "SFX knows the journal via these
-            # providers", not "you can download this DOI now". Using
-            # it as a fallback wastes user time on paywalls.
-            target, query_ok = lookup_fulltext_target(
-                it["doi"], resolver_cfg,
-                priority=SFX_PLATFORM_PRIORITY,
-                in_range_only=True,
-                issn=it.get("issn"), pub_date=it.get("pub_date"),
-                volume=it.get("volume"),
-            )
-        elif resolver_cfg is None:
-            # No `[library] openurl_base` configured. There is nothing
-            # to gate on, so gating on it would drop every upfront item
-            # without a single attempt — which is precisely what used to
-            # happen: an unconfigured resolver made the entire Connector
-            # fallback unreachable while logging "no library coverage".
-            query_ok = False
+        # Query B only (date-filtered). When Query B is empty, we do NOT
+        # fall back to Query A. The cache data against JYU's SFX (see
+        # resolver_cache.json) shows Query A commonly returns targets the
+        # user genuinely can't access — the ignore-date list is "the
+        # resolver knows the journal via these providers", not "you can
+        # download this DOI now". Using it as a fallback wastes user time
+        # on paywalls.
+        #
+        # Ranking comes from `resolver_cfg.priority`, which honours
+        # `[library] platform_priority`.
+        #
+        # With no `[library] openurl_base` configured `query_ok` is
+        # False, which fails open below. Gating on an unconfigured
+        # resolver would drop every upfront item without a single
+        # attempt — which is precisely what used to happen: it made the
+        # entire Connector fallback unreachable while logging "no
+        # library coverage".
+        target, query_ok, chosen = _pass3_target(
+            it, resolver_cfg, ignore_coverage=ignore_coverage,
+        )
 
         if target or not query_ok or ignore_coverage:
             # Fail open. With no resolver answer, hand the Connector the
@@ -1675,7 +2373,11 @@ def _run_browser_in_process(
                 if origin == "upfront":
                     failed_open += 1
                 target = f"https://doi.org/{it['doi']}"
-            connector_items.append({**it, "sfx_target_url": target})
+            entry_with_target = {**it, "resolver_target_url": target}
+            if is_ebsco_target(chosen):
+                ebsco_items.append(entry_with_target)
+            else:
+                connector_items.append(entry_with_target)
         else:
             status = (
                 "skipped_no_library_coverage"
@@ -1714,7 +2416,34 @@ def _run_browser_in_process(
         )
 
     # ------------------------------------------------------------------
-    # Pass 4 — single Connector session for upfront + retry items.
+    # Pass 4a — EBSCOhost items, driven directly from their resolver
+    # target. Runs before the Connector because it needs neither Zotero
+    # desktop nor a human: EBSCO authenticates on institutional IP, and
+    # the OpenURL page self-redirects to a single-article PDF viewer.
+    # ------------------------------------------------------------------
+
+    if ebsco_items:
+        print(
+            f"\n  • EBSCOhost (resolver-routed): {len(ebsco_items)} "
+            f"paper{'' if len(ebsco_items) == 1 else 's'}",
+            flush=True,
+        )
+        try:
+            asyncio.run(_drive_handler(
+                EbscoHandler(), ebsco_items, zot, log_writer, args, run_date,
+                on_failure="retry_bucket",
+                # A failure here is not evidence the article is
+                # unreachable — hand it on to the Connector, which drives
+                # the same platform through Zotero's own translator.
+                retry_bucket=connector_items,
+                prompt_on_first_failure=False,
+            ))
+        except NetworkOutage as e:
+            _report_outage(e)
+            return 1
+
+    # ------------------------------------------------------------------
+    # Pass 4b — single Connector session for whatever is left.
     # ------------------------------------------------------------------
 
     if connector_items:
@@ -1729,11 +2458,14 @@ def _run_browser_in_process(
             args, run_date,
         ))
 
-    _print_browser_summary(args, len(to_process))
+    _print_browser_summary(
+        args, [it["key"] for it in to_process], log_fh=log_fh)
     return 0
 
 
-def _print_browser_summary(args: argparse.Namespace, queued: int) -> None:
+def _print_browser_summary(
+    args: argparse.Namespace, queued_keys: Collection[str], *, log_fh=None,
+) -> None:
     """End-of-run totals for `--sources browser` / `connector`.
 
     The browser path printed per-handler totals and then returned in
@@ -1742,9 +2474,29 @@ def _print_browser_summary(args: argparse.Namespace, queued: int) -> None:
     Read back from the run log rather than threading counters through
     four passes, which also means resumed and partial runs report the
     same way.
+
+    Read back, but *intersected with what this run queued*. The log is
+    cumulative, so counting all of it answered a different question than
+    the one asked: a 14-item run that attached nothing announced "Done.
+    393 of 14 queued items now have a PDF attached." Worse than the
+    arithmetic, `queued - attached` went negative, so the "still
+    missing" line never printed and the `run_done` event reported
+    `missing: 0` — a machine-readable claim of success on a total
+    failure, which is the one thing an unattended caller must never be
+    told.
+
+    Reading back also means reading a file this run is still writing.
+    The handle is open and buffered, so the rows for the items just
+    attached are not on disk yet — a live 17-item run that attached 5
+    read them back as 0 and reported "Done. 0 of 17". The whole-log
+    count had hidden this too, by being large enough that a few missing
+    rows made no visible difference. Hence the flush.
     """
+    if log_fh is not None:
+        with contextlib.suppress(Exception):
+            log_fh.flush()
     try:
-        attached = shared_orchestrators.load_done_keys(
+        attached_ever = shared_orchestrators.load_done_keys(
             args.log_csv,
             statuses=("attached", "attached_via_connector"),
             key_field="item_key",
@@ -1753,6 +2505,11 @@ def _print_browser_summary(args: argparse.Namespace, queued: int) -> None:
         return
     from fetchers.browser import interaction
 
+    queued = len(queued_keys)
+    # `load_done_keys` lower-cases every key it returns; Zotero item keys
+    # are upper-case. Intersecting the two forms directly is empty for
+    # every run, which would trade an over-count for an under-count.
+    attached = {k.strip().lower() for k in queued_keys} & set(attached_ever)
     interaction.report_progress({
         "event": "run_done", "queued": queued, "attached": len(attached),
         "missing": max(queued - len(attached), 0),
@@ -1798,11 +2555,18 @@ def _try_cascade(
         return None
     item_type = d.get("itemType", "") or ""
     item_key = item.get("key", "") or d.get("key", "") or ""
-    last_source = ""
+    # The fetcher whose answer the logged row rests on — the one that
+    # raised, preferring one that carried an HTTP status so `source` and
+    # `http_status` always name the same event. Whichever fetcher merely
+    # happened to be *last* in the cascade is not that: with the current
+    # ordering it is always CORE, so every API-pass row in a 655-row
+    # live log blamed a provider that had only been asked last. When
+    # nobody answered, the failure belongs to the cascade as a whole and
+    # naming any single member of it would be an invention.
+    blamed_source = ""
     raised_exception = False
     last_status: int | None = None
     for src in sources:
-        last_source = src.name
         try:
             result = src.fetch_pdf(doi, cache_dir=cache_dir)
         except NotImplementedError:
@@ -1813,6 +2577,9 @@ def _try_cascade(
             status = _http_status_of(e)
             if status is not None:
                 last_status = status
+                blamed_source = src.name
+            elif not blamed_source:
+                blamed_source = src.name
             continue
         if result is None:
             continue
@@ -1847,11 +2614,19 @@ def _try_cascade(
                     doi=doi,
                     item_type=item_type,
                     attempt=1,
-                    source=last_source,
+                    source=blamed_source or _API_CASCADE_SOURCE,
                     publisher=publisher,
                     http_status=last_status,
                     cause=cause,
                     untried_browser_handler=browser_handler,
+                    # This is the API cascade, and `main()` rejects
+                    # --sources that mix the browser pass into it, so by
+                    # construction nothing here has been through a
+                    # browser handler, the link resolver, or the
+                    # Connector. Saying so keeps UNAVAILABLE — the one
+                    # cause that licenses an exclusion — off items that
+                    # no route has yet actually refused.
+                    browser_pass_untried=True,
                 )
         except Exception as e:  # noqa: BLE001
             # Logging is best-effort — never let a CSV write break a
@@ -2102,6 +2877,32 @@ def _print_run_report(
     print(pdf_run_report.format_report(rows, metadata=lookup))
 
 
+def select_requested_articles(
+    fetched: list[dict], requested: set[str],
+) -> tuple[list[dict], int]:
+    """Split a `--filter-keys-file` fetch into articles and skipped keys.
+
+    `ZoteroClient.items_by_keys` returns the items whose keys were asked
+    for *and* their attachment children — a request for 38 keys comes
+    back as 55 items once 17 of them have a PDF. Counting every
+    non-`journalArticle` in that response as a skipped key therefore
+    reported a number that grew as retrieval succeeded: a run that had
+    just attached 11 PDFs announced "11 key(s) resolved to
+    non-journalArticle items and were skipped" having skipped none of
+    them, and the louder it got the better the run had gone.
+
+    Only a key the caller actually asked for can be a scope decision, so
+    the count is taken over those; the children are not an answer about
+    anything and are ignored.
+    """
+    own = [it for it in fetched if it.get("key") in requested]
+    articles = [
+        it for it in own
+        if it.get("data", {}).get("itemType") == "journalArticle"
+    ]
+    return articles, len(own) - len(articles)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Construct the CLI parser.
 
@@ -2139,7 +2940,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cache-dir", default=DEFAULT_CACHE_DIR,
                         help=f"PDF cache directory (default: {DEFAULT_CACHE_DIR}).")
     parser.add_argument("--workers", type=int, default=6,
-                        help="Parallel download threads (default: 6).")
+                        help="Parallel download threads (default: 6). "
+                             "API cascade only — see --browser-workers for "
+                             "the browser passes.")
+    parser.add_argument(
+        "--browser-workers", type=int, default=1, metavar="N",
+        help="Parallel tabs per publisher in the browser passes "
+             "(default: 1). All N share one Chromium profile, so one "
+             "Cloudflare / SSO solve covers them all. Capped per "
+             "publisher by that handler's own `concurrency`, and never "
+             "applied to the Zotero Connector pass, which drives a "
+             "single Zotero desktop.",
+    )
     parser.add_argument(
         "--filter-keys-file",
         help="Path to a text file of Zotero item keys (one per line) "
@@ -2234,7 +3046,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Don't let the library link-resolver pre-flight gate the "
              "Connector pass. Use when the resolver reports no coverage "
              "for journals your library actually subscribes to (it keys on "
-             "DOI and misses aggregator-hosted holdings).",
+             "DOI and misses aggregator-hosted holdings). To exempt a "
+             "single publisher rather than disabling the gate wholesale — "
+             "one you reach via a society membership or a second "
+             "institution's login — list its handler name in "
+             "[library] direct_access in config.toml.",
     )
     parser.add_argument(
         "--no-check-text", action="store_true",
@@ -2310,7 +3126,7 @@ def main() -> int:
 
     os.makedirs(args.cache_dir, exist_ok=True)
     run_date = date.today().isoformat()
-    done_dois = _load_done_dois(args.log_csv)
+    done_items = _load_done_items(args.log_csv)
 
     if args.auto_publishers:
         if args.filter_keys_file:
@@ -2367,12 +3183,8 @@ def main() -> int:
             target = {line.strip() for line in f if line.strip()}
         print(f"Fetching {len(target)} Zotero items by key...", end=" ", flush=True)
         fetched = zot.items_by_keys(target)
-        all_items = [
-            it for it in fetched
-            if it.get("data", {}).get("itemType") == "journalArticle"
-        ]
+        all_items, not_articles = select_requested_articles(fetched, target)
         print(f"{len(all_items)} journal articles.", flush=True)
-        not_articles = len(fetched) - len(all_items)
         if not_articles:
             # Distinguished from "key not found": a book chapter that was
             # asked for and skipped is a scope decision, not a typo, and
@@ -2404,8 +3216,8 @@ def main() -> int:
     # Items with DOI that haven't already been attached
     candidates = [
         it for it in all_items
-        if (doi := (it.get("data", {}).get("DOI") or "").strip())
-        and doi.lower() not in done_dois
+        if (it.get("data", {}).get("DOI") or "").strip()
+        and it["key"].strip().lower() not in done_items
     ]
     print(f"Items not yet processed: {len(candidates)}", flush=True)
 
@@ -2463,7 +3275,7 @@ def main() -> int:
             rc = _run_browser_in_process(
                 to_process, zot, log_writer, args, run_date,
                 connector_only=(browser_modes == ["connector"]),
-                session=session, config=config,
+                session=session, config=config, log_fh=log_fh,
             )
         finally:
             log_fh.close()
@@ -2514,7 +3326,7 @@ def main() -> int:
         try:
             rc = _run_browser_in_process(
                 residuals, zot, log_writer, args, run_date,
-                session=session, config=config,
+                session=session, config=config, log_fh=log_fh,
             )
         finally:
             log_fh.close()

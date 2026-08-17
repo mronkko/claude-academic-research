@@ -57,11 +57,18 @@ def test_aom_doi_finds_the_aom_handler(enrich, tmp_path) -> None:
     assert publisher == "Academy of Management"
 
 
-def test_springer_doi_has_no_browser_handler(enrich, tmp_path) -> None:
-    """The 15 Springer items really were unreachable.
+def test_springer_doi_finds_the_springer_handler(enrich, tmp_path) -> None:
+    """Springer items are "try harder", not a genuine FE6.
 
-    No handler means the cascade's verdict stands, and the item is a
-    genuine FE6 candidate rather than a "try harder" one.
+    This test asserted the opposite until 2026-08-17: that no handler
+    existed, so "the 15 Springer items really were unreachable" and the
+    cascade's verdict stood. That reading was wrong. SpringerLink answers
+    any HTTP client with an Imperva `Client Challenge` page regardless of
+    entitlement — measured from an on-campus IP across ten DOIs including
+    licensed titles, and unchanged by a full browser header set. The
+    articles were reachable all along; only the HTTP route was blocked.
+    A browser handler now claims them, so triage must route them to a
+    retry rather than toward an exclusion code.
     """
     _seed_cache(tmp_path, {
         SPRINGER_DOI: {
@@ -70,8 +77,8 @@ def test_springer_doi_has_no_browser_handler(enrich, tmp_path) -> None:
         },
     })
     publisher, handler = enrich._triage_context(SPRINGER_DOI, str(tmp_path))
-    assert handler == ""
-    assert publisher == "Springer"
+    assert handler == "springer"
+    assert publisher == "Springer Nature"
 
 
 def test_resolved_host_beats_a_misleading_doi_prefix(enrich, tmp_path) -> None:
@@ -110,6 +117,156 @@ def test_corrupt_cache_does_not_raise(enrich, tmp_path) -> None:
 
 def test_unknown_doi_yields_empty_triage(enrich, tmp_path) -> None:
     assert enrich._triage_context("10.9999/nope", str(tmp_path)) == ("", "")
+
+
+# ---------------------------------------------------------------------------
+# What the cascade actually writes when it comes up empty.
+#
+# The API cascade is the first of several routes and cannot reach a
+# Cloudflare-gated publisher, a link-resolver platform, or the Zotero
+# Connector. A live run nonetheless logged 227 items as UNAVAILABLE —
+# the one cause that licenses a `fulltext:unavailable` tag — every one
+# with an empty `http_status`, i.e. without a single source having ever
+# answered "not found", and every one attributed to `core` purely
+# because CORE sits last in the cascade.
+# ---------------------------------------------------------------------------
+
+
+class _SilentSource:
+    """A fetcher that returns None: no PDF, no error, no verdict."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def fetch_pdf(self, doi: str, *, cache_dir: str):
+        return None
+
+
+class _HttpError(Exception):
+    """Shaped like the httpx / requests errors `_http_status_of` reads:
+    `.response.status_code`."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__(f"HTTP {status}")
+        self.response = type("R", (), {"status_code": status})()
+
+
+class _RaisingSource(_SilentSource):
+    """A fetcher that fails with an HTTP status attached."""
+
+    def __init__(self, name: str, status: int) -> None:
+        super().__init__(name)
+        self.status = status
+
+    def fetch_pdf(self, doi: str, *, cache_dir: str):
+        raise _HttpError(self.status)
+
+
+class _TimingOutSource(_SilentSource):
+    """A fetcher that fails with no status at all — a transport fault."""
+
+    def fetch_pdf(self, doi: str, *, cache_dir: str):
+        raise TimeoutError("connection timed out")
+
+
+def _cascade_row(enrich, tmp_path, sources, doi="10.2307/2666999"):
+    """Run `_try_cascade` to exhaustion and return the row it logged."""
+    import pdf_fetch_log
+
+    log = tmp_path / "pdf_fetch_log.csv"
+    result = enrich._try_cascade(
+        {"key": "ITEM01", "data": {"DOI": doi, "itemType": "journalArticle"}},
+        sources, str(tmp_path), failure_log_path=str(log),
+    )
+    assert result is None
+    rows = pdf_fetch_log.read_failures(log)
+    assert len(rows) == 1
+    return rows[0]
+
+
+def test_a_silent_cascade_is_not_logged_as_unavailable(enrich, tmp_path) -> None:
+    """A JSTOR DOI no handler covers, that nobody answered for. The
+    resolver and the Connector are both still ahead of it, so FE6 is
+    not a verdict this pass is entitled to reach."""
+    row = _cascade_row(
+        enrich, tmp_path,
+        [_SilentSource("crossref"), _SilentSource("openalex"), _SilentSource("core")],
+    )
+    assert row["http_status"] == ""      # nobody ever said "not found"
+    assert row["cause"] == "BROWSER_REQUIRED"
+
+
+def test_a_silent_cascade_is_not_blamed_on_whoever_ran_last(
+    enrich, tmp_path,
+) -> None:
+    """`core` was merely last in the ordering, not the source that
+    failed meaningfully. With no answer from anyone, the failure belongs
+    to the cascade as a whole."""
+    row = _cascade_row(
+        enrich, tmp_path,
+        [_SilentSource("crossref"), _SilentSource("openalex"), _SilentSource("core")],
+    )
+    assert row["source"] == enrich._API_CASCADE_SOURCE
+    assert row["source"] != "core"
+
+
+def test_the_source_that_answered_is_the_one_blamed(enrich, tmp_path) -> None:
+    """When a fetcher does respond, `source` and `http_status` must name
+    the same event — otherwise the row reads as though CORE returned the
+    403 that ScienceDirect returned."""
+    row = _cascade_row(
+        enrich, tmp_path,
+        [
+            _SilentSource("crossref"),
+            _RaisingSource("sciencedirect", 403),
+            _SilentSource("core"),
+        ],
+    )
+    assert row["source"] == "sciencedirect"
+    assert row["http_status"] == "403"
+    assert row["cause"] == "ACCESS_BLOCKED"     # a real answer is still evidence
+
+
+def test_a_transport_fault_still_names_the_source_that_faulted(
+    enrich, tmp_path,
+) -> None:
+    """No status to classify on, but one fetcher did fail — better to
+    name it than to fall back to the whole-cascade label."""
+    row = _cascade_row(
+        enrich, tmp_path,
+        [_SilentSource("crossref"), _TimingOutSource("openalex"), _SilentSource("core")],
+    )
+    assert row["source"] == "openalex"
+    assert row["http_status"] == ""
+    assert row["cause"] == "NETWORK_ERROR"
+
+
+def test_a_covered_publisher_records_the_handler_it_has_not_run(
+    enrich, tmp_path,
+) -> None:
+    """The handler goes in its own column. Reading it off `source` is
+    what produced "--sources browser --publisher core" in the report."""
+    row = _cascade_row(
+        enrich, tmp_path, [_SilentSource("crossref"), _SilentSource("core")],
+        doi=SAGE_DOI,
+    )
+    assert row["untried_handler"] == "sage"
+    assert row["source"] == enrich._API_CASCADE_SOURCE
+    assert row["cause"] == "BROWSER_REQUIRED"
+
+
+def test_out_of_scope_item_types_are_still_settled_here(enrich, tmp_path) -> None:
+    """Item type is decided independently of retrieval, so an untried
+    route must not upgrade a book chapter into "try harder"."""
+    import pdf_fetch_log
+
+    log = tmp_path / "log.csv"
+    enrich._try_cascade(
+        {"key": "ITEM02",
+         "data": {"DOI": "10.1007/978-3-030-1", "itemType": "bookSection"}},
+        [_SilentSource("crossref")], str(tmp_path), failure_log_path=str(log),
+    )
+    assert pdf_fetch_log.read_failures(log)[0]["cause"] == "OUT_OF_SCOPE"
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +310,29 @@ def test_connector_successes_count_as_done(enrich, tmp_path) -> None:
         "2026-08-13,C,10.1/c,C,skipped_no_pdf,connector\n",
         encoding="utf-8",
     )
-    assert enrich._load_done_dois(str(log)) == {"10.1/a", "10.1/b"}
+    assert enrich._load_done_items(str(log)) == {"a", "b"}
+
+
+def test_resume_set_does_not_bar_a_duplicate_record(enrich, tmp_path) -> None:
+    """Keyed on the DOI, one copy's attachment barred every other copy.
+
+    Duplicate records sharing a DOI are normal in a library built by a
+    systematic-review import — one real library held 229 such groups.
+    Item B here is a second copy of A's article and has no PDF of its
+    own; under the old DOI key it was permanently ineligible, so a
+    consumer that resolved 10.1/a to B saw an item that could never
+    acquire a PDF. `pdf_map()` remains the gate that keeps A itself from
+    being re-fetched.
+    """
+    log = tmp_path / "pdf_attach_log.csv"
+    log.write_text(
+        "run_date,item_key,doi,title,status,source\n"
+        "2026-08-13,A,10.1/a,A,attached,crossref\n",
+        encoding="utf-8",
+    )
+    done = enrich._load_done_items(str(log))
+    assert "a" in done
+    assert "b" not in done
 
 
 # ---------------------------------------------------------------------------

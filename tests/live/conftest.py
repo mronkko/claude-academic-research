@@ -83,6 +83,12 @@ KNOWN_DOIS: dict[str, str] = {
     # Resolution only proves the DOI exists — whether the PDF downloads
     # still depends on your institution's subscriptions.
     "sage":     "10.1177/10422587241306872",          # ETP 2025
+    # Journal of Business Ethics 2018. Chosen because the Alma resolver
+    # reports 15 licensed routes for it (EBSCOhost, JSTOR, ProQuest and
+    # FinELib SpringerLink), so a failure here is the Imperva JS
+    # challenge rather than an entitlement gap — which is exactly what
+    # the browser handler exists to clear.
+    "springer": "10.1007/s10551-018-4026-8",
     "emerald":  "10.1108/ijebr-05-2024-0509",         # IJEBR 2024
     "tandf":    "10.1080/08985626.2024.2444907",      # Entrepreneurship & Regional Dev 2024
     "wiley":    "10.1002/smj.70090",                    # SMJ — Wiley browser fallback (ETP moved to Sage in 2022)

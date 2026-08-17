@@ -37,10 +37,12 @@ from .connector import (
     resolve_connector_extension_path,
     wait_for_service_worker,
 )
+from .ebsco import EbscoHandler, is_ebsco_target
 from .emerald import EmeraldHandler
 from .informs import InformsHandler
 from .oup import OupHandler
 from .sage import SageHandler
+from .springer import SpringerHandler
 from .tandf import TandfHandler
 from .wiley import WileyHandler
 
@@ -87,6 +89,7 @@ def all_handlers() -> list[PublisherHandler]:
         InformsHandler(),
         OupHandler(),
         SageHandler(),
+        SpringerHandler(),
         TandfHandler(),
         WileyHandler(),
     ]
@@ -120,17 +123,20 @@ def resolve_by_host(
     drives handler selection. Catches the case where a DOI's prefix
     is misleading (journal migrated publishers).
 
-    Matching is suffix-based via the shared library_resolver helper,
-    so ``onlinelibrary.wiley.com`` matches a handler whose domains
-    include ``wiley.com``.
+    Matching is suffix-based via the shared resolver helper, so
+    ``onlinelibrary.wiley.com`` matches a handler whose domains include
+    ``wiley.com``. This is a plain hostname test — the URL is synthesized
+    from a Crossref-resolved host, not a resolver target — so it uses
+    `host_matches_domains` rather than the resolver's host-or-name target
+    matching.
     """
     if not host:
         return None
-    from fetchers.library_resolver import _target_matches_domains
+    from fetchers.resolvers import host_matches_domains
     for h in handlers if handlers is not None else all_handlers():
         if not h.direct_access_domains:
             continue
-        if _target_matches_domains(f"https://{host}/", h.direct_access_domains):
+        if host_matches_domains(f"https://{host}/", h.direct_access_domains):
             return h
     return None
 
@@ -141,6 +147,7 @@ __all__ = [
     "ApaHandler",
     "BrowserSource",
     "Counter",
+    "EbscoHandler",
     "EmeraldHandler",
     "InformsHandler",
     "OupHandler",
@@ -149,12 +156,14 @@ __all__ = [
     "PublisherHandler",
     "RequestHandler",
     "SageHandler",
+    "SpringerHandler",
     "TandfHandler",
     "WileyHandler",
     "ZoteroConnectorHandler",
     "all_handlers",
     "cache_path_for",
     "is_cached",
+    "is_ebsco_target",
     "launch_context",
     "ping_zotero_desktop",
     "progress_tag",

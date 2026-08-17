@@ -1005,17 +1005,68 @@ A four-phase cascade that `enrich_pdfs.py` runs automatically. Each
 phase handles a class of item the previous phase can't; nothing is
 ever silently dropped.
 
-**Phase 1 — API cascade (`enrich_pdfs.py` default mode).** Works for
-most open-access and publisher-TDM-enabled items:
+**Prefer the API route.** Retrieval through APIs is both faster and far
+less error prone than driving a browser: nothing depends on a page
+layout, a Cloudflare challenge, or the user being at the keyboard. Run
+the API phases to exhaustion before proposing a browser pass, and expect
+the browser to be a remainder-handling step rather than the main event.
+
+The order is ranked by **version quality first, cost second**, and
+within a quality tier free sources always precede paid ones. Only one
+source in the whole sequence bills per item. The full retrieval sequence,
+and which phase runs each stage:
 
 ```
-publisher TDM API (Elsevier, Wiley)  →  Crossref TDM  →  PMC
-  →  OpenAlex Content  →  Unpaywall  →  OpenAlex OA metadata
+Stage 1 — free version of record            ┐
+  ScienceDirect (Elsevier) → Springer       │
+  → Crossref TDM → PMC                      │
+Stage 2 — paid version of record            ├─ Phase 1 (API cascade,
+  OpenAlex Content API ($0.01/PDF, opt-in)  │   default mode)
+Stage 3 — open access, often author version │
+  OpenAlex OA metadata → Unpaywall          │
+  → Semantic Scholar → CORE                 │
+  → [preprints, only with --allow-preprints]┘
+Stage 4 — browser handlers for gated publishers  ── Phase 2
+  (APA, Sage, AOM, T&F, OUP, Emerald, INFORMS, …)
+Stage 5 — Zotero Connector + library link resolver ── Phase 3
 ```
 
-Elsevier and Wiley TDM require `ELSEVIER_API_KEY` and
-`WILEY_TDM_TOKEN`. OpenAlex Content is paid ($0.01 per download, gated
-on `OPENALEX_API_KEY`).
+Wiley TDM (`WILEY_TDM_TOKEN`) is a stage-1 source too, but excluded from
+the default cascade and selected explicitly with `--sources wiley`.
+
+**Two stage-1 sources fail in ways that look like "article unavailable"
+and are not.** Check for these before concluding anything about an item:
+
+- **Springer is bot-blocked, not network-gated.**
+  `link.springer.com/content/pdf/<doi>.pdf` answers any HTTP client with
+  an identical ~3 KB `Client Challenge` page — an Imperva JavaScript
+  interstitial — regardless of DOI, entitlement, or whether you are on
+  the campus network. Verified from an on-campus IP across ten DOIs,
+  including titles the institution certainly licenses, and unchanged by
+  a full browser header set. So Springer DOIs reliably fall through
+  stage 1 and must be recovered at stage 4 (browser) instead. A VPN does
+  not help; nothing about the failure is about access.
+- **Elsevier may return a one-page preview with HTTP 200.** The TDM
+  endpoint serves `application/pdf` of plausible size (300 KB+) while
+  `X-ELS-Status` reads `WARNING - Response limited to first page because
+  requestor not entitled to resource`. The fetcher detects this and
+  refuses to attach it, which is correct — but the signal is logged at
+  info level, so a run can produce nothing from Elsevier while looking
+  healthy. If Elsevier yields no PDFs, suspect the key's full-text
+  entitlement rather than the articles.
+
+**Why the one paid tier outranks the free ones below it.** The OpenAlex
+Content API serves the publisher's own file — the version of record,
+correctly paginated. Unpaywall, Semantic Scholar and CORE frequently
+hold an author accepted manuscript instead, whose page numbers do not
+match the published article. When the downstream job is quoting text and
+citing pages, a correct version of record is worth $0.01 more than a
+free manuscript. It is skippable: answer no to the wizard's OpenAlex
+question, or set `[openalex] use_paid_content_api = false`, and the
+cascade runs on free and institutionally-subscribed sources only. CORE
+sits last of the free sources for the same version-quality reason, and
+its attachments carry `pdf:repository-copy` so the distinction survives
+into coding.
 
 **Phase 2 — browser cascade for Cloudflare-gated publishers**
 (`enrich_pdfs.py --sources browser`). HTTP clients cannot solve the
@@ -1076,10 +1127,11 @@ PDF retrieval: 125/244 attached · 110 still missing
   publisher                 n  cause              next step
   Sage                     48  BROWSER_REQUIRED   --sources browser --publisher sage
   Academy of Management    28  BROWSER_REQUIRED   --sources browser --publisher aom
+  IEEE                     16  BROWSER_REQUIRED   Not an exclusion — run enrich_pdfs.py --sources browser
+  (unknown)                10  BROWSER_REQUIRED   Not an exclusion — run enrich_pdfs.py --sources browser
   Wiley                     8  ACCESS_BLOCKED     Flag for ILL — paywall, full text exists
-  Springer                 15  UNAVAILABLE        FE6 (no fulltext available)
 
-  86 of the 110 are recoverable — they have not been through every route yet.
+  102 of the 110 are recoverable — they have not been through every route yet.
 ```
 
 **Report this table to the user and offer the next step before
@@ -1087,11 +1139,20 @@ proposing any exclusion.** Say how many items the browser pass would
 recover — that number, not the raw failure count, is what the user needs
 to decide with.
 
+Two things to read correctly. A `BROWSER_REQUIRED` row whose next step
+carries no `--publisher` — the IEEE row above — means no per-publisher
+handler covers that DOI. It does **not** mean nothing can be done: the
+link resolver's licensed platforms (EBSCOhost, JSTOR, ProQuest) and the
+Zotero Connector are keyed on the item, not on the DOI prefix, and the
+plain browser pass reaches both. And after an API-only run, expect *no*
+`UNAVAILABLE` rows at all — that cause means every route was tried, and
+the browser pass has not run yet.
+
 Then act by cause:
 
 | Cause | Meaning | What to do |
 |---|---|---|
-| `BROWSER_REQUIRED` | A Cloudflare-gated publisher this plugin has a handler for, not yet run | Offer the browser pass. **Not an exclusion.** |
+| `BROWSER_REQUIRED` | A route the plain-HTTP cascade cannot take is still untried — either a Cloudflare-gated publisher whose handler has not run, or no handler at all but the browser pass itself has not run, leaving the link resolver and the Connector ahead of the item | Offer the browser pass. **Not an exclusion.** |
 | `ACCESS_BLOCKED` | Paywalled; the full text exists | Offer the ILL list. **Not an exclusion.** |
 | `NETWORK_ERROR` | Transport failure | Re-run. **Not an exclusion.** |
 | `CORRUPT_DOWNLOAD` | A source served bytes that are not a usable PDF — usually a truncated download | Retry via a *different* source, not the same one. **Not an exclusion.** |
@@ -1117,8 +1178,17 @@ its cause in the retrieval report is `UNAVAILABLE`.** If you have not run
 the audit, you do not know the cause, and you may not tag. The audit
 writes the retry sets for you as key files
 (`retry.browser[.<publisher>]`, `retry.ill`, `retry.network`,
-`true_negative`, `out_of_scope`) — feed them straight to
-`--filter-keys-file`; do not assemble key lists by hand.
+`retry.reattach`, `true_negative`, `out_of_scope`) — feed them straight
+to `--filter-keys-file`; do not assemble key lists by hand.
+
+The pipeline now enforces the same rule from its side: `pdf_fetch_log`
+will not classify an item `UNAVAILABLE` while the browser pass is still
+ahead of it, however silent the API cascade was. An empty `http_status`
+on such a row is the tell — it means not one source ever answered "not
+found", and it is not evidence of anything. One live run produced 227
+of them across IEEE, JSTOR, ACM and Elsevier articles; three that had
+been written into `true_negative` opened on the first click through
+EBSCOhost.
 
 **Run the browser pass yourself.** Having no controlling terminal is no
 longer a reason to hand the user a command to paste — `--control-file`
@@ -1128,9 +1198,18 @@ the user's screen and the user still solves each challenge:
 ```bash
 uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py \
     --sources browser --auto-publishers \
+    --browser-workers 4 \
     --control-file .claude/audit/browser.json \
     --progress-json .claude/audit/browser-progress.jsonl
 ```
+
+`--browser-workers N` drives each publisher on N tabs of **one** Chromium
+profile, so a single Cloudflare / SSO solve covers all of them. Each
+handler caps it at its own `concurrency` — 1 for the direct publisher
+handlers, 4 for EBSCOhost, always 1 for the Zotero Connector — and says
+so when it does, rather than quietly honouring a smaller number. See
+`zotero-operations`, step 7, for why those 1s are measured limits and not
+defaults to raise.
 
 Start it with `run_in_background: true`. When the file's `state` becomes
 `awaiting_user`, relay its `prompt` to the user verbatim and write their
@@ -1176,7 +1255,9 @@ phases is a data-quality signal, not a failure to hide.
 - **Parallelise with `ThreadPoolExecutor` + `threading.Lock` on the
   CSV log.** Default 8 workers for Haiku / Gemini Flash, 5 for Sonnet / Gemini Pro.
   **`--workers` is a synchronous-path setting only.** It sizes a pool of
-  concurrent API calls, so it does nothing on the `--emit-manifest` /
+  concurrent API calls — it has no effect on the browser passes either,
+  which are sized by `--browser-workers`. So it does nothing on the
+  `--emit-manifest` /
   `--apply-responses` path — there the whole manifest goes to the serving
   engine in one call and the engine schedules the batch, which is where
   nearly all of the throughput comes from. Reinstating a per-request loop

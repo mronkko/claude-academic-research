@@ -7,6 +7,404 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-08-18
+
+A retrieval release. Everything in it came out of running the pipeline
+against real corpora — a 914-item run that recovered 161 PDFs, its
+655-item residual, a 97-item Springer run — and most of it is either a
+route the pipeline could not previously take, or a verdict it was
+reaching without evidence.
+
+### Added
+
+- **An EBSCOhost handler, driven from the link resolver.** Not a publisher
+  handler: EBSCOhost hosts many publishers, so nothing selects it by DOI
+  or host — the resolver saying "your licensed route is EBSCOhost" does.
+  It therefore stays out of `all_handlers()` alongside
+  `ZoteroConnectorHandler`, and a unit test pins that, because leaking
+  into the registry would offer it to Pass 1 where no resolver target
+  exists and it could only fail.
+
+  It matters because EBSCOhost is the platform Alma routes to most, and
+  its holdings reach much further back than the publishers': from **1982**
+  for the journals in one 97-item run, where FinELib SpringerLink starts
+  at 1997. So it is the route to exactly the pre-1997 population the
+  coverage guard diverts away from Springer.
+
+  Retrieval, measured rather than assumed. Navigating the Alma
+  `resolution_url` produces six redirects — EZproxy, EBSCO OpenURL, an
+  OAuth handshake that succeeds on **institutional IP with no login** —
+  and lands on a JS results page that is inert to any HTTP client: zero
+  occurrences of "pdf", `__NEXT_DATA__` only. That page self-redirects to
+  a single-article PDF viewer, which then fetches
+  `research.ebsco.com/api/researcher-edge-aggregator/…/fulltext/pdf` for a
+  signed URL and pulls the bytes from
+  `content.ebscohost.com/cds/retrieve?content=<token>`.
+
+  **That signed URL works from a plain HTTP client** — verified, no
+  cookies, no session. So the handler uses the browser only to *observe*
+  it and hands the download to `ctx.request`. It intercepts a response
+  rather than clicking the viewer's Download button or awaiting a download
+  event: the button works, but serialises everything through the page and
+  leaves a file to locate. Nothing here is derivable from a DOI, so no URL
+  template is possible.
+
+  Likely more reliable than the Connector for this platform, for a reason
+  `connector.py` already documents: EBSCO OpenURL links land on an
+  "intermediate list page" where Zotero's translator shows a picker. This
+  drives the viewer directly and never sees that page.
+
+  Verified end to end on the three items a 97-item Springer run could not
+  reach — all pre-1997, all previously logged `UNAVAILABLE` and then
+  `connector_setup_failed`. All three now attach from EBSCOhost (741 KB,
+  1,207 KB, 3,326 KB). Page counts are asserted, not just the `%PDF-`
+  header, because a few hundred KB of `application/pdf` can still be a
+  one-page preview.
+
+- `pypdf` in the dev dependency group. The live page-count assertion sat
+  behind an `importorskip` and silently never ran, hiding the exact
+  preview trap it exists to catch — the same failure mode that put
+  `reportlab`, `pybliometrics`, `wiley-tdm` and `playwright` in that group.
+
+- **Parallel browser retrieval — `--browser-workers N`.** The browser
+  passes drove one page at a time, which put an unattended EBSCOhost run
+  of 401 items at roughly two hours. N lanes now share **one** persistent
+  Chromium context, and that choice is the whole design: the profile
+  directory holds the Cloudflare clearance and the institutional SSO /
+  EZproxy session, Chromium locks that directory, so N separate browsers
+  would mean N profiles and every one of those logins solved again. Tabs
+  in one context inherit them, and Chromium already gives each tab its
+  own renderer process, so the parallelism is real.
+
+  Two ceilings, smaller wins: `--browser-workers` is the user's for the
+  run, `handler.concurrency` is the publisher's. The latter was declared
+  on every handler from the start and never read by any driver;
+  `effective_lanes` now reads it, and a request the handler will not
+  honour is reported rather than quietly reduced. **1 stays the default
+  for every publisher-direct handler** — those modules record measured
+  limits (Sage resets sessions above ~30 requests/minute; T&F and Wiley
+  reject `ctx.request` outright), and N parallel requests from one IP is
+  the shape bot detection looks for, where the cost of guessing is the
+  publisher for the run *plus* the shared profile's clearance.
+  `EbscoHandler` is raised to 4, on evidence: IP auth with no
+  interstitial, most of its ~20 s per item spent waiting on a six-hop
+  redirect and a JS boot, and the bytes fetched from a CDN rather than
+  through the page. The Zotero Connector pass is pinned to 1 regardless —
+  one Zotero desktop, one translator, a human per host.
+
+  Three pieces of state that were locals in the serial loop are now
+  shared through a `LaneCoordinator`: the Option-4 answer, the outage
+  breaker's count, and whether the prompt has fired. It adds a gate with
+  no serial counterpart — while a prompt is open every other lane parks
+  *before* claiming its next item, so "skip the rest" cannot arrive after
+  three more tabs have opened against a publisher just declined. Each
+  lane gets its own handler instance, because `last_error` is per-
+  download state and a shared one would let a lane read another's reason
+  and file a lost connection as a missing article. On an outage the lanes
+  stop claiming rather than being cancelled, so nothing is abandoned
+  mid-download and un-attempted items stay unlogged, hence re-runnable.
+
+- **`[library] openurl_base` takes a list — query several libraries and
+  merge their routes.** A reader with two affiliations has two sets of
+  entitlements, and neither institution's resolver knows the other's.
+  The case that forced it: the configured Alma tenant returned no route
+  at all for nine *Nursing Standard* articles, so the pipeline called
+  them "no licensed route" and sent them to ILL — while the reader's
+  second institution served the same journal through Journals@Ovid and
+  ProQuest Central, full text one click away. Modelling one library made
+  a second library's holdings unrepresentable, and the resulting verdict
+  was confidently wrong. With both configured, all 26 previously
+  unroutable items resolved.
+
+  The first entry stays the primary: it keeps the existing cache keys
+  and breaks ranking ties. `/setup` can now widen the scalar you already
+  have into a list (`promote_scalar`), which matters because a
+  `permissions.deny` rule blocks the Read tool on `config.toml`, so
+  hand-editing is not a fallback an agent can offer.
+
+- **"Your library has this publisher, but not this year" now works on
+  Alma.** Three items in a 97-item run each burned a 30-second download
+  timeout on a paywall; all three were pre-1997 articles whose journal
+  Alma lists under SpringerLink from 1997. The resolver had the answer
+  and nothing read it. That verdict used to be derived from an SFX query
+  parameter Alma ignores; `resolvers/coverage.py` now parses Alma's
+  per-package coverage statements (`Available from 01.01.1997 volume: 16
+  issue: 1.`) into year windows instead. The grammar was sampled from 23
+  real statements across six DOIs.
+
+- **EBSCOhost re-queries by DOI when it answers with a search page.**
+  Alma hands EBSCO an OpenURL carrying journal, year and title, and
+  EBSCO turns that into `(SO <journal>)AND(DT <year>)AND(TI <title>)` —
+  a query that can exclude the very article sitting in the database.
+  Measured on `10.1287/mnsc.2017.2869`: Crossref and the DOI say 2017
+  (online-first), EBSCO holds it as May 2019, so `DT 2017` returned zero
+  and EBSCO fell back to fuzzy SmartText matching. `DI "<doi>"` returns
+  exactly one record. On a seven-item live batch this took retrieval
+  from 0 to 5.
+
+  Results from SmartText are **never** used, and a result count on a
+  page carrying it is never read as a count: those hits answer a
+  different question from the one asked, and attaching the wrong paper
+  to a citation is worse than attaching nothing. A DOI search returning
+  more than one record is likewise left alone. Zero records is reported
+  as what it is — the library's resolver advertising a route EBSCO
+  cannot honour for this tenant — and never as "no full text exists".
+
+### Fixed
+
+- **A duplicate record no longer inherits its sibling's "done" status.**
+  `enrich_abstracts.py` and `enrich_pdfs.py` both keyed their resume set
+  on the DOI, so enriching one copy of an article permanently excluded
+  every other copy. One real library held `10.1037/0882-7974.9.3.391`
+  three times: two carried the abstract, the third did not, and the third
+  was the copy consumers resolved to. The content was in the library and
+  structurally invisible — 229 duplicate-DOI groups, roughly 298 items in
+  that position.
+
+  The DOI key bought nothing in exchange, which is what makes this a
+  plain defect rather than a trade-off. An item whose update succeeded
+  carries an `abstractNote` afterwards and an item whose PDF attached is
+  caught by `pdf_map()`, so each was already excluded by its own per-item
+  gate; the DOI key could only ever exclude *other* items. Both now key
+  on `item_key`. `enrich_abstracts` additionally groups the work by DOI
+  so duplicates share one cascade — three copies are three Zotero writes
+  but a single lookup — and `enrich_pdfs` needs no equivalent, since its
+  PDF cache is already keyed on the DOI and the sibling attaches from
+  disk.
+
+- **`needs_interactive_solve = False` now actually skips the setup
+  prompt.** It only changed the queue message; the driver still called
+  `setup()` unconditionally, so the EBSCOhost handler — which
+  authenticates silently on institutional IP — opened a "can you see the
+  PDF?" question with nothing to solve. Under `--control-file` that stalls
+  an unattended run until the timeout. Found by running the handler for
+  real, not by reading the code.
+
+- **A Springer browser handler.** Springer contributed 0 of 98 Springer
+  DOIs to a 914-item run, and the reason was not access.
+  `link.springer.com/content/pdf/<doi>.pdf` answers any HTTP client with
+  a byte-identical ~3 KB HTML page titled `Client Challenge` — an Imperva
+  JavaScript interstitial. Measured from an on-campus IP
+  (`*.aalto.fi`) across ten DOIs including *Journal of Business Ethics*,
+  which the institution licenses, and unchanged by a complete browser
+  header set. The challenge is served *before* entitlement is evaluated,
+  so a VPN makes no difference, and Crossref's TDM record points at the
+  same URL and fails identically.
+
+  No Springer API fixes this: Meta/Metadata return metadata only, the
+  Open Access API covers only OA content, and the TDM API returns
+  full-text **XML** (its official client has `save_xml()` and no PDF
+  method) behind a TDM agreement. So the fix is a real browser, where the
+  JS runs and the challenge clears.
+
+  `SpringerHandler` is a `PageNavigationHandler`. It was written as a
+  `RequestHandler` first, on the theory that Playwright's request client
+  inherits the browser context's cookies the way Sage and Emerald do for
+  Cloudflare. Measured, and false: with the article page fully rendered
+  and the PDF reachable by hand, `ctx.request.get()` still returned the
+  3038-byte challenge. Imperva binds clearance to more than the cookie,
+  so navigation plus a download event is the only route. Confirmed
+  end-to-end afterwards — a 13-page, 982 KB *Journal of Business Ethics*
+  PDF paginated 565–577, i.e. the version of record.
+
+  `RequestHandler`'s failure diagnostics learned to name this: a 3038-byte
+  Imperva page used to be reported as the useless `other (3038B)`, which
+  read like a broken publisher rather than a bot wall.
+
+  Two tests asserted the opposite premise and were corrected, not
+  patched: `test_springer_doi_has_no_browser_handler` claimed "the 15
+  Springer items really were unreachable", and the registry count was
+  pinned at nine handlers.
+
+- **`UNAVAILABLE` must be earned.** It is the one failure cause that
+  licenses a full-text exclusion (FE6), and the pipeline was arriving at
+  it by default from five different directions, in every case without
+  having asked anyone about the article:
+
+  - A lost network connection. One run dropped its network for four
+    minutes and shredded 193 items at ~1.2 s each, recording every one
+    as a failed fetch. Consecutive transport errors now stop the pass
+    instead, leaving un-attempted items unlogged and re-runnable.
+  - A publisher the plain-HTTP cascade structurally cannot reach —
+    silence from a route that was never viable is not evidence.
+  - A 60-second timeout downloading a PDF that turned out to be 27 MB
+    and attached fine on the next attempt.
+  - An article whose record had been positively located, and which
+    failed only at the last hop to its viewer.
+  - A "no exact match" page the pipeline had itself recorded as
+    *unconfirmed*.
+
+  Browser failures now classify from what actually happened, and only
+  genuine silence falls through to the shared classifier. The timeout
+  check is deliberately kept out of the transport-error list that trips
+  the outage breaker, so a merely slow publisher cannot abort a queue.
+
+- **The browser pass no longer opens a publisher the resolver says you
+  cannot reach.** Pass 1 matched a handler by DOI prefix, asked the link
+  resolver whether that publisher was worth opening, then opened it
+  anyway in the case that mattered most. On Alma the platform table was
+  silently doing double duty as the identity map, and it listed nine
+  entries against ten handlers — so five handlers could never satisfy
+  the guard at all.
+
+- **Imported rows are no longer all `journalArticle`.** Scopus and Web
+  of Science return book chapters too, and the row's `source` column —
+  the book's title — went into `publicationTitle`, producing a journal
+  article published in *The Judiciary, the Legislature and the EU
+  Internal Market*. The cost is not cosmetic: a mis-typed chapter passes
+  the journal-article filter, is routed to article-only PDF handlers and
+  cannot succeed there. Five such items in one corpus each burned a
+  browser slot to produce an unexplained failure, and would have done so
+  again on every future run. The type now comes from Crossref, asked
+  once per distinct DOI, under `--dry-run` too.
+
+- **Two counts that described a different run than the one printed.**
+  The skipped-key note counted attachment children as skipped keys, so
+  it *grew as retrieval succeeded* — announcing 11 keys skipped
+  immediately after attaching 11 PDFs, having skipped none. The
+  end-of-run summary counted the whole cumulative log rather than this
+  run's items, so a 14-item run that attached nothing announced "393 of
+  14"; fixing that exposed a second bug underneath, where the summary
+  re-read its own still-buffered log and reported "0 of 17" for a run
+  that had attached 5.
+
+- **The EBSCOhost login prompt asked the wrong question, then opened the
+  wrong page.** It tested whether the *handler* needs an interactive
+  solve rather than whether *this queue* does — so once a second library
+  put EZproxy-wrapped routes into the mix, no login was ever offered and
+  the items died silently on a SAML page. The fix then pointed the solve
+  at a hook name `setup()` never calls, leaving the base implementation
+  in charge and presenting a blank page to sign in on, which is worse
+  than not prompting because the prompt looks answerable.
+
+- **Parallel lanes no longer burst, or race each other through one
+  login.** Each lane slept before its own download, which spaces that
+  lane and nothing else: lanes started together sleep in lockstep and
+  fire simultaneously — the exact shape a rate limiter looks for.
+  Pacing is now reserved across the run. Separately, four lanes opening
+  cold hit the institutional login at the same instant and each
+  invalidated the others' session handshake, which a human cannot
+  resolve; lanes now wait for the first to complete one item.
+
+### Changed
+
+- **SFX and Alma are now peer link-resolver dialects.** The resolver
+  parsed both shapes but everything built on top of the parse assumed
+  SFX's, and on Alma the difference was silent rather than loud. Measured
+  live against an Alma tenant for a DOI with **15** licensed routes
+  including EBSCOhost, JSTOR and three ProQuest packages:
+
+  ```
+  _effective_host(target)        -> <tenant>.alma.exlibrisgroup.com
+  _platform_rank(target, …)      -> len(priority)   i.e. unranked
+  required_domains=ebscohost.com -> no route found
+  ```
+
+  Every Alma `resolution_url` points at the Alma redirector, never a
+  publisher, so any decision keyed on hostname was blind. `required_domains`
+  returned the module's own documented "library has no licensed route"
+  verdict for an article with fifteen, and `SFX_PLATFORM_PRIORITY` — the
+  reasoned preference for EBSCOhost over JSTOR over ProQuest, which
+  sometimes serves scanned images — did nothing at all there.
+
+  `fetchers/resolvers/` now holds a `LibraryResolver` ABC with
+  `SfxResolver` and `AlmaResolver` as equal implementations, selected by
+  `[library] resolver` (`auto` by default) and registered most-specific
+  first. The fix is not an Alma special case: targets became a structured
+  `FulltextTarget` carrying the provider names Alma already sends
+  (`package_public_name` / `interface_name`, previously discarded with the
+  `<keys>` element), and **`rank_key` and `matches_domains` live on the
+  base class and match host *or* name**. SFX keeps matching by domain,
+  Alma starts matching by name, and a third dialect would get both free.
+
+  Alma also declares `supports_date_threshold = False`, so `lookup_dual`
+  makes **one** request instead of two and reports
+  `date_filtering_available=False`. Live testing found Alma returns
+  identical results for correct, wrong and absent `rft.date`/`rft.volume`,
+  and `sfx.ignore_date_threshold` is an SFX parameter it ignores — so the
+  second query bought nothing, and diffing two identical answers into a
+  coverage verdict was worse than nothing. `enrich_pdfs.py` Pass 1 no
+  longer attempts that classification when the dialect cannot support it.
+
+  Verified live that Alma returns the same 15 services with and without
+  the `sfx.*` parameters, so each dialect now sends only its own vendor
+  namespace.
+
+  `[library] platform_priority` is now implemented; it was documented in a
+  comment but nothing had ever read it.
+
+  Renamed with it, since every call site is in-repo: `SfxCache` →
+  `ResolverCache`, `SFX_PLATFORM_PRIORITY` → `PLATFORM_PRIORITY`,
+  `sfx_lookup_dual` → `lookup_dual`, `SfxDualResult` → `DualResult`,
+  `sfx_target_url` → `resolver_target_url`. The cache file is
+  `resolver_cache.json`; the old `sfx_cache.json` is ignored rather than
+  migrated, because a bare URL list cannot answer the platform question
+  and importing it would rank every entry as unranked indefinitely. Cost
+  is one resolver round-trip per DOI on the first run after upgrading.
+
+  Preserved deliberately, each having been a real incident: fail-open
+  `query_ok` semantics, positive-only caching (an empty answer once
+  turned a soft DOI-keying miss permanent for 15 articles the user could
+  read), and `has_fulltext_access`.
+
+  SFX parsing is now covered by inline-XML tests as well as the
+  gitignored institution-specific fixtures. Those fixtures skip on a
+  fresh checkout, so the dialect with weaker automated coverage was the
+  one most likely to rot unnoticed — itself a form of unequal standing.
+
+- **The PDF cascade is now ranked by version quality first, cost second
+  — and it asks before spending.** The paid OpenAlex Content API used to
+  be tried *first* inside a combined OpenAlex fetcher that itself sat
+  ahead of Unpaywall, Semantic Scholar and CORE. Anyone with
+  `OPENALEX_API_KEY` configured was therefore billed $0.01 per PDF for
+  articles the free tiers would have served moments later, with no way to
+  express a preference and nothing in the wizard that had ever asked
+  whether to spend at all.
+
+  `OpenAlexSource` is split in two. `openalex` is now the free OA
+  metadata tier only; `openalex_content` is the paid Content API. That
+  split is what lets the cascade state the priority properly:
+
+  ```
+  Stage 1  free version of record       ScienceDirect → Springer
+                                        → Crossref TDM → PMC
+  Stage 2  paid version of record       OpenAlex Content ($0.01, opt-in)
+  Stage 3  open access, often author    OpenAlex OA → Unpaywall
+           accepted manuscript          → Semantic Scholar → CORE
+  Stage 4  browser handlers             APA, Sage, AOM, T&F, OUP, …
+  Stage 5  Zotero Connector             via the library link resolver
+  ```
+
+  The paid tier ranks *above* the free open-access sources rather than
+  last, which is the one place cost does not win: it serves the
+  publisher's own file, so its pagination matches the published article,
+  whereas the OA aggregators frequently hold an author manuscript whose
+  page numbers do not. A cent is the right price for a citable version of
+  record. It remains the only per-item cost anywhere in the sequence.
+
+- **`/setup` now asks whether to spend on the OpenAlex Content API**, and
+  explains why the API route is preferred over the browser at all: APIs
+  are much faster and far less error prone, since nothing depends on a
+  page layout, a Cloudflare challenge, or the user being at the keyboard.
+  The question is skipped when no OpenAlex key is configured — asking
+  about a tier that cannot run is noise.
+
+  The opt-in is deliberately tri-state. An absent setting reads as
+  enabled, so no existing install silently loses a working tier on
+  upgrade; only an explicit `[openalex] use_paid_content_api = false`
+  (or `OPENALEX_USE_PAID_CONTENT_API=off`) turns it off. The coercion
+  that decides this is one shared function, because a plain `bool()` cast
+  reads the string `"false"` as true.
+
+  The switch also gates OpenAlex's *abstract* route, which goes through
+  the same paid Content API for GROBID TEI XML — opting out means opting
+  out everywhere, not just for PDFs.
+
+- The retrieval sequence is documented for users in
+  `skills/systematic-review/SKILL.md` and
+  `skills/zotero-operations/SKILL.md`, with `fetchers.pdf_sources`'s
+  docstring as the single authoritative ordering both point at.
+
 ## [0.12.0] — 2026-08-17
 
 ### Added

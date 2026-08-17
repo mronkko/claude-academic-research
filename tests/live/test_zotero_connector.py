@@ -252,7 +252,7 @@ def test_connector_full_save_and_merge() -> None:
                         "item_key": stub_key,
                         "doi": _OA_TEST_DOI,
                         "title": "connector live test (PLOS ONE, OA)",
-                        "sfx_target_url": _OA_TEST_URL,
+                        "resolver_target_url": _OA_TEST_URL,
                     },
                     zot,
                     counter=Counter(), total=1, t_start=time.monotonic(),

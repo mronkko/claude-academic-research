@@ -95,6 +95,21 @@ The browser route (`--sources browser`) needs a one-time Playwright
 browser install before first use: `uvx playwright install chromium`
 (the setup wizard pre-approves this command).
 
+**Exhaust the API cascade before reaching for the browser.** APIs are
+much faster and far less error prone — nothing hinges on a page layout,
+a Cloudflare challenge, or the user sitting at the keyboard. The default
+`enrich_pdfs.py` run is ranked by version quality first and cost second:
+free version of record (ScienceDirect, Springer, Crossref TDM, PMC) →
+paid version of record (OpenAlex Content API, $0.01/PDF, opt-in) → open
+access that is often the author's manuscript (OpenAlex OA, Unpaywall,
+Semantic Scholar, CORE) → browser handlers → Zotero Connector. The
+OpenAlex Content API is the only per-item cost anywhere in that
+sequence; it outranks the free open-access tiers because it serves the
+correctly paginated published article rather than an author manuscript,
+and it is switched off with `[openalex] use_paid_content_api = false`.
+The authoritative ordering lives in `fetchers.pdf_sources`'s docstring —
+read it there rather than restating it from memory.
+
 The audit script writes both a JSON report and five `.keys` files
 (`.claude/audit/audit.{missing_abstract,missing_pdf,missing_doi,
 empty_stubs,tdm_recovered}.keys`), plus a set of `retry.*` /
@@ -151,14 +166,27 @@ running these stages:**
 
    | Cause in the report | Next rung |
    |---|---|
-   | `BROWSER_REQUIRED` | `enrich_pdfs.py --sources browser --filter-keys-file <retry.browser.keys>` — a visible Chromium opens; the user solves one Cloudflare challenge per publisher. Narrow to one publisher with `retry.browser.<publisher>.keys`. |
+   | `BROWSER_REQUIRED` | `enrich_pdfs.py --sources browser --filter-keys-file <retry.browser.keys>` — a visible Chromium opens; the user solves one Cloudflare challenge per publisher. Narrow to one publisher with `retry.browser.<publisher>.keys`. Rows that name no publisher belong here too: the link resolver and the Zotero Connector key on the item rather than the DOI prefix, and the same pass reaches both. |
    | `ACCESS_BLOCKED` (Wiley prefix, no token) | Configure `WILEY_TDM_TOKEN` via `/setup`, then `--sources wiley` |
    | `ACCESS_BLOCKED` (anything else) | Hand the user `retry.ill.keys` as an interlibrary-loan list |
    | `NETWORK_ERROR` | Re-run the same stage; the cause is transient |
    | `CORRUPT_DOWNLOAD` | The source served a broken file (usually truncated). Re-running the *same* source returns the same bad bytes — escalate to a different one: the publisher TDM route, or `--sources browser`. |
    | `UPLOAD_FAILED` | The PDF is already in the local cache and only the Zotero attach failed. Re-run `enrich_pdfs.py`; it attaches from cache with no new download. Cheapest rung on the ladder — always offer it first. |
    | `OUT_OF_SCOPE` | A book chapter, thesis, or preprint. No rung applies — the item is excluded on its type, not on retrieval, and chasing a PDF for it wastes the user's time. |
-   | `UNAVAILABLE` | Genuinely unreachable *as published*. One route remains — see below — and only after the user declines it is "not available" the honest report. |
+   | `UNAVAILABLE` | Genuinely unreachable *as published* — every route was tried, so this cannot appear before a browser pass has run. One route remains — see below — and only after the user declines it is "not available" the honest report. |
+
+   **A publisher the browser pass skips is a finding, not a gap.** The
+   run prints, for example, "16 items skipped the publisher's own site —
+   the link resolver lists a licensed route for them, but not via that
+   publisher (Academy of Management 7, Taylor & Francis 5, …)". Those
+   items are *not* lost: they went to the resolver's own route in the
+   same pass. Report the line rather than treating it as a failure, and
+   only act on it if the user says they can reach one of those
+   publishers by other means — a society membership, a login at a second
+   institution — in which case add that handler name to
+   `[library] direct_access` in config.toml and re-run. Many society
+   publishers (Academy of Management, INFORMS) sell membership rather
+   than institutional access, so this skip is usually correct.
 
    **The last rung is a different paper, so it is offered, never taken
    silently.** `enrich_pdfs.py --allow-preprints` looks for a copy on
@@ -183,9 +211,22 @@ running these stages:**
    ```bash
    uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py \
        --sources browser --auto-publishers \
+       --browser-workers 4 \
        --control-file .claude/audit/browser.json \
        --progress-json .claude/audit/browser-progress.jsonl
    ```
+
+   **`--browser-workers N` is worth passing on any large queue.** N tabs
+   share one Chromium profile, so one Cloudflare / SSO solve covers them
+   all — an unattended EBSCOhost run of 400 items drops from roughly two
+   hours to well under one. Each publisher caps it at its own
+   `concurrency`, which is 1 for every direct publisher handler and 4 for
+   EBSCOhost, so raising the number cannot get a bot-protected publisher
+   throttled; a request that gets capped is printed rather than silently
+   reduced. Do not raise a handler's `concurrency` to make the flag bite
+   harder — those 1s are measured limits, and the cost of exceeding one
+   is the publisher for the whole run plus the shared profile's
+   clearance.
 
    Launch it with `run_in_background: true`, then loop:
 
