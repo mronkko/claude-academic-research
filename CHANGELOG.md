@@ -9,6 +9,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An EBSCOhost handler, driven from the link resolver.** Not a publisher
+  handler: EBSCOhost hosts many publishers, so nothing selects it by DOI
+  or host — the resolver saying "your licensed route is EBSCOhost" does.
+  It therefore stays out of `all_handlers()` alongside
+  `ZoteroConnectorHandler`, and a unit test pins that, because leaking
+  into the registry would offer it to Pass 1 where no resolver target
+  exists and it could only fail.
+
+  It matters because EBSCOhost is the platform Alma routes to most, and
+  its holdings reach much further back than the publishers': from **1982**
+  for the journals in one 97-item run, where FinELib SpringerLink starts
+  at 1997. So it is the route to exactly the pre-1997 population the
+  coverage guard diverts away from Springer.
+
+  Retrieval, measured rather than assumed. Navigating the Alma
+  `resolution_url` produces six redirects — EZproxy, EBSCO OpenURL, an
+  OAuth handshake that succeeds on **institutional IP with no login** —
+  and lands on a JS results page that is inert to any HTTP client: zero
+  occurrences of "pdf", `__NEXT_DATA__` only. That page self-redirects to
+  a single-article PDF viewer, which then fetches
+  `research.ebsco.com/api/researcher-edge-aggregator/…/fulltext/pdf` for a
+  signed URL and pulls the bytes from
+  `content.ebscohost.com/cds/retrieve?content=<token>`.
+
+  **That signed URL works from a plain HTTP client** — verified, no
+  cookies, no session. So the handler uses the browser only to *observe*
+  it and hands the download to `ctx.request`. It intercepts a response
+  rather than clicking the viewer's Download button or awaiting a download
+  event: the button works, but serialises everything through the page and
+  leaves a file to locate. Nothing here is derivable from a DOI, so no URL
+  template is possible.
+
+  Likely more reliable than the Connector for this platform, for a reason
+  `connector.py` already documents: EBSCO OpenURL links land on an
+  "intermediate list page" where Zotero's translator shows a picker. This
+  drives the viewer directly and never sees that page.
+
+  Verified end to end on the three items a 97-item Springer run could not
+  reach — all pre-1997, all previously logged `UNAVAILABLE` and then
+  `connector_setup_failed`. All three now attach from EBSCOhost (741 KB,
+  1,207 KB, 3,326 KB). Page counts are asserted, not just the `%PDF-`
+  header, because a few hundred KB of `application/pdf` can still be a
+  one-page preview.
+
+- `pypdf` in the dev dependency group. The live page-count assertion sat
+  behind an `importorskip` and silently never ran, hiding the exact
+  preview trap it exists to catch — the same failure mode that put
+  `reportlab`, `pybliometrics`, `wiley-tdm` and `playwright` in that group.
+
+### Fixed
+
+- **`needs_interactive_solve = False` now actually skips the setup
+  prompt.** It only changed the queue message; the driver still called
+  `setup()` unconditionally, so the EBSCOhost handler — which
+  authenticates silently on institutional IP — opened a "can you see the
+  PDF?" question with nothing to solve. Under `--control-file` that stalls
+  an unattended run until the timeout. Found by running the handler for
+  real, not by reading the code.
+
 - **A Springer browser handler.** Springer contributed 0 of 98 Springer
   DOIs to a 914-item run, and the reason was not access.
   `link.springer.com/content/pdf/<doi>.pdf` answers any HTTP client with

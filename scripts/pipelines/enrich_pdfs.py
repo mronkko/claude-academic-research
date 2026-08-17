@@ -609,9 +609,19 @@ async def _drive_handler(
         ctx = await launch_context(p, args.cache_dir)
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
 
-        setup_result = normalise_setup_result(
-            await handler.setup(page, items[0]["doi"])
-        )
+        # `needs_interactive_solve = False` means what it says: no bot
+        # wall, no institutional login, nothing for a human to clear — so
+        # do not open a prompt nobody needs to answer. Until this check
+        # existed the flag only changed the queue *message*, and the
+        # EBSCOhost handler (which authenticates silently on
+        # institutional IP) still blocked on a setup question, which would
+        # stall an unattended run until the control-file timeout.
+        if getattr(handler, "needs_interactive_solve", True):
+            setup_result = normalise_setup_result(
+                await handler.setup(page, items[0]["doi"])
+            )
+        else:
+            setup_result = "proceed"
         if setup_result in ("skip", "always_skip"):
             # User bailed out before any item ran. "always_skip" also
             # persists the publisher to [library] no_access so future
@@ -1347,8 +1357,10 @@ def _run_browser_in_process(
 
     from core import config_writer
     from fetchers.browser import (
+        EbscoHandler,
         ZoteroConnectorHandler,
         all_handlers,
+        is_ebsco_target,
         resolve_by_doi,
         resolve_by_host,
     )
@@ -1663,6 +1675,12 @@ def _run_browser_in_process(
     # ------------------------------------------------------------------
 
     connector_items: list[dict] = []
+    # Items whose resolver target is EBSCOhost. They get a dedicated
+    # handler rather than the Connector: EBSCO's OpenURL link lands on a
+    # multi-result page where the Zotero translator shows a picker (see
+    # connector.py), whereas that page self-redirects to a single-article
+    # PDF viewer we can drive directly. No Zotero desktop needed either.
+    ebsco_items: list[dict] = []
     skipped_no_target = 0
     origins = (
         [(it, "upfront") for it in connector_upfront]
@@ -1671,7 +1689,7 @@ def _run_browser_in_process(
     ignore_coverage = getattr(args, "ignore_library_coverage", False)
     failed_open = 0
     for it, origin in origins:
-        target, query_ok = None, True
+        target, query_ok, chosen = None, True, None
         if resolver_cfg is not None and not ignore_coverage:
             # Query B only (date-filtered). When Query B is empty,
             # we do NOT fall back to Query A. The cache data against
@@ -1684,7 +1702,7 @@ def _run_browser_in_process(
             # Ranking comes from `resolver_cfg.priority`, which honours
             # `[library] platform_priority`; passing the module default
             # here would silently ignore the user's configured order.
-            target, query_ok = lookup_fulltext_target(
+            target, query_ok, chosen = lookup_fulltext_target(
                 it["doi"], resolver_cfg,
                 in_range_only=True,
                 issn=it.get("issn"), pub_date=it.get("pub_date"),
@@ -1710,7 +1728,11 @@ def _run_browser_in_process(
                 if origin == "upfront":
                     failed_open += 1
                 target = f"https://doi.org/{it['doi']}"
-            connector_items.append({**it, "resolver_target_url": target})
+            entry_with_target = {**it, "resolver_target_url": target}
+            if is_ebsco_target(chosen):
+                ebsco_items.append(entry_with_target)
+            else:
+                connector_items.append(entry_with_target)
         else:
             status = (
                 "skipped_no_library_coverage"
@@ -1749,7 +1771,30 @@ def _run_browser_in_process(
         )
 
     # ------------------------------------------------------------------
-    # Pass 4 — single Connector session for upfront + retry items.
+    # Pass 4a — EBSCOhost items, driven directly from their resolver
+    # target. Runs before the Connector because it needs neither Zotero
+    # desktop nor a human: EBSCO authenticates on institutional IP, and
+    # the OpenURL page self-redirects to a single-article PDF viewer.
+    # ------------------------------------------------------------------
+
+    if ebsco_items:
+        print(
+            f"\n  • EBSCOhost (resolver-routed): {len(ebsco_items)} "
+            f"paper{'' if len(ebsco_items) == 1 else 's'}",
+            flush=True,
+        )
+        asyncio.run(_drive_handler(
+            EbscoHandler(), ebsco_items, zot, log_writer, args, run_date,
+            on_failure="retry_bucket",
+            # A failure here is not evidence the article is unreachable —
+            # hand it on to the Connector, which drives the same platform
+            # through Zotero's own translator.
+            retry_bucket=connector_items,
+            prompt_on_first_failure=False,
+        ))
+
+    # ------------------------------------------------------------------
+    # Pass 4b — single Connector session for whatever is left.
     # ------------------------------------------------------------------
 
     if connector_items:

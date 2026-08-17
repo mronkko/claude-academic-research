@@ -294,10 +294,18 @@ class TargetLookup(NamedTuple):
     evidence of missing access, and callers must not treat it as such.
     `url=None` with `query_ok=True` is the real "library has no licensed
     route" verdict.
+
+    `target` is the winning `FulltextTarget`, or None when there was no
+    winner. Callers need it to know *which platform* they were sent to:
+    on Alma every URL is the same redirector host, so the platform is
+    only knowable from the target's `interface_name` / `package_name`.
+    That is what lets a platform-specific handler (EBSCO) be chosen over
+    the generic Connector.
     """
 
     url: str | None
     query_ok: bool
+    target: FulltextTarget | None = None
 
 
 def lookup_fulltext_target(
@@ -353,7 +361,7 @@ def lookup_fulltext_target(
         targets,
         key=lambda t: resolver.sort_key(t, ranking, pub_date=pub_date),
     )
-    return TargetLookup(best.url, True)
+    return TargetLookup(best.url, True, best)
 
 
 def first_fulltext_target_preferred(

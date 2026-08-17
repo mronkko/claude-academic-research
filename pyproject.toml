@@ -50,6 +50,13 @@ dev = [
     # actually running still needs `playwright install chromium`, which
     # the fixture's skip message spells out.
     "playwright>=1.40",
+    # The silent-skip problem once more, and this one hid the exact trap it
+    # exists to catch: a retrieved file can be `application/pdf`, a few
+    # hundred KB, and still be a one-page preview — which is how Elsevier's
+    # entitlement failure presents. The page-count assertion in the live
+    # EBSCO test is the only check separating an article from its first
+    # page, and behind an importorskip it simply did not run.
+    "pypdf>=4.0",
 ]
 
 [tool.pytest.ini_options]

@@ -37,6 +37,7 @@ from .connector import (
     resolve_connector_extension_path,
     wait_for_service_worker,
 )
+from .ebsco import EbscoHandler, is_ebsco_target
 from .emerald import EmeraldHandler
 from .informs import InformsHandler
 from .oup import OupHandler
@@ -146,6 +147,7 @@ __all__ = [
     "ApaHandler",
     "BrowserSource",
     "Counter",
+    "EbscoHandler",
     "EmeraldHandler",
     "InformsHandler",
     "OupHandler",
@@ -161,6 +163,7 @@ __all__ = [
     "all_handlers",
     "cache_path_for",
     "is_cached",
+    "is_ebsco_target",
     "launch_context",
     "ping_zotero_desktop",
     "progress_tag",

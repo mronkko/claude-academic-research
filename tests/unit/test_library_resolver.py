@@ -138,6 +138,16 @@ def _ft(*urls: str) -> str:
     return sfx_xml(*(("getFullTxt", u, "") for u in urls))
 
 
+def _uq(result) -> tuple[str | None, bool]:
+    """Just the (url, query_ok) verdict.
+
+    `TargetLookup` also carries the winning `FulltextTarget`, which these
+    tests do not care about — comparing the whole tuple would couple every
+    fail-open assertion to that field's presence.
+    """
+    return (result.url, result.query_ok)
+
+
 # ---------------------------------------------------------------------------
 # Fail-open semantics
 # ---------------------------------------------------------------------------
@@ -147,24 +157,24 @@ def test_unconfigured_resolver_reports_query_not_ok() -> None:
     """A None resolver means "no pre-flight", which callers must not read
     as "no access" — that once made the whole Connector pass unreachable."""
     cfg = LibraryResolverConfig(resolver=None, session=MagicMock())
-    assert lookup_fulltext_target(DOI, cfg) == (None, False)
+    assert _uq(lookup_fulltext_target(DOI, cfg)) == (None, False)
     assert has_fulltext_access(DOI, cfg) is True
 
 
 def test_transport_error_reports_query_not_ok() -> None:
-    assert lookup_fulltext_target(DOI, _sfx_cfg(_session(error=True))) == (
+    assert _uq(lookup_fulltext_target(DOI, _sfx_cfg(_session(error=True)))) == (
         None, False,
     )
 
 
 def test_non_200_reports_query_not_ok() -> None:
-    assert lookup_fulltext_target(DOI, _sfx_cfg(_session(status=503))) == (
+    assert _uq(lookup_fulltext_target(DOI, _sfx_cfg(_session(status=503)))) == (
         None, False,
     )
 
 
 def test_malformed_xml_reports_query_not_ok() -> None:
-    assert lookup_fulltext_target(DOI, _sfx_cfg(_session(text="<not-xml"))) == (
+    assert _uq(lookup_fulltext_target(DOI, _sfx_cfg(_session(text="<not-xml")))) == (
         None, False,
     )
 
@@ -172,7 +182,7 @@ def test_malformed_xml_reports_query_not_ok() -> None:
 def test_empty_response_is_a_real_no_access_verdict() -> None:
     """The one case that legitimately means "no licensed route": the
     resolver answered, and had nothing."""
-    assert lookup_fulltext_target(DOI, _sfx_cfg(_session(text=_ft()))) == (
+    assert _uq(lookup_fulltext_target(DOI, _sfx_cfg(_session(text=_ft())))) == (
         None, True,
     )
 
@@ -200,9 +210,9 @@ def test_required_domains_rejects_indirect_routes() -> None:
     cfg = _sfx_cfg(_session(text=_ft(
         "https://www.jstor.org/stable/1", "https://search.ebscohost.com/x",
     )))
-    assert lookup_fulltext_target(
+    assert _uq(lookup_fulltext_target(
         DOI, cfg, required_domains=("pubsonline.informs.org",),
-    ) == (None, True)
+    )) == (None, True)
 
 
 def test_required_domains_accepts_a_matching_direct_route() -> None:
@@ -303,9 +313,9 @@ def test_alma_skips_the_fallback_when_the_doi_query_answered() -> None:
 
 def test_sfx_never_uses_an_issn_fallback() -> None:
     session = _session(text=_ft())
-    assert lookup_fulltext_target(
+    assert _uq(lookup_fulltext_target(
         DOI, _sfx_cfg(session), issn="1042-2587",
-    ) == (None, True)
+    )) == (None, True)
     assert session.get.call_count == 1
 
 
@@ -428,7 +438,7 @@ def test_an_empty_answer_is_never_cached(tmp_path: Path) -> None:
     it turns a soft miss into a permanent one."""
     cache = ResolverCache(tmp_path)
     cfg = _sfx_cfg(_session(text=_ft()), cache)
-    assert lookup_fulltext_target(DOI, cfg) == (None, True)
+    assert _uq(lookup_fulltext_target(DOI, cfg)) == (None, True)
     assert ResolverCache(tmp_path).get(DOI) is None
     # A later run with real coverage must still be able to find it.
     cfg2 = _sfx_cfg(_session(text=_ft("https://search.ebscohost.com/x")), cache)
