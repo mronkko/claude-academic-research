@@ -61,6 +61,7 @@ import os
 import re
 import sys
 import threading
+from collections.abc import Collection
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date
@@ -2311,11 +2312,13 @@ def _run_browser_in_process(
             args, run_date,
         ))
 
-    _print_browser_summary(args, len(to_process))
+    _print_browser_summary(args, [it["key"] for it in to_process])
     return 0
 
 
-def _print_browser_summary(args: argparse.Namespace, queued: int) -> None:
+def _print_browser_summary(
+    args: argparse.Namespace, queued_keys: Collection[str],
+) -> None:
     """End-of-run totals for `--sources browser` / `connector`.
 
     The browser path printed per-handler totals and then returned in
@@ -2324,9 +2327,19 @@ def _print_browser_summary(args: argparse.Namespace, queued: int) -> None:
     Read back from the run log rather than threading counters through
     four passes, which also means resumed and partial runs report the
     same way.
+
+    Read back, but *intersected with what this run queued*. The log is
+    cumulative, so counting all of it answered a different question than
+    the one asked: a 14-item run that attached nothing announced "Done.
+    393 of 14 queued items now have a PDF attached." Worse than the
+    arithmetic, `queued - attached` went negative, so the "still
+    missing" line never printed and the `run_done` event reported
+    `missing: 0` — a machine-readable claim of success on a total
+    failure, which is the one thing an unattended caller must never be
+    told.
     """
     try:
-        attached = shared_orchestrators.load_done_keys(
+        attached_ever = shared_orchestrators.load_done_keys(
             args.log_csv,
             statuses=("attached", "attached_via_connector"),
             key_field="item_key",
@@ -2335,6 +2348,11 @@ def _print_browser_summary(args: argparse.Namespace, queued: int) -> None:
         return
     from fetchers.browser import interaction
 
+    queued = len(queued_keys)
+    # `load_done_keys` lower-cases every key it returns; Zotero item keys
+    # are upper-case. Intersecting the two forms directly is empty for
+    # every run, which would trade an over-count for an under-count.
+    attached = {k.strip().lower() for k in queued_keys} & set(attached_ever)
     interaction.report_progress({
         "event": "run_done", "queued": queued, "attached": len(attached),
         "missing": max(queued - len(attached), 0),
