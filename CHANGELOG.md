@@ -66,6 +66,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Every APA item failed on an entitled session.** On a JYU VPN run
+  the handler reported "No 'Get Access' control on the PsycNET page …
+  markup has changed" for all 133 items, while its own saved screenshot
+  read *"Your access to this content through Jyvaskylan yliopisto has
+  been verified!"*. `_FULLTEXT_URL` builds `/fulltext/<record_id>.pdf`,
+  but the real URL carries a per-session `auth_id`; the bare form
+  redirects to `/recordAccess/institutional/<record_id>`, which verifies
+  the institution and *then* renders a "Download PDF" link holding the
+  signed URL a few seconds later. The handler read the failed probe as
+  "not entitled" and ran its access check against that page — which of
+  course has no "Get Access" control — and blamed the markup. It now
+  recognises the access path, waits for the signed link, and downloads
+  from it. Verified against the live site.
+
 - **`--publisher` did not gate the Pass 2 API retry.** The
   `--publisher` skip added earlier sat *below* the retry in the
   classification loop, so a `--publisher apa` run still called Wiley

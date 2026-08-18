@@ -46,7 +46,7 @@ import json
 import re
 import time
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import unquote, urljoin
 
 from .base import (
     Counter,
@@ -155,6 +155,19 @@ class ApaHandler(PublisherHandler):
             # a run is the normal case.
             if await _download_from(page, fulltext_url, out):
                 source_url = fulltext_url
+            elif _ACCESS_PATH in (page.url or "").lower():
+                # PsycNET bounced the bare `/fulltext/` URL to its
+                # institutional-access page. That is recognition, not
+                # refusal — the signed link appears there shortly.
+                signed = await _download_from_access_page(page, out)
+                if not signed:
+                    raise RuntimeError(
+                        f"PsycNET verified institutional access for record "
+                        f"{record_id} but never rendered a 'Download PDF' "
+                        f"link on {page.url}. Either the modal is still "
+                        f"loading after 25s or its markup has changed"
+                    )
+                source_url = signed
             else:
                 # Step 3: the access check. Its job is to turn an
                 # unentitled session into an entitled one; where it
@@ -371,6 +384,49 @@ async def _download_from(page, url: str, out: Path) -> bool:
     except Exception:
         return False
     return is_cached(out)
+
+
+#: The page PsycNET redirects an entitled-but-unauthorised session to.
+#: Reaching it is success, not failure: it means the institution was
+#: recognised. See `_download_from_access_page`.
+_ACCESS_PATH = "/recordaccess/institutional/"
+
+
+async def _download_from_access_page(page, out: Path) -> str:
+    """Take the signed PDF link off PsycNET's institutional-access page.
+
+    `_FULLTEXT_URL` builds `/fulltext/<record_id>.pdf`, which is not a
+    complete URL: the real one carries an `auth_id` minted per session,
+    e.g. `/fulltext/1997-06412-019.pdf?auth_id=4168&returnUrl=...`.
+    Navigating to the bare form therefore never downloads — PsycNET
+    redirects to `/recordAccess/institutional/<record_id>`, which
+    verifies the institution and *then* renders a "Download PDF" link
+    holding the signed URL.
+
+    That redirect is what made this look broken on a live JYU run. The
+    caller treated the failed `/fulltext/` probe as "not entitled" and
+    ran `_run_access_check` on the page it had landed on — but that page
+    is the access modal, not the record page, so there was no "Get
+    Access" control and the handler reported the markup as changed. The
+    screenshot told the real story: "Your access to this content through
+    Jyvaskylan yliopisto has been verified!" above a spinner.
+
+    The link is populated by JS several seconds after arrival, so the
+    wait here is generous. Returns the signed URL on success, "" if the
+    link never appeared.
+    """
+    try:
+        link = page.locator(
+            "a[href*='/fulltext/'][href*='.pdf']"
+        ).first
+        await link.wait_for(state="attached", timeout=25000)
+        href = await link.get_attribute("href")
+    except Exception:
+        return ""
+    if not href:
+        return ""
+    url = urljoin(page.url or "https://psycnet.apa.org/", href)
+    return url if await _download_from(page, url, out) else ""
 
 
 async def _run_access_check(page) -> str:
