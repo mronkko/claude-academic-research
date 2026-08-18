@@ -33,6 +33,11 @@ htmlcov/
 coverage.xml
 .pytest-playwright-cache/
 
+# Playwright MCP scratch — console logs and page snapshots the server
+# drops in the CWD during a browser session. Machine-local debris, and
+# the snapshots capture live EZproxy / institutional URLs.
+.playwright-mcp/
+
 # Pipeline output (CSV logs, PDF/fulltext caches, Chromium profile).
 # Safe to delete any time; scripts regenerate on next run.
 output/
