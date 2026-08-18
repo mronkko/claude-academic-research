@@ -75,6 +75,35 @@ class PdfFetcher(Source, ABC):
     # prefix filtering) and is excluded from Pass 2 API retry.
     direct_access_domains: tuple[str, ...] = ()
 
+    #: DOI prefixes this source can serve, or empty for "any DOI".
+    #: Declared separately from the private tuples the prefix-filtering
+    #: sources already keep, because the orchestrator needs to ask the
+    #: question *before* calling `fetch_pdf` — see `handles_doi`.
+    doi_prefixes: tuple[str, ...] = ()
+
+    def handles_doi(self, doi: str) -> bool:
+        """Could this source ever serve `doi`?
+
+        Not "will it succeed" — "is this DOI in its remit at all".
+
+        The distinction was invisible until a source-restricted run made
+        it obvious: `--sources wiley` over a 1,133-item queue printed
+        `no PDF` for ~970 Taylor & Francis, BMJ, Cambridge and Sage
+        items, because `WileySource.fetch_pdf` returns None on a
+        non-Wiley prefix and the orchestrator cannot tell that apart from
+        "Wiley was asked and had nothing". It then wrote a
+        `skipped_no_pdf` row and an `api_cascade` failure row for each —
+        a non-attempt recorded as a failure, which is the defect this
+        repo has spent a whole release removing everywhere else.
+
+        Default True, so a source that fetches any DOI (Crossref,
+        OpenAlex, Unpaywall, …) needs no override.
+        """
+        if not self.doi_prefixes:
+            return True
+        low = (doi or "").strip().lower()
+        return any(low.startswith(p) for p in self.doi_prefixes)
+
     @abstractmethod
     def fetch_pdf(
         self,

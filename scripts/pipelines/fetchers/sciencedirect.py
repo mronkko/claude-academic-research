@@ -173,6 +173,7 @@ class ScienceDirectSource(AbstractFetcher, PdfFetcher):
     PDF via https://api.elsevier.com/content/article/doi/{doi}."""
 
     name = "sciencedirect"
+    doi_prefixes = _ELSEVIER_PREFIXES
     direct_access_domains = ("sciencedirect.com", "elsevier.com")
 
     def _api_key(self) -> str:

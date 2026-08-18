@@ -118,6 +118,7 @@ def _cache_pdf_path(cache_dir: str | Path, doi: str) -> Path:
 
 class SpringerSource(PdfFetcher):
     name = "springer"
+    doi_prefixes = _SPRINGER_PREFIXES
     direct_access_domains = ("link.springer.com", "springer.com")
 
     def fetch_pdf(

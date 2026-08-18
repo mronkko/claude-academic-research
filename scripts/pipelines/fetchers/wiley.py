@@ -45,6 +45,7 @@ _WILEY_PREFIXES = ("10.1002/", "10.1111/", "10.1046/", "10.1348/")
 
 class WileySource(PdfFetcher):
     name = "wiley"
+    doi_prefixes = _WILEY_PREFIXES
     direct_access_domains = ("onlinelibrary.wiley.com", "wiley.com")
 
     def _token(self) -> str:

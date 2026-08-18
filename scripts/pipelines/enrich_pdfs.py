@@ -2766,6 +2766,35 @@ def _run_api_cascade(
     """
     attached = no_pdf = failed = 0
 
+    # An item no selected source covers was never asked about, and must
+    # not be reported — or logged — as though it had been. With the full
+    # cascade this filter removes nothing, because Crossref, OpenAlex,
+    # Unpaywall and the rest handle any DOI. It matters for a restricted
+    # run: `--sources wiley` over 1,133 items printed `no PDF` for ~970
+    # Taylor & Francis, BMJ, Cambridge and Sage records and wrote a
+    # `skipped_no_pdf` row for each, because `fetch_pdf` returning None
+    # on a prefix mismatch is indistinguishable from Wiley being asked
+    # and having nothing.
+    eligible, unhandled = [], []
+    for it in to_process:
+        doi = (it.get("data", {}).get("DOI") or "").strip()
+        if any(src.handles_doi(doi) for src in sources):
+            eligible.append(it)
+        else:
+            unhandled.append(it)
+    if unhandled:
+        names = ", ".join(sorted({s.name for s in sources}))
+        print(
+            f"\n  {len(unhandled)} of {len(to_process)} items have a DOI "
+            f"no selected source covers ({names}) — not attempted, not "
+            f"logged. Drop --sources to run the full cascade.",
+            flush=True,
+        )
+    to_process = eligible
+    if not to_process:
+        print("  Nothing left for the selected sources.", flush=True)
+        return attached, no_pdf, failed
+
     print(f"\n  Downloading PDFs ({args.workers} threads)...", flush=True)
     results: list[tuple[dict, tuple[Path, str] | None]] = []
     with ThreadPoolExecutor(max_workers=args.workers) as pool:

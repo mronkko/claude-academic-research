@@ -66,6 +66,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A source-restricted run reported items it never asked about.**
+  `--sources wiley` over a 1,133-item queue printed `no PDF` for ~970
+  Taylor & Francis, BMJ, Cambridge and Sage records and wrote a
+  `skipped_no_pdf` row plus a generic `api_cascade` failure row for each.
+  `WileySource.fetch_pdf` returns `None` on a prefix mismatch, and the
+  orchestrator could not tell that apart from "Wiley was asked and had
+  nothing". `PdfFetcher.handles_doi()` now answers "is this DOI in this
+  source's remit at all" before `fetch_pdf` is called, and the cascade
+  skips — silently in the log, with one summary line on screen — any
+  item no selected source covers. No effect on a full cascade run, where
+  Crossref, OpenAlex and Unpaywall take any DOI. The exclusion path was
+  never at risk (`browser_pass_untried=True` keeps `UNAVAILABLE` off
+  these), but a non-attempt recorded as a failure is the defect this
+  release has been removing everywhere else.
+
 - **The end-of-run report made one Zotero request per missing item.**
   `_print_run_report` called `zot.get_item` lazily from inside the
   formatter, so a run with 1,133 unresolved items made 1,133 sequential
