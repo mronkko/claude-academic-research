@@ -40,6 +40,20 @@ from fetchers.browser.apa import (
 
 PDF_BYTES = b"%PDF-1.7\n" + b"x" * 2000
 
+
+@pytest.fixture(autouse=True)
+def _short_get_access_wait(monkeypatch):
+    """Keep the suite quick.
+
+    `try_click` polls to its deadline when nothing visible turns up, and
+    the production budget for "Get Access" is 20s — measured against a
+    JS app that renders it about six seconds in. Every failure-path test
+    here would otherwise sit out that full budget.
+    """
+    import fetchers.browser.apa as apa_mod
+
+    monkeypatch.setattr(apa_mod, "_GET_ACCESS_TIMEOUT_MS", 300)
+
 LANDING = "https://psycnet.apa.org/doiLanding?doi=10.1037%2Fapl0000007"
 RECORD_ID = "2015-01016-001"
 #: A paper cited by the test article. This is the accession a live run
@@ -92,13 +106,39 @@ class _FakeExpectDownload:
 
 
 class _FakeLocator:
+    """Models the slice of Playwright's Locator that the code uses.
+
+    `count`/`nth`/`is_visible` exist because `try_click` sweeps every
+    candidate for the first *visible* one — it used to take `.first` and
+    wait on it, which is why a hidden 0x0 duplicate of PsycNET's "Get
+    Access" anchor defeated every selector. `hidden_duplicates` models
+    exactly that: matches that resolve but can never be clicked.
+    """
+
     def __init__(self, page: _FakePsycnetPage, selector: str) -> None:
         self._page = page
         self._selector = selector
+        self._index = 0
 
     @property
     def first(self) -> _FakeLocator:
-        return self
+        return self.nth(0)
+
+    def nth(self, index: int) -> _FakeLocator:
+        clone = _FakeLocator(self._page, self._selector)
+        clone._index = index
+        return clone
+
+    async def count(self) -> int:
+        if not self._page.matches(self._selector):
+            return 0
+        return 1 + self._page.hidden_duplicates
+
+    async def is_visible(self) -> bool:
+        if not self._page.matches(self._selector):
+            return False
+        # The live page puts the 0x0 anchors *before* the real one.
+        return self._index >= self._page.hidden_duplicates
 
     async def wait_for(self, state: str = "", timeout: int = 0) -> None:
         del state, timeout
@@ -106,7 +146,8 @@ class _FakeLocator:
             raise TimeoutError(f"no element for {self._selector}")
 
     async def click(self) -> None:
-        await self.wait_for()
+        if not await self.is_visible():
+            raise TimeoutError(f"element {self._index} not visible")
         self._page.click(self._selector)
 
     async def get_attribute(self, name: str) -> str | None:
@@ -136,6 +177,7 @@ class _FakePsycnetPage:
         has_get_access: bool = True,
         has_check_access: bool = True,
         pdf_control_works: bool = False,
+        hidden_duplicates: int = 0,
         stale_loads: int = 0,
         lands_on_record: bool = False,
     ) -> None:
@@ -147,6 +189,10 @@ class _FakePsycnetPage:
         self.has_get_access = has_get_access
         self.has_check_access = has_check_access
         self.pdf_control_works = pdf_control_works
+        #: Hidden 0x0 matches rendered *before* the real control, as
+        #: PsycNET does for "Get Access". Zero keeps every existing test
+        #: on the old shape.
+        self.hidden_duplicates = hidden_duplicates
         #: How many probes serve a *different* item's landing page
         #: before this one's renders. Defence-in-depth against the race.
         self.stale_loads = stale_loads
@@ -645,3 +691,36 @@ def test_setup_hint_warns_that_the_session_does_not_persist() -> None:
     hint = ApaHandler().setup_hint
     assert "ONCE PER RUN" in hint
     assert "/record/" in hint and "doiLanding" in hint
+
+
+def test_a_hidden_duplicate_control_does_not_defeat_the_click(
+    tmp_path: Path,
+) -> None:
+    """The live defect, in one test.
+
+    PsycNET's record page renders two "Get Access" anchors: a 0x0 one
+    with no `offsetParent`, then the real 252x21 one. `try_click` took
+    `page.locator(sel).first`, waited 20s for the hidden one to become
+    visible, moved on to the next selector — which resolved to the same
+    hidden element — and reported that PsycNET's markup had changed, on
+    a page where the operator could see and click the button.
+
+    Confirmed against the live site before fixing: `a.list-group-item.pdf`
+    matched two elements, index 0 measuring 0x0 with a null
+    `offsetParent`.
+    """
+    page = _FakePsycnetPage(
+        entitled_after_check=True, hidden_duplicates=1, pdf_control_works=True,
+    )
+    result = _run(ApaHandler(), page, tmp_path, Counter())
+
+    assert result is not None, "the visible control was never reached"
+
+
+def test_the_visible_control_is_still_found_without_duplicates(
+    tmp_path: Path,
+) -> None:
+    """The ordinary shape must keep working — the sweep is a superset of
+    the old `.first` behaviour, not a replacement for it."""
+    page = _FakePsycnetPage(entitled_after_check=True, pdf_control_works=True)
+    assert _run(ApaHandler(), page, tmp_path, Counter()) is not None

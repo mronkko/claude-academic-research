@@ -66,6 +66,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`try_click` clicked `.first`, not the first *visible* match.** Its
+  docstring promised the latter; the code took `page.locator(sel).first`
+  and waited for that one element to become visible. PsycNET's record
+  page renders two "Get Access" anchors — a 0x0 one with no
+  `offsetParent`, then the real 252x21 one — so `.first` selected the
+  hidden one, waited out the full timeout, moved to the next selector,
+  and resolved to the same hidden element again. Every selector failed,
+  on a page where the operator could see and click the button, and the
+  handler blamed PsycNET's markup. It now sweeps every candidate of
+  every selector and clicks the first that is genuinely visible;
+  `timeout` became a budget for the whole search, capping the worst case
+  at `timeout` rather than `timeout x len(selectors)`. Shared by every
+  browser handler, so the same trap is closed everywhere.
+
 - **Every APA item failed on an entitled session** (superseding the
   first attempt at this, which shipped as dead code). On a JYU VPN run
   the handler reported "No 'Get Access' control … markup has changed"

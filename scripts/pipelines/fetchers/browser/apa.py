@@ -456,8 +456,14 @@ async def _run_access_check(page) -> str:
     """
     opened = await try_click(
         page,
-        "button.getAccessButton",
+        # `title`/`aria-label` are the stable handles: the visible text
+        # lives in a nested <span translate="">, and the class list
+        # varies per user. `button.getAccessButton` matched nothing on
+        # the live page and is kept only as a cheap legacy fallback.
+        "a[title='Get Access']",
+        "a[aria-label='Get Access']",
         "a.list-group-item.pdf",
+        "button.getAccessButton",
         "button:has-text('Get Access')",
         "a:has-text('Get Access')",
         timeout=_GET_ACCESS_TIMEOUT_MS,

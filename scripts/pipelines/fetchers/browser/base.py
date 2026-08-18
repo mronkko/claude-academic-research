@@ -97,21 +97,53 @@ def is_cached(path: Path) -> bool:
 
 
 async def try_click(page: Page, *selectors: str, timeout: int = 8000) -> bool:
-    """Click the first selector that resolves to a visible element.
+    """Click the first *visible* element any selector resolves to.
 
-    Returns True on the first successful click, False if every selector
-    fails. Used by the multi-step flows (APA PsycNET) where the button's
-    class changes per-user.
+    Returns True on the first successful click, False if nothing visible
+    turns up before `timeout`. Used by the multi-step flows (APA
+    PsycNET) where the control's class changes per-user.
+
+    **`.first` is not good enough, and that cost a live run.** This used
+    to take `page.locator(sel).first` and wait for *it* to become
+    visible. PsycNET's record page renders two "Get Access" anchors — a
+    0x0 one with no `offsetParent`, then the real 252x21 one. `.first`
+    picked the hidden one every time, waited out the full timeout, moved
+    to the next selector, and resolved to the same hidden element again.
+    All four selectors failed, 20s each, on a page where the operator
+    could see and click the button. The reported diagnosis — that
+    PsycNET had changed its markup — was wrong twice over: the markup
+    was unchanged and the selectors matched it.
+
+    So: sweep every candidate of every selector and click the first one
+    that is actually visible. `timeout` is now a budget for the whole
+    search rather than per-selector, which also caps the worst case at
+    `timeout` instead of `timeout x len(selectors)`.
     """
-    for sel in selectors:
-        loc = page.locator(sel).first
+    deadline = time.monotonic() + timeout / 1000
+    while True:
+        for sel in selectors:
+            loc = page.locator(sel)
+            try:
+                count = await loc.count()
+            except Exception:
+                continue
+            for i in range(count):
+                candidate = loc.nth(i)
+                try:
+                    if not await candidate.is_visible():
+                        continue
+                    await candidate.click()
+                    return True
+                except Exception:
+                    # Visible a moment ago, gone or covered now — try the
+                    # next candidate rather than abandoning the sweep.
+                    continue
+        if time.monotonic() >= deadline:
+            return False
         try:
-            await loc.wait_for(state="visible", timeout=timeout)
-            await loc.click()
-            return True
+            await page.wait_for_timeout(250)
         except Exception:
-            continue
-    return False
+            return False
 
 
 # ---------------------------------------------------------------------------
