@@ -441,13 +441,30 @@ async def _download_from(page, url: str, out: Path) -> bool:
     which is a routine outcome rather than an error. The 20s budget is
     deliberately shorter than the 30s used elsewhere: this is a probe
     that the caller has a fallback for, not the last attempt.
+
+    That budget is now rarely spent, because the refusal announces
+    itself: see the `bounced` check below.
     """
     try:
         async with page.expect_download(timeout=20000) as dl_info:
+            bounced = False
             try:
                 await page.goto(url, wait_until="commit", timeout=15000)
+                # `goto` returning normally means no download interrupted
+                # it, and `commit` fires on the *final* response of the
+                # redirect chain — so if we are sitting on `/record/`,
+                # PsycNET has already refused and no event is coming.
+                # Waiting the full 20s for it was pure cost, paid on the
+                # first item of every run and on every item whose session
+                # has gone cold. Measured: the bounce settles in well
+                # under a second.
+                bounced = "/record/" in (page.url or "")
             except Exception:
-                pass  # expected — the download event interrupts navigation
+                # Expected on success — the download event interrupts
+                # navigation and `goto` raises. Never fast-fail here.
+                pass
+            if bounced:
+                return False
         dl = await dl_info.value
         out.parent.mkdir(parents=True, exist_ok=True)
         await dl.save_as(str(out))

@@ -84,6 +84,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **APA waited 20s for a download PsycNET had already refused.** The
+  `/fulltext/<id>.pdf` probe opens an `expect_download` window, and an
+  unentitled session is redirected to `/record/<id>` instead — in well
+  under a second. The probe then sat out its whole 20s budget waiting
+  for an event that could not arrive, once on the first item of every
+  run and again on every item whose session had gone cold. It now
+  fast-fails when `goto` returns normally and the page is on `/record/`.
+  Deliberately not applied when `goto` raises: that is the success path,
+  where the download event interrupts the navigation.
+
 - **APA clicked the modal's close button instead of CHECK ACCESS.** The
   selector was `button[id^='psycnet-check-access']`, and PsycNET builds
   both controls from the same per-article stem —

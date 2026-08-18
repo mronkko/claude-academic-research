@@ -799,3 +799,39 @@ def test_an_unentitled_session_is_still_reported_as_sso(
     page = _FakePsycnetPage(entitled=False, entitled_after_check=False)
     assert _run(ApaHandler(), page, tmp_path, Counter()) is None
     assert "sso.apa.org" in capsys.readouterr().out
+
+
+def test_a_bounced_fulltext_probe_does_not_wait_for_a_download(
+    tmp_path: Path,
+) -> None:
+    """The probe's 20s budget is for a download that might arrive. When
+    PsycNET has already bounced to `/record/`, none can.
+
+    Paid on the first item of every run and on every item whose session
+    has gone cold — 20s each, for an answer the page gave immediately.
+    Pinned by asserting the download event is never awaited, since the
+    wall-clock saving is not observable against a fake.
+    """
+    page = _FakePsycnetPage(entitled=False, has_get_access=False)
+    awaited: list[str] = []
+    original = page.pop_download
+
+    def _tracked():
+        awaited.append("download")
+        return original()
+
+    page.pop_download = _tracked                     # type: ignore[method-assign]
+    _run(ApaHandler(), page, tmp_path, Counter())
+
+    assert awaited == [], (
+        "waited on a download event after PsycNET bounced to /record/"
+    )
+
+
+def test_a_real_download_still_interrupts_navigation(tmp_path: Path) -> None:
+    """The fast-fail must never fire on the success path. An entitled
+    session's `goto` raises, because the download event interrupts the
+    navigation — that is the case the guard deliberately excludes."""
+    page = _FakePsycnetPage(entitled=True)
+    result = _run(ApaHandler(), page, tmp_path, Counter())
+    assert result is not None, "the fast-fail swallowed a real download"
