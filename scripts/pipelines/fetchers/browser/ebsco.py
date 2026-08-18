@@ -275,6 +275,35 @@ class EbscoHandler(PublisherHandler):
     #: far shorter than `response_timeout_ms`.
     requery_timeout_ms = 12000
 
+    #: Budget for pulling the bytes off `content.ebscohost.com` once the
+    #: viewer has handed over its signed URL. Four minutes, not the 60 s
+    #: this inherited from `RequestHandler`.
+    #:
+    #: 60 s was set for publisher PDFs of a few hundred KB. It is the
+    #: wrong size for this handler, whose reason to exist is EBSCO's
+    #: pre-1997 back-file — page images, not typeset text.
+    #: `10.1287/orsc.11.4.367.14601` (2000, 27 MB) timed out here on one
+    #: run and attached on the next, which fixes the arithmetic: the
+    #: failing attempt sustained under ~460 KB/s, so 60 s buys ~27 MB and
+    #: the largest file we have actually met sits exactly on the line.
+    #:
+    #: 240 s buys ~108 MB at that same rate, past any plausible scanned
+    #: article. The asymmetry is what picks the round number rather than
+    #: a tight one. Being generous costs one of four lanes idling up to
+    #: 4 min, once, on a download that was going to fail anyway — and
+    #: never the pass, because `is_download_timeout` deliberately keeps
+    #: this out of the outage breaker. Being tight costs a full ~60 s
+    #: setup + viewer round trip thrown away on an article we are
+    #: entitled to and had already reached.
+    #:
+    #: Flat rather than size-aware on purpose. Playwright's request
+    #: client buffers the whole body before `resp.body()` returns, so
+    #: there is no Content-Length to read and no per-chunk stall to
+    #: measure without replacing the fetch — a lot of machinery to save
+    #: a wasted retry that `462dcd6` already stopped turning into an
+    #: exclusion.
+    download_timeout_ms = 240000
+
     #: Set by the driver before `setup()` when this queue needs a login.
     #: Per-instance because each lane copies the handler.
     pending_solve_url = ""
@@ -566,7 +595,7 @@ class EbscoHandler(PublisherHandler):
         # EZproxy-scoped session keeps working.
         url = pdf_url[0]
         try:
-            resp = await ctx.request.get(url, timeout=60000)
+            resp = await ctx.request.get(url, timeout=self.download_timeout_ms)
             body = await resp.body()
         except Exception as e:
             counter.failed += 1

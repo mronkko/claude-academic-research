@@ -225,6 +225,27 @@ def test_skips_an_item_with_no_resolver_target(tmp_path: Path) -> None:
     page.goto.assert_not_called()
 
 
+def test_the_download_budget_is_sized_for_scanned_back_files(
+    tmp_path: Path,
+) -> None:
+    """The signed-URL fetch must use `download_timeout_ms`, not 60 s.
+
+    Live evidence: `10.1287/orsc.11.4.367.14601` (2000, 27 MB of page
+    images) timed out on the inherited 60 s budget and attached on the
+    next run. This handler's whole reason to exist is EBSCO's pre-1997
+    back-file, so large scans are its normal population, not its edge
+    case. Pinned by value as well as by wiring — a future edit that
+    quietly restores a publisher-sized budget would otherwise pass.
+    """
+    handler = EbscoHandler()
+    assert handler.download_timeout_ms >= 240000
+    ctx = _ctx(_good_pdf())
+    assert _run(handler, _page(), ctx, _item(), tmp_path) is not None
+    assert ctx.request.get.await_args.kwargs["timeout"] == (
+        handler.download_timeout_ms
+    )
+
+
 def test_serves_a_cached_pdf_without_touching_the_network(
     tmp_path: Path,
 ) -> None:

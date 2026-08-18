@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **EBSCO's download budget was sized for typeset PDFs, not scans.** The
+  signed-CDN fetch inherited `RequestHandler`'s 60 s timeout, which is
+  right for a few hundred KB of typeset text and wrong for the population
+  this handler exists to reach: EBSCO's pre-1997 back-file is page
+  images. `10.1287/orsc.11.4.367.14601` (2000, 27 MB) timed out on one
+  run and attached on the next — the failing attempt sustained under
+  ~460 KB/s, so 60 s buys ~27 MB and the largest file we have met sits
+  exactly on the line. Now `EbscoHandler.download_timeout_ms`, 240 s,
+  which buys ~108 MB at that rate. Flat rather than size-aware on
+  purpose: Playwright buffers the whole body before `resp.body()`
+  returns, so there is no length to read and no stall to measure without
+  replacing the fetch. Costs one of four lanes idling up to 4 min on a
+  download that was going to fail anyway, and never the pass —
+  `is_download_timeout` keeps this out of the outage breaker.
+
 ## [0.13.0] — 2026-08-18
 
 A retrieval release. Everything in it came out of running the pipeline
