@@ -18,11 +18,22 @@ Springer DOIs have to be recovered through the browser pass instead
 It is kept in the stage-1 list because asking costs one cheap request
 that fails fast, and the block may be relaxed at any time — but never
 read a Springer miss as evidence that an article is unavailable.
+
+**It stops asking once the wall is confirmed.** "One cheap request"
+was true per item and wrong per run: a live 1,895-item pass made 144
+requests, got the same 3 KB challenge 144 times, attached nothing, and
+logged a warning for each — the loudest thing on the user's screen, and
+then a second round when the browser pass re-tried the same source. So
+after `_CHALLENGE_LIMIT` consecutive challenges this run gives up for
+the rest of the process and says so once. It still asks at the start of
+every run, which is what keeps "the block may be relaxed at any time"
+true, and one non-challenge answer resets the counter.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 import urllib.parse
 from pathlib import Path
 
@@ -30,6 +41,44 @@ from fetchers import _pdf_validate
 from fetchers.base import PdfFetcher
 
 logger = logging.getLogger(__name__)
+
+#: Consecutive Imperva challenges before this source stops asking for the
+#: rest of the process. Small because the evidence is unambiguous — the
+#: challenge is byte-identical every time and arrives before entitlement
+#: is evaluated, so three in a row is not a slow patch, it is the wall.
+_CHALLENGE_LIMIT = 3
+
+_challenge_lock = threading.Lock()
+_consecutive_challenges = 0
+_gave_up_announced = False
+
+
+def _note_challenge(doi: str) -> None:
+    """Count an Imperva challenge; announce the giving-up once."""
+    global _consecutive_challenges, _gave_up_announced
+    with _challenge_lock:
+        _consecutive_challenges += 1
+        if _consecutive_challenges == _CHALLENGE_LIMIT and not _gave_up_announced:
+            _gave_up_announced = True
+            print(
+                f"  springer: {_CHALLENGE_LIMIT} consecutive Imperva "
+                f"challenges (last: {doi}) — not asking again this run. "
+                f"These items need `--sources browser`, where a real JS "
+                f"engine clears the challenge.",
+                flush=True,
+            )
+
+
+def _note_real_answer() -> None:
+    """Springer answered with something other than the challenge."""
+    global _consecutive_challenges
+    with _challenge_lock:
+        _consecutive_challenges = 0
+
+
+def _blocked() -> bool:
+    with _challenge_lock:
+        return _consecutive_challenges >= _CHALLENGE_LIMIT
 
 #: `10.1023` is Kluwer Academic, absorbed into Springer in 2004; its
 #: titles serve from link.springer.com under the same URL shape as
@@ -45,6 +94,22 @@ _SPRINGER_PREFIXES = (
 
 def _doi_safe(doi: str) -> str:
     return doi.replace("/", "_").replace(":", "_")
+
+
+def _is_challenge(resp) -> bool:
+    """True when this is Imperva's interstitial rather than a real answer.
+
+    Matched on the body, not the status code: the challenge arrives as
+    HTTP 200 with a ~3 KB HTML page, which is indistinguishable from a
+    broken publisher unless you look inside. `fetchers/browser/base.py`
+    keys on the same markers for the same reason.
+    """
+    try:
+        body = (resp.content or b"")[:2000].decode("utf-8", errors="replace")
+    except Exception:
+        return False
+    low = body.lower()
+    return "client challenge" in low or "incapsula" in low or "_incapsula_" in low
 
 
 def _cache_pdf_path(cache_dir: str | Path, doi: str) -> Path:
@@ -73,6 +138,11 @@ class SpringerSource(PdfFetcher):
             logger.warning("discarding cached PDF for %s — %s", doi, _defect)
             path.unlink(missing_ok=True)
 
+        if _blocked():
+            # Already established this run. Returning None keeps the
+            # cascade falling through exactly as a real miss would.
+            return None
+
         encoded = urllib.parse.quote(doi, safe="")
         url = f"https://link.springer.com/content/pdf/{encoded}.pdf"
         try:
@@ -87,8 +157,18 @@ class SpringerSource(PdfFetcher):
             # None (not an exception) so the cascade falls through to the
             # next source — a truncated copy at one provider is often
             # served intact by another.
-            logger.warning("%s: rejected PDF for %s — %s", self.name, doi, _defect)
+            if _is_challenge(resp):
+                _note_challenge(doi)
+                logger.debug(
+                    "%s: Imperva challenge for %s", self.name, doi,
+                )
+            else:
+                _note_real_answer()
+                logger.warning(
+                    "%s: rejected PDF for %s — %s", self.name, doi, _defect,
+                )
             return None
+        _note_real_answer()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(resp.content)
         return path, url

@@ -2,17 +2,40 @@
 
 Uses the `wiley-tdm` library, which handles authentication, rate
 limiting, and the download retry loop. `WILEY_TDM_TOKEN` is required.
+
+**Calls are serialised, on purpose.** `wiley-tdm` rate-limits per client
+instance, and this used to build a fresh `TDMClient` for every DOI — so
+the cascade's six worker threads produced six independent limiters,
+none of which could see the aggregate. Wiley throttled the excess, the
+client raised, and the handler swallowed it into `logger.debug`, which
+is invisible at normal log level. The result looked exactly like "this
+article is not available".
+
+Measured on one live library, same token and the same Wiley-prefix
+items both times: **47** PDFs at `--workers 4`, **110** when the same
+items were retried one at a time. Less than half the yield, lost
+silently. One shared client behind one lock costs Wiley items their
+parallelism — they were never really parallel — and every other source
+in the cascade keeps running concurrently around it.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import threading
 from pathlib import Path
 
 from fetchers.base import PdfFetcher
 
 logger = logging.getLogger(__name__)
+
+#: One client for the process, and one caller inside it at a time, so the
+#: library's own rate limiter sees every request this run makes. Built
+#: lazily because constructing it needs a token we may not have.
+_CLIENT_LOCK = threading.Lock()
+_CLIENT: object | None = None
+_CLIENT_KEY: tuple[str, str] | None = None
 
 #: `10.1348` is the British Psychological Society, whose journals Wiley
 #: publishes and serves from onlinelibrary.wiley.com like any other —
@@ -47,12 +70,26 @@ class WileySource(PdfFetcher):
             return None
 
         os.makedirs(cache_dir, exist_ok=True)
-        client = TDMClient(api_token=token, download_dir=str(cache_dir))
-        try:
-            results = client.download_pdfs([doi])
-        except Exception as e:
-            logger.debug("wiley TDM download(%s) failed: %s", doi, e)
-            return None
+        # One client, one caller at a time. The lock is held across the
+        # download, not just the construction: it is the *requests* that
+        # must be rate-limited, and a shared client called from six
+        # threads would throttle exactly as badly as six clients did.
+        global _CLIENT, _CLIENT_KEY
+        with _CLIENT_LOCK:
+            key = (token, str(cache_dir))
+            if _CLIENT is None or _CLIENT_KEY != key:
+                _CLIENT = TDMClient(
+                    api_token=token, download_dir=str(cache_dir),
+                )
+                _CLIENT_KEY = key
+            try:
+                results = _CLIENT.download_pdfs([doi])
+            except Exception as e:
+                # Was `logger.debug`, which is why losing half the yield
+                # to throttling looked like "not available". A failure to
+                # *ask* is not an answer and must be visible.
+                logger.warning("wiley TDM download(%s) failed: %s", doi, e)
+                return None
         if not results:
             return None
         r = results[0]

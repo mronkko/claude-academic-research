@@ -66,6 +66,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Wiley TDM lost more than half its yield to its own rate limiter.**
+  `WileySource` built a fresh `TDMClient` for every DOI, so the
+  cascade's worker threads produced one rate limiter each and none saw
+  the aggregate. Wiley throttled the excess, the client raised, and the
+  handler swallowed it into `logger.debug` — invisible at normal log
+  level and indistinguishable from "this article is not available".
+  Measured on one live library, same token and the same Wiley-prefix
+  items both times: **47** PDFs at `--workers 4`, **110** when retried
+  one at a time. Now one process-wide client behind one lock held across
+  the download, and a failed call logs at warning level, because a
+  failure to *ask* is not an answer.
+
+- **Springer asked 144 times per run and was refused 144 times.** The
+  Imperva challenge is byte-identical, arrives as HTTP 200 before
+  entitlement is evaluated, and each one was logged at warning level —
+  the loudest thing on screen during a browser pass, then repeated when
+  Pass 2 re-tried the same source. The source now gives up after three
+  consecutive challenges and says so once, while still asking at the
+  start of every run so a relaxed block is still noticed; any
+  non-challenge response resets it. Zero Springer-prefix items in a
+  1,895-item library had ever been attached by this source.
+
 - **`--plan` attached PDFs.** It is documented as "classify items and
   print the publisher queue — then exit without opening a browser", and
   it does stop before the browser. But the Pass 2 API retry runs first,
