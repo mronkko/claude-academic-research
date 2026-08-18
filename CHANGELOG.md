@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The browser pass stopped asking before it has anything to ask
+  about.** `_drive_handler` ran `handler.setup()` — the "can you
+  see/reach the PDF from this page?" prompt — before attempting a single
+  item. Several publishers authenticate on institutional IP, so that
+  question often guards a wall that is not there, and a user driving
+  eight publisher blocks answers it eight times to no effect ("I have
+  just said Y to most prompts"). The order is now inverted: try the
+  first item, and treat its failure as the evidence a human is needed.
+  Setup opens then, and the item that paid for the discovery is retried
+  once rather than being spent on it. Asked once per run, not per item.
+
+  Single-lane only, which is not a simplification: with parallel tabs
+  the solve has to land on lane 0 before the others open, or they hit
+  the login page simultaneously with no session to inherit. Multi-lane
+  runs keep solving upfront, and `_drive_handler` ANDs the caller's
+  intent with its own `effective_lanes` count rather than trusting it.
+
 - **Wiley TDM now runs in the default cascade.** It was excluded on the
   reasoning that it "requires a specific auth contract", but
   `WileySource.fetch_pdf` already returns `None` on a non-Wiley prefix,

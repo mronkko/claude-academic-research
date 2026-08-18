@@ -961,6 +961,7 @@ async def _drive_handler(
     on_failure: str = "log",            # "log" | "retry_bucket"
     retry_bucket: list[dict] | None = None,
     prompt_on_first_failure: bool = False,
+    defer_solve: bool = False,
     on_always_skip=None,                # callable(handler_name) → None
 ) -> None:
     """Drive one publisher handler across its items.
@@ -974,6 +975,16 @@ async def _drive_handler(
     its final status is the only row that ends up in the log. This
     cleaner chain matches the "only the final outcome is logged"
     design of the v0.4.0 routing model.
+
+    `defer_solve=True` skips the upfront "can you see the PDF?" setup
+    prompt and runs it only when the first item actually fails, then
+    retries that item once. Several publishers authenticate on
+    institutional IP, so the upfront question often guards a wall that
+    is not there — a user driving eight publisher blocks answers it
+    eight times and it does nothing seven of them. Single-lane only:
+    with parallel tabs the solve must land on lane 0 before the others
+    open, or they hit the login page simultaneously with no session to
+    inherit.
 
     `prompt_on_first_failure=True` fires the Option-4 prompt ONCE per
     handler per run on the first per-item failure. The user picks:
@@ -1036,7 +1047,20 @@ async def _drive_handler(
             if hasattr(handler, "needs_solve_for")
             else getattr(handler, "needs_interactive_solve", True)
         )
-        if needs_solve:
+        # Deferring is only safe on one lane; `lanes` itself is computed
+        # further down, after setup has already run, so ask
+        # `effective_lanes` here — it is pure.
+        defer_solve = defer_solve and effective_lanes(
+            handler, int(getattr(args, "browser_workers", 1) or 1),
+        ) == 1
+        if needs_solve and defer_solve:
+            print(
+                f"  {display}: not asking upfront — trying the first item "
+                f"first. If it fails, the setup step opens then.",
+                flush=True,
+            )
+            setup_result = "proceed"
+        elif needs_solve:
             solve_hosts = (
                 handler.solve_hosts_for(items)
                 if hasattr(handler, "solve_hosts_for") else []
@@ -1149,6 +1173,9 @@ async def _drive_handler(
             log_writer = _SerialisedWriter(log_writer)
 
         cursor = 0
+        #: Set the first time a failure triggers the deferred setup, so
+        #: the question is asked once per run rather than once per item.
+        deferred_setup_done = False
 
         def _claim() -> dict | None:
             """Hand out the next item, or None when the queue is spent.
@@ -1177,6 +1204,55 @@ async def _drive_handler(
                 lane_page, ctx, item, args.cache_dir,
                 counter=counter, total=total, t_start=t_start,
             )
+            # Deferred solve. The upfront setup prompt assumes a wall
+            # that is often not there — several publishers authenticate
+            # on institutional IP, and a user answering "yes I can see
+            # the PDF" to every publisher in turn is answering a question
+            # nobody needed asked. So: try first, and treat the first
+            # real failure as the evidence that a human is needed.
+            #
+            # Single-lane only, and that is not a simplification. With
+            # parallel tabs the solve has to land on lane 0 *before* the
+            # others open, or they all hit the login page at once with no
+            # session to inherit — see the `needs_solve` block above.
+            # One lane means no such ordering to protect, and no
+            # coordination needed for the once-only flag.
+            nonlocal deferred_setup_done
+            if (
+                result is None
+                and defer_solve
+                and not deferred_setup_done
+                and not coord.skip_remaining
+                and not is_transport_error(
+                    getattr(lane_handler, "last_error", ""),
+                )
+            ):
+                deferred_setup_done = True
+                print(
+                    f"\n  {display}: first item did not download — opening "
+                    f"the setup step so you can sign in or clear a "
+                    f"challenge, then retrying this item.",
+                    flush=True,
+                )
+                deferred_result = normalise_setup_result(
+                    await lane_handler.setup(lane_page, item["doi"])
+                )
+                if deferred_result in ("skip", "always_skip"):
+                    coord.skip_remaining = True
+                    if deferred_result == "always_skip" and on_always_skip:
+                        try:
+                            on_always_skip(lane_handler.name)
+                        except Exception as e:      # noqa: BLE001
+                            print(
+                                f"  WARN: could not persist [library] "
+                                f"no_access += {lane_handler.name!r}: {e}",
+                                flush=True,
+                            )
+                else:
+                    result = await lane_handler.download(
+                        lane_page, ctx, item, args.cache_dir,
+                        counter=counter, total=total, t_start=t_start,
+                    )
             doi = item["doi"]
             title = (item.get("title") or "")[:70]
             # A heartbeat per item, so an agent following the run knows
@@ -2444,6 +2520,9 @@ def _run_browser_in_process(
             handler = handler_by_name[name]
             await _drive_handler(
                 handler, pub_items, zot, log_writer, args, run_date,
+                # One lane means no tab-ordering to protect, so the solve
+                # can wait until something actually needs it.
+                defer_solve=True,
                 on_failure="retry_bucket",
                 retry_bucket=connector_retry,
                 prompt_on_first_failure=True,
