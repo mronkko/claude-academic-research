@@ -2096,9 +2096,16 @@ def _run_browser_in_process(
             flush=True,
         )
         print(
-            f"  Up to {len(to_process)} items, two resolver queries each, "
-            f"and they run one at a time — this is the quiet part of the "
-            f"run. Progress every {_PREFLIGHT_TICK}.",
+            f"  Two things happen here, per item, one item at a time:\n"
+            f"    1. a retry against Wiley TDM / Elsevier / Springer when "
+            f"Crossref\n"
+            f"       says the DOI lives on their host — a real fetch, and "
+            f"it attaches;\n"
+            f"    2. the resolver coverage queries themselves.\n"
+            f"  So lines from those publishers below are attempts, not "
+            f"resolver output.\n"
+            f"  Up to {len(to_process)} items; progress every "
+            f"{_PREFLIGHT_TICK} resolver queries.",
             flush=True,
         )
 
@@ -2107,6 +2114,7 @@ def _run_browser_in_process(
     # "items skimmed" — a run whose queue is mostly no-handler items ends
     # far below `len(to_process)` and that is the honest figure.
     checked = 0
+    pass2_attached = 0
     t_preflight = time.monotonic()
 
     for zot_item in to_process:
@@ -2205,6 +2213,7 @@ def _run_browser_in_process(
                         f"{title70}", flush=True,
                     )
                     break
+                pass2_attached += 1
                 print(
                     f"  Pass 2 API retry via {src.name} {title70}",
                     end=" ", flush=True,
@@ -2290,6 +2299,12 @@ def _run_browser_in_process(
             f"  Resolver pre-flight done: {checked} checked in "
             f"{elapsed:.0f}s. Answers are cached — the next publisher "
             f"block skips these.",
+            flush=True,
+        )
+    if pass2_attached:
+        print(
+            f"  Pass 2 API retry attached {pass2_attached} PDF"
+            f"{'' if pass2_attached == 1 else 's'} along the way.",
             flush=True,
         )
 

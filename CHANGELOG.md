@@ -293,6 +293,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ten times over. The skip now happens before `lookup_dual`, which is
   safe precisely because the post-loop filter drops those items anyway.
 
+- **The pre-flight banner described half of what the pre-flight does.**
+  It announced "two resolver queries each … this is the quiet part of
+  the run", but the same loop also runs the Pass 2 API retry — a real
+  fetch against Wiley TDM / Elsevier / Springer whenever Crossref
+  resolves a DOI to their host, which can and does attach. Users
+  reasonably read the `DOI: … - Access Denied` lines that `wiley-tdm`
+  prints, and the Springer circuit-breaker notice, as resolver output
+  and concluded nothing was being tried. The banner now names both
+  activities and says outright that publisher lines below it are
+  attempts, and the closing summary reports how many PDFs the retry
+  attached.
+
 - **The resolver pre-flight looked like a hang.** It printed one
   "Checking library access via …" header and then nothing while it made
   up to two sequential network calls per item — many minutes of silence
