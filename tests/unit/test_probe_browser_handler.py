@@ -63,3 +63,22 @@ def test_it_declares_playwright_in_its_pep723_block() -> None:
     learn you mistyped a dependency."""
     head = _PATH.read_text().split("# ///")[1]
     assert "playwright" in head
+
+
+def test_it_offers_a_way_to_defeat_its_own_cache() -> None:
+    """A probe whose second run is a cache hit cannot answer "did the fix
+    work". Live: two DOIs were fetched, then the identical command
+    reported both from cache and exercised nothing — while printing
+    "0 ok, 0 failed", which read like a failure.
+    """
+    src = _PATH.read_text()
+    assert '"--fresh"' in src
+    assert '"--fresh-profile"' in src
+
+
+def test_a_cache_hit_is_not_counted_as_a_fetch() -> None:
+    """The summary must distinguish "the handler did this" from "a file
+    was already on disk", or a green run means nothing."""
+    src = _PATH.read_text()
+    assert "served from cache" in src
+    assert "exercised nothing" in src

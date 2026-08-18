@@ -76,6 +76,24 @@ async def _probe(args: argparse.Namespace) -> int:
     handler = _handler_by_name(args.handler)
     cache_dir = os.path.abspath(args.cache_dir)
     os.makedirs(cache_dir, exist_ok=True)
+
+    # A probe whose second run is a cache hit cannot answer "did the fix
+    # work" — the first run poisons every one after it. Live: two DOIs
+    # were fetched, then the same command re-run reported both from
+    # cache and tested nothing.
+    if args.fresh:
+        from fetchers.browser.base import cache_path_for
+        for doi in args.doi:
+            target = Path(cache_path_for(cache_dir, doi))
+            if target.exists():
+                target.unlink()
+                print(f"removed cached {target.name}", flush=True)
+    if args.fresh_profile:
+        import shutil
+        profile = Path(cache_dir) / ".chrome-profile"
+        if profile.exists():
+            shutil.rmtree(profile, ignore_errors=True)
+            print(f"removed browser profile {profile}", flush=True)
     print(f"handler:   {handler.name} ({handler.display_name})")
     print(f"cache dir: {cache_dir}")
     print(f"dois:      {len(args.doi)}\n")
@@ -94,6 +112,7 @@ async def _probe(args: argparse.Namespace) -> int:
                 print(f"setup raised: {e}\n", flush=True)
 
         counter = Counter()
+        cached = fetched = 0
         for i, doi in enumerate(args.doi, 1):
             print(f"--- [{i}/{len(args.doi)}] {doi} ---", flush=True)
             t0 = time.monotonic()
@@ -122,8 +141,14 @@ async def _probe(args: argparse.Namespace) -> int:
             else:
                 path, source_url = result
                 size = Path(path).stat().st_size // 1024 if Path(path).exists() else 0
-                print(f"  -> {size}KB from {source_url} ({elapsed:.1f}s)",
-                      flush=True)
+                if source_url.startswith("cache://"):
+                    cached += 1
+                    print(f"  -> {size}KB from CACHE — nothing was tested. "
+                          f"Re-run with --fresh.", flush=True)
+                else:
+                    fetched += 1
+                    print(f"  -> {size}KB from {source_url} ({elapsed:.1f}s)",
+                          flush=True)
 
             if args.step:
                 try:
@@ -133,7 +158,11 @@ async def _probe(args: argparse.Namespace) -> int:
                     print(f"  (page unreadable: {e})", flush=True)
             print(flush=True)
 
-        print(f"done: {counter.ok} ok, {failures} failed", flush=True)
+        print(f"\ndone: {fetched} fetched, {cached} served from cache, "
+              f"{failures} failed", flush=True)
+        if cached and not fetched:
+            print("  NOTE: every item came from the cache, so this run "
+                  "exercised nothing. Use --fresh to re-test.", flush=True)
         diagnostics = Path(cache_dir) / "diagnostics"
         if diagnostics.is_dir():
             print(f"diagnostics: {diagnostics}", flush=True)
@@ -162,6 +191,16 @@ def main() -> int:
                              "(default: output/probe_cache). Uses its own "
                              "browser profile, so a probe never disturbs a "
                              "pipeline run's session.")
+    parser.add_argument("--fresh", action="store_true",
+                        help="delete the cached PDF for each --doi first, so "
+                             "the handler actually runs. Without this a "
+                             "second run is all cache hits and proves "
+                             "nothing.")
+    parser.add_argument("--fresh-profile", action="store_true",
+                        help="also delete the Chromium profile, discarding "
+                             "SSO/session state. Use to test what an "
+                             "unattended first item really faces — a warm "
+                             "session hides every entitlement problem.")
     parser.add_argument("--setup", action="store_true",
                         help="call handler.setup() first — the interactive "
                              "sign-in / challenge step")
