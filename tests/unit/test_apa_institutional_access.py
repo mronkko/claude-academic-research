@@ -199,18 +199,25 @@ def test_the_handler_never_accepts_cookies_on_the_users_behalf() -> None:
         )
 
 
-def test_an_unanswered_banner_is_its_own_diagnosis() -> None:
-    """"No entitlement" was the wrong thing to tell a user whose real
-    problem was an unanswered consent dialog — they had access to both
-    test articles and could download either one by hand."""
+def test_a_click_that_changes_nothing_is_not_an_entitlement_answer() -> None:
+    """"Your institution likely has no entitlement" was told to a user
+    who had access to both test articles and could download either by
+    hand. PsycNET had never run the check: the click went to the modal's
+    close button, which shares the `psycnet-check-access` id prefix with
+    the affirmative control.
+
+    Briefly this was blamed on the cookie banner instead — a cold
+    profile showed one and failed, a warm profile did not and worked.
+    The correlation was real and the cause was not; with the banner
+    answered, the run failed identically. Kept as its own state so the
+    next non-navigation cannot be folded back into "granted".
+    """
     import inspect
 
     src = inspect.getsource(apa_mod.ApaHandler.download)
-    assert "no-consent" in src
-    # Phrase-matching across an f-string that the formatter may rewrap is
-    # brittle; match the two halves that carry the meaning.
-    assert "cookie" in src and "consent" in src
-    assert "will not answer it for you" in src
+    assert "no-navigation" in src
+    assert "did not move" in src
+    assert "entitlement answer" in src
 
 
 def test_setup_asks_for_the_cookie_decision_first() -> None:
@@ -219,3 +226,29 @@ def test_setup_asks_for_the_cookie_decision_first() -> None:
     hint = apa_mod.ApaHandler.setup_hint.lower()
     assert "cookie" in hint
     assert hint.index("cookie") < hint.index("sign in")
+
+
+def test_check_access_never_targets_the_modal_close_button() -> None:
+    """The bug that cost the most rounds, pinned as a selector rule.
+
+    PsycNET builds both controls from the same per-article id stem:
+
+        psycnet-check-access-close_760346   <- the modal's x
+        psycnet-check-access-yes_760346     <- CHECK ACCESS
+
+    so `button[id^='psycnet-check-access']` matches the close button
+    first. It is visible, so it was clicked, the modal was dismissed,
+    and `try_click` reported success — after which the handler spent 60s
+    hunting a PDF on a page that had gone nowhere, and blamed the
+    institution's entitlements.
+
+    Playwright's strict mode is what exposed it; every `.first`-style
+    sweep had quietly preferred whichever came first in the DOM.
+    """
+    import inspect
+
+    src = inspect.getsource(apa_mod._run_access_check)
+    assert "check-access-yes" in src, "the affirmative id is not targeted"
+    assert "button[id^='psycnet-check-access']" not in src, (
+        "the ambiguous prefix is back; it matches the modal close button"
+    )

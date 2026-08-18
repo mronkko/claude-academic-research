@@ -84,6 +84,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **APA clicked the modal's close button instead of CHECK ACCESS.** The
+  selector was `button[id^='psycnet-check-access']`, and PsycNET builds
+  both controls from the same per-article stem —
+  `psycnet-check-access-close_760346` alongside
+  `psycnet-check-access-yes_760346`. The close button comes first in the
+  DOM and is visible, so it was clicked, the modal was dismissed, and
+  the click reported success. The access check never ran; the handler
+  then spent 60s looking for a PDF on a page that had gone nowhere and
+  reported "your institution likely has no entitlement to this
+  article" — to a user with access to every article it said that about.
+  Now targets the affirmative control by id, title and aria-label, with
+  a test forbidding the ambiguous prefix.
+
+  Two earlier diagnoses of this failure were wrong and are retracted.
+  It was not entitlement, and it was not the cookie banner: a cold
+  profile showed a banner and failed while a warm one did not and
+  worked, which was a real correlation and the wrong cause — with the
+  banner answered, the run failed identically. `_run_access_check` now
+  returns `no-navigation` for "clicked, page stayed put", so the next
+  occurrence cannot be folded back into "granted".
+
 - **An unanswered cookie banner was reported as "no entitlement".** On
   a cold browser profile every APA item failed after 88s with "your
   institution likely has no entitlement to this article", for articles

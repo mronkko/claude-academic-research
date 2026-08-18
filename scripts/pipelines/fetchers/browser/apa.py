@@ -94,12 +94,10 @@ class ApaHandler(PublisherHandler):
         "FIRST: answer the cookie banner at the bottom of the page.\n"
         "Accept or reject — either records a decision, and either is\n"
         "fine for retrieval. This plugin deliberately will not answer it\n"
-        "for you: consent has to be your act, not the tool's. It matters\n"
-        "practically as well as legally, because PsycNET appears to wait\n"
-        "on that decision before its access check will run at all — a\n"
-        "profile where the banner is unanswered clicks CHECK ACCESS and\n"
-        "then sits there. Your answer persists in this browser profile\n"
-        "and covers every later APA item.\n"
+        "for you: consent has to be your act, not the tool's. Answering\n"
+        "it also stops the banner overlaying controls lower down. Your\n"
+        "choice persists in this browser profile and covers every later\n"
+        "APA item.\n"
         "\n"
         "THEN: EXPECT TO SIGN IN ONCE PER RUN. Unlike the Cloudflare-gated\n"
         "publishers, whose clearance cookie is saved in the browser\n"
@@ -191,19 +189,18 @@ class ApaHandler(PublisherHandler):
                         f"one — check the saved screenshot before assuming "
                         f"the selectors are stale"
                     )
-                if state == "no-consent":
+                if state == "no-navigation":
                     raise RuntimeError(
-                        f"APA's access check for record {record_id} was "
-                        f"clicked but the page never moved, and the cookie "
-                        f"consent banner was still showing — no choice is "
-                        f"recorded in this browser profile, and PsycNET "
-                        f"appears to wait on OneTrust before running the "
-                        f"check. Answer the banner yourself in the browser "
-                        f"window (accept or reject — either records a "
-                        f"decision) and re-run; the choice persists in the "
-                        f"profile and covers every later APA item. This "
-                        f"plugin will not answer it for you: consent has to "
-                        f"be your act, not the tool's."
+                        f"CHECK ACCESS was clicked for record {record_id} "
+                        f"and the page did not move (still at {page.url}). "
+                        f"That is not an entitlement answer — PsycNET never "
+                        f"ran the check. The known cause is the click "
+                        f"landing on a control that is not the affirmative "
+                        f"one; the modal's close button shares the "
+                        f"`psycnet-check-access` id prefix. Re-run with "
+                        f"scripts/dev/probe_browser_handler.py "
+                        f"--handler apa --keep-open and watch which control "
+                        f"the overlay loses."
                     )
                 if state == "no-check-access":
                     raise RuntimeError(
@@ -504,10 +501,10 @@ async def _run_access_check(page) -> str:
       - ``"no-access-control"`` — no "Get Access" on the page at all.
       - ``"no-check-access"``   — overlay opened, but offered no access
                                   check (usually purchase-only).
-      - ``"no-consent"``        — CHECK ACCESS clicked, page never
-                                  moved, and the consent banner was up:
-                                  APA's own script is waiting on a
-                                  decision only a human can make.
+      - ``"no-navigation"``     — CHECK ACCESS clicked and the page
+                                  stayed put. Neither entitlement nor
+                                  consent: historically this meant the
+                                  click had gone to the wrong control.
     """
     # Again, because the caller's dismissal happened before the
     # `/fulltext/` probe — and that probe navigates (to `/fulltext/`,
@@ -535,13 +532,24 @@ async def _run_access_check(page) -> str:
     if not opened:
         return "no-access-control"
 
-    # The overlay's control carries a per-article id
-    # (`psycnet-check-access-yes_308815`), so match on the prefix.
+    # The affirmative control only. Its id is per-article
+    # (`psycnet-check-access-yes_760346`) — but so is the modal's own
+    # close button (`psycnet-check-access-close_760346`), and the old
+    # prefix `psycnet-check-access` matched that one first. It is
+    # visible, so the click landed on it, dismissed the modal, and
+    # reported success. The access check never ran; the flow then spent
+    # 60s looking for a PDF on a page that had gone nowhere and blamed
+    # the institution's entitlements.
+    #
+    # Playwright's strict mode is what finally showed it — a plain
+    # `.first`-style sweep silently prefers whichever comes first in the
+    # DOM, and that is the close button.
     checked = await try_click(
         page,
-        "button[id^='psycnet-check-access']",
+        "button[id*='check-access-yes']",
+        "button[title='Check Access']",
+        "button[aria-label='Check Access']",
         "button:has-text('Check Access')",
-        "a:has-text('Check Access')",
         timeout=6000,
     )
     if not checked:
@@ -580,11 +588,15 @@ async def _run_access_check(page) -> str:
         return "sso"
     if _ACCESS_PATH in current.lower():
         return "granted"
-    # CHECK ACCESS was clicked and the page did not move. When the
-    # consent banner was up, that is the likeliest reason: APA's access
-    # check does not run until OneTrust resolves, and nobody has
-    # answered it in this profile.
-    return "no-consent" if banner_was_up else "granted"
+    # Clicked, and the page did not move. This was briefly attributed to
+    # the consent banner — a cold profile showed one and failed, a warm
+    # profile did not and worked. That correlation was real and the
+    # cause was not: with the banner answered, the run failed
+    # identically. The actual cause was the click landing on the modal's
+    # close button. Kept as its own state so a future non-navigation is
+    # not silently folded into "granted" again.
+    del banner_was_up
+    return "no-navigation"
 
 
 async def _click_pdf_control(page, out: Path) -> bool:
