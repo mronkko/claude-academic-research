@@ -26,18 +26,43 @@ Two routes, in order:
      route 1 works; one that it does not recognise *stops on the login
      form*.
 
-That last point is what this handler used to get wrong. It waited for a
-navigation to `/recordAccess/institutional/**` — a URL PsycNET no longer
-produces — swallowed the timeout, then hunted for a "Download PDF"
-button on whatever page it happened to be sitting on, which was the SSO
-login form. Every failure, whatever its cause, surfaced as
-`Download button not found` after ~135 s. A live run failed 2/2 items on
-articles the operator could download by hand from the same profile, and
-the log could not say why. Landing on the login page is now detected and
-reported as what it is.
+**Correction, verified in a shared browser session on 2026-08-18.** This
+docstring used to say `/recordAccess/institutional/**` was "a URL
+PsycNET no longer produces". It produces exactly that URL, and the whole
+retrieval hinges on it. Recording that as fact is what sent later work
+hunting for the PDF anywhere but the page that actually has it, and cost
+five rounds of wrong diagnoses — entitlement, markup drift, cookie
+consent — for a fault that was none of those.
 
-Institutional SSO cookies persist across DOIs, so at most the first item
-of a run needs a human.
+What CHECK ACCESS does, watched step by step on an entitled session:
+
+    /record/<accession>
+      -> click "Get Access"       (an <a href="#">, rendered ~6s in)
+      -> overlay "Access Options" with three controls
+      -> click "Check Access"
+      -> navigates to /recordAccess/institutional/<accession>?returnUrl=...
+         (a full page titled "APA PsycNet Record Access", no dialog —
+          its card merely resembles the overlay it came from, which is
+          why it gets described as "the same overlay")
+      -> that page carries the only URL that downloads:
+         /fulltext/<accession>.pdf?auth_id=<n>&returnUrl=...
+
+The bare `/fulltext/<accession>.pdf` is not a substitute: without the
+per-session `auth_id` it redirects to `/record/<accession>`.
+
+The overlay's three controls share one per-article id stem, and the
+close button sorts first:
+
+    psycnet-check-access-close_651260    <- the x
+    psycnet-check-access-yes_651260      <- CHECK ACCESS
+    psycnet-purchase-access-yes_651260   <- Purchase PDF ($19.95)
+
+A selector of `button[id^='psycnet-check-access']` therefore clicks the
+x, dismisses the overlay, and reports success. That was the actual bug.
+
+An unentitled session stops at the `sso.apa.org` login form instead;
+that case is detected and reported as itself. Institutional SSO cookies
+persist across DOIs, so at most the first item of a run needs a human.
 """
 
 from __future__ import annotations
