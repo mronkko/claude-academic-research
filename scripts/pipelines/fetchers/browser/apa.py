@@ -483,11 +483,21 @@ async def _run_access_check(page) -> str:
     if not checked:
         return "no-check-access"
 
-    # CHECK ACCESS navigates. Entitled sessions bounce through the IdP
-    # back to PsycNET; unentitled ones stop on the login form.
+    # CHECK ACCESS navigates: an entitled session lands on
+    # `/recordAccess/institutional/<id>`, an unentitled one stops at the
+    # IdP login form.
+    #
+    # The predicate must name those two destinations. It used to accept
+    # any `psycnet.apa.org` URL — which is where we already are, so
+    # `wait_for_url` returned immediately and never waited for the
+    # navigation at all. Everything downstream then ran against the
+    # record page: no signed link to find, the bare `/fulltext/` retry
+    # bounced back to `/record/`, and the run reported "your institution
+    # likely has no entitlement to this article" about an article the
+    # institution demonstrably had.
     try:
         await page.wait_for_url(
-            lambda u: _SSO_HOST in u or "psycnet.apa.org" in u,
+            lambda u: _SSO_HOST in u or _ACCESS_PATH in (u or "").lower(),
             timeout=15000,
         )
     except Exception:

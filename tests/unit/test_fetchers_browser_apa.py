@@ -63,6 +63,14 @@ SSO_URL = (
     "https://sso.apa.org/apasso/idm/login?CheckAccess=1&UID=2015-01016-001"
     "&ERIGHTS_TARGET=https%3A%2F%2Fpsycnet.apa.org%2FdoiLanding"
 )
+#: Where CHECK ACCESS lands an entitled session, verified live. The
+#: signed link is minted here and nowhere else — the bare
+#: `/fulltext/<id>.pdf` route needs the `auth_id` this page carries.
+ACCESS_URL = (
+    f"https://psycnet.apa.org/recordAccess/institutional/{RECORD_ID}"
+    f"?returnUrl=https%253A%252F%252Fpsycnet.apa.org%252Frecord%252F{RECORD_ID}"
+)
+SIGNED_FULLTEXT = f"/fulltext/{RECORD_ID}.pdf?auth_id=4168"
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +160,10 @@ class _FakeLocator:
 
     async def get_attribute(self, name: str) -> str | None:
         del name
+        if "/fulltext/" in self._selector:
+            # Relative, as PsycNET serves it — the handler must resolve
+            # it against the page URL.
+            return SIGNED_FULLTEXT if self._page.on_access_page else None
         if "/record/" in self._selector:
             return self._page.record_href
         return None
@@ -201,6 +213,7 @@ class _FakePsycnetPage:
         self.lands_on_record = lands_on_record
 
         self._overlay_open = False
+        self._pending_url: str | None = None
         self._pending_download: bytes | None = None
         self.evaluated: list[str] = []
         self.visited: list[str] = []
@@ -219,10 +232,14 @@ class _FakePsycnetPage:
         if self._overlay_open and self.has_check_access:
             tokens.add("psycnet-check-access")
             tokens.add("Check Access")
-        if self.pdf_control_works:
+        if self.pdf_control_works or "/recordaccess/" in self.url.lower():
             tokens.add("/fulltext/")
             tokens.add("Download PDF")
         return tokens
+
+    @property
+    def on_access_page(self) -> bool:
+        return "/recordaccess/" in self.url.lower()
 
     def matches(self, selector: str) -> bool:
         return any(token in selector for token in self._present)
@@ -231,11 +248,18 @@ class _FakePsycnetPage:
         if "getAccess" in selector or "Get Access" in selector:
             self._overlay_open = True
         elif "check-access" in selector or "Check Access" in selector:
+            # A *pending* navigation, not an instant one. This is the
+            # difference the `wait_for_url` bug lived in: clicking starts
+            # the navigation, and the URL only changes once something
+            # actually waits for the destination. A predicate that is
+            # already true of the current page (`"psycnet.apa.org" in u`
+            # on `/record/...`) returns before the page has moved, and
+            # every later step then runs against the wrong page.
             if self.entitled_after_check:
                 self.entitled = True
-                self.url = LANDING
+                self._pending_url = ACCESS_URL
             else:
-                self.url = SSO_URL
+                self._pending_url = SSO_URL
         elif "/fulltext/" in selector or "Download PDF" in selector:
             if self.pdf_control_works:
                 self._pending_download = PDF_BYTES
@@ -259,6 +283,11 @@ class _FakePsycnetPage:
             )
             return None
         if "/fulltext/" in url:
+            if "auth_id=" in url:
+                # The signed link always serves, which is the point of it.
+                self._pending_download = PDF_BYTES
+                self.url = url
+                return None
             if self.entitled:
                 self._pending_download = PDF_BYTES
                 self.url = url
@@ -286,8 +315,18 @@ class _FakePsycnetPage:
 
     async def wait_for_url(self, matcher, timeout: int = 0) -> None:
         del timeout
-        if callable(matcher) and not matcher(self.url):
-            raise TimeoutError("url never matched")
+        if not callable(matcher):
+            return
+        # Playwright resolves as soon as the *current* URL matches, so a
+        # predicate that merely describes where we already are returns
+        # before the pending navigation lands — leaving every later step
+        # on the wrong page. Order is the whole point of this model.
+        if matcher(self.url):
+            return
+        if self._pending_url is not None and matcher(self._pending_url):
+            self.url, self._pending_url = self._pending_url, None
+            return
+        raise TimeoutError("url never matched")
 
     async def wait_for_load_state(self, state: str = "", timeout: int = 0) -> None:
         del state, timeout
@@ -724,3 +763,39 @@ def test_the_visible_control_is_still_found_without_duplicates(
     the old `.first` behaviour, not a replacement for it."""
     page = _FakePsycnetPage(entitled_after_check=True, pdf_control_works=True)
     assert _run(ApaHandler(), page, tmp_path, Counter()) is not None
+
+
+def test_the_signed_link_from_the_access_page_is_what_downloads(
+    tmp_path: Path,
+) -> None:
+    """The whole chain, end to end, in the shape the live site has.
+
+    CHECK ACCESS lands on `/recordAccess/institutional/<id>`; that page
+    carries `/fulltext/<id>.pdf?auth_id=...`; the bare `/fulltext/` URL
+    cannot substitute for it.
+
+    Two bugs hid behind this. `_run_access_check` waited on
+    `"psycnet.apa.org" in url` — already true on the record page — so
+    `wait_for_url` returned before the navigation and every later step
+    ran against the wrong page. And the signed-link step was originally
+    placed where the access page is never reached.
+    """
+    page = _FakePsycnetPage(entitled_after_check=True)
+    result = _run(ApaHandler(), page, tmp_path, Counter())
+
+    assert result is not None
+    _path, source_url = result
+    assert "auth_id=" in source_url, (
+        f"downloaded from {source_url!r} rather than the signed link"
+    )
+    assert any("auth_id=" in v for v in page.visited), page.visited
+
+
+def test_an_unentitled_session_is_still_reported_as_sso(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The tightened `wait_for_url` predicate must not swallow the IdP
+    case — that diagnosis is the one this handler exists to give."""
+    page = _FakePsycnetPage(entitled=False, entitled_after_check=False)
+    assert _run(ApaHandler(), page, tmp_path, Counter()) is None
+    assert "sso.apa.org" in capsys.readouterr().out

@@ -66,6 +66,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **APA's post-"Check Access" wait matched the page it was already on.**
+  `_run_access_check` waited for `_SSO_HOST in url or "psycnet.apa.org"
+  in url` — and the browser was already on
+  `psycnet.apa.org/record/<id>`, so `wait_for_url` returned before the
+  navigation it was meant to wait for. Every later step then ran against
+  the record page: no signed link to find there, the bare `/fulltext/`
+  retry bounced back to `/record/`, and the run concluded "your
+  institution likely has no entitlement to this article" about articles
+  the institution demonstrably had. The predicate now names the two
+  destinations that navigation actually has — the IdP, or
+  `/recordAccess/institutional/`.
+
 - **`try_click` clicked `.first`, not the first *visible* match.** Its
   docstring promised the latter; the code took `page.locator(sel).first`
   and waited for that one element to become visible. PsycNET's record
