@@ -427,6 +427,8 @@ async def _download_from_access_page(page, out: Path) -> str:
     wait here is generous. Returns the signed URL on success, "" if the
     link never appeared.
     """
+    # The access page is a fresh document too.
+    await _dismiss_cookie_banner(page)
     try:
         link = page.locator(
             "a[href*='/fulltext/'][href*='.pdf']"
@@ -454,6 +456,15 @@ async def _run_access_check(page) -> str:
       - ``"no-check-access"``   — overlay opened, but offered no access
                                   check (usually purchase-only).
     """
+    # Again, because the caller's dismissal happened before the
+    # `/fulltext/` probe — and that probe navigates (to `/fulltext/`,
+    # bounced back to `/record/`), which reloads the document and brings
+    # the banner back. Every click below therefore happened with the
+    # banner present, on a cold profile, however diligently it was
+    # removed earlier. A live cold-profile probe failed both items and
+    # its screenshot showed the banner still there at the end.
+    await _dismiss_cookie_banner(page)
+
     opened = await try_click(
         page,
         # `title`/`aria-label` are the stable handles: the visible text
