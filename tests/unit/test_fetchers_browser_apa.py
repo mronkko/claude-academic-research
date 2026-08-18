@@ -38,7 +38,42 @@ from fetchers.browser.apa import (
     _is_landing_for,
 )
 
-PDF_BYTES = b"%PDF-1.7\n" + b"x" * 2000
+PDF_BYTES = b"%PDF-1.7\n" + b"x" * 2000 + b"\nstartxref\n9\n%%EOF\n"
+
+
+class _FakeApiResponse:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    async def body(self) -> bytes:
+        return self._payload
+
+
+class _FakeRequest:
+    """Models `context.request`, which shares the context's cookie jar.
+
+    That sharing is the point: the full-text probe asks over HTTP rather
+    than navigating, so an entitled session gets the PDF and an
+    unentitled one gets the record page's HTML — without either answer
+    costing the fully-rendered page, which used to be thrown away and
+    rebuilt before "Get Access" existed again.
+    """
+
+    def __init__(self, page: _FakePsycnetPage) -> None:
+        self._page = page
+        self.calls: list[str] = []
+
+    async def get(self, url: str, timeout: int = 0):
+        del timeout
+        self.calls.append(url)
+        if "/fulltext/" in url and self._page.entitled:
+            return _FakeApiResponse(PDF_BYTES)
+        return _FakeApiResponse(b"<!doctype html><title>Record</title>")
+
+
+class _FakeBrowserContext:
+    def __init__(self, page: _FakePsycnetPage) -> None:
+        self.request = _FakeRequest(page)
 
 
 @pytest.fixture(autouse=True)
@@ -379,7 +414,8 @@ def _run(handler: ApaHandler, page, cache_dir: Path, counter: Counter):
     # otherwise be spent as real wall-clock time on the timeout paths.
     handler.landing_timeout_ms = 300
     return asyncio.run(handler.download(
-        page, None, {"doi": "10.1037/apl0000007", "title": "Sinking slowly"},
+        page, _FakeBrowserContext(page),
+        {"doi": "10.1037/apl0000007", "title": "Sinking slowly"},
         cache_dir, counter=counter, total=1, t_start=time.monotonic(),
     ))
 
@@ -835,3 +871,33 @@ def test_a_real_download_still_interrupts_navigation(tmp_path: Path) -> None:
     page = _FakePsycnetPage(entitled=True)
     result = _run(ApaHandler(), page, tmp_path, Counter())
     assert result is not None, "the fast-fail swallowed a real download"
+
+
+def test_the_fulltext_probe_never_navigates(tmp_path: Path) -> None:
+    """The answer to "why can't the overlay open as soon as the page has
+    loaded?" — it can, once nothing throws the page away to ask a
+    question.
+
+    Probing by navigation left the fully-rendered record page, was
+    bounced back to `/record/<id>`, and then waited for Angular to
+    rebuild the entire view before "Get Access" existed again. A live
+    run showed 10-20s of staring at the record page before the overlay
+    appeared. `ctx.request` shares the context's cookies, so the same
+    question can be asked without moving the page.
+    """
+    page = _FakePsycnetPage(entitled=False, has_get_access=False)
+    _run(ApaHandler(), page, tmp_path, Counter())
+
+    assert not any("/fulltext/" in v for v in page.visited), (
+        f"the probe navigated: {page.visited}"
+    )
+
+
+def test_an_entitled_session_never_opens_the_overlay(tmp_path: Path) -> None:
+    """The fast path stays fast — and is now faster still, since it
+    costs no navigation at all rather than one plus a download event."""
+    page = _FakePsycnetPage(entitled=True)
+    result = _run(ApaHandler(), page, tmp_path, Counter())
+
+    assert result is not None
+    assert not page._overlay_open, "opened the overlay despite entitlement"

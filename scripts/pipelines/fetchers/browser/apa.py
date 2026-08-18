@@ -73,6 +73,8 @@ import time
 from pathlib import Path
 from urllib.parse import unquote, urljoin
 
+from fetchers import _pdf_validate
+
 from .base import (
     Counter,
     PublisherHandler,
@@ -143,7 +145,6 @@ class ApaHandler(PublisherHandler):
         self, page, ctx, item, cache_dir,
         *, counter: Counter, total: int, t_start: float,
     ) -> tuple[Path, str] | None:
-        del ctx
         doi = item["doi"]
         out = cache_path_for(cache_dir, doi)
         if is_cached(out):
@@ -185,8 +186,19 @@ class ApaHandler(PublisherHandler):
 
             # Step 2: the direct full-text URL. Works whenever the
             # session is already entitled, which after the first item of
-            # a run is the normal case.
-            if await _download_from(page, fulltext_url, out):
+            # a run is the normal case — and the whole reason items 2..n
+            # are several times faster than item 1.
+            #
+            # Gating this on `_session_entitled` was tried and reverted.
+            # It would spare a cold item 1 the bounce and the Angular
+            # re-render that follows (~6s), but it forces a *warm*
+            # profile through an unnecessary access check (~10s), and a
+            # persistent Chromium profile can arrive already entitled.
+            # A wash on one item per run, in exchange for second-guessing
+            # a session state the request itself reports accurately.
+            if ctx is not None and await _fetch_fulltext_without_navigating(
+                ctx, fulltext_url, out,
+            ):
                 source_url = fulltext_url
             else:
                 # Step 3: the access check. Its job is to turn an
@@ -431,6 +443,38 @@ async def _wait_for_landing_record_id(
         if time.monotonic() >= deadline:
             return ""
         await page.wait_for_timeout(250)
+
+
+async def _fetch_fulltext_without_navigating(ctx, url: str, out: Path) -> bool:
+    """Ask for the PDF over the context's HTTP client. Never navigates.
+
+    The point is what it *doesn't* disturb. Probing by navigation meant
+    leaving the fully-rendered record page, being bounced back to
+    `/record/<id>`, and waiting for Angular to rebuild the whole view —
+    six seconds or more — before "Get Access" existed again. Reported
+    from a live run as staring at the record page for 10-20s before the
+    overlay appeared, and the answer to "why can't the overlay open as
+    soon as the page has loaded?": it can, once nothing throws the page
+    away to ask a question.
+
+    `ctx.request` shares the context's cookie jar, so an entitled
+    session is entitled here too — the same property the EBSCO handler
+    relies on to pull bytes off a signed CDN URL without a page.
+
+    Returns False for anything that is not a valid PDF, including the
+    HTML of `/record/<id>` that an unentitled session is redirected to.
+    The caller then runs the access check on the page it still has.
+    """
+    try:
+        resp = await ctx.request.get(url, timeout=20000)
+        body = await resp.body()
+    except Exception:
+        return False
+    if not body or _pdf_validate.pdf_defect(body) is not None:
+        return False
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(body)
+    return is_cached(out)
 
 
 async def _download_from(page, url: str, out: Path) -> bool:

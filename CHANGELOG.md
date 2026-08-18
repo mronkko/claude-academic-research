@@ -84,6 +84,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **APA's full-text probe no longer navigates.** It asked for
+  `/fulltext/<id>.pdf` by navigating the page, so an unentitled session
+  was bounced to `/record/<id>` and Angular rebuilt the whole view
+  before "Get Access" existed again — 10-20s of an apparently idle
+  record page, on a render that had already finished before the probe
+  threw it away. The probe now goes through `ctx.request`, which shares
+  the context's cookie jar (the same property the EBSCO handler uses to
+  pull bytes off a signed CDN URL). An entitled session gets the PDF
+  with no navigation at all; an unentitled one falls through to the
+  access check on the page it still has, so the overlay opens as soon as
+  the page has loaded.
+
 - **APA waited 20s for a download PsycNET had already refused.** The
   `/fulltext/<id>.pdf` probe opens an `expect_download` window, and an
   unentitled session is redirected to `/record/<id>` instead — in well
