@@ -66,6 +66,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The end-of-run report made one Zotero request per missing item.**
+  `_print_run_report` called `zot.get_item` lazily from inside the
+  formatter, so a run with 1,133 unresolved items made 1,133 sequential
+  requests *after* the last PDF was already attached — printing nothing
+  while it did. Reported from a live run as "the script did not
+  terminate but does not seem to progress either", which is precisely
+  what it looked like. It now pre-fetches through
+  `ZoteroClient.items_by_keys` (50 keys per request, so ~23 instead of
+  1,133), says how many items it is fetching, and skips resolved items
+  entirely since the report never itemises those. A metadata failure now
+  degrades the report to title + DOI instead of being able to stall it.
+
 - **Wiley TDM lost more than half its yield to its own rate limiter.**
   `WileySource` built a fresh `TDMClient` for every DOI, so the
   cascade's worker threads produced one rate limiter each and none saw

@@ -2933,6 +2933,28 @@ def _attach_from_cache(
     return done
 
 
+def _citation_fields(data: dict) -> dict[str, str]:
+    """The four fields the run report needs from a Zotero item."""
+    creators = data.get("creators") or []
+    names = [
+        c.get("lastName") or c.get("name") or ""
+        for c in creators if isinstance(c, dict)
+    ]
+    names = [n for n in names if n]
+    if len(names) > 3:
+        authors = f"{names[0]} et al."
+    elif names:
+        authors = " & ".join(names)
+    else:
+        authors = ""
+    return {
+        "authors": authors,
+        "year": _year_from_zotero_date(data.get("date", "")) or "",
+        "journal": data.get("publicationTitle", "") or "",
+        "title": data.get("title", "") or "",
+    }
+
+
 def _print_run_report(
     args: argparse.Namespace, zot=None, item_keys: set[str] | None = None,
 ) -> None:
@@ -2955,36 +2977,39 @@ def _print_run_report(
 
     lookup = None
     if zot is not None:
+        # One batched fetch, not one request per item. This used to call
+        # `zot.get_item` lazily inside the formatter, so a run with 1,133
+        # unresolved items made 1,133 sequential Zotero requests after the
+        # last PDF had already been attached — printing nothing while it
+        # did. Reported from a live run as "the script did not terminate
+        # but does not seem to progress either", which is exactly what it
+        # looked like. `items_by_keys` does the same work in ceil(n/50).
+        needed = sorted({
+            (r.get("item_key") or "").strip()
+            for r in pdf_run_report.latest_rows(rows)
+            if (r.get("item_key") or "").strip()
+            and (r.get("status") or "").strip()
+            not in pdf_run_report.SUCCESS_STATUSES
+        })
         cache: dict[str, dict[str, str]] = {}
+        if needed:
+            print(
+                f"  Building the report — fetching metadata for "
+                f"{len(needed)} unresolved items…",
+                flush=True,
+            )
+            try:
+                for item in zot.items_by_keys(needed):
+                    key = (item.get("key") or "").strip()
+                    if key:
+                        cache[key] = _citation_fields(item.get("data", {}))
+            except Exception as e:
+                # The report degrades to title + DOI, which is a worse
+                # report but still a report. Never lose one to metadata.
+                print(f"  (metadata lookup failed: {str(e)[:70]})", flush=True)
 
         def lookup(item_key: str) -> dict[str, str]:      # noqa: F811
-            if not item_key:
-                return {}
-            if item_key not in cache:
-                try:
-                    data = zot.get_item(item_key).get("data", {})
-                except Exception:
-                    cache[item_key] = {}
-                    return {}
-                creators = data.get("creators") or []
-                names = [
-                    c.get("lastName") or c.get("name") or ""
-                    for c in creators if isinstance(c, dict)
-                ]
-                names = [n for n in names if n]
-                if len(names) > 3:
-                    authors = f"{names[0]} et al."
-                elif names:
-                    authors = " & ".join(names)
-                else:
-                    authors = ""
-                cache[item_key] = {
-                    "authors": authors,
-                    "year": _year_from_zotero_date(data.get("date", "")) or "",
-                    "journal": data.get("publicationTitle", "") or "",
-                    "title": data.get("title", "") or "",
-                }
-            return cache[item_key]
+            return cache.get(item_key, {})
 
     print(pdf_run_report.format_report(rows, metadata=lookup))
 
