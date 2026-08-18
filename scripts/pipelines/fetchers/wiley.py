@@ -14,7 +14,10 @@ from fetchers.base import PdfFetcher
 
 logger = logging.getLogger(__name__)
 
-_WILEY_PREFIXES = ("10.1002/", "10.1111/", "10.1046/")
+#: `10.1348` is the British Psychological Society, whose journals Wiley
+#: publishes and serves from onlinelibrary.wiley.com like any other —
+#: the TDM endpoint accepts it, it was simply never listed.
+_WILEY_PREFIXES = ("10.1002/", "10.1111/", "10.1046/", "10.1348/")
 
 
 class WileySource(PdfFetcher):

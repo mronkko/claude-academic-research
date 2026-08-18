@@ -72,7 +72,8 @@ def pdf_sources(
 
         Stage 1 — free version of record (institutional subscription or
                   free API; the published article, correctly paginated)
-            ScienceDirect (Elsevier) → Springer → Crossref TDM → PMC
+            ScienceDirect (Elsevier) → Springer → Wiley TDM
+            → Crossref TDM → PMC
         Stage 2 — paid version of record
             OpenAlex Content API ($0.01/PDF, opt-in)
         Stage 3 — open access, often the author's accepted manuscript
@@ -111,16 +112,30 @@ def pdf_sources(
     review cares about — see `fetchers/preprint.py` for why the opt-in
     and the `pdf:preprint-version` tag are both load-bearing.
 
-    Wiley and Browser are in the registry but excluded from the default
-    selection too — they require a specific auth contract (Wiley) or run
-    interactively (Browser). Use `names=["wiley"]` or `names=["browser"]`
-    to select them explicitly.
+    Browser is in the registry but excluded from the default selection —
+    it runs interactively, opening a real window a human may have to
+    click. Use `names=["browser"]` to select it explicitly.
+
+    **Wiley used to be excluded here too, and should not have been.**
+    The stated reason was that it "requires a specific auth contract",
+    but `WileySource.fetch_pdf` already returns None on a non-Wiley DOI
+    prefix, on a missing token, on a missing `wiley_tdm` import, and on
+    any exception — it self-disables exactly as safely as
+    ScienceDirect, which is token-gated too and was never excluded. The
+    cost of the asymmetry was silent: `--all` builds its cascade from
+    this function, so the documented one-shot "run everything" path
+    skipped Wiley entirely, and only a reader who found `--sources
+    wiley` in a table deep in the skill would ever run it. Measured on a
+    live 1,895-item library pass: 248 Wiley-prefix items, of which the
+    cascade found 39; a separate `--sources wiley` pass then recovered
+    **47 more** that no default invocation would ever have asked for.
     """
     if http is None:
         return []
     all_sources = cast("list[PdfFetcher]", [
         ScienceDirectSource(http, config),
         SpringerSource(http, config),
+        WileySource(http, config),
         CrossrefSource(http, config),
         PmcSource(http, config),
         # Stage 2 — the cascade's only per-item cost, ranked here rather
@@ -131,7 +146,6 @@ def pdf_sources(
         SemanticScholarSource(http, config),
         CoreSource(http, config),
         PreprintSource(http, config),
-        WileySource(http, config),
         BrowserSource(http, config),
     ])
     if names:
@@ -140,7 +154,6 @@ def pdf_sources(
     return [
         s for s in all_sources
         if not s.interactive
-        and s.name != "wiley"
         and (s.name != "preprint" or allow_preprints)
     ]
 

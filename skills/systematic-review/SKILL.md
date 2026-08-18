@@ -1019,7 +1019,7 @@ and which phase runs each stage:
 ```
 Stage 1 — free version of record            ┐
   ScienceDirect (Elsevier) → Springer       │
-  → Crossref TDM → PMC                      │
+  → Wiley TDM → Crossref TDM → PMC          │
 Stage 2 — paid version of record            ├─ Phase 1 (API cascade,
   OpenAlex Content API ($0.01/PDF, opt-in)  │   default mode)
 Stage 3 — open access, often author version │
@@ -1031,8 +1031,19 @@ Stage 4 — browser handlers for gated publishers  ── Phase 2
 Stage 5 — Zotero Connector + library link resolver ── Phase 3
 ```
 
-Wiley TDM (`WILEY_TDM_TOKEN`) is a stage-1 source too, but excluded from
-the default cascade and selected explicitly with `--sources wiley`.
+Wiley TDM (`WILEY_TDM_TOKEN`) is a stage-1 source and runs in the
+default cascade. It used to be excluded, on the reasoning that it needs
+a token — but so does ScienceDirect, and the fetcher already
+self-disables without one. The exclusion cost real coverage silently,
+because `--all` builds its Pass 1 from the same default list: on a live
+1,895-item pass, 47 Wiley PDFs were reachable that no documented
+one-shot invocation would have asked for. `--sources wiley` still works
+for a Wiley-only run.
+
+Expect the token to answer for **current** content only. On that same
+pass its hit rate was ~20% for 1990-onward articles and **zero** for
+anything older — a back-file entitlement gap, not a failure. Pre-1990
+Wiley articles are a browser / EBSCO job.
 
 **Two stage-1 sources fail in ways that look like "article unavailable"
 and are not.** Check for these before concluding anything about an item:

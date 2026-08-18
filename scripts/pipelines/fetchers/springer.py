@@ -31,8 +31,14 @@ from fetchers.base import PdfFetcher
 
 logger = logging.getLogger(__name__)
 
+#: `10.1023` is Kluwer Academic, absorbed into Springer in 2004; its
+#: titles serve from link.springer.com under the same URL shape as
+#: `10.1007`. Legacy imprints like this are where a prefix list quietly
+#: costs retrieval — a live 1,895-item pass left 12 Kluwer-era items
+#: with no handler at all, so they fell through to the resolver route
+#: for want of one line.
 _SPRINGER_PREFIXES = (
-    "10.1007/", "10.1057/", "10.1038/", "10.1140/",
+    "10.1007/", "10.1023/", "10.1057/", "10.1038/", "10.1140/",
     "10.1186/", "10.1365/", "10.1245/",
 )
 

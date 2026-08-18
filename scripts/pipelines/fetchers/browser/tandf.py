@@ -14,7 +14,10 @@ from .base import PageNavigationHandler
 class TandfHandler(PageNavigationHandler):
     name = "tandf"
     display_name = "Taylor & Francis"
-    doi_prefixes = ("10.1080/",)
+    # Routledge (10.4324), Haworth (10.1300) and Lawrence Erlbaum
+    # (10.1207) are all T&F imprints today and serve from
+    # tandfonline.com under the same /doi/pdf/ shape as 10.1080.
+    doi_prefixes = ("10.1080/", "10.4324/", "10.1300/", "10.1207/")
     url_template = "https://www.tandfonline.com/doi/pdf/{doi}?download=true"
     # Landing page for setup — the PDF URL auto-downloads and leaves
     # about:blank; the user needs to see a real page to solve CF or

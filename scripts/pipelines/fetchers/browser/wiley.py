@@ -17,7 +17,8 @@ class WileyHandler(PageNavigationHandler):
     name = "wiley"
     display_name = "Wiley (fallback)"
     # Wiley prefixes: 10.1002 (most), 10.1111 (some), 10.1046 (legacy).
-    doi_prefixes = ("10.1002/", "10.1111/", "10.1046/")
+    # `10.1348` = British Psychological Society, published by Wiley.
+    doi_prefixes = ("10.1002/", "10.1111/", "10.1046/", "10.1348/")
     # `/doi/pdfdirect/` serves the raw PDF (same endpoint wiley-tdm
     # uses), so navigation fires a download event. `/doi/pdf/` lands
     # on Wiley's e-reader viewer page — a PDF icon with an Open button

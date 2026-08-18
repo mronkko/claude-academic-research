@@ -7,7 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Wiley TDM now runs in the default cascade.** It was excluded on the
+  reasoning that it "requires a specific auth contract", but
+  `WileySource.fetch_pdf` already returns `None` on a non-Wiley prefix,
+  a missing token, a missing `wiley_tdm` import, or any exception — it
+  self-disables exactly as safely as ScienceDirect, which is token-gated
+  too and was never excluded. The asymmetry failed silently: `--all`
+  builds its Pass 1 from the same default list, so the documented
+  "run everything" invocation skipped Wiley outright, and only a reader
+  who found `--sources wiley` in a table deep in the skill would run it.
+  Measured on a live 1,895-item library pass: 248 Wiley-prefix items,
+  39 found by the cascade, and **47 more** recovered by a separate
+  `--sources wiley` run that no default invocation would have made.
+  Ranked at stage 1, above the OA aggregators, because TDM returns the
+  publisher's file and they often return an author manuscript whose
+  pagination does not match. `--sources wiley` still selects it alone.
+
+  Expect current content only: on that pass the token answered for ~20%
+  of 1990-onward articles and **none** older. That is a back-file
+  entitlement gap, not a failure — pre-1990 Wiley is a browser/EBSCO job.
+
 ### Fixed
+
+- **Legacy imprint DOI prefixes matched no handler.** Publishers absorb
+  each other and the acquired prefixes keep resolving on the new owner's
+  platform, under the same URL shape the handler already builds — so one
+  missing line sends an item to the resolver route instead of straight
+  to its publisher. Added `10.1023` (Kluwer → Springer, 12 items on the
+  live pass), `10.4324` / `10.1300` / `10.1207` (Routledge / Haworth /
+  Lawrence Erlbaum → Taylor & Francis, 24), `10.2190` (Baywood → Sage,
+  7), and `10.1348` (British Psychological Society → Wiley, 2) to both
+  the Wiley API source and its browser handler. A test now pins that the
+  two Wiley prefix lists stay equal, since the handler is the fallback
+  for exactly the DOIs the TDM route could not serve.
 
 - **EBSCO's download budget was sized for typeset PDFs, not scans.** The
   signed-CDN fetch inherited `RequestHandler`'s 60 s timeout, which is

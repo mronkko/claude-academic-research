@@ -14,7 +14,9 @@ from .base import RequestHandler
 class SageHandler(RequestHandler):
     name = "sage"
     display_name = "Sage"
-    doi_prefixes = ("10.1177/",)
+    # `10.2190` = Baywood Publishing, acquired by Sage in 2015; its
+    # back-catalogue serves from journals.sagepub.com.
+    doi_prefixes = ("10.1177/", "10.2190/")
     url_template = "https://journals.sagepub.com/doi/pdf/{doi}?download=true"
     # Landing page for setup — opening the PDF URL directly triggers
     # a Chromium auto-download that consumes the session and leaves

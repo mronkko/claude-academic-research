@@ -167,7 +167,7 @@ running these stages:**
    | Cause in the report | Next rung |
    |---|---|
    | `BROWSER_REQUIRED` | `enrich_pdfs.py --sources browser --filter-keys-file <retry.browser.keys>` — a visible Chromium opens; the user solves one Cloudflare challenge per publisher. Narrow to one publisher with `retry.browser.<publisher>.keys`. Rows that name no publisher belong here too: the link resolver and the Zotero Connector key on the item rather than the DOI prefix, and the same pass reaches both. |
-   | `ACCESS_BLOCKED` (Wiley prefix, no token) | Configure `WILEY_TDM_TOKEN` via `/setup`, then `--sources wiley` |
+   | `ACCESS_BLOCKED` (Wiley prefix, no token) | Configure `WILEY_TDM_TOKEN` via `/setup` and re-run — Wiley TDM is in the default cascade, so no separate `--sources wiley` is needed. Note the token covers current content: pre-1990 Wiley articles come back empty and belong on the browser / EBSCO route. |
    | `ACCESS_BLOCKED` (anything else) | Hand the user `retry.ill.keys` as an interlibrary-loan list |
    | `NETWORK_ERROR` | Re-run the same stage; the cause is transient |
    | `CORRUPT_DOWNLOAD` | The source served a broken file (usually truncated). Re-running the *same* source returns the same bad bytes — escalate to a different one: the publisher TDM route, or `--sources browser`. |
