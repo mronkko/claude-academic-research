@@ -352,3 +352,50 @@ def test_wait_for_child_attachment_recovers_after_transient_error() -> None:
     zot.cloud.children.side_effect = fake_children
     assert _wait_for_child_attachment(zot, "NEW", timeout_s=5) is True
     assert attempts["n"] >= 2
+
+
+# ---------------------------------------------------------------------
+# What the failure message is allowed to blame
+# ---------------------------------------------------------------------
+
+
+def test_the_failure_message_stops_blaming_the_library_once_one_item_saved(
+) -> None:
+    """"Check the left pane" is good advice for the first item and wrong
+    for the fiftieth.
+
+    Once anything has saved in this run, the library selection is
+    demonstrably correct — `counter.ok` proves it — so leading with that
+    cause sends the user to inspect a setting that is fine. Reported live
+    against a run whose real reason was no access to those articles.
+    """
+    import inspect
+
+    from fetchers.browser import connector
+
+    src = inspect.getsource(connector)
+    assert "if counter.ok:" in src, (
+        "the message does not branch on what the run already knows"
+    )
+    # The no-access reading must be offered in both branches, since it is
+    # the likeliest cause in one and a real possibility in the other.
+    # Matched on a single word: these messages are hand-wrapped for the
+    # terminal, so a phrase can be split across two Python literals and
+    # is then unjoinable by any amount of whitespace normalising.
+    assert src.count("subscription") >= 2, (
+        "only one branch offers the no-access explanation"
+    )
+
+
+def test_both_branches_offer_the_no_access_explanation() -> None:
+    """The original message listed three causes and omitted the one the
+    user actually hit: they simply could not reach the article. A
+    paywall, an expired subscription and a dropped VPN all hand the
+    translator the same page with no PDF on it."""
+    import inspect
+
+    from fetchers.browser import connector
+
+    src = inspect.getsource(connector).lower()
+    assert "subscription" in src
+    assert "vpn" in src or "proxy" in src

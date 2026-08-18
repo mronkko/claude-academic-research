@@ -511,18 +511,46 @@ class ZoteroConnectorHandler(PublisherHandler):
             _poll_for_new_item, zot, doi, item["item_key"], 120,
         )
         if new_key is None:
-            print(
-                "  └─ FAIL: no new item appeared in the target group.\n"
-                "         Common causes:\n"
-                "           - Zotero Desktop has a DIFFERENT library\n"
-                "             selected in the left pane (the most\n"
-                "             common cause — check now).\n"
-                "           - The translator saved the item under a\n"
-                "             different DOI, or saved metadata only.\n"
-                "           - The save was rejected silently; check\n"
-                "             Zotero Desktop's Debug Output Log.",
-                flush=True,
-            )
+            # What to blame depends on something we already know. Once
+            # anything has saved in this run, the library selection is
+            # demonstrably correct, and leading with "check the left
+            # pane" sends the user to inspect a setting that is fine.
+            # Reported live against a run where the actual reason was
+            # simply no access to those articles — off-VPN, paywalled,
+            # or unentitled, which the translator cannot distinguish
+            # because all three hand it a page with no PDF on it.
+            if counter.ok:
+                print(
+                    f"  └─ FAIL: the translator saved nothing.\n"
+                    f"         {counter.ok} item"
+                    f"{'' if counter.ok == 1 else 's'} already saved this "
+                    f"run, so the library\n"
+                    f"         selection is correct — it is not that.\n"
+                    f"         Most likely you cannot reach this article:\n"
+                    f"           - no subscription, or off the entitled\n"
+                    f"             network (VPN/proxy down);\n"
+                    f"           - the page offered metadata only.\n"
+                    f"         Logged as ACCESS_BLOCKED, not as \"no full\n"
+                    f"         text exists\" — it stays in the review as an\n"
+                    f"         interlibrary-loan candidate.",
+                    flush=True,
+                )
+            else:
+                print(
+                    "  └─ FAIL: no new item appeared in the target group.\n"
+                    "         Nothing has saved yet this run, so check the\n"
+                    "         first cause before the others:\n"
+                    "           - Zotero Desktop has a DIFFERENT library\n"
+                    "             selected in the left pane (the most\n"
+                    "             common cause — check now).\n"
+                    "           - You cannot reach this article: no\n"
+                    "             subscription, or off the entitled network.\n"
+                    "           - The translator saved the item under a\n"
+                    "             different DOI, or saved metadata only.\n"
+                    "           - The save was rejected silently; check\n"
+                    "             Zotero Desktop's Debug Output Log.",
+                    flush=True,
+                )
             counter.failed += 1
             return False
         print(f"  │  New item saved locally ({new_key}). "

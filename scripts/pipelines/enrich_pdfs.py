@@ -677,7 +677,26 @@ def _browser_failure_cause(
         return pdf_fetch_log.FailureCause.NETWORK_ERROR
     if getattr(handler, "last_verdict", ""):
         return pdf_fetch_log.FailureCause.ACCESS_BLOCKED
-    return None
+    # 4. **Everything else is ACCESS_BLOCKED, not UNAVAILABLE.** This
+    #    used to return None and let the shared classifier decide, which
+    #    returns UNAVAILABLE once the browser pass has run — the one
+    #    cause that licenses an FE6 exclusion.
+    #
+    #    A browser handler almost never has evidence that no full text
+    #    exists. What it has is "the publisher's page did not yield a
+    #    PDF to me", and the honest reading of that is a paywall, a
+    #    login, or a handler that asked wrongly. A live library
+    #    accumulated 106 UNAVAILABLE rows this way — 64 of them APA,
+    #    logged while the handler was clicking the overlay's close
+    #    button instead of CHECK ACCESS, for articles the user could
+    #    open by hand.
+    #
+    #    The asymmetry decides it. ACCESS_BLOCKED keeps an item in the
+    #    review and asks a human to try interlibrary loan; UNAVAILABLE
+    #    can remove it from the evidence base. Being wrong in the first
+    #    direction costs an ILL request nobody needed; being wrong in
+    #    the second silently shrinks the review.
+    return pdf_fetch_log.FailureCause.ACCESS_BLOCKED
 
 
 #: Where a retried item carries what the pass before it found. Lives on
@@ -1823,7 +1842,15 @@ async def _drive_connector(
                     cause=(
                         pdf_fetch_log.FailureCause.NETWORK_ERROR
                         if is_transport_error(getattr(handler, "last_error", ""))
-                        else None
+                        # Was None, which the shared classifier turns into
+                        # UNAVAILABLE. The Connector being the last rung
+                        # makes it the last thing to *fail*, not evidence
+                        # that no full text exists: the usual reason the
+                        # translator saves nothing is that the page it was
+                        # given is a paywall. Reported live — "the real
+                        # reason is that I do not have access to these
+                        # items" — against rows filed as UNAVAILABLE.
+                        else pdf_fetch_log.FailureCause.ACCESS_BLOCKED
                     ),
                 )
 

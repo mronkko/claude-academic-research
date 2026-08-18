@@ -397,15 +397,42 @@ def test_a_download_timeout_is_not_a_missing_article() -> None:
         pdf_fetch_log.FailureCause.NETWORK_ERROR)
 
 
-def test_silence_is_left_to_the_shared_classifier() -> None:
-    """No verdict and no transport failure — this function claims nothing."""
+def test_silence_reads_as_blocked_access_not_as_absence() -> None:
+    """No verdict and no transport failure is not evidence of absence.
+
+    This used to return None and let the shared classifier decide, which
+    answers UNAVAILABLE once the browser pass has run — the one cause
+    that licenses an FE6 exclusion. But a browser handler that came away
+    empty has learned "the publisher's page did not yield a PDF to me",
+    which is a paywall, a login, or a handler asking wrongly.
+
+    A live library accumulated 106 UNAVAILABLE rows that way, 64 of them
+    APA, logged while the handler was clicking the overlay's close
+    button instead of CHECK ACCESS — for articles the user could open by
+    hand. ACCESS_BLOCKED keeps them in the review and flags them for
+    ILL; UNAVAILABLE can remove them from the evidence base.
+    """
     handler = MagicMock(last_verdict=ebsco.VERDICT_UNKNOWN, last_error="")
-    assert enrich_pdfs._browser_failure_cause(handler, transport=False) is None
+    assert enrich_pdfs._browser_failure_cause(handler, transport=False) == (
+        pdf_fetch_log.FailureCause.ACCESS_BLOCKED
+    )
 
 
 def test_a_handler_without_verdicts_is_unaffected() -> None:
-    """Every other browser handler reaches this function too."""
-    assert enrich_pdfs._browser_failure_cause(object(), transport=False) is None
+    """Every other browser handler reaches this function too, and gets
+    the same benefit of the doubt."""
+    assert enrich_pdfs._browser_failure_cause(object(), transport=False) == (
+        pdf_fetch_log.FailureCause.ACCESS_BLOCKED
+    )
+
+
+def test_a_transport_failure_still_outranks_everything() -> None:
+    """The one thing that must never read as an answer about the article
+    is the machine's own connection dropping."""
+    handler = MagicMock(last_verdict=ebsco.VERDICT_NO_HOLDINGS, last_error="")
+    assert enrich_pdfs._browser_failure_cause(handler, transport=True) == (
+        pdf_fetch_log.FailureCause.NETWORK_ERROR
+    )
 
 
 def test_a_slow_publisher_does_not_trip_the_outage_breaker() -> None:

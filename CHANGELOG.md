@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A browser or Connector failure now reads as ACCESS_BLOCKED, not
+  UNAVAILABLE.** `_browser_failure_cause` returned None for anything it
+  could not classify, and the shared classifier turns that into
+  `UNAVAILABLE` once the browser pass has run — the one cause that
+  licenses an FE6 exclusion, meaning "every route was asked and no full
+  text exists". A browser handler almost never has that evidence. What
+  it has is "the publisher's page did not yield a PDF to me", which is a
+  paywall, a login, a dropped VPN, or a handler asking wrongly. The
+  Connector's own failure path defaulted the same way, on the reasoning
+  that it is the last rung — but being last to fail is not evidence of
+  absence.
+
+  The asymmetry decides it: `ACCESS_BLOCKED` keeps an item in the review
+  as an interlibrary-loan candidate, `UNAVAILABLE` can remove it from
+  the evidence base. Being wrong in the first direction costs an ILL
+  request nobody needed; being wrong in the second silently shrinks the
+  review. Transport errors and download timeouts still outrank both.
+
+- **The Connector's "no new item appeared" message blamed the wrong
+  thing.** It led with "Zotero Desktop has a DIFFERENT library selected"
+  — good advice for the first item of a run, and wrong for the
+  fiftieth, since `counter.ok` already proves the selection is correct.
+  It now branches on that, and both branches offer the explanation the
+  original omitted entirely: you may simply not be able to reach the
+  article. A paywall, an expired subscription and a dropped VPN all hand
+  the translator the same page with no PDF on it.
+
 - **The browser pass stopped asking before it has anything to ask
   about.** `_drive_handler` ran `handler.setup()` — the "can you
   see/reach the PDF from this page?" prompt — before attempting a single
