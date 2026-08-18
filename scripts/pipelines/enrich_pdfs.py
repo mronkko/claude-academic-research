@@ -2005,7 +2005,16 @@ def _run_browser_in_process(
     # (competing timeouts lead to visible stalls).
     import requests as _requests
     resolver_session = _requests.Session()
-    resolver_cfg = load_from_config(resolver_session, args.cache_dir)
+    # `--refresh-resolver-cache` sets the miss TTL to zero, so every
+    # cached "no route" is re-asked while cached routes are kept. The
+    # alternative used to be deleting `resolver_cache.json`, which lives
+    # in a directory that also holds the PDF cache and both Chromium
+    # profiles — a blunt instrument for re-checking one library's answer.
+    resolver_cfg = load_from_config(
+        resolver_session, args.cache_dir,
+        miss_ttl_s=0 if getattr(args, "refresh_resolver_cache", False)
+        else None,
+    )
 
     # [library] no_access → short-circuit these direct handlers
     # unconditionally. Populated at runtime by the failure prompt's
@@ -2262,6 +2271,15 @@ def _run_browser_in_process(
                 continue
 
         items_by_pub[direct.name].append(entry)
+
+    if checked:
+        elapsed = time.monotonic() - t_preflight
+        print(
+            f"  Resolver pre-flight done: {checked} checked in "
+            f"{elapsed:.0f}s. Answers are cached — the next publisher "
+            f"block skips these.",
+            flush=True,
+        )
 
     if args.publisher:
         items_by_pub = {
@@ -3134,6 +3152,16 @@ def _build_parser() -> argparse.ArgumentParser:
              "including which publishers will need an interactive "
              "Cloudflare / SSO solve — then exit without opening a browser. "
              "Run this first so you know what the real run will ask of you.",
+    )
+    parser.add_argument(
+        "--refresh-resolver-cache", action="store_true",
+        help="Re-ask the link resolver about items it previously reported "
+             "no route for. Cached routes are kept; only the misses are "
+             "re-queried. Use after gaining access to a title, or when "
+             "you suspect the resolver's answer was wrong — misses are "
+             "cached for a week, cheaply enough that a ten-block browser "
+             "session asks once, but that window is also long enough to "
+             "outlast a new subscription.",
     )
     parser.add_argument(
         "--ignore-library-coverage", action="store_true",

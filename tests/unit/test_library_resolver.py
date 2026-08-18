@@ -432,16 +432,32 @@ def test_cache_is_a_hit_and_skips_the_network(tmp_path: Path) -> None:
     session.get.assert_not_called()
 
 
-def test_an_empty_answer_is_never_cached(tmp_path: Path) -> None:
-    """The JBE incident. An empty result is a claim about what the resolver
-    could see *for this DOI*, and it is wrong often enough that persisting
-    it turns a soft miss into a permanent one."""
+def test_an_empty_answer_expires_instead_of_being_permanent(
+    tmp_path: Path,
+) -> None:
+    """The JBE incident, and the correction to its fix.
+
+    An empty result is a claim about what the resolver could see *for
+    this DOI*, and it is wrong often enough that persisting it forever
+    turns a soft miss into a permanent one — 15 articles the user
+    demonstrably had access to were skipped that way. The first fix was
+    to never cache a miss, which made every run re-ask every one of them.
+
+    A miss is now kept with a timestamp and forgotten after
+    `miss_ttl_s`, so the recovery path survives while the repetition
+    does not.
+    """
     cache = ResolverCache(tmp_path)
     cfg = _sfx_cfg(_session(text=_ft()), cache)
     assert _uq(lookup_fulltext_target(DOI, cfg)) == (None, True)
-    assert ResolverCache(tmp_path).get(DOI) is None
-    # A later run with real coverage must still be able to find it.
-    cfg2 = _sfx_cfg(_session(text=_ft("https://search.ebscohost.com/x")), cache)
+    assert ResolverCache(tmp_path).get(DOI) == []
+
+    # A later run with real coverage must still be able to find it, once
+    # the miss has aged out.
+    cfg2 = _sfx_cfg(
+        _session(text=_ft("https://search.ebscohost.com/x")),
+        ResolverCache(tmp_path, miss_ttl_s=0),
+    )
     assert lookup_fulltext_target(DOI, cfg2).url is not None
 
 

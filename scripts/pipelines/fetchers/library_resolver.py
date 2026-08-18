@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -92,9 +93,51 @@ class ResolverCache:
     per DOI on the first run after upgrading; cached from then on.
     """
 
-    def __init__(self, cache_dir: str | Path) -> None:
+    #: Seconds a *negative* answer stays believable. Positives never
+    #: expire — a library that holds a title today held it yesterday, and
+    #: a route that disappears costs one failed fetch, not a wrong
+    #: verdict. Misses are the opposite: the resolver keys on DOI, so a
+    #: journal reached through an aggregator answers empty for reasons
+    #: that have nothing to do with entitlement.
+    #:
+    #: This used to be "never cache a miss at all", after a live run
+    #: cached empties with no expiry and permanently skipped 15 *Journal
+    #: of Business Ethics* articles the user demonstrably had access to.
+    #: That fix worked but overshot: every miss was then re-queried on
+    #: every run forever, and with the browser pass now driven one
+    #: publisher at a time, the same fruitless lookups repeated once per
+    #: block — the single slowest thing in the pre-flight, on a queue
+    #: where misses outnumber hits.
+    #:
+    #: A week is the compromise. Long enough that a ten-block browser
+    #: session, or a day of re-runs, asks once; short enough that a miss
+    #: cannot outlive a subscription change by much.
+    #:
+    #: The recovery path the old rule protected — gain access, re-run,
+    #: get it — is preserved by `enrich_pdfs.py --refresh-resolver-cache`,
+    #: which sets this to 0 for one run and re-asks every miss while
+    #: keeping known routes. That flag exists because the original
+    #: incident report named the real problem precisely: clearing the
+    #: cache meant deleting a directory that also holds the PDF cache and
+    #: both Chromium profiles. A TTL without an escape hatch would have
+    #: reintroduced that, slower.
+    miss_ttl_s: float = 7 * 24 * 3600
+
+    #: Writes go through on every `put`, and deliberately so. Batching
+    #: them was tried and reverted: serialising the whole dict costs
+    #: ~5-10 ms against ~400 ms of network per item, so the saving is
+    #: ~2% of pre-flight wall time — not worth a cache that loses its
+    #: tail when a run is interrupted, which is exactly when the next
+    #: run most needs it. The write is atomic (tmp + replace) so a
+    #: process killed mid-write leaves the previous file intact rather
+    #: than a truncated one.
+
+    def __init__(self, cache_dir: str | Path,
+                 miss_ttl_s: float | None = None) -> None:
         self.path = Path(cache_dir) / "resolver_cache.json"
         self._data: dict[str, dict] = {}
+        if miss_ttl_s is not None:
+            self.miss_ttl_s = miss_ttl_s
         if self.path.exists():
             try:
                 self._data = json.loads(self.path.read_text())
@@ -103,9 +146,21 @@ class ResolverCache:
                 self._data = {}
 
     def get(self, key: str) -> list[FulltextTarget] | None:
+        """Cached answer, or None when this DOI must be asked about.
+
+        Three outcomes, and the caller depends on telling them apart:
+        a list of targets (known route), an empty list (asked recently,
+        no route — do not ask again yet), and None (never asked, or the
+        miss has aged out).
+        """
         entry = self._data.get(key)
         if not entry or "targets" not in entry:
             return None
+        miss_at = entry.get("miss_at")
+        if miss_at is not None:
+            if time.time() - float(miss_at) > self.miss_ttl_s:
+                return None
+            return []
         out = []
         for raw in entry["targets"]:
             target = FulltextTarget.from_cache_dict(raw)
@@ -115,10 +170,25 @@ class ResolverCache:
 
     def put(self, key: str, targets: list[FulltextTarget]) -> None:
         self._data[key] = {"targets": [t.as_cache_dict() for t in targets]}
-        # Best-effort write — don't crash the pipeline on a filesystem hiccup.
+        self._write()
+
+    def put_miss(self, key: str) -> None:
+        """Record that the resolver answered, with nothing.
+
+        Timestamped, unlike a positive, because that is the whole basis
+        on which it is allowed to be forgotten.
+        """
+        self._data[key] = {"targets": [], "miss_at": time.time()}
+        self._write()
+
+    def _write(self) -> None:
+        # Best-effort write — don't crash the pipeline on a filesystem
+        # hiccup. Losing a cache entry costs one repeated query.
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps(self._data, indent=1))
+            tmp = self.path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(self._data, indent=1))
+            tmp.replace(self.path)
         except Exception as e:
             logger.debug("ResolverCache write failed: %s", e)
 
@@ -183,6 +253,8 @@ class LibraryResolverConfig:
 def load_from_config(
     session: requests.Session,
     cache_dir: str | Path | None = None,
+    *,
+    miss_ttl_s: float | None = None,
 ) -> LibraryResolverConfig | None:
     """Build a config from `[library]` in config.toml.
 
@@ -235,7 +307,7 @@ def load_from_config(
         resolver=resolver,
         additional_resolvers=additional,
         session=session,
-        cache=ResolverCache(cache_dir) if cache_dir else None,
+        cache=ResolverCache(cache_dir, miss_ttl_s) if cache_dir else None,
         priority=priority,
     )
 
@@ -382,8 +454,14 @@ def _query_one(
     # setup keeps writing exactly the cache entries it always has.
     if resolver_id and targets:
         targets = [replace(t, resolver_name=label) for t in targets]
-    if cfg.cache is not None and targets:
-        cfg.cache.put(key, targets)
+    if cfg.cache is not None:
+        if targets:
+            cfg.cache.put(key, targets)
+        else:
+            # An answer, and answers are worth remembering — for a while.
+            # See `ResolverCache.miss_ttl_s` for why this is time-boxed
+            # rather than permanent, and why it is no longer discarded.
+            cfg.cache.put_miss(key)
     return targets
 
 

@@ -29,6 +29,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of 1990-onward articles and **none** older. That is a back-file
   entitlement gap, not a failure — pre-1990 Wiley is a browser/EBSCO job.
 
+### Added
+
+- **`--refresh-resolver-cache`** on `enrich_pdfs.py` — re-ask the link
+  resolver about items it previously reported no route for, keeping
+  cached routes. The supported way to act on "I just gained access to
+  this title", and the escape hatch that makes caching misses safe.
+
+### Changed
+
+- **Resolver misses are now cached for a week instead of never.** An
+  empty resolver answer used to be discarded, so every item the library
+  had no route for was re-queried on every run — and once the browser
+  pass was driven one publisher at a time, the same fruitless lookups
+  repeated once per block. Measured on a live library: the cache held
+  943 entries and every one was a positive, because misses were dropped
+  by construction.
+
+  Misses are now stored with a timestamp and forgotten after
+  `ResolverCache.miss_ttl_s` (7 days). Positives still never expire. The
+  reason misses were dropped in the first place stands, and is why this
+  is time-boxed rather than permanent: the resolver keys on DOI, so a
+  journal reached through an aggregator answers empty for reasons that
+  have nothing to do with entitlement, and a live run once skipped 15
+  *Journal of Business Ethics* articles the user demonstrably had access
+  to. That incident's real complaint — that clearing the cache meant
+  deleting a directory holding the PDF cache and both Chromium profiles
+  — is answered by `--refresh-resolver-cache` rather than by refusing to
+  cache at all.
+
+  Cache writes are now atomic (temp file + replace), so a run killed
+  mid-write leaves the previous cache intact rather than truncated.
+  Batching those writes was tried and reverted: it saves ~2% of
+  pre-flight wall time and costs the cache its tail whenever a run is
+  interrupted, which is when the next run most needs it.
+
 ### Fixed
 
 - **`--plan` attached PDFs.** It is documented as "classify items and

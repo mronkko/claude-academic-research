@@ -112,15 +112,29 @@ def test_a_found_target_is_returned(tmp_path) -> None:
 
 # --- negative caching -------------------------------------------------
 
-def test_empty_results_are_not_cached(tmp_path) -> None:
-    """A DOI-keyed miss was written to `resolver_cache.json` with no expiry,
-    so a soft false negative became permanent — and clearing it meant
-    deleting a directory that also holds the PDF cache and both
-    Chromium profiles."""
+def test_an_empty_answer_is_cached_but_only_for_a_while(tmp_path) -> None:
+    """A miss is worth remembering and must not be permanent.
+
+    Originally these were not cached at all, because a DOI-keyed miss
+    written with no expiry turned a soft false negative into a permanent
+    one — and clearing it meant deleting a directory that also holds the
+    PDF cache and both Chromium profiles. That fix overshot: every miss
+    was then re-asked on every run, and once the browser pass was driven
+    one publisher at a time the same fruitless lookups repeated once per
+    block.
+
+    So: cached, timestamped, and forgotten after `miss_ttl_s`. An empty
+    list means "asked recently, no route"; None means "ask".
+    """
     cfg = _cfg(tmp_path, response=(200, _XML_NO_TARGETS))
     lookup_fulltext_target(DOI, cfg)
 
-    assert cfg.cache.get(DOI) is None, "a negative verdict was persisted"
+    assert cfg.cache.get(DOI) == [], "the miss was not remembered at all"
+
+    from fetchers.library_resolver import ResolverCache
+    assert ResolverCache(tmp_path, miss_ttl_s=0).get(DOI) is None, (
+        "an expired miss must read as unknown, not as a negative verdict"
+    )
 
 
 def test_positive_results_are_still_cached(tmp_path) -> None:
@@ -134,8 +148,14 @@ def test_positive_results_are_still_cached(tmp_path) -> None:
     assert [t.url for t in cached]
 
 
-def test_a_later_run_re_queries_after_an_empty_result(tmp_path) -> None:
-    """The user's actual recovery path: gain access, re-run, get it."""
+def test_a_later_run_re_queries_once_the_miss_expires(tmp_path) -> None:
+    """The user's actual recovery path: gain access, re-run, get it.
+
+    Now time-boxed rather than immediate, which is the price of not
+    re-asking on every run. `--refresh-resolver-cache` sets the TTL to
+    zero for one run and is the supported way to take it immediately;
+    this pins that the mechanism underneath it works.
+    """
     cfg = _cfg(tmp_path, response=(200, _XML_NO_TARGETS))
     assert lookup_fulltext_target(DOI, cfg).url is None
 
@@ -144,6 +164,12 @@ def test_a_later_run_re_queries_after_an_empty_result(tmp_path) -> None:
     resp.content = _XML_WITH_TARGET.encode()
     cfg.session.get.return_value = resp
 
+    # Within the TTL the cached miss stands — no query, no result.
+    assert lookup_fulltext_target(DOI, cfg).url is None
+
+    # Expired (what --refresh-resolver-cache does): asked again, found.
+    from fetchers.library_resolver import ResolverCache
+    cfg.cache = ResolverCache(tmp_path, miss_ttl_s=0)
     assert lookup_fulltext_target(DOI, cfg).url is not None
 
 
