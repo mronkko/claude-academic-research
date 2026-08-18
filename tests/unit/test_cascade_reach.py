@@ -135,3 +135,45 @@ def test_plan_mode_builds_no_fetching_sources() -> None:
     # And the flag it already honoured is still honoured.
     assert "args.dry_run" in src
     argparse.Namespace(plan=True)  # documents the shape the gate reads
+
+
+# --- 4. --publisher must not pay for publishers it discards ----------
+
+
+def test_publisher_filter_skips_the_resolver_for_other_publishers() -> None:
+    """`--publisher wiley` used to ask the link resolver about every
+    handler-matched item in the queue and then throw all but wiley's
+    away: the filter on `items_by_pub` runs *after* the classification
+    loop. On a live 1,251-item queue that was ~830 items at two Alma
+    round-trips each, to keep 162 — and ten publisher blocks paid it ten
+    times.
+
+    Pinned structurally: the skip must sit before the `lookup_dual` call,
+    because that call is the expensive half. A refactor that moves the
+    guard below it restores the cost silently — nothing would fail, the
+    run would just be slow again, which is exactly how this survived.
+    """
+    import inspect
+
+    import enrich_pdfs
+
+    src = inspect.getsource(enrich_pdfs._run_browser_in_process)
+    guard = "if args.publisher and direct.name != args.publisher:"
+    assert guard in src, "the --publisher early skip is gone"
+    assert src.index(guard) < src.index("dual = lookup_dual("), (
+        "the --publisher skip must precede lookup_dual, or the resolver "
+        "is still queried for items this run will discard"
+    )
+
+
+def test_the_preflight_reports_progress() -> None:
+    """It is a serial loop over hundreds of items with two network calls
+    apiece. Before this it printed one header and then nothing, which a
+    user correctly read as a hang."""
+    import inspect
+
+    import enrich_pdfs
+
+    assert enrich_pdfs._PREFLIGHT_TICK > 0
+    src = inspect.getsource(enrich_pdfs._run_browser_in_process)
+    assert "checked % _PREFLIGHT_TICK" in src

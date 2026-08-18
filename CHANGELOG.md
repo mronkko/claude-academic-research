@@ -41,6 +41,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what answers "what will this ask of me" — but a preview that mutates
   is not a preview, and users are told to run this one first.
 
+- **`--publisher` paid the resolver bill for every other publisher.**
+  The filter on `items_by_pub` runs *after* the classification loop, so
+  a single-publisher run still asked the link resolver about every
+  handler-matched item and discarded all but one publisher's. On a live
+  1,251-item queue that was ~830 items at two Alma round-trips each to
+  keep 162 — and running the ten publisher blocks in sequence paid it
+  ten times over. The skip now happens before `lookup_dual`, which is
+  safe precisely because the post-loop filter drops those items anyway.
+
+- **The resolver pre-flight looked like a hang.** It printed one
+  "Checking library access via …" header and then nothing while it made
+  up to two sequential network calls per item — many minutes of silence
+  on a large queue, with no way to tell work from a stall. It now says
+  how many items it will check up front and prints a progress line with
+  a rate every 50 resolver queries.
+
 - **Legacy imprint DOI prefixes matched no handler.** Publishers absorb
   each other and the acquired prefixes keep resolving on the new owner's
   platform, under the same URL shape the handler already builds — so one

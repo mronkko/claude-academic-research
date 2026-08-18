@@ -61,6 +61,7 @@ import os
 import re
 import sys
 import threading
+import time
 from collections.abc import Collection
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -756,6 +757,12 @@ def _log_browser_failure(
 # ---------------------------------------------------------------------
 # Failure detail + the single attach path
 # ---------------------------------------------------------------------
+
+#: How often the resolver pre-flight prints a progress line. The loop is
+#: serial and can run many minutes on a large queue; before this it
+#: printed one header and then nothing, which reads as a hang. 50 is
+#: often enough to see movement without turning the log into a scroll.
+_PREFLIGHT_TICK = 50
 
 _DETAIL_MAX = 300
 
@@ -2079,6 +2086,19 @@ def _run_browser_in_process(
             f"\nChecking library access via {resolver_cfg.describe()}...",
             flush=True,
         )
+        print(
+            f"  Up to {len(to_process)} items, two resolver queries each, "
+            f"and they run one at a time — this is the quiet part of the "
+            f"run. Progress every {_PREFLIGHT_TICK}.",
+            flush=True,
+        )
+
+    # Counter for that progress line. Only items that actually reach the
+    # resolver are counted, so the number means "queries made", not
+    # "items skimmed" — a run whose queue is mostly no-handler items ends
+    # far below `len(to_process)` and that is the honest figure.
+    checked = 0
+    t_preflight = time.monotonic()
 
     for zot_item in to_process:
         item_data = zot_item.get("data", {})
@@ -2203,8 +2223,26 @@ def _run_browser_in_process(
         # — Case 2, divert, and no 30-second paywall timeout. Three items
         # in one 97-item run hit exactly that before this existed.
         #
+        # `--publisher` filters `items_by_pub` *after* this loop, which
+        # meant a single-publisher run still asked the resolver about
+        # every other publisher's items and threw the answers away: ~830
+        # handler-matched items, two Alma round-trips each, to keep 162.
+        # Ten publisher blocks paid that ten times over. Skipping here is
+        # safe precisely because the post-loop filter discards these
+        # items regardless — including `connector_upfront`, which
+        # `--publisher` empties outright.
+        if args.publisher and direct.name != args.publisher:
+            continue
+
         # See `classify_direct_route` for why Case 1 is split in two.
         if resolver_cfg is not None:
+            checked += 1
+            if checked % _PREFLIGHT_TICK == 0:
+                rate = checked / max(time.monotonic() - t_preflight, 1e-6)
+                print(
+                    f"  … {checked} checked ({rate:.1f}/s)",
+                    flush=True,
+                )
             dual = lookup_dual(
                 doi, resolver_cfg,
                 issn=entry["issn"], pub_date=entry["pub_date"],
