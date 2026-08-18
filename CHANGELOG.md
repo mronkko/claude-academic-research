@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-08-18
+
+A reliability release, written almost entirely from one long live
+session against a 1,954-item library. Nearly every entry is the same
+defect wearing a different hat: **the pipeline reporting a non-attempt
+as an answer.** A source that was never selected, a prefix that matched
+no handler, a click that landed on a close button, a probe that timed
+out waiting for a download the page had already refused — each one
+surfaced as "no PDF for this article", which is the one thing none of
+them meant.
+
+The user-visible result is that retrieval both finds more and lies less.
+Wiley TDM now runs in the default cascade, legacy imprints reach their
+current publisher, APA works unattended (its block went from failing
+every item to ~4s each), and a browser failure no longer defaults to the
+verdict that licenses removing an article from a review.
+
+### Added
+
+- **`scripts/dev/probe_browser_handler.py`** — drive one browser handler
+  against a few DOIs, with no Zotero in the loop:
+
+      uv run scripts/dev/probe_browser_handler.py --handler apa \
+          --doi 10.1037/0882-7974.12.2.376 --step --keep-open
+
+  Debugging a handler through `enrich_pdfs.py` costs a Zotero fetch of
+  the whole key list, an attachment scan and a resolver pre-flight over
+  the residual before the browser opens — minutes of unrelated work per
+  attempt, and four rounds of APA fixes were paid for at that rate. The
+  probe reuses the real `launch_context` and the real handler classes,
+  so it exercises what the pipeline runs; only the item queue and the
+  upload are missing. `--step` prints the page URL and title after each
+  item, which is the thing that kept mattering — three separate APA bugs
+  were all "the handler is on a different page than it thinks it is" —
+  and `--keep-open` leaves the failing page on screen with its session.
+  It reaches `ebsco` too, which is kept out of the handler registry.
+
+- **`--refresh-resolver-cache`** on `enrich_pdfs.py` — re-ask the link
+  resolver about items it previously reported no route for, keeping
+  cached routes. The supported way to act on "I just gained access to
+  this title", and the escape hatch that makes caching misses safe.
+
+
 ### Changed
 
 - **A browser or Connector failure now reads as ACCESS_BLOCKED, not
@@ -73,33 +116,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of 1990-onward articles and **none** older. That is a back-file
   entitlement gap, not a failure — pre-1990 Wiley is a browser/EBSCO job.
 
-### Added
-
-- **`scripts/dev/probe_browser_handler.py`** — drive one browser handler
-  against a few DOIs, with no Zotero in the loop:
-
-      uv run scripts/dev/probe_browser_handler.py --handler apa \
-          --doi 10.1037/0882-7974.12.2.376 --step --keep-open
-
-  Debugging a handler through `enrich_pdfs.py` costs a Zotero fetch of
-  the whole key list, an attachment scan and a resolver pre-flight over
-  the residual before the browser opens — minutes of unrelated work per
-  attempt, and four rounds of APA fixes were paid for at that rate. The
-  probe reuses the real `launch_context` and the real handler classes,
-  so it exercises what the pipeline runs; only the item queue and the
-  upload are missing. `--step` prints the page URL and title after each
-  item, which is the thing that kept mattering — three separate APA bugs
-  were all "the handler is on a different page than it thinks it is" —
-  and `--keep-open` leaves the failing page on screen with its session.
-  It reaches `ebsco` too, which is kept out of the handler registry.
-
-- **`--refresh-resolver-cache`** on `enrich_pdfs.py` — re-ask the link
-  resolver about items it previously reported no route for, keeping
-  cached routes. The supported way to act on "I just gained access to
-  this title", and the escape hatch that makes caching misses safe.
-
-### Changed
-
 - **Resolver misses are now cached for a week instead of never.** An
   empty resolver answer used to be discarded, so every item the library
   had no route for was re-queried on every run — and once the browser
@@ -125,6 +141,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Batching those writes was tried and reverted: it saves ~2% of
   pre-flight wall time and costs the cache its tail whenever a run is
   interrupted, which is when the next run most needs it.
+
 
 ### Fixed
 
