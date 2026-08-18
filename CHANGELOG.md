@@ -84,6 +84,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An unanswered cookie banner was reported as "no entitlement".** On
+  a cold browser profile every APA item failed after 88s with "your
+  institution likely has no entitlement to this article", for articles
+  the user could download by hand. The cause was OneTrust: PsycNET
+  appears to wait on a consent decision before its access check will run
+  at all, so CHECK ACCESS clicked cleanly and the page never moved.
+
+  The handler removes the banner from the DOM so it cannot intercept
+  clicks, and **deliberately does not answer it**. Consent under
+  GDPR/ePrivacy has to be an act of the data subject; a tool clicking
+  "Accept All Cookies" and persisting that into a browser profile is not
+  obtaining consent, it is manufacturing a record of one — for every
+  user who installs the plugin. So `setup()` now asks the human to
+  answer the banner first (accept or reject, either records a decision),
+  and the failure path says exactly that instead of guessing at
+  entitlement. The choice persists in the profile and covers every later
+  APA item. A test pins the refusal, because the pressure to flip it is
+  real: accepting would plainly make retrieval work.
+
+  Also fixed: `_dismiss_cookie_banner` ran once, before the `/fulltext/`
+  probe, and that probe navigates — reloading the document and bringing
+  the banner back before every click that mattered. It now runs again at
+  the access check and on the institutional-access page.
+
 - **APA's post-"Check Access" wait matched the page it was already on.**
   `_run_access_check` waited for `_SSO_HOST in url or "psycnet.apa.org"
   in url` — and the browser was already on

@@ -163,3 +163,59 @@ def test_the_access_path_is_not_used_as_a_post_probe_branch() -> None:
         "download() branches on _ACCESS_PATH again — the /fulltext/ probe "
         "redirects to /record/<id>, so that branch cannot fire"
     )
+
+
+# --- 5. consent is the user's act, never the tool's -------------------
+
+
+def test_the_handler_never_accepts_cookies_on_the_users_behalf() -> None:
+    """Consent under GDPR/ePrivacy has to come from the data subject.
+
+    A tool that clicks "Accept All Cookies" and persists that into a
+    browser profile is not obtaining consent; it is manufacturing a
+    record of one, for every user who installs the plugin. The banner is
+    removed from the DOM so it cannot intercept clicks, and answered by
+    a human during `setup()` or not at all.
+
+    Pinned as a refusal because the practical pressure to flip it is
+    real: PsycNET appears to gate its access check on OneTrust
+    resolving, so accepting would plainly make retrieval work.
+    """
+    import inspect
+
+    # Match the *controls*, not the words. The phrase "Accept All
+    # Cookies" appears in this module's prose explaining why it is not
+    # clicked, so a naive string search flags the explanation itself.
+    src = inspect.getsource(apa_mod).lower()
+    for selector in (
+        "onetrust-accept-btn",
+        "onetrust-pc-btn-handler",
+        "accept-recommended-btn",
+        "ot-pc-refuse-all",
+    ):
+        assert selector not in src, (
+            f"the handler appears to answer the consent banner itself "
+            f"({selector!r}); consent must be the user's act"
+        )
+
+
+def test_an_unanswered_banner_is_its_own_diagnosis() -> None:
+    """"No entitlement" was the wrong thing to tell a user whose real
+    problem was an unanswered consent dialog — they had access to both
+    test articles and could download either one by hand."""
+    import inspect
+
+    src = inspect.getsource(apa_mod.ApaHandler.download)
+    assert "no-consent" in src
+    # Phrase-matching across an f-string that the formatter may rewrap is
+    # brittle; match the two halves that carry the meaning.
+    assert "cookie" in src and "consent" in src
+    assert "will not answer it for you" in src
+
+
+def test_setup_asks_for_the_cookie_decision_first() -> None:
+    """`setup()` is the one moment a human is guaranteed to be present,
+    so it is the only place the question can honestly be asked."""
+    hint = apa_mod.ApaHandler.setup_hint.lower()
+    assert "cookie" in hint
+    assert hint.index("cookie") < hint.index("sign in")

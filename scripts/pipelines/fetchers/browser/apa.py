@@ -91,7 +91,17 @@ class ApaHandler(PublisherHandler):
     landing_timeout_ms: int = 20000
 
     setup_hint = (
-        "EXPECT TO SIGN IN ONCE PER RUN. Unlike the Cloudflare-gated\n"
+        "FIRST: answer the cookie banner at the bottom of the page.\n"
+        "Accept or reject — either records a decision, and either is\n"
+        "fine for retrieval. This plugin deliberately will not answer it\n"
+        "for you: consent has to be your act, not the tool's. It matters\n"
+        "practically as well as legally, because PsycNET appears to wait\n"
+        "on that decision before its access check will run at all — a\n"
+        "profile where the banner is unanswered clicks CHECK ACCESS and\n"
+        "then sits there. Your answer persists in this browser profile\n"
+        "and covers every later APA item.\n"
+        "\n"
+        "THEN: EXPECT TO SIGN IN ONCE PER RUN. Unlike the Cloudflare-gated\n"
         "publishers, whose clearance cookie is saved in the browser\n"
         "profile, APA's session cookie does not survive closing the\n"
         "browser — a fresh run starts signed out even though the last\n"
@@ -181,6 +191,20 @@ class ApaHandler(PublisherHandler):
                         f"one — check the saved screenshot before assuming "
                         f"the selectors are stale"
                     )
+                if state == "no-consent":
+                    raise RuntimeError(
+                        f"APA's access check for record {record_id} was "
+                        f"clicked but the page never moved, and the cookie "
+                        f"consent banner was still showing — no choice is "
+                        f"recorded in this browser profile, and PsycNET "
+                        f"appears to wait on OneTrust before running the "
+                        f"check. Answer the banner yourself in the browser "
+                        f"window (accept or reject — either records a "
+                        f"decision) and re-run; the choice persists in the "
+                        f"profile and covers every later APA item. This "
+                        f"plugin will not answer it for you: consent has to "
+                        f"be your act, not the tool's."
+                    )
                 if state == "no-check-access":
                     raise RuntimeError(
                         f"'Get Access' opened but the overlay offered no "
@@ -249,21 +273,46 @@ class ApaHandler(PublisherHandler):
 # ---------------------------------------------------------------------------
 
 
-async def _dismiss_cookie_banner(page) -> None:
-    """Remove the OneTrust consent banner from the DOM.
+async def _cookie_banner_present(page) -> bool:
+    """True when OneTrust is still asking, i.e. no choice is recorded."""
+    try:
+        return bool(await page.evaluate(
+            "() => !!document.querySelector('#onetrust-banner-sdk')"
+        ))
+    except Exception:
+        return False
 
-    It is `position: fixed` at the maximum z-index, so it sits over
-    anything near the viewport edge and silently eats clicks meant for
-    the access controls. Removed rather than accepted: dismissing an
-    overlay that blocks automation is not the same as consenting to
-    tracking on the user's behalf, and the download needs neither.
+
+async def _dismiss_cookie_banner(page) -> bool:
+    """Get the consent banner out of the way of the clicks. Never answer it.
+
+    Returns True if the banner was there — which is itself a diagnosis,
+    because a browser profile whose owner has answered OneTrust does not
+    show it again.
+
+    **This removes the element and does not accept.** Consent under
+    GDPR/ePrivacy has to be an act of the data subject; a tool clicking
+    "Accept All Cookies" and persisting that into a profile is not
+    obtaining consent, it is manufacturing a record of one, on behalf of
+    every user who installs this plugin. So the banner is answered by a
+    human during `setup()` or not at all.
+
+    The cost of that is real and worth stating: APA appears to gate its
+    own access-check script on OneTrust *resolving*, so on a profile
+    where nobody has answered, CHECK ACCESS clicks cleanly and then does
+    nothing. Deleting the element does not substitute for a decision.
+    That is why the failure path below names the banner instead of
+    guessing at entitlement — the fix is a human answering it once, and
+    the choice then persists in the profile for every later run.
     """
+    present = await _cookie_banner_present(page)
     try:
         await page.evaluate(
             "() => document.querySelector('#onetrust-consent-sdk')?.remove()"
         )
     except Exception:
         pass
+    return present
 
 
 #: Read in one `evaluate` so the URL and the links are sampled from the
@@ -455,6 +504,10 @@ async def _run_access_check(page) -> str:
       - ``"no-access-control"`` — no "Get Access" on the page at all.
       - ``"no-check-access"``   — overlay opened, but offered no access
                                   check (usually purchase-only).
+      - ``"no-consent"``        — CHECK ACCESS clicked, page never
+                                  moved, and the consent banner was up:
+                                  APA's own script is waiting on a
+                                  decision only a human can make.
     """
     # Again, because the caller's dismissal happened before the
     # `/fulltext/` probe — and that probe navigates (to `/fulltext/`,
@@ -463,7 +516,7 @@ async def _run_access_check(page) -> str:
     # banner present, on a cold profile, however diligently it was
     # removed earlier. A live cold-profile probe failed both items and
     # its screenshot showed the banner still there at the end.
-    await _dismiss_cookie_banner(page)
+    banner_was_up = await _dismiss_cookie_banner(page)
 
     opened = await try_click(
         page,
@@ -523,7 +576,15 @@ async def _run_access_check(page) -> str:
         current = page.url or ""
     except Exception:
         pass
-    return "sso" if _SSO_HOST in current else "granted"
+    if _SSO_HOST in current:
+        return "sso"
+    if _ACCESS_PATH in current.lower():
+        return "granted"
+    # CHECK ACCESS was clicked and the page did not move. When the
+    # consent banner was up, that is the likeliest reason: APA's access
+    # check does not run until OneTrust resolves, and nobody has
+    # answered it in this profile.
+    return "no-consent" if banner_was_up else "granted"
 
 
 async def _click_pdf_control(page, out: Path) -> bool:
