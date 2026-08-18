@@ -66,6 +66,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--publisher` did not gate the Pass 2 API retry.** The
+  `--publisher` skip added earlier sat *below* the retry in the
+  classification loop, so a `--publisher apa` run still called Wiley
+  TDM, Elsevier and Springer for every item whose resolved host matched
+  them. In practice that meant an APA-only run spending its time inside
+  `wiley_tdm`'s rate-limit sleep, re-asking Wiley about pre-2000
+  articles it had already refused — none of which APA could ever have
+  wanted. Handler routing and the `--publisher` bail-out now happen
+  before both the retry and the resolver lookup, and the guard test pins
+  the position against both rather than just one.
+
 - **A source-restricted run reported items it never asked about.**
   `--sources wiley` over a 1,133-item queue printed `no PDF` for ~970
   Taylor & Francis, BMJ, Cambridge and Sage records and wrote a

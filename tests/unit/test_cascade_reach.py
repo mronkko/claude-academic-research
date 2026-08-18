@@ -158,12 +158,22 @@ def test_publisher_filter_skips_the_resolver_for_other_publishers() -> None:
     import enrich_pdfs
 
     src = inspect.getsource(enrich_pdfs._run_browser_in_process)
-    guard = "if args.publisher and direct.name != args.publisher:"
+    guard = "if args.publisher and ("
     assert guard in src, "the --publisher early skip is gone"
-    assert src.index(guard) < src.index("dual = lookup_dual("), (
-        "the --publisher skip must precede lookup_dual, or the resolver "
-        "is still queried for items this run will discard"
-    )
+
+    # It must precede *both* expensive things in the loop. Placing it
+    # below the Pass 2 API retry is how a `--publisher apa` run ended up
+    # sitting in `wiley_tdm`'s rate-limit sleep, re-asking Wiley about
+    # pre-2000 articles it had already refused — visible only because a
+    # user interrupted it and read the traceback.
+    for costly, why in (
+        ("retry_result = src.fetch_pdf(", "the Pass 2 API retry"),
+        ("dual = lookup_dual(", "the link resolver"),
+    ):
+        assert src.index(guard) < src.index(costly), (
+            f"the --publisher skip must precede {why}, or this run pays "
+            f"for items it will discard"
+        )
 
 
 def test_the_preflight_reports_progress() -> None:

@@ -2143,6 +2143,29 @@ def _run_browser_in_process(
         if resolution and resolution.url:
             resolved_host = urlparse(resolution.url).hostname or ""
 
+        # Route to a handler *before* any network work below, so a
+        # `--publisher` run can bail out immediately. The Pass 2 API
+        # retry used to sit above this and therefore ran for every item
+        # regardless: a `--publisher apa` run spent its time inside
+        # `wiley_tdm`'s rate-limit sleep, re-asking Wiley about pre-2000
+        # articles it had already refused, none of which APA could ever
+        # have wanted. The earlier `--publisher` guard sat *below* the
+        # retry and so never saw them.
+        if resolved_host:
+            direct = resolve_by_host(resolved_host, direct_handlers)
+        if direct is None:
+            direct = resolve_by_doi(doi, direct_handlers)
+
+        if direct and direct.name in no_access:
+            direct = None
+
+        if args.publisher and (
+                direct is None or direct.name != args.publisher):
+            # Not this block's publisher. `--publisher` empties
+            # `connector_upfront` after the loop, so there is nothing
+            # more this item could contribute to the run.
+            continue
+
         # Pass 2 API retry: if the resolved host matches a
         # prefix-filtering API source (Wiley TDM / Elsevier / Springer),
         # invoke it with `bypass_prefix_filter=True`. Catches DOIs
@@ -2204,14 +2227,6 @@ def _run_browser_in_process(
             if retry_result is not None:
                 continue
 
-        if resolved_host:
-            direct = resolve_by_host(resolved_host, direct_handlers)
-        if direct is None:
-            direct = resolve_by_doi(doi, direct_handlers)
-
-        if direct and direct.name in no_access:
-            direct = None
-
         if direct is None:
             no_handler_count += 1
             connector_upfront.append(entry)
@@ -2240,9 +2255,6 @@ def _run_browser_in_process(
         # safe precisely because the post-loop filter discards these
         # items regardless — including `connector_upfront`, which
         # `--publisher` empties outright.
-        if args.publisher and direct.name != args.publisher:
-            continue
-
         # See `classify_direct_route` for why Case 1 is split in two.
         if resolver_cfg is not None:
             checked += 1
