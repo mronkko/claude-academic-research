@@ -2036,8 +2036,18 @@ def _run_browser_in_process(
     # prefix Pass 1 wouldn't have matched, we call the source with
     # `bypass_prefix_filter=True` before resorting to the browser.
     # Skipped in connector_only mode (targeted validation).
+    #: `--plan` must not build this list. The retry below downloads and
+    #: attaches, and it honours `--dry-run` but never checked `--plan` —
+    #: so a flag documented as "classify and print the queue, then exit
+    #: without opening a browser" silently wrote PDFs into the user's
+    #: library. Caught by running `--plan` on a 1,251-item queue and
+    #: watching it attach Wiley files. The resolver lookups a few lines
+    #: down *are* deliberate under `--plan` (they answer "what will this
+    #: ask of me"); fetching is not, because a preview that mutates is
+    #: not a preview.
     pass2_api_sources: list = []
-    if not connector_only and session is not None and config is not None:
+    if (not connector_only and session is not None and config is not None
+            and not getattr(args, "plan", False)):
         try:
             pass2_api_sources = [
                 s for s in fetchers.pdf_sources(session, config)

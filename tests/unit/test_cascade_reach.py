@@ -102,3 +102,36 @@ def test_the_wiley_api_source_and_its_browser_handler_agree() -> None:
 
     handler = next(h for h in all_handlers() if h.name == "wiley")
     assert set(handler.doi_prefixes) == set(_WILEY_PREFIXES)
+
+
+# --- 3. --plan does not mutate the library ---------------------------
+
+
+def test_plan_mode_builds_no_fetching_sources() -> None:
+    """`--plan` is documented as "classify items and print the publisher
+    queue, then exit without opening a browser". It also ran the Pass 2
+    API retry, which downloads and attaches — the retry checked
+    `--dry-run` but never `--plan`. Caught live: a `--plan` invocation on
+    a 1,251-item queue attached Wiley PDFs to a real library.
+
+    The retry is gated on `pass2_api_sources` being non-empty, so the
+    refusal is pinned there: under `--plan` the list must stay empty and
+    nothing downstream can fetch. The resolver lookups it performs are
+    deliberate and stay — they are what answers "what will this ask of
+    me" — but a preview that writes is not a preview.
+    """
+    import argparse
+    import inspect
+
+    import enrich_pdfs
+
+    src = inspect.getsource(enrich_pdfs._run_browser_in_process)
+    head = src.split("pass2_api_sources: list = []")[1].split("\n\n")[0]
+    assert 'getattr(args, "plan", False)' in head, (
+        "the Pass 2 API retry source list is built without consulting "
+        "--plan; a preview would fetch and attach again"
+    )
+
+    # And the flag it already honoured is still honoured.
+    assert "args.dry_run" in src
+    argparse.Namespace(plan=True)  # documents the shape the gate reads

@@ -31,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--plan` attached PDFs.** It is documented as "classify items and
+  print the publisher queue — then exit without opening a browser", and
+  it does stop before the browser. But the Pass 2 API retry runs first,
+  and that retry downloads and attaches: it checked `--dry-run` and
+  never checked `--plan`. Caught by running `--plan` over a 1,251-item
+  queue and watching it write Wiley files into a real library. The
+  resolver lookups `--plan` performs are deliberate and stay — they are
+  what answers "what will this ask of me" — but a preview that mutates
+  is not a preview, and users are told to run this one first.
+
 - **Legacy imprint DOI prefixes matched no handler.** Publishers absorb
   each other and the acquired prefixes keep resolving on the new owner's
   platform, under the same URL shape the handler already builds — so one
