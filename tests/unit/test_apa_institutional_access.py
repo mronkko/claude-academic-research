@@ -126,11 +126,40 @@ def test_the_handler_recognises_the_access_path() -> None:
     assert apa_mod._ACCESS_PATH in url
 
 
-def test_the_access_branch_precedes_the_get_access_check() -> None:
-    """Order is the fix. Running `_run_access_check` first is what
-    produced "markup has changed" for a page that had just said access
-    was verified."""
+def test_the_signed_link_is_tried_before_the_bare_fulltext_url() -> None:
+    """Ordering, and a correction to an earlier attempt at this fix.
+
+    That attempt keyed the institutional-access branch off `page.url`
+    straight after the `/fulltext/` probe — but measured live, a bare
+    `/fulltext/<id>.pdf` redirects to `/record/<id>`, not to the access
+    page, so the branch was unreachable and shipped as dead code.
+
+    The access page is reached only *after* "Check Access" succeeds. So
+    `_download_from_access_page` belongs immediately after
+    `_run_access_check` returns, and must come before the retry of the
+    bare full-text URL — that URL cannot work alone, since the real one
+    carries a per-session `auth_id`.
+    """
     import inspect
 
     src = inspect.getsource(apa_mod.ApaHandler.download)
-    assert src.index("_ACCESS_PATH") < src.index("_run_access_check"), src
+    check = src.index("_run_access_check(page)")
+    signed = src.index("_download_from_access_page(page, out)")
+    retry = src.rindex("_download_from(page, fulltext_url, out)")
+    assert check < signed < retry, (
+        "the signed-link step must sit between the access check and the "
+        "bare full-text retry"
+    )
+
+
+def test_the_access_path_is_not_used_as_a_post_probe_branch() -> None:
+    """Guards the specific dead-code mistake, which cost a whole
+    debugging cycle: `_ACCESS_PATH` describes where "Check Access"
+    lands, never where the `/fulltext/` probe lands."""
+    import inspect
+
+    src = inspect.getsource(apa_mod.ApaHandler.download)
+    assert "_ACCESS_PATH" not in src, (
+        "download() branches on _ACCESS_PATH again — the /fulltext/ probe "
+        "redirects to /record/<id>, so that branch cannot fire"
+    )

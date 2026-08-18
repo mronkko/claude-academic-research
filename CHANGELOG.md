@@ -66,19 +66,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Every APA item failed on an entitled session.** On a JYU VPN run
-  the handler reported "No 'Get Access' control on the PsycNET page …
-  markup has changed" for all 133 items, while its own saved screenshot
-  read *"Your access to this content through Jyvaskylan yliopisto has
-  been verified!"*. `_FULLTEXT_URL` builds `/fulltext/<record_id>.pdf`,
-  but the real URL carries a per-session `auth_id`; the bare form
-  redirects to `/recordAccess/institutional/<record_id>`, which verifies
-  the institution and *then* renders a "Download PDF" link holding the
-  signed URL a few seconds later. The handler read the failed probe as
-  "not entitled" and ran its access check against that page — which of
-  course has no "Get Access" control — and blamed the markup. It now
-  recognises the access path, waits for the signed link, and downloads
-  from it. Verified against the live site.
+- **Every APA item failed on an entitled session** (superseding the
+  first attempt at this, which shipped as dead code). On a JYU VPN run
+  the handler reported "No 'Get Access' control … markup has changed"
+  for every item, while its own screenshot read *"Your access to this
+  content through Jyvaskylan yliopisto has been verified!"*.
+
+  Two causes, both established by driving the live site rather than
+  reading markup:
+
+  1. **The 4s wait for "Get Access" was too short.** PsycNET's record
+     page is a JS app that renders it as an `<a href="#">` about six
+     seconds after `domcontentloaded`. The timeout is now 20s, and the
+     message names the wait and points at the saved screenshot instead
+     of accusing APA of changing their HTML.
+  2. **`_FULLTEXT_URL` is not a complete URL.** The real one carries a
+     per-session `auth_id` (`/fulltext/<id>.pdf?auth_id=4168&…`) which
+     PsycNET mints into a "Download PDF" link on
+     `/recordAccess/institutional/<id>` after "Check Access" succeeds.
+     The handler now takes the link from there.
+
+  The first attempt keyed that second step off `page.url` immediately
+  after the bare `/fulltext/` probe. Measured live, that probe redirects
+  to `/record/<id>`, not to the access page — so the branch could never
+  fire. A test now pins that `download()` does not branch on the access
+  path there, and that the signed-link step sits between the access
+  check and the bare-URL retry.
 
 - **`--publisher` did not gate the Pass 2 API retry.** The
   `--publisher` skip added earlier sat *below* the retry in the

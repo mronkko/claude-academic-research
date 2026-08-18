@@ -449,13 +449,19 @@ def test_missing_get_access_control_is_reported_distinctly(
     tmp_path: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Third of the three formerly-identical failures: right page, no
-    control. Must not read like the SSO or the entitlement case."""
+    control. Must not read like the SSO or the entitlement case.
+
+    The wording changed after a live run showed the old message —
+    "PsycNET's landing markup has changed" — was actively misleading:
+    the selectors were right and the control simply had not rendered
+    yet. It now names the wait and points at the screenshot.
+    """
     page = _FakePsycnetPage(entitled=False, has_get_access=False)
     result = _run(ApaHandler(), page, tmp_path, Counter())
 
     assert result is None
     out = capsys.readouterr().out
-    assert "No 'Get Access' control" in out
+    assert "'Get Access' never appeared" in out
     assert "sso.apa.org" not in out
 
 

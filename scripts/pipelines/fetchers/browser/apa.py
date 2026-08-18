@@ -155,19 +155,6 @@ class ApaHandler(PublisherHandler):
             # a run is the normal case.
             if await _download_from(page, fulltext_url, out):
                 source_url = fulltext_url
-            elif _ACCESS_PATH in (page.url or "").lower():
-                # PsycNET bounced the bare `/fulltext/` URL to its
-                # institutional-access page. That is recognition, not
-                # refusal — the signed link appears there shortly.
-                signed = await _download_from_access_page(page, out)
-                if not signed:
-                    raise RuntimeError(
-                        f"PsycNET verified institutional access for record "
-                        f"{record_id} but never rendered a 'Download PDF' "
-                        f"link on {page.url}. Either the modal is still "
-                        f"loading after 25s or its markup has changed"
-                    )
-                source_url = signed
             else:
                 # Step 3: the access check. Its job is to turn an
                 # unentitled session into an entitled one; where it
@@ -185,9 +172,14 @@ class ApaHandler(PublisherHandler):
                     )
                 if state == "no-access-control":
                     raise RuntimeError(
-                        f"No 'Get Access' control on the PsycNET page for "
-                        f"record {record_id}. Either the page did not finish "
-                        f"rendering or PsycNET's landing markup has changed"
+                        f"'Get Access' never appeared on "
+                        f"{page.url} for record {record_id} within "
+                        f"{_GET_ACCESS_TIMEOUT_MS // 1000}s. Measured live, "
+                        f"PsycNET renders it as an <a href='#'> about six "
+                        f"seconds after domcontentloaded, so this is a "
+                        f"timing or routing problem before it is a markup "
+                        f"one — check the saved screenshot before assuming "
+                        f"the selectors are stale"
                     )
                 if state == "no-check-access":
                     raise RuntimeError(
@@ -197,10 +189,17 @@ class ApaHandler(PublisherHandler):
                         f"for this article"
                     )
 
-                # Access check came back without a detour to the IdP.
+                # Access check came back without a detour to the IdP, so
+                # we are standing on `/recordAccess/institutional/...`.
+                # That page mints the signed link — try it first: the
+                # bare `/fulltext/` URL below cannot work on its own,
+                # because the real one carries a per-session `auth_id`.
+                signed = await _download_from_access_page(page, out)
+                if signed:
+                    source_url = signed
                 # Retry the full-text URL, then fall back to whatever
                 # PDF control the resulting page offers.
-                if await _download_from(page, fulltext_url, out):
+                elif await _download_from(page, fulltext_url, out):
                     source_url = fulltext_url
                 elif await _click_pdf_control(page, out):
                     source_url = page.url
@@ -386,10 +385,23 @@ async def _download_from(page, url: str, out: Path) -> bool:
     return is_cached(out)
 
 
-#: The page PsycNET redirects an entitled-but-unauthorised session to.
-#: Reaching it is success, not failure: it means the institution was
-#: recognised. See `_download_from_access_page`.
+#: The page "Check Access" navigates to once the institution is
+#: recognised. Reaching it is success, not failure — it is where the
+#: signed link is minted. See `_download_from_access_page`.
+#:
+#: NOT where a bare `/fulltext/<id>.pdf` lands: measured live, that
+#: redirects to `/record/<id>`. An earlier fix keyed the whole
+#: institutional-access branch off this path immediately after the
+#: `/fulltext/` probe and was therefore dead code.
 _ACCESS_PATH = "/recordaccess/institutional/"
+
+#: How long to wait for "Get Access". PsycNET's record page is a JS app
+#: that renders it as an `<a href="#">` roughly six seconds after
+#: domcontentloaded — measured against the live site. The old 4s budget
+#: expired before the control existed, and the miss was reported as
+#: "PsycNET's landing markup has changed", which sent debugging after
+#: selectors that were correct all along.
+_GET_ACCESS_TIMEOUT_MS = 20000
 
 
 async def _download_from_access_page(page, out: Path) -> str:
@@ -448,7 +460,7 @@ async def _run_access_check(page) -> str:
         "a.list-group-item.pdf",
         "button:has-text('Get Access')",
         "a:has-text('Get Access')",
-        timeout=4000,
+        timeout=_GET_ACCESS_TIMEOUT_MS,
     )
     if not opened:
         return "no-access-control"
