@@ -181,14 +181,31 @@ def test_resolve_by_doi_routes_custom_flow_publishers() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_custom_handlers_use_doi_redirect_as_entry_url() -> None:
-    """APA, INFORMS, and OUP all extract the PDF URL from the landing
-    page at runtime — their url_template is the doi.org redirect."""
+def test_custom_handlers_enter_at_a_landing_page_not_a_guessed_pdf() -> None:
+    """APA, INFORMS and OUP all read the PDF URL off the landing page at
+    runtime, so their entry URL must be that page.
+
+    This used to assert the literal `https://doi.org/{doi}`, which is a
+    proxy for the real rule rather than the rule itself. APA now goes
+    straight to `psycnet.apa.org/doiLanding?doi=...`: doi.org only ever
+    redirected there, so the hop cost a DNS lookup and a third-party
+    round trip per item. Still a landing page, still not a guessed PDF
+    URL — the property the test exists for.
+    """
     for cls in (ApaHandler, InformsHandler, OupHandler):
-        assert cls.url_template == "https://doi.org/{doi}", (
-            f"{cls.__name__}: url_template must be the doi.org redirect "
-            f"so we hit the publisher's landing page, not a guessed PDF URL"
+        template = cls.url_template
+        assert "{doi}" in template, f"{cls.__name__}: no DOI placeholder"
+        assert not template.endswith(".pdf"), (
+            f"{cls.__name__}: entry URL looks like a guessed PDF path; "
+            f"these handlers must start from a landing page and read the "
+            f"real URL out of it"
         )
+
+    assert InformsHandler.url_template == "https://doi.org/{doi}"
+    assert OupHandler.url_template == "https://doi.org/{doi}"
+    assert ApaHandler.url_template.startswith(
+        "https://psycnet.apa.org/doiLanding?doi="
+    ), "APA enters at PsycNET's own landing view — see its url_template note"
 
 
 # ---------------------------------------------------------------------------

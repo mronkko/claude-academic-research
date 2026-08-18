@@ -71,7 +71,7 @@ import json
 import re
 import time
 from pathlib import Path
-from urllib.parse import unquote, urljoin
+from urllib.parse import quote, unquote, urljoin
 
 from fetchers import _pdf_validate
 
@@ -106,7 +106,22 @@ class ApaHandler(PublisherHandler):
     name = "apa"
     display_name = "APA PsycNET"
     doi_prefixes = ("10.1037/",)
-    url_template = "https://doi.org/{doi}"
+    #: Straight to PsycNET's landing view, not through `doi.org`.
+    #:
+    #: doi.org only ever redirects here anyway, so the hop bought a DNS
+    #: lookup and a third-party round trip per item and nothing else.
+    #: Verified live end to end from this URL: the page carries the
+    #: accession in `/record/<id>?doi=1`, and its own
+    #: `button.getAccessButton` opens the same overlay, whose CHECK
+    #: ACCESS lands on `/recordAccess/institutional/<id>` with the signed
+    #: link. `{doi}` is substituted percent-encoded — see `download`.
+    #:
+    #: The trade is that doi.org's canonical resolution is gone: a DOI
+    #: PsycNET does not know now yields its "not found" view rather than
+    #: a redirect somewhere informative. Acceptable because routing only
+    #: sends `10.1037/` prefixes here, and `_wait_for_landing_record_id`
+    #: already fails loudly when no record link appears.
+    url_template = "https://psycnet.apa.org/doiLanding?doi={doi}"
     direct_access_domains = ("psycnet.apa.org", "apa.org")
     concurrency = 1
     delay_s = 1.0
@@ -151,7 +166,9 @@ class ApaHandler(PublisherHandler):
             counter.cached += 1
             return out, f"cache://{out}"
 
-        url = self.url_template.format(doi=doi)
+        # Percent-encoded: the DOI's `/` and any `<`/`>` in it would
+        # otherwise sit raw in a query string.
+        url = self.url_template.format(doi=quote(doi, safe=""))
         source_url = url
         try:
             # Step 1: doi.org → doiLanding, then wait for Angular to put

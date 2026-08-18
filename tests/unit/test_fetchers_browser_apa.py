@@ -311,7 +311,11 @@ class _FakePsycnetPage:
         if url == "about:blank":
             self.url = "about:blank"
             return None
-        if url.startswith("https://doi.org/"):
+        if url.startswith("https://doi.org/") or "/doiLanding" in url:
+            # Both entry shapes land the same way. `doi.org` is kept
+            # modelled because it is what PsycNET redirects *from* when a
+            # link elsewhere sends the browser there; the handler itself
+            # now goes straight to the landing view.
             self.url = (
                 f"https://psycnet.apa.org/record/{RECORD_ID}"
                 if self.lands_on_record else LANDING
@@ -630,7 +634,14 @@ def test_page_is_blanked_before_the_article_is_identified(
     _run(ApaHandler(), page, tmp_path, Counter())
 
     assert page.visited[0] == "about:blank"
-    assert page.visited[1].startswith("https://doi.org/")
+    # Straight to PsycNET's landing view; `doi.org` only ever redirected
+    # here, so the hop cost a third-party round trip per item.
+    assert page.visited[1].startswith(
+        "https://psycnet.apa.org/doiLanding?doi="
+    )
+    assert "10.1037%2Fapl0000007" in page.visited[1], (
+        "the DOI must be percent-encoded into the query string"
+    )
 
 
 def test_another_items_landing_page_is_never_mistaken_for_this_one(

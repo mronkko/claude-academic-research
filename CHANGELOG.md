@@ -84,6 +84,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **APA enters at PsycNET's landing view instead of via doi.org.**
+  `doi.org` only ever redirected to `psycnet.apa.org/doiLanding?doi=...`,
+  so the hop bought a DNS lookup and a third-party round trip per item
+  and nothing else. Verified live end to end from the direct URL: the
+  page carries the accession in `/record/<id>?doi=1`, its own
+  `button.getAccessButton` opens the same overlay, and CHECK ACCESS
+  lands on `/recordAccess/institutional/<id>` with the signed link. The
+  trade — losing doi.org's canonical resolution for a DOI PsycNET does
+  not know — is bounded by routing, which only sends `10.1037/` here.
+
 - **APA's full-text probe no longer navigates.** It asked for
   `/fulltext/<id>.pdf` by navigating the page, so an unentitled session
   was bounced to `/record/<id>` and Angular rebuilt the whole view
