@@ -31,6 +31,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`scripts/dev/probe_browser_handler.py`** — drive one browser handler
+  against a few DOIs, with no Zotero in the loop:
+
+      uv run scripts/dev/probe_browser_handler.py --handler apa \
+          --doi 10.1037/0882-7974.12.2.376 --step --keep-open
+
+  Debugging a handler through `enrich_pdfs.py` costs a Zotero fetch of
+  the whole key list, an attachment scan and a resolver pre-flight over
+  the residual before the browser opens — minutes of unrelated work per
+  attempt, and four rounds of APA fixes were paid for at that rate. The
+  probe reuses the real `launch_context` and the real handler classes,
+  so it exercises what the pipeline runs; only the item queue and the
+  upload are missing. `--step` prints the page URL and title after each
+  item, which is the thing that kept mattering — three separate APA bugs
+  were all "the handler is on a different page than it thinks it is" —
+  and `--keep-open` leaves the failing page on screen with its session.
+  It reaches `ebsco` too, which is kept out of the handler registry.
+
 - **`--refresh-resolver-cache`** on `enrich_pdfs.py` — re-ask the link
   resolver about items it previously reported no route for, keeping
   cached routes. The supported way to act on "I just gained access to
