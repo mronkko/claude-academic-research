@@ -1259,3 +1259,60 @@ def test_pyzotero_clients_match_library_type() -> None:
     assert group_zc.local.library_type == "groups"
     assert group_zc.cloud.library_type == "groups"
     assert str(group_zc.local.library_id) == "12345"
+
+
+# ---------------------------------------------------------------------
+# Attachment template — built locally, not fetched
+# ---------------------------------------------------------------------
+
+
+def test_attach_pdf_does_not_fetch_a_template_from_the_api() -> None:
+    """pyzotero's `_attachment_template` breaks long runs.
+
+    `item_template` caches the `/items/new` response, and once that entry
+    is over an hour old `_updated()` re-validates it with a bare
+    `GET /items/new` carrying no query parameters (pyzotero 1.13.7,
+    `_client.py:381`). Zotero answers `400 'itemType' not provided`, so
+    every upload from that point on fails. Live: a Springer block
+    downloaded 110 PDFs and attached none, each logged as
+    `UnsupportedParamsError ... 'itemType' not provided`. Short runs
+    never see it.
+
+    It is also a private symbol across a package boundary, which this
+    repo has a standing rule against.
+    """
+    import inspect
+
+    import zotero_io
+
+    src = inspect.getsource(zotero_io.ZoteroClient.attach_pdf)
+    assert "_attachment_template" not in src, (
+        "attach_pdf fetches its template again; that call 400s on any run "
+        "older than an hour"
+    )
+    assert "_IMPORTED_FILE_TEMPLATE" in src
+
+
+def test_the_local_template_carries_what_zotero_and_zupload_need() -> None:
+    """`Zupload` requires `filename` and fills `contentType` when empty;
+    the API requires the type and link mode. The rest is Zotero's
+    documented attachment schema."""
+    import zotero_io
+
+    tmpl = zotero_io._IMPORTED_FILE_TEMPLATE
+    assert tmpl["itemType"] == "attachment"
+    assert tmpl["linkMode"] == "imported_file"
+    for field in ("title", "filename", "contentType", "tags", "relations"):
+        assert field in tmpl, field
+
+
+def test_the_template_is_copied_not_shared(tmp_path) -> None:
+    """Each upload sets `title`/`filename` on its template. Mutating the
+    module-level dict would leak one item's filename into the next."""
+    import zotero_io
+
+    before = dict(zotero_io._IMPORTED_FILE_TEMPLATE)
+    tmpl = dict(zotero_io._IMPORTED_FILE_TEMPLATE)
+    tmpl["filename"] = "something.pdf"
+    assert zotero_io._IMPORTED_FILE_TEMPLATE == before
+    assert zotero_io._IMPORTED_FILE_TEMPLATE["filename"] == ""

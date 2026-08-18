@@ -261,6 +261,44 @@ def add_library_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+#: Zotero's `imported_file` attachment template, written out rather than
+#: fetched.
+#:
+#: This used to call `self.cloud._attachment_template("imported_file")`,
+#: which is pyzotero's private wrapper around
+#: `GET /items/new?itemType=attachment&linkMode=imported_file`. Two
+#: reasons that had to go, one of them live:
+#:
+#: 1. **It breaks on long runs.** `item_template` caches the response,
+#:    and on a cache entry older than an hour `_updated()` re-validates
+#:    by issuing `GET /items/new` *with no query parameters at all*
+#:    (pyzotero 1.13.7, `_client.py:381`). The API answers
+#:    `400 'itemType' not provided`, so every upload fails. Seen live:
+#:    a Springer block downloaded 110 PDFs and attached none of them,
+#:    each one logged `UnsupportedParamsError ... 'itemType' not
+#:    provided`. Short runs never hit it; a run that has been going for
+#:    an hour fails every remaining attachment.
+#: 2. It is a private symbol, and this repo already has a rule against
+#:    depending on those across a package boundary.
+#:
+#: The shape is Zotero's documented attachment schema and is stable —
+#: `Zupload` only requires `filename`, and fills `contentType` itself
+#: when it is empty.
+_IMPORTED_FILE_TEMPLATE: dict = {
+    "itemType": "attachment",
+    "linkMode": "imported_file",
+    "title": "",
+    "accessDate": "",
+    "url": "",
+    "note": "",
+    "tags": [],
+    "relations": {},
+    "contentType": "",
+    "charset": "",
+    "filename": "",
+}
+
+
 class ZoteroClient:
     """Thin pyzotero wrapper used by every pipeline script.
 
@@ -1099,7 +1137,7 @@ class ZoteroClient:
 
         from pyzotero._upload import Zupload
 
-        template = self.cloud._attachment_template("imported_file")
+        template = dict(_IMPORTED_FILE_TEMPLATE)
         template["title"] = path.name
         template["filename"] = path.name
         result = Zupload(

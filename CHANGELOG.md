@@ -84,6 +84,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Every Zotero upload failed once a run passed an hour.** `attach_pdf`
+  built its attachment item with pyzotero's private
+  `_attachment_template("imported_file")`. That wraps
+  `GET /items/new?itemType=attachment&linkMode=imported_file` and caches
+  the result — and on a cache entry older than an hour, pyzotero
+  re-validates it by issuing `GET /items/new` with **no query parameters
+  at all** (1.13.7, `_client.py:381`). Zotero answers
+  `400 'itemType' not provided`, so from that moment every attachment in
+  the run fails. Seen live: a Springer block downloaded 110 PDFs — 712
+  KB, 1078 KB, 2091 KB, all valid — and attached none of them. Short
+  runs never hit it, which is why it survived a day of testing.
+
+  The template is now written out locally. It is Zotero's documented
+  attachment schema, `Zupload` only requires `filename` and fills
+  `contentType` itself, and building it costs no network round trip —
+  so this is also one fewer request per upload. It removes a dependency
+  on a private symbol across a package boundary, which this repo already
+  had a rule against.
+
 - **APA enters at PsycNET's landing view instead of via doi.org.**
   `doi.org` only ever redirected to `psycnet.apa.org/doiLanding?doi=...`,
   so the hop bought a DNS lookup and a third-party round trip per item
