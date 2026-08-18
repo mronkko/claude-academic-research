@@ -24,6 +24,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   download that was going to fail anyway, and never the pass —
   `is_download_timeout` keeps this out of the outage breaker.
 
+- **Declining the Connector erased a verdict another pass had earned.**
+  Whatever the EBSCOhost pass fails to attach is handed to the Zotero
+  Connector as a second chance. Five Connector pre-flights can then stop
+  before trying anything, and each wrote one row per item saying why *the
+  pass* stopped — so two items carrying real EBSCO verdicts (an
+  unconfirmed no-match, and a positively located `unique_record`) landed
+  in `pdf_attach_log.csv` as `connector_setup_failed`, whose advertised
+  lever is "re-run the Connector pass". Read alone the row says the item
+  was never looked at; the finding survived only in `pdf_fetch_log.csv`
+  under `cause`, so the two logs disagreed and the run report printed the
+  less informed one. The retry bucket now carries the earlier pass's
+  answer on the item, and the bail-out row keeps it in `detail` —
+  `status` stays honest about the Connector, which really did not run.
+  Items reaching the queue fresh get no `detail`, because for them the
+  status is the whole story.
+
 ## [0.13.0] — 2026-08-18
 
 A retrieval release. Everything in it came out of running the pipeline

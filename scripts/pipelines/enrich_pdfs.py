@@ -679,6 +679,39 @@ def _browser_failure_cause(
     return None
 
 
+#: Where a retried item carries what the pass before it found. Lives on
+#: the item dict because the retry bucket *is* the hand-off: the second
+#: pass receives items, not a report of the first.
+PRIOR_ATTEMPT_KEY = "prior_attempt"
+
+
+def _carrying_prior_attempt(
+    item: dict, handler, cause: pdf_fetch_log.FailureCause | None,
+) -> dict:
+    """Copy of `item` annotated with the answer this handler just gave.
+
+    Exists because a queue-wide bail-out in the *next* pass writes one
+    row per item, and had nothing better to say than why that pass
+    stopped. Live: two EBSCO items earned real verdicts —
+    `no_exact_match_unconfirmed` and a located `unique_record` — were
+    handed to the Connector as a second chance, and when the Connector
+    setup prompt was declined both landed in `pdf_attach_log.csv` as
+    `connector_setup_failed`, whose advertised lever is "re-run the
+    Connector pass". Nothing in that row said EBSCO had already been
+    asked and had answered. The truth survived only in the *other* log,
+    `pdf_fetch_log.csv`, under `cause` — two files disagreeing about the
+    same item, with the less informed one printed in the run report.
+
+    A copy, not a mutation: `retry_bucket` and the caller's list are
+    different queues, and the first pass's own logging is already done.
+    """
+    verdict = (getattr(handler, "last_verdict", "") or "").strip()
+    note = f"{handler.name}: {verdict or 'no verdict'}"
+    if cause is not None:
+        note += f" ({cause.value})"
+    return {**item, PRIOR_ATTEMPT_KEY: note}
+
+
 def _log_browser_failure(
     args: argparse.Namespace,
     item: dict,
@@ -1201,6 +1234,12 @@ async def _drive_handler(
                         elif answer == "skip":
                             coord.skip_remaining = True
                         # "keep" → keep looping, same as before.
+                # NETWORK_ERROR is recoverable and says "retry next
+                # run". Letting this default would classify it
+                # UNAVAILABLE — the one cause that licenses a full-text
+                # exclusion — for an article no server was ever asked
+                # about.
+                cause = _browser_failure_cause(lane_handler, transport)
                 # Structured record either way: this handler was tried
                 # and did not produce a PDF. That fact is true whether
                 # or not the Connector gets a turn next, and the
@@ -1209,15 +1248,12 @@ async def _drive_handler(
                     args, item,
                     source=lane_handler.name,
                     publisher=lane_handler.display_name,
-                    # NETWORK_ERROR is recoverable and says "retry next
-                    # run". Letting this default would classify it
-                    # UNAVAILABLE — the one cause that licenses a
-                    # full-text exclusion — for an article no server was
-                    # ever asked about.
-                    cause=_browser_failure_cause(lane_handler, transport),
+                    cause=cause,
                 )
                 if on_failure == "retry_bucket" and retry_bucket is not None:
-                    retry_bucket.append(item)
+                    retry_bucket.append(
+                        _carrying_prior_attempt(item, lane_handler, cause)
+                    )
                 else:
                     log_writer.writerow({
                         "run_date": run_date, "item_key": item["item_key"],
@@ -1424,6 +1460,36 @@ def library_selection_matches(zot, selected: dict) -> tuple[bool, str]:
     return False, ""
 
 
+def _log_connector_bailout(
+    log_writer, items: list[dict], *, run_date: str, status: str, source: str,
+) -> None:
+    """Log a queue-wide Connector bail-out, one row per untried item.
+
+    Five different pre-flights can stop this pass before any item is
+    tried (Zotero offline, wrong library, missing extension, declined
+    setup, dead service worker). Each wrote its own near-identical loop;
+    they are one call now because they differ only in `status`.
+
+    The `detail` is the point of the helper. For an item that reached
+    this queue fresh there is nothing to add — `status` is the whole
+    story. For one handed on from an earlier pass there is: that pass
+    asked and got an answer, and a row saying only "the Connector did
+    not start" reads as though the item had never been looked at. The
+    status stays honest about the Connector — it really did not run, and
+    re-running it really is the next lever — while `detail` keeps the
+    finding that was already earned. `pdf_run_report` prints the detail
+    line directly under the item, so both facts reach the reader.
+    """
+    for it in items:
+        log_writer.writerow({
+            "run_date": run_date, "item_key": it["item_key"],
+            "doi": it["doi"],
+            "title": (it.get("title") or "")[:70],
+            "status": status, "source": source,
+            "detail": it.get(PRIOR_ATTEMPT_KEY, ""),
+        })
+
+
 async def _drive_connector(
     handler,
     items: list[dict],
@@ -1470,14 +1536,10 @@ async def _drive_connector(
             f"{len(items)} items as connector_zotero_unavailable.",
             flush=True,
         )
-        for it in items:
-            log_writer.writerow({
-                "run_date": run_date, "item_key": it["item_key"],
-                "doi": it["doi"],
-                "title": (it.get("title") or "")[:70],
-                "status": "connector_zotero_unavailable",
-                "source": handler.name,
-            })
+        _log_connector_bailout(
+            log_writer, items, run_date=run_date,
+            status="connector_zotero_unavailable", source=handler.name,
+        )
         return
 
     # Library-selection pre-flight. Connector saves go to whichever
@@ -1545,14 +1607,10 @@ async def _drive_connector(
                         f"  {where} in the left pane, then re-run.",
                         flush=True,
                     )
-                    for it in items:
-                        log_writer.writerow({
-                            "run_date": run_date, "item_key": it["item_key"],
-                            "doi": it["doi"],
-                            "title": (it.get("title") or "")[:70],
-                            "status": "connector_wrong_library",
-                            "source": handler.name,
-                        })
+                    _log_connector_bailout(
+                        log_writer, items, run_date=run_date,
+                        status="connector_wrong_library", source=handler.name,
+                    )
                     return
     else:
         print(
@@ -1571,14 +1629,10 @@ async def _drive_connector(
             "  then re-run the setup wizard.",
             flush=True,
         )
-        for it in items:
-            log_writer.writerow({
-                "run_date": run_date, "item_key": it["item_key"],
-                "doi": it["doi"],
-                "title": (it.get("title") or "")[:70],
-                "status": "connector_extension_missing",
-                "source": handler.name,
-            })
+        _log_connector_bailout(
+            log_writer, items, run_date=run_date,
+            status="connector_extension_missing", source=handler.name,
+        )
         return
 
     os.makedirs(args.cache_dir, exist_ok=True)
@@ -1593,14 +1647,10 @@ async def _drive_connector(
             await handler.setup(page, items[0]["doi"])
         )
         if setup_result != "proceed":
-            for it in items:
-                log_writer.writerow({
-                    "run_date": run_date, "item_key": it["item_key"],
-                    "doi": it["doi"],
-                    "title": (it.get("title") or "")[:70],
-                    "status": "connector_setup_failed",
-                    "source": handler.name,
-                })
+            _log_connector_bailout(
+                log_writer, items, run_date=run_date,
+                status="connector_setup_failed", source=handler.name,
+            )
             await ctx.close()
             return
 
@@ -1610,14 +1660,10 @@ async def _drive_connector(
                 "  ERROR: Connector service worker did not start within 15s.",
                 flush=True,
             )
-            for it in items:
-                log_writer.writerow({
-                    "run_date": run_date, "item_key": it["item_key"],
-                    "doi": it["doi"],
-                    "title": (it.get("title") or "")[:70],
-                    "status": "connector_sw_timeout",
-                    "source": handler.name,
-                })
+            _log_connector_bailout(
+                log_writer, items, run_date=run_date,
+                status="connector_sw_timeout", source=handler.name,
+            )
             await ctx.close()
             return
 
