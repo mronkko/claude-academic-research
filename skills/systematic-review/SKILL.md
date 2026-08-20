@@ -32,6 +32,64 @@ If the result is `configured`, proceed.
 
 ---
 
+## Autonomous runs
+
+When the user asks for autonomous execution — "work autonomously", "run
+the whole thing", "don't ask me, just do it", "go" — that is a real
+instruction and it is honoured. It changes *when* you ask, not
+*whether*.
+
+**Consolidate every confirmation into one up-front proposal, and make
+that proposal before the first paid inference call.** Not per stage.
+The pipeline's gates (scope, model, cost) exist so a human decides
+before money and methodology are committed; asking six times during a
+run the user has walked away from does not achieve that, and skipping
+them silently — which is what happened in the session that prompted
+this section — achieves the opposite of it.
+
+The single proposal must contain:
+
+1. **Scope summary** — the brief from `.claude/systematic-review/scope.md`,
+   condensed to what a reader needs to say yes or no: construct,
+   population, questions, databases, year range, journal set.
+2. **Proposed model per stage**, with the comparison that justifies it
+   (see "Choosing the screening model" — newest of the required tier,
+   never a dated snapshot when a newer sibling exists).
+3. **Item counts**, once the search and import have run — they are not
+   gated, so you will have real numbers rather than an estimate.
+4. **Projected LLM cost**, from an actual `--dry-run` of the screening
+   stage. Not a guess, and not omitted because the dry run was
+   awkward — the dry run is one command and its cost line is the number
+   the user is being asked to approve.
+
+Then ask once. After a "proceed", the later stages run without further
+questions — the `PAID LLM RUN` banner still prints before each one, so
+the record of what was spent stays in the transcript.
+
+**What is not gated:** search, import, and enrichment. Database APIs
+(OpenAlex, Scopus, WoS, Semantic Scholar, Crossref, Unpaywall) are
+covered by keys the user already has, cost nothing per call, and
+produce the counts the proposal needs. Run them first, then propose.
+
+**What autonomy never overrides:**
+
+- Writing outside the agreed Zotero library or collection.
+- The provenance rules — no hand-composed item metadata, no improvised
+  pipeline-style code, no hand-typed numbers in the manuscript.
+- Deletion or destructive repair of a library. If the fix for a bad
+  import is "delete these 31 items", propose it and wait, however
+  autonomous the run.
+- Any stage that would exceed a cost the user approved. If the real
+  count comes in at three times the estimate, stop and re-ask.
+
+If the user declines to answer the single proposal — they are away, the
+session is unattended — run everything up to the first paid stage and
+stop there with the proposal on screen. A completed search and import
+with a clear question waiting is a good outcome; a screened corpus the
+user never authorised is not.
+
+---
+
 ## Bootstrap (first run in this project)
 
 An SR project needs (a) the canonical directory scaffold, (b) four
@@ -113,6 +171,24 @@ The CI guard at `tests/unit/test_no_direct_localhost_zotero.py`
 fails the build if a direct-HTTP call slips into a pipeline file
 that isn't `zotero_io.py` or `bbt_client.py`.
 
+**Never compose item metadata yourself.** New items come from a
+pipeline script importing database-retrieved rows, or from an
+identifier-based add (`mcp__zotero__zotero_add_item` with a DOI/ISBN/
+URL, or `zotero-cli add doi|isbn|url`). Typing out a citation — even
+one item, even to repair a bad import — writes metadata with no
+provenance into a library a manuscript will cite. If neither path
+works, name the gap and propose the fix. Full rule: the second IRON
+RULE in [skills/zotero-operations/SKILL.md](../zotero-operations/SKILL.md).
+
+**`--remote` — reading from api.zotero.org.** Every pipeline script
+takes it. Reads default to Zotero Desktop's local server because it is
+far faster, which is the wrong default in two situations: no Zotero
+Desktop is running (headless, CI, a container), or Desktop has not yet
+synced items this pipeline just wrote through the Web API. In either
+case the local client answers "no items" without an error, which reads
+as "nothing to do". If Zotero Desktop is not open on this machine, pass
+`--remote` on **every** stage, not just the one that failed.
+
 ## Zotero library selection (required before any Zotero write)
 
 Run this **first**, right after bootstrap. Pin down which Zotero
@@ -139,6 +215,18 @@ project's `CLAUDE.md` to orient themselves.
    mcp__zotero__zotero_list_libraries()
    ```
 
+   Without MCP tools registered (a subagent, a CLI-only environment),
+   the same listing comes from the shell:
+
+   ```bash
+   zotero-cli library list
+   ```
+
+   Use one of these two. There is no plugin script for it and none is
+   needed — do not grep the plugin's source for group IDs, and do not
+   run a pipeline script with no arguments to provoke its
+   "which group?" error message into printing them.
+
    Show the user the personal library (type `user`) and each group
    (type `group`, with numeric IDs). Ask which to use. Group
    libraries are the usual choice for SRs — shared with
@@ -154,9 +242,12 @@ project's `CLAUDE.md` to orient themselves.
    mcp__zotero__zotero_get_collections(library_id=<id>)
    ```
 
-   For a fresh collection, note the intended name — `import_to_zotero.py`
-   creates it on first use when `--collection <name>` is passed and
-   no matching key exists.
+   For a fresh collection, note the intended name. `--collection`
+   accepts either an 8-character collection **key** or a display
+   **name**: a name that matches an existing collection resolves to its
+   key, and a name that matches nothing is created. The script prints
+   which of the three happened. (Two collections sharing a name is an
+   error, not a guess — pass the key.)
 
 3. Write the choice into the project's `CLAUDE.md` under a
    `## Zotero library` heading (create or extend the file as
@@ -200,6 +291,10 @@ keyword combinations get baked into the user's mental model, volume
 numbers anchor downstream inclusion calls, and reframing after a
 pilot is more expensive than reframing on paper. Pin down scope on
 paper, get explicit sign-off, then search.
+
+Under an autonomous run this confirmation is folded into the single
+up-front proposal (see "Autonomous runs") rather than asked here —
+folded in, never dropped.
 
 **Brief contents (every section required before asking for
 confirmation):**
@@ -351,6 +446,32 @@ chat models — `:batch` IDs are asynchronous queue endpoints, and
 appear right alongside the models you want. The `tier?` column is a
 guess from the model's name and is labelled as one. Reading past that
 is your job, not the script's.
+
+**Propose the newest ordinary chat model of the required tier**, judged
+by the listing's `released` column first and the version numbers in the
+ID second. Two hard rules:
+
+- **Never propose a dated snapshot when an undated sibling of the same
+  family exists.** IDs ending in `-YYYYMMDD` are pinned releases and the
+  listing marks them `dated snapshot` in the `notes` column. A snapshot
+  of the *previous* generation sorts alphabetically right next to its
+  successor — `claude-sonnet-4-5-20250929` immediately before
+  `claude-sonnet-5` — and picking it by proximity is exactly the
+  mistake this rule exists to stop. Propose a snapshot only when the
+  user asks for a frozen ID for reproducibility, and say that is why.
+- **State the comparison when you propose.** Name the model, its
+  `released` date, and what you rejected next to it: "proposing
+  `claude-sonnet-5` (released 2026-02-05) over
+  `claude-sonnet-4-5-20250929`, a dated snapshot of the previous
+  generation." A proposal the user cannot check is not a proposal.
+
+Your own knowledge of which model is current is older than the listing
+in front of you. Where the two disagree, the listing wins — it is what
+the provider is serving today.
+
+Under an autonomous run, the proposal moves into the single up-front
+confirmation (see "Autonomous runs"); it does not become an unannounced
+pick.
 
 Then write each confirmed choice, one call per stage, from the project
 directory:
@@ -877,16 +998,16 @@ single-item debugging).
 | Summarise a pilot CSV — journal coverage (top-N) | `pilot_analyze.py journal-coverage` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/pilot_analyze.py journal-coverage --csv pilot/search_results.csv --top 25` |
 | Summarise a pilot CSV — hits by journals.json field code | `pilot_analyze.py field-breakdown` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/pilot_analyze.py field-breakdown --csv pilot/search_results.csv --journals journals.json` |
 | Filter / trim a search CSV (top-N by year, year range) | `filter_search_results.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/filter_search_results.py --input <csv> --output <csv> [--year-min Y] [--year-max Y] [--top-n N]` |
-| Import deduplicated search CSV into Zotero | `import_to_zotero.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/import_to_zotero.py --group <id> --input <search.csv> [--collection <key>]` |
-| Abstract screening (Claude Haiku on title+abstract) | `abstract_screen.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/abstract_screen.py --group <id> --collection <key> --config ./screening_config.py [--model <alias>]` |
-| Full-text screening + structured coding (Claude Sonnet) | `fulltext_code.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs [--model <alias>]` |
-| Update specific coding fields on already-coded items | `fulltext_code.py --update-fields` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs --update-fields FIELD1,FIELD2` |
+| Import deduplicated search CSV into Zotero | `import_to_zotero.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/import_to_zotero.py --group <id> --input <search.csv> [--collection <key-or-name>] [--remote]` |
+| Abstract screening (Claude Haiku on title+abstract) | `abstract_screen.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/abstract_screen.py --group <id> --collection <key> --config ./screening_config.py [--model <alias>] [--remote]` |
+| Full-text screening + structured coding (Claude Sonnet) | `fulltext_code.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs [--model <alias>] [--remote]` |
+| Update specific coding fields on already-coded items | `fulltext_code.py --update-fields` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs --update-fields FIELD1,FIELD2 [--remote]` |
 | Summarise screening / coding decisions across passes | `screening_report.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/screening_report.py <log.csv> [--list <decision>] [--list-rescreened]` |
-| Fetch missing abstracts (multi-source cascade) | `enrich_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_abstracts.py --filter-keys-file <keys>` |
-| Attach missing PDFs (multi-source cascade) | `enrich_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --filter-keys-file <keys>` |
+| Fetch missing abstracts (multi-source cascade) | `enrich_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_abstracts.py --filter-keys-file <keys> [--remote]` |
+| Attach missing PDFs (multi-source cascade) | `enrich_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --filter-keys-file <keys> [--remote]` |
 | Attach Wiley PDFs only (TDM token) | `enrich_pdfs.py --sources wiley` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --sources wiley --filter-keys-file <keys>` |
 | Attach Cloudflare-gated PDFs (Sage, APA, T&F, Emerald, …) | `enrich_pdfs.py --sources browser` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --sources browser --filter-keys-file <keys>` |
-| Audit library (missing abstracts / PDFs / stubs) | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/audit_zotero_library.py --group <id>` |
+| Audit library (missing abstracts / PDFs / stubs) | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/audit_zotero_library.py --group <id> [--remote]` |
 | Export includes-only coded view | `export_coded_includes.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/export_coded_includes.py --log-csv <screening.csv> --out <coded.csv>` |
 | Generate `references.bib` from manuscript keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/generate_bib.py <project_dir>` |
 
@@ -976,6 +1097,25 @@ A formal SR typically combines **two or three** sources from this list
 still run a defensible SR using OpenAlex + Semantic Scholar, provided
 the coverage gaps are disclosed in the methods section (pulled from
 `search_metadata.json` via the stats dictionary; never typed in prose).
+
+**Crossref is deliberately not on this list, and must not be added as
+one.** `paper-search-mcp` exposes a Crossref search, so it is always one
+tool call away, and it is the wrong tool three times over: it has no
+Boolean query language, so no reportable PRISMA search string can be
+built from it; its deposited abstracts are sparse and publisher-
+dependent; and OpenAlex already carries Crossref's records with a
+searchable surface on top. Crossref's role here is as the **metadata
+and abstract authority** — `import_to_zotero.py` fills incomplete
+records from it, and it heads the abstract cascade below. Both are
+lookups by DOI, not discovery.
+
+**Prefer a mix that includes Scopus or WoS when the user has one**, for
+a reason beyond coverage: those two return creator names split into
+family and given (`Doe, Jane`), while OpenAlex and Semantic Scholar
+return display order only. Dedup carries the better rendering across
+databases, so an OpenAlex+WoS run imports correct creators for every
+overlapping record with no extra requests. An OpenAlex-only corpus
+pays one Crossref fetch per record to reconstruct them.
 
 **Technical tips for search design:**
 

@@ -70,6 +70,29 @@ Python that touches the Zotero API or handles API keys — invoke the
 named script. See the `systematic-review` skill for the full matrix of
 invocations.
 
+## Autonomous runs
+
+"Work autonomously" is honoured, and it changes *when* you ask, not
+*whether*. Search, import and enrichment run unattended — the database
+APIs cost nothing per call. Before the **first paid LLM call**
+(`abstract_screen.py`, `fulltext_code.py`), stop once and put a single
+proposal to the user:
+
+- the scope summary,
+- the model proposed for each stage, with the comparison that justifies
+  it (newest of the required tier; never a dated `-YYYYMMDD` snapshot
+  when a newer sibling exists),
+- the item count,
+- the projected cost from an actual `--dry-run`.
+
+One "proceed" covers every remaining stage. If nobody answers, run up
+to the paid stage and stop there with the proposal on screen.
+
+Autonomy never covers: writing outside the library below, deleting
+items, hand-composed Zotero metadata, hand-typed numbers in the
+manuscript, or a stage that would cost materially more than what was
+approved.
+
 ## Zotero library
 
 *Populate during the systematic-review bootstrap — the agent will
@@ -81,9 +104,21 @@ ask `mcp__zotero__zotero_list_libraries` and offer options.*
   created fresh at import time)
 
 All pipeline scripts take `--group <id>` (group library) or `--user`
-(personal library) and, where supported, `--collection <key>` as
-explicit CLI flags. Do not set `ZOTERO_GROUP` as an env var — the
+(personal library) and, where supported, `--collection <key-or-name>`
+as explicit CLI flags. Do not set `ZOTERO_GROUP` as an env var — the
 canonical record is here.
+
+If Zotero Desktop is not running on this machine (headless, container,
+CI), add `--remote` to **every** stage: reads default to Desktop's
+local server and it answers "no items" rather than erroring when it is
+absent or has not yet synced.
+
+**Never write Zotero items from metadata you composed yourself.** New
+items come from `import_to_zotero.py` (database-retrieved rows) or from
+an identifier-based add (`mcp__zotero__zotero_add_item` with a
+DOI/ISBN/URL, `zotero-cli add doi`). Typing out a citation, even to
+repair one bad record, is a defect signal — say what is missing
+instead.
 
 For Zotero housekeeping on a *different* library or group than the
 one above — adding abstracts, attaching PDFs, fixing BBT keys, finding

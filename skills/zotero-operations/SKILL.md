@@ -383,6 +383,43 @@ under `scripts/pipelines/` for `127.0.0.1:23119` or `localhost:23119`
 and fails the build on a match outside `zotero_io.py` and
 `bbt_client.py`. New code must route through those modules.
 
+## IRON RULE — never compose item metadata yourself
+
+The rule above says *how* to reach Zotero. This one says where an
+item's **content** may come from, and it has exactly two answers:
+
+1. **A pipeline script importing database-retrieved data.**
+   `import_to_zotero.py` maps rows that a search database returned
+   (OpenAlex, Scopus, WoS, Semantic Scholar) and fills gaps from
+   Crossref. Every field traces to an API response.
+2. **An identifier-based add.** `mcp__zotero__zotero_add_item` with
+   `source_type="doi"`/`"isbn"`/`"url"`, or `zotero-cli add
+   doi|isbn|url|bibtex|csl-json`. You supply the identifier; the
+   authority supplies the metadata.
+
+**Never write an item from metadata you wrote yourself.** No
+hand-assembled `{"title": ..., "creators": [...]}` dict, no inline
+Python building item payloads, no typing a citation out of a PDF you
+just read, no "I know this paper, I'll fill in the fields". Not for one
+item, not to fix a record that imported badly, not because the
+identifier lookup failed.
+
+The reason is not tidiness. Metadata you compose is metadata with no
+provenance: nothing downstream can tell it from an authority record,
+it will be cited in a manuscript, and its errors are invisible —
+a plausible-looking wrong year or a wrong page range does not announce
+itself. An identifier-based add is checkable; a typed one is not.
+
+**When neither path works, that is a defect signal**, and the response
+is the same as for direct HTTP: stop, name the gap to the user, and
+propose the missing capability — a searcher that carries the field, a
+fix to the fill path, a new `zotero_io.py` helper. Do not fill the gap
+by hand.
+
+If an item genuinely has no identifier anywhere (grey literature, an
+unpublished working paper), say so explicitly and ask the user how they
+want it recorded, rather than quietly typing it in.
+
 ## Local client for reads, remote for writes
 
 `pyzotero.zotero.Zotero(group, "group", key, local=True)` reads from

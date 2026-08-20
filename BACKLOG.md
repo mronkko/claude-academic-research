@@ -22,6 +22,41 @@ directory — not checked in because it references machine-local paths).
 
 ---
 
+## Open — two upstream fixes for `mronkko/zotero-mcp` (2026-08-20)
+
+Both found by adopting `zotero_mcp.citation_import.csl_json_to_zotero`
+on `import_to_zotero.py`'s fill path (S10, partially reopened). Both
+are worked around locally in `_csl_for_converter`, with the tests that
+pin the workaround in `tests/unit/test_import_metadata_provenance.py`.
+Fixing them upstream lets that adapter shrink; **it cannot be deleted
+until a fix ships to PyPI**, since this plugin depends on the published
+wheel (`zotero-mcp-server>=0.9,<0.10`), not the checkout.
+
+1. **`csl_json_to_zotero` raises `AttributeError` on Crossref CSL.**
+   `_set_if_in_template(template, "ISSN", (csl.get("ISSN") or "").strip())`
+   assumes a string; Crossref's CSL transform returns `"ISSN": [...]`
+   and `"ISBN": [...]` as arrays. `.strip()` on a list raises, which
+   fails conversion for essentially every journal article. Same
+   exposure on `container-title` and `collection-title`, which some CSL
+   producers emit as arrays. Fix: coerce list-valued scalars to their
+   first entry inside the converter.
+2. **Crossref's `/transform/…/csl+json` is not quite CSL, and
+   `CSL_TYPE_MAP` does not know it.** Crossref emits its own type names
+   — `journal-article` where CSL says `article-journal`, `book-chapter`
+   where CSL says `chapter` — so every record converted straight from
+   Crossref becomes a `document`. Silent and total. Fix: accept
+   Crossref's spellings as aliases in `CSL_TYPE_MAP`, since Crossref is
+   the overwhelmingly common source of CSL JSON in practice.
+
+A third, smaller point, deliberately *not* pushed upstream: the
+converter preserves unmapped fields in `extra`, which is right for
+hand-written CSL and wrong for a Crossref API payload (`indexed`,
+`license`, `member`, `score`, and a `reference` list that ran to 108
+entries on one ordinary article). That is a caller's decision, and this
+plugin makes it by forwarding only mappable fields.
+
+---
+
 ## Done — APA PsycNET handler failed on reachable PDFs (2026-08-16)
 
 **Reported from a live downstream run** (the AI-literature-review study's
@@ -405,6 +440,11 @@ were found while merely *designing and implementing* this (D1-D3 below).
   Zotero desktop must be running and synced, and two sync waits sit in
   the run: after `import_to_zotero.py` (cloud write → local read) and
   after `abstract_screen.py` (cloud tag write → local tag read).
+  *(Updated 2026-08-20: the first of those is gone —
+  `import_to_zotero.py`'s own dedup pre-check and patch read now go
+  through `cloud_journal_articles()`, since they are reading back this
+  script's own writes. The general point stands for every other stage,
+  where `--remote` is the escape hatch.)*
 - **Three stages are library-wide, not collection-scoped.**
   `enrich_abstracts.py` / `enrich_pdfs.py` / `enrich_dois.py` take only
   `--filter-keys-file` (the harness generates it at import time);
@@ -418,25 +458,30 @@ were found while merely *designing and implementing* this (D1-D3 below).
 
 **Enabling changes:**
 
-- `zotero_io.find_group_by_name(name)` — **promote to public** (agreed
-  with user). Implement over the existing private
-  `_list_accessible_groups(api_key, user_id)`; `user_id` is written
-  automatically by `/setup` (`wizard.py:_verify_zotero` persists
-  `userID` from `api.zotero.org/keys/<key>`), with a fallback to
-  re-deriving it the same way. Error on >1 name match; never guess.
-- `zotero_io.create_collection` / `delete_collection` — neither
-  exists today (only `delete_item`). **Coordination note for the
-  cleanup branch:** these are *not* redundant with zotero-mcp /
-  `zotero-cli`. The "zotero-cli evaluation (2026-07-19)" entry in
-  House-keeping already settled it — zotero-cli costs ~1.5–2 s startup
-  per invocation, has no batch-by-keys mode, no reliable `--json`, and
-  no HTTP-412 retry, so pipeline-shaped code stays on pyzotero.
+- ~~`zotero_io.find_group_by_name(name)` — **promote to public**~~
+  **Shipped.** Public, over `_list_accessible_groups`, erroring on >1
+  name match.
+- ~~`zotero_io.create_collection` / `delete_collection` — neither
+  exists today~~ **Shipped**, and since 2026-08-20 joined by
+  `find_collection(name_or_key, create=)`, which is what
+  `import_to_zotero.py --collection` resolves through: key match →
+  unique name match → create. (The coordination note stands: these are
+  not redundant with `zotero-cli`, whose ~1.5–2 s per-invocation
+  startup, absent batch-by-keys mode, unreliable `--json` and missing
+  412 retry keep pipeline-shaped code on pyzotero.)
 - *(Optional, high leverage)* **`ZOTERO_PREFER_REMOTE=1`** — an env
   check inside `ZoteroClient.__init__` covers every construction path
   (`from_args`, `from_config`, `for_user_library`) in ~3 lines,
   default unchanged. Removes both sync waits and the Zotero-desktop
   requirement, making the run a single unattended command — and
   unblocks headless / CI / Antigravity users who have no desktop.
+  **Partly overtaken (2026-08-20):** the import's own read-your-writes
+  hazard is fixed at source — `_fetch_existing_items` and
+  `_patch_existing_items` now read through `cloud_journal_articles()`
+  regardless of the run's preference, so the post-import sync wait is
+  gone and a stale local client can no longer report an empty library
+  and duplicate the corpus. The `--remote` flag already covers the
+  headless case per-run; the env var would only save typing it.
 - *(Optional)* **tiered runs** so a first run needs 2 keys, not 8:
   `search` (~1 min, no Zotero writes — would have caught D1),
   `oa` (~4 min, `ZOTERO_API_KEY` + `ANTHROPIC_API_KEY` only),
@@ -646,6 +691,34 @@ notes on every `fulltext:include`.
   as a real dedup/data-quality issue in practice.
   Files: [scripts/pipelines/import_to_zotero.py](scripts/pipelines/import_to_zotero.py)
   (`_row_to_zotero_item`, `_parse_authors`).
+
+  **Partially reopened and shipped (2026-08-20, `feat/e2e-demo-fixes`).**
+  A live import produced items with single-field creator names and no
+  volume/issue/pages, which reframed the question: the objection was
+  never to the converter, it was to using it on rows that don't need
+  it. `csl_json_to_zotero` is now adopted **on the fill path only** —
+  a record whose creators are display-order (all OpenAlex / Semantic
+  Scholar rows) or whose type is unknown is rebuilt from one Crossref
+  CSL fetch; a complete row is still mapped offline by
+  `_row_to_zotero_item`. Each of the four skip reasons, revisited:
+  (1) the CSV→CSL adapter was never needed — the adapter runs the other
+  way, Crossref→converter (`_csl_for_converter`); (2) the type dispatch
+  stopped being moot once the searchers started carrying real types,
+  and the container-field selection is what makes a book chapter's
+  `bookTitle` land correctly; (3) `template_fn` needs no network —
+  `zotero_mcp.schema.valid_fields` builds the template from an on-disk
+  cache, so `--dry-run` still previews offline; (4) the test churn was
+  real but small, and `_parse_authors` kept its signature.
+  Two Crossref-specific adapters were required and are pinned by tests
+  in `test_import_metadata_provenance.py`: Crossref's "CSL" keeps
+  Crossref type names (`journal-article`, not `article-journal`), which
+  would otherwise type every filled record `document`; and it returns
+  `ISSN` as an array, which the converter `.strip()`s — an
+  `AttributeError` for essentially every journal article. **Worth
+  fixing upstream in the fork** so the adapter can eventually go away;
+  until a fix ships to PyPI, the adapter stays. `_looks_corporate` was
+  *not* lifted — it is private, and the fill path gets corporate names
+  right anyway via CSL's `literal`.
 
 - **S9** — file-format/architecture question for a DOI-resolve →
   Zotero-import handoff (`resolve_dois.py` → `import_to_zotero.py`).
