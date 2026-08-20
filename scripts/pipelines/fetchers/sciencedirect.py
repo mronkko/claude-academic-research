@@ -140,32 +140,231 @@ def _collect_annotations(el) -> list[str]:
     return out
 
 
-def _extract_xml_parts(xml_bytes: bytes) -> tuple[str, list[str]]:
-    """Split an Elsevier full-text XML response into (prose, annotations).
+#: Elements that start a new block rather than continuing the current
+#: one. Kept out of a paragraph's inline text and emitted in their own
+#: right, so a list does not dissolve into the sentence before it.
+_NESTED_BLOCK_TAGS = frozenset({"list", "displayed-quote", "table"})
 
-    Returns `("", [])` if the response has no `<body>` or does not
-    parse — callers must treat that as "XML fallback also failed".
+#: Deepest heading level rendered. Elsevier nests three deep in
+#: practice; anything further is rendered at the third level rather
+#: than inventing styles nobody has a stylesheet for.
+_MAX_HEADING_LEVEL = 3
+
+
+def _inline_text(el, also_skip: frozenset = frozenset()) -> str:
+    """One block's worth of running text, annotations and sub-blocks out."""
+    return " ".join(
+        _element_text(el, _ANNOTATION_TAGS | _NESTED_BLOCK_TAGS | also_skip)
+    )
+
+
+def _sub_blocks(el, depth: int) -> list[tuple[str, str]]:
+    """Block-level descendants of `el`, in document order.
+
+    Elsevier nests lists and block quotes *inside* the paragraph that
+    introduces them, so they have to be lifted out after that
+    paragraph's own text rather than found among its siblings.
+    """
+    out: list[tuple[str, str]] = []
+    for child in el:
+        if child.tag in _ANNOTATION_TAGS:
+            continue
+        if child.tag in _NESTED_BLOCK_TAGS:
+            out.extend(_element_blocks(child, depth))
+        else:
+            out.extend(_sub_blocks(child, depth))
+    return out
+
+
+def _prose_blocks(
+    el, kind: str, depth: int, also_skip: frozenset = frozenset(),
+) -> list[tuple[str, str]]:
+    text = _inline_text(el, also_skip)
+    blocks = [(kind, text)] if text else []
+    return blocks + _sub_blocks(el, depth)
+
+
+def _table_blocks(el) -> list[tuple[str, str]]:
+    """A table as caption plus one block per row.
+
+    Table cells hold inline markup rather than `<ce:para>`, so the
+    generic block walk finds nothing to emit and the whole table
+    vanishes — which is what happened when structural extraction first
+    replaced the flat text join here. Rows are rendered pipe-separated:
+    crude, but it keeps the cell boundaries that a wall of concatenated
+    cell text destroys.
+    """
+    blocks: list[tuple[str, str]] = []
+    caption = el.find("caption")
+    if caption is not None:
+        text = _inline_text(caption)
+        if text:
+            blocks.append(("p", text))
+    for row in el.iter("row"):
+        cells = [c for c in (_inline_text(e) for e in row.iter("entry")) if c]
+        if cells:
+            blocks.append(("row", "  |  ".join(cells)))
+    return blocks
+
+
+def _element_blocks(el, depth: int = 1) -> list[tuple[str, str]]:
+    """Turn one element into `(kind, text)` blocks.
+
+    `kind` is `h1`–`h3`, `p`, `li` or `quote` — the vocabulary
+    `_render_text_pdf` maps onto paragraph styles. Extracting structure
+    rather than a single string is what lets the recovered PDF keep its
+    headings: `<ce:section-title>` used to be concatenated straight into
+    the first sentence of its own section, so every article opened
+    "Introduction Fairness and discrimination in algorithmic systems
+    are…" and ran on from there as one undifferentiated block.
+    """
+    tag = el.tag
+    if tag in _ANNOTATION_TAGS:
+        return []
+    if tag == "section":
+        blocks: list[tuple[str, str]] = []
+        title = el.find("section-title")
+        if title is not None:
+            heading = _inline_text(title)
+            label = el.find("label")
+            if label is not None and (label.text or "").strip():
+                # Appendices carry their designation in a sibling label.
+                heading = f"{label.text.strip()} {heading}".strip()
+            if heading:
+                blocks.append((f"h{min(depth, _MAX_HEADING_LEVEL)}", heading))
+        for child in el:
+            if child.tag in ("section-title", "label"):
+                continue
+            blocks.extend(_element_blocks(child, depth + 1))
+        return blocks
+    if tag in ("para", "simple-para"):
+        return _prose_blocks(el, "p", depth)
+    if tag == "displayed-quote":
+        return _prose_blocks(el, "quote", depth)
+    if tag == "list-item":
+        # `<ce:label>` here is the bullet glyph itself, which the
+        # renderer supplies — keeping it would print two bullets.
+        # Footnote labels take a different path and are kept.
+        return _prose_blocks(el, "li", depth, frozenset({"label"}))
+    if tag == "table":
+        return _table_blocks(el)
+    # Containers with no block semantics of their own: descend.
+    out: list[tuple[str, str]] = []
+    for child in el:
+        out.extend(_element_blocks(child, depth))
+    return out
+
+
+def _parse_namespace_free(xml_bytes: bytes):
+    """Parse the response and strip namespaces from every tag.
+
+    Elsevier mixes four namespaces across one document; stripping them
+    once up front is what lets every lookup below be a plain tag name.
+    Returns None if the payload does not parse.
     """
     try:
         import xml.etree.ElementTree as ET
         root = ET.fromstring(xml_bytes)
     except Exception as e:  # noqa: BLE001
         logger.debug("Elsevier XML parse failed: %s", e)
-        return "", []
-    # Strip namespaces from every tag for tolerant element lookups.
+        return None
     for el in root.iter():
         if isinstance(el.tag, str) and "}" in el.tag:
             el.tag = el.tag.split("}", 1)[1]
-    body = None
-    for el in root.iter("body"):
-        body = el
-        break
+    return root
+
+
+def _first_text(root, tag: str) -> str:
+    for el in root.iter(tag):
+        text = " ".join("".join(el.itertext()).split())
+        if text:
+            return text
+    return ""
+
+
+def _all_text(root, tag: str) -> list[str]:
+    out: list[str] = []
+    for el in root.iter(tag):
+        text = " ".join("".join(el.itertext()).split())
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def _extract_metadata(root) -> dict:
+    """The front-matter facts a journal PDF prints on its first page.
+
+    All of this rides along in the same response the body comes from,
+    and none of it used to reach the recovered file — which is why a
+    recovered PDF opened straight into the article's first sentence,
+    with no title, no authors and no DOI anywhere in it. That is also
+    why title-similarity checks on these files had so little to work
+    with.
+    """
+    coredata = next(root.iter("coredata"), None)
+    if coredata is None:
+        return {}
+    affiliations: list[str] = []
+    for group in root.iter("author-group"):
+        for aff in group.iter("affiliation"):
+            textfn = aff.find("textfn")
+            if textfn is None:
+                continue
+            text = " ".join("".join(textfn.itertext()).split())
+            label = aff.find("label")
+            if label is not None and (label.text or "").strip():
+                text = f"({label.text.strip()}) {text}"
+            if text and text not in affiliations:
+                affiliations.append(text)
+    return {
+        "title": _first_text(coredata, "title"),
+        "authors": _all_text(coredata, "creator"),
+        "affiliations": affiliations,
+        "journal": _first_text(coredata, "publicationName"),
+        "volume": _first_text(coredata, "volume"),
+        "issue": _first_text(coredata, "issueIdentifier"),
+        "pages": (_first_text(coredata, "pageRange")
+                  or _first_text(coredata, "articleNumber")),
+        "date": (_first_text(coredata, "coverDisplayDate")
+                 or _first_text(coredata, "coverDate")),
+        "doi": _first_text(coredata, "doi"),
+        "issn": _first_text(coredata, "issn"),
+        "abstract": _first_text(coredata, "description"),
+        "keywords": _all_text(coredata, "subject"),
+    }
+
+
+def _extract_article(
+    xml_bytes: bytes,
+) -> tuple[dict, list[tuple[str, str]], list[str]]:
+    """One parse: (metadata, body blocks, relocated annotations)."""
+    root = _parse_namespace_free(xml_bytes)
+    if root is None:
+        return {}, [], []
+    body = next(root.iter("body"), None)
     if body is None:
-        return "", []
+        return _extract_metadata(root), [], []
     return (
-        " ".join(_element_text(body, _ANNOTATION_TAGS)),
+        _extract_metadata(root),
+        _element_blocks(body),
         _collect_annotations(body),
     )
+
+
+def _extract_xml_blocks(xml_bytes: bytes) -> tuple[list[tuple[str, str]], list[str]]:
+    """Split an Elsevier full-text XML response into (blocks, annotations).
+
+    Returns `([], [])` if the response has no `<body>` or does not
+    parse — callers must treat that as "XML fallback also failed".
+    """
+    _meta, blocks, notes = _extract_article(xml_bytes)
+    return blocks, notes
+
+
+def _extract_xml_parts(xml_bytes: bytes) -> tuple[str, list[str]]:
+    """`_extract_xml_blocks` flattened to plain prose, for text checks."""
+    blocks, notes = _extract_xml_blocks(xml_bytes)
+    return "\n\n".join(text for _kind, text in blocks), notes
 
 
 def _extract_xml_body(xml_bytes: bytes) -> str:
@@ -185,16 +384,33 @@ def _extract_xml_body(xml_bytes: bytes) -> str:
     In-text markers (`<ce:cross-ref>` superscripts) stay where they
     are, so a reader can still match a marker to its note.
     """
-    return _assemble_body(*_extract_xml_parts(xml_bytes))
+    return _assemble_body(*_extract_xml_blocks(xml_bytes))
 
 
-def _assemble_body(prose: str, notes: list[str]) -> str:
-    """Join body prose and relocated annotations into one document."""
-    if not prose and not notes:
-        return ""
+def _assemble_body(blocks: list[tuple[str, str]], notes: list[str]) -> str:
+    """Flatten blocks and relocated annotations into one plain string.
+
+    The string form is what the length check and any text-only consumer
+    sees; `_render_text_pdf` takes the blocks themselves so it can keep
+    the headings.
+    """
+    return "\n\n".join(
+        [text for _kind, text in blocks]
+        + ([_FOOTNOTES_HEADING, *notes] if notes else [])
+    )
+
+
+def _document_flow(
+    blocks: list[tuple[str, str]], notes: list[str],
+) -> list[tuple[str, str]]:
+    """Body blocks plus the relocated footnotes, as one block list."""
     if not notes:
-        return prose
-    return "\n\n".join([prose, _FOOTNOTES_HEADING, *notes])
+        return list(blocks)
+    return [
+        *blocks,
+        ("h1", _FOOTNOTES_HEADING),
+        *(("note", note) for note in notes),
+    ]
 
 
 def _plugin_version() -> str:
@@ -239,15 +455,107 @@ def _recovery_note(n_annotations: int) -> str:
     )
 
 
-def _render_text_pdf(
-    text: str, out_path: Path, *, title: str = "", note: str = "",
-) -> None:
-    """Write `text` to `out_path` as a plain text-only PDF via reportlab.
+#: Block kind -> (stylesheet name, space after, left indent).
+#: `note` is deliberately the same size as body text: the footnotes are
+#: content in the articles this fallback serves, not marginalia.
+_BLOCK_STYLES: dict[str, tuple[str, int, int]] = {
+    "h1": ("Heading1", 10, 0),
+    "h2": ("Heading2", 8, 0),
+    "h3": ("Heading3", 6, 0),
+    "p": ("BodyText", 6, 0),
+    "li": ("BodyText", 4, 18),
+    "quote": ("BodyText", 8, 24),
+    "row": ("BodyText", 2, 18),
+    "note": ("BodyText", 4, 0),
+}
 
-    Layout is intentionally minimal — wrapped paragraphs, no styling.
-    The point is that downstream `pdftotext` can recover the body for
-    coding. Raises ImportError if reportlab is not installed; callers
-    should catch and report a sensible error in that case.
+
+def _cover_flowables(meta: dict, note: str, styles, Paragraph, Spacer):
+    """The front page a journal PDF would have: who, where, when, what.
+
+    Built from `<coredata>`, which arrives in the same response as the
+    body. Without it a recovered file opened cold on the article's first
+    sentence — no title, no authors, no DOI anywhere in the document —
+    so nothing downstream could identify the file from its own contents.
+    """
+    small = styles["BodyText"].clone("CoverSmall")
+    small.fontSize = 8.5
+    small.leading = 11
+    flow: list = []
+
+    if meta.get("journal"):
+        flow.append(Paragraph(_escape_xml(meta["journal"]), small))
+        flow.append(Spacer(1, 4))
+    if meta.get("title"):
+        flow.append(Paragraph(_escape_xml(meta["title"]), styles["Title"]))
+        flow.append(Spacer(1, 8))
+    if meta.get("authors"):
+        flow.append(Paragraph(
+            _escape_xml(", ".join(meta["authors"])), styles["BodyText"],
+        ))
+        flow.append(Spacer(1, 4))
+    for affiliation in meta.get("affiliations", []):
+        flow.append(Paragraph(_escape_xml(affiliation), small))
+    if meta.get("affiliations"):
+        flow.append(Spacer(1, 8))
+
+    # "Computer Law & Security Review 41 (July 2021) 105567"
+    citation = meta.get("journal", "")
+    if meta.get("volume"):
+        citation += f" {meta['volume']}"
+    if meta.get("issue"):
+        citation += f"({meta['issue']})"
+    if meta.get("date"):
+        citation += f" ({meta['date']})"
+    if meta.get("pages"):
+        citation += f" {meta['pages']}"
+    if citation.strip():
+        flow.append(Paragraph(_escape_xml(citation.strip()), small))
+    if meta.get("doi"):
+        flow.append(Paragraph(
+            _escape_xml(f"https://doi.org/{meta['doi']}"), small,
+        ))
+    if meta.get("issn"):
+        flow.append(Paragraph(_escape_xml(f"ISSN {meta['issn']}"), small))
+    flow.append(Spacer(1, 12))
+
+    if meta.get("abstract"):
+        flow.append(Paragraph("Abstract", styles["Heading2"]))
+        flow.append(Paragraph(_escape_xml(meta["abstract"]), styles["BodyText"]))
+        flow.append(Spacer(1, 8))
+    if meta.get("keywords"):
+        flow.append(Paragraph(
+            _escape_xml("Keywords: " + "; ".join(meta["keywords"])), small,
+        ))
+        flow.append(Spacer(1, 12))
+    if note:
+        flow.append(Paragraph(_escape_xml(note), styles["Italic"]))
+    return flow
+
+
+def _render_text_pdf(
+    blocks: list[tuple[str, str]] | str,
+    out_path: Path,
+    *,
+    title: str = "",
+    note: str = "",
+    meta: dict | None = None,
+) -> None:
+    """Write `blocks` to `out_path` as a text-only PDF via reportlab.
+
+    Takes the `(kind, text)` blocks from `_extract_xml_blocks` so the
+    article keeps its shape: headings as headings, list items indented,
+    block quotes set in. A plain string is still accepted and rendered
+    as undifferentiated body paragraphs, which is what every caller got
+    before the structure existed.
+
+    Styling stays minimal — this is a text carrier for `pdftotext`, not
+    a facsimile of the publisher's typesetting. But a 190,000-character
+    article with no headings at all is hard to read and hard to
+    navigate, and the structure costs nothing: it is in the XML already.
+
+    Raises ImportError if reportlab is not installed; callers should
+    catch and report a sensible error in that case.
 
     `note` is a provenance line rendered above the body. A recovered
     PDF is otherwise indistinguishable from a native one to anything
@@ -262,30 +570,53 @@ def _render_text_pdf(
     from reportlab.lib.pagesizes import letter  # type: ignore[import-not-found]
     from reportlab.lib.styles import getSampleStyleSheet  # type: ignore[import-not-found]
     from reportlab.platypus import (  # type: ignore[import-not-found]
+        PageBreak,
         Paragraph,
         SimpleDocTemplate,
         Spacer,
     )
 
+    if isinstance(blocks, str):
+        # Legacy string input: split as the old renderer did.
+        blocks = [
+            ("p", para.strip())
+            for para in re.split(r"\n\s*\n+|(?<=\.\s)\s{2,}", blocks)
+            if para.strip()
+        ]
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     doc = SimpleDocTemplate(str(out_path), pagesize=letter)
     styles = getSampleStyleSheet()
     flowables: list = []
-    if title:
-        flowables.append(Paragraph(_escape_xml(title), styles["Title"]))
-        flowables.append(Spacer(1, 12))
-    if note:
-        flowables.append(Paragraph(_escape_xml(note), styles["Italic"]))
-        flowables.append(Spacer(1, 12))
-    # reportlab Paragraph wraps and respects basic markup. Split on
-    # blank lines / sentence-like breaks; very long single paragraphs
-    # get broken on punctuation to keep the layout sane.
-    paragraphs = re.split(r"\n\s*\n+|(?<=\.\s)\s{2,}", text)
-    for p in paragraphs:
-        p = p.strip()
-        if p:
-            flowables.append(Paragraph(_escape_xml(p), styles["BodyText"]))
-            flowables.append(Spacer(1, 6))
+    if meta:
+        flowables.extend(
+            _cover_flowables(meta, note, styles, Paragraph, Spacer)
+        )
+        flowables.append(PageBreak())
+    else:
+        if title:
+            flowables.append(Paragraph(_escape_xml(title), styles["Title"]))
+            flowables.append(Spacer(1, 12))
+        if note:
+            flowables.append(Paragraph(_escape_xml(note), styles["Italic"]))
+            flowables.append(Spacer(1, 12))
+
+    for kind, text in blocks:
+        if not text.strip():
+            continue
+        style_name, gap, indent = _BLOCK_STYLES.get(kind, _BLOCK_STYLES["p"])
+        style = styles[style_name]
+        if indent:
+            # A named clone per indent level — reportlab styles are
+            # shared objects, so mutating one would indent everything.
+            style = style.clone(f"{style_name}Indent{indent}")
+            style.leftIndent = indent
+        body = _escape_xml(text)
+        if kind == "li":
+            body = f"\u2022 {body}"
+        flowables.append(Paragraph(body, style))
+        flowables.append(Spacer(1, gap))
+
     if not flowables:
         # Avoid reportlab's "no story" error on empty input.
         flowables.append(Paragraph("(empty body)", styles["BodyText"]))
@@ -462,8 +793,8 @@ class ScienceDirectSource(AbstractFetcher, PdfFetcher):
         xml_status = xml_resp.headers.get("x-els-status", "") or xml_resp.headers.get("X-ELS-Status", "")
         if _is_preview_warning(xml_status):
             return None
-        prose, annotations = _extract_xml_parts(xml_resp.content)
-        body = _assemble_body(prose, annotations)
+        meta, blocks, annotations = _extract_article(xml_resp.content)
+        body = _assemble_body(blocks, annotations)
         if not body or len(body) < 500:
             # An entitled XML response with a truly empty body is
             # vanishingly rare — treat as not-recovered rather than
@@ -472,7 +803,8 @@ class ScienceDirectSource(AbstractFetcher, PdfFetcher):
         out_path = _cache_pdf_path(cache_dir, doi, recovered=True)
         try:
             _render_text_pdf(
-                body, out_path, note=_recovery_note(len(annotations)),
+                _document_flow(blocks, annotations), out_path,
+                note=_recovery_note(len(annotations)), meta=meta,
             )
         except ImportError:
             logger.warning(

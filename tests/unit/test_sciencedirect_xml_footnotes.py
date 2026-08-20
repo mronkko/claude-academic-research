@@ -26,6 +26,9 @@ from __future__ import annotations
 
 from fetchers.sciencedirect import (
     _assemble_body,
+    _document_flow,
+    _extract_article,
+    _extract_xml_blocks,
     _extract_xml_body,
     _extract_xml_parts,
     _recovery_note,
@@ -160,7 +163,7 @@ def test_an_article_without_footnotes_gets_no_heading() -> None:
 
 
 def test_assemble_body_is_empty_for_nothing() -> None:
-    assert _assemble_body("", []) == ""
+    assert _assemble_body([], []) == ""
 
 
 def test_malformed_xml_still_yields_nothing() -> None:
@@ -198,3 +201,186 @@ def test_recovery_note_reports_a_real_version() -> None:
     version = _plugin_version()
     assert version != "unknown", "plugin.json should be readable from the repo"
     assert version[0].isdigit()
+
+
+# ---------------------------------------------------------------------------
+# Document structure
+# ---------------------------------------------------------------------------
+
+STRUCTURED_XML = b"""<?xml version="1.0"?>
+<ns0:article xmlns:ns0="http://www.elsevier.com/xml/common/dtd">
+  <ns0:body><ns0:sections>
+    <ns0:section><ns0:section-title>Introduction</ns0:section-title>
+      <ns0:para>Opening prose.</ns0:para>
+      <ns0:section><ns0:section-title>Background</ns0:section-title>
+        <ns0:para>Nested prose.<ns0:list><ns0:list-item><ns0:label>&#8226;</ns0:label>\
+<ns0:para>First bullet.</ns0:para></ns0:list-item><ns0:list-item>\
+<ns0:para>Second bullet.</ns0:para></ns0:list-item></ns0:list></ns0:para>
+        <ns0:displayed-quote><ns0:simple-para>A quoted passage.\
+</ns0:simple-para></ns0:displayed-quote>
+      </ns0:section>
+    </ns0:section>
+  </ns0:sections></ns0:body>
+</ns0:article>
+"""
+
+TABLE_XML = b"""<?xml version="1.0"?>
+<ns0:article xmlns:ns0="http://www.elsevier.com/xml/common/dtd">
+  <ns0:body><ns0:section><ns0:para>Text before.<ns0:table><ns0:tgroup>\
+<ns0:tbody><ns0:row><ns0:entry><ns0:bold>Measure</ns0:bold></ns0:entry>\
+<ns0:entry>D &gt; A</ns0:entry></ns0:row><ns0:row><ns0:entry>Dominance\
+</ns0:entry><ns0:entry>D &gt; 50% &gt; A</ns0:entry></ns0:row></ns0:tbody>\
+</ns0:tgroup></ns0:table></ns0:para></ns0:section></ns0:body>
+</ns0:article>
+"""
+
+
+def test_section_titles_become_headings() -> None:
+    """They used to be concatenated into the first sentence of their own
+    section, so every recovered article opened "Introduction Fairness
+    and discrimination…" and ran on as one undifferentiated block."""
+    blocks, _ = _extract_xml_blocks(STRUCTURED_XML)
+    assert ("h1", "Introduction") in blocks
+    assert ("h2", "Background") in blocks
+
+
+def test_headings_nest_by_section_depth() -> None:
+    blocks, _ = _extract_xml_blocks(STRUCTURED_XML)
+    kinds = {text: kind for kind, text in blocks}
+    assert kinds["Introduction"] == "h1"
+    assert kinds["Background"] == "h2"
+
+
+def test_paragraphs_are_separate_blocks() -> None:
+    blocks, _ = _extract_xml_blocks(STRUCTURED_XML)
+    paras = [t for k, t in blocks if k == "p"]
+    assert "Opening prose." in paras
+    assert "Nested prose." in paras
+
+
+def test_list_items_are_their_own_blocks() -> None:
+    """A list nested inside its introducing paragraph must not dissolve
+    into that paragraph's sentence."""
+    blocks, _ = _extract_xml_blocks(STRUCTURED_XML)
+    items = [t for k, t in blocks if k == "li"]
+    assert items == ["First bullet.", "Second bullet."]
+    assert "First bullet." not in dict.fromkeys(
+        t for k, t in blocks if k == "p"
+    )
+
+
+def test_block_quotes_are_marked_as_such() -> None:
+    blocks, _ = _extract_xml_blocks(STRUCTURED_XML)
+    assert ("quote", "A quoted passage.") in blocks
+
+
+def test_table_rows_survive_as_rows() -> None:
+    """Cells hold inline markup rather than `<ce:para>`, so a generic
+    block walk finds nothing to emit and the table vanishes silently."""
+    blocks, _ = _extract_xml_blocks(TABLE_XML)
+    rows = [t for k, t in blocks if k == "row"]
+    assert rows == ["Measure  |  D > A", "Dominance  |  D > 50% > A"]
+
+
+def test_table_text_is_not_glued_into_the_paragraph() -> None:
+    blocks, _ = _extract_xml_blocks(TABLE_XML)
+    paras = [t for k, t in blocks if k == "p"]
+    assert paras == ["Text before."]
+
+
+def test_flattened_parts_still_read_as_text() -> None:
+    """`_extract_xml_parts` keeps its contract for the length check and
+    any text-only consumer."""
+    prose, notes = _extract_xml_parts(STRUCTURED_XML)
+    assert "Introduction" in prose
+    assert "Opening prose." in prose
+    assert notes == []
+
+
+def test_assembled_body_appends_the_footnotes_heading() -> None:
+    blocks, notes = _extract_xml_blocks(FOOTNOTE_XML)
+    body = _assemble_body(blocks, notes)
+    assert body.index("Footnotes") < body.index("European Commission")
+
+
+def test_document_flow_renders_notes_after_a_heading() -> None:
+    blocks, notes = _extract_xml_blocks(FOOTNOTE_XML)
+    flow = _document_flow(blocks, notes)
+    kinds = [k for k, _ in flow]
+    assert kinds[-2:] == ["h1", "note"]
+    assert flow[-2] == ("h1", "Footnotes")
+
+
+def test_document_flow_omits_the_heading_when_there_are_no_notes() -> None:
+    blocks, notes = _extract_xml_blocks(NO_FOOTNOTE_XML)
+    assert _document_flow(blocks, notes) == blocks
+
+
+# ---------------------------------------------------------------------------
+# Front matter
+# ---------------------------------------------------------------------------
+
+COREDATA_XML = b"""<?xml version="1.0"?>
+<ns0:response xmlns:ns0="http://www.elsevier.com/xml/svapi/article/dtd"
+              xmlns:ns1="http://purl.org/dc/elements/1.1/">
+  <ns0:coredata>
+    <ns1:title>Why fairness cannot be automated</ns1:title>
+    <ns0:publicationName>Computer Law &amp; Security Review</ns0:publicationName>
+    <ns1:creator>Wachter, Sandra</ns1:creator>
+    <ns1:creator>Mittelstadt, Brent</ns1:creator>
+    <ns0:volume>41</ns0:volume>
+    <ns0:pageRange>105567</ns0:pageRange>
+    <ns0:coverDisplayDate>July 2021</ns0:coverDisplayDate>
+    <ns0:doi>10.1016/j.clsr.2021.105567</ns0:doi>
+    <ns0:issn>2212473X</ns0:issn>
+    <ns1:description>An abstract about discrimination.</ns1:description>
+    <ns0:subject>Fairness</ns0:subject>
+    <ns0:subject>Bias</ns0:subject>
+  </ns0:coredata>
+  <ns0:originalText><ns0:author-group>
+    <ns0:affiliation><ns0:label>a</ns0:label>
+      <ns0:textfn>Oxford Internet Institute, University of Oxford</ns0:textfn>
+    </ns0:affiliation>
+  </ns0:author-group>
+  <ns0:body><ns0:section><ns0:para>Body text.</ns0:para></ns0:section></ns0:body>
+  </ns0:originalText>
+</ns0:response>
+"""
+
+
+def test_front_matter_is_extracted() -> None:
+    """None of this used to reach the recovered file, so it opened cold
+    on the first sentence with no title, authors or DOI anywhere in it."""
+    meta, _blocks, _notes = _extract_article(COREDATA_XML)
+    assert meta["title"] == "Why fairness cannot be automated"
+    assert meta["authors"] == ["Wachter, Sandra", "Mittelstadt, Brent"]
+    assert meta["journal"] == "Computer Law & Security Review"
+    assert meta["volume"] == "41"
+    assert meta["doi"] == "10.1016/j.clsr.2021.105567"
+    assert meta["abstract"] == "An abstract about discrimination."
+    assert meta["keywords"] == ["Fairness", "Bias"]
+
+
+def test_affiliations_are_labelled_and_deduplicated() -> None:
+    """Elsevier repeats each affiliation in a formatted and a structured
+    form; only the formatted one belongs on a cover page."""
+    meta, _b, _n = _extract_article(COREDATA_XML)
+    assert meta["affiliations"] == [
+        "(a) Oxford Internet Institute, University of Oxford",
+    ]
+
+
+def test_metadata_and_body_come_from_one_parse() -> None:
+    meta, blocks, _notes = _extract_article(COREDATA_XML)
+    assert meta["title"]
+    assert ("p", "Body text.") in blocks
+
+
+def test_missing_coredata_is_empty_metadata_not_a_crash() -> None:
+    meta, blocks, _notes = _extract_article(FOOTNOTE_XML)
+    assert meta == {}
+    assert blocks, "the body must still be recovered without front matter"
+
+
+def test_extract_article_survives_malformed_xml() -> None:
+    assert _extract_article(b"<not><well>formed") == ({}, [], [])
