@@ -7,10 +7,12 @@ Scopus and WoS return book chapters, and a mis-typed chapter passes
 succeed there. Five of them in one live corpus each burned a browser
 slot to produce an unexplained "never reached the viewer".
 
-The five real DOIs are used here as fixtures. Their correct types were
-confirmed against Crossref in a live Zotero group: four chapters and —
-the one worth keeping in the suite — a whole *book* among them, so a
-rule of "not an article means chapter" would be wrong too.
+The type used to be bought from Crossref, one HTTP request per DOI, on
+every single row. It now comes from the row's own `type` column, which
+the searchers fill from what the database already told them — and only
+a row that cannot say goes to the authority. The five real DOIs are
+still the fixtures: their Crossref types are exactly the strings the
+searchers now emit, so the same table is under test from the other end.
 """
 
 from __future__ import annotations
@@ -18,7 +20,8 @@ from __future__ import annotations
 import import_to_zotero as imp
 import pytest
 
-# Real DOIs, with the type Crossref actually returns for each.
+# Real DOIs, with the type Crossref returns for each — which is also
+# the value a searcher now writes into the row's `type` column.
 LIVE_CASES = [
     ("10.1017/cbo9780511845680.012", "book-chapter", "bookSection"),
     ("10.1163/ej.9789004180192.i-356.48", "book-chapter", "bookSection"),
@@ -28,67 +31,39 @@ LIVE_CASES = [
 ]
 
 
-class _Session:
-    """Stand-in for the shared requests session."""
-
-
-def _crossref(monkeypatch, type_by_doi: dict, *, calls: list | None = None):
-    def fake_get_json(session, url, **kw):
-        if calls is not None:
-            calls.append(url)
-        doi = url.rsplit("/works/", 1)[-1]
-        if doi not in type_by_doi:
-            return None
-        return {"message": {"type": type_by_doi[doi]}}
-
-    monkeypatch.setattr(imp.http_client, "get_json", fake_get_json)
-
-
 @pytest.mark.parametrize(("doi", "crossref_type", "expected"), LIVE_CASES)
 def test_live_dois_resolve_to_their_real_types(
-    monkeypatch, doi, crossref_type, expected,
+    doi, crossref_type, expected,
 ) -> None:
-    _crossref(monkeypatch, {doi: crossref_type})
-    assert imp.resolve_item_type(doi, session=_Session()) == expected
+    row = {"doi": doi, "type": crossref_type}
+    assert imp.row_item_type(row) == expected
 
 
-def test_a_book_is_not_flattened_to_a_chapter(monkeypatch) -> None:
+def test_a_book_is_not_flattened_to_a_chapter() -> None:
     """The case a "chapters vs articles" rule would get wrong."""
-    doi = "10.5149/northcarolina/9781469661032.001.0001"
-    _crossref(monkeypatch, {doi: "monograph"})
-    assert imp.resolve_item_type(doi, session=_Session()) == "book"
+    assert imp.row_item_type({"type": "monograph"}) == "book"
 
 
-class TestFallbacks:
-    """Every unknown must land on the old behaviour, never on an error."""
-
-    def test_missing_doi(self) -> None:
-        assert imp.resolve_item_type("", session=_Session()) == "journalArticle"
-
-    def test_unknown_crossref_type(self, monkeypatch) -> None:
-        _crossref(monkeypatch, {"10.1/x": "some-new-thing"})
-        assert imp.resolve_item_type("10.1/x", session=_Session()) == "journalArticle"
-
-    def test_doi_not_in_crossref(self, monkeypatch) -> None:
-        _crossref(monkeypatch, {})
-        assert imp.resolve_item_type("10.1/x", session=_Session()) == "journalArticle"
-
-    def test_network_failure_does_not_fail_the_import(self, monkeypatch) -> None:
-        def boom(*a, **kw):
-            raise RuntimeError("crossref down")
-
-        monkeypatch.setattr(imp.http_client, "get_json", boom)
-        assert imp.resolve_item_type("10.1/x", session=_Session()) == "journalArticle"
+def test_type_matching_is_case_and_space_insensitive() -> None:
+    assert imp.row_item_type({"type": "  Journal-Article "}) == "journalArticle"
 
 
-def test_one_lookup_per_distinct_doi(monkeypatch) -> None:
-    """A merged Scopus+WoS batch sees most DOIs twice."""
-    calls: list = []
-    _crossref(monkeypatch, {"10.1/x": "journal-article"}, calls=calls)
-    cache: dict = {}
-    for _ in range(4):
-        imp.resolve_item_type("10.1/X", session=_Session(), cache=cache)
-    assert len(calls) == 1, "Crossref was asked more than once for one DOI"
+class TestUnknowns:
+    """An unknown type must say so, not guess.
+
+    `""` is the routing signal for "ask Crossref". Returning
+    `journalArticle` here — the old fallback — would send a book
+    chapter to Zotero labelled an article without anything to notice it.
+    """
+
+    def test_missing_type_column(self) -> None:
+        assert imp.row_item_type({"doi": "10.1/x"}) == ""
+
+    def test_empty_type_column(self) -> None:
+        assert imp.row_item_type({"type": ""}) == ""
+
+    def test_unmapped_crossref_type(self) -> None:
+        assert imp.row_item_type({"type": "some-new-thing"}) == ""
 
 
 class TestContainerField:

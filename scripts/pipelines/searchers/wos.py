@@ -21,6 +21,23 @@ _WOS_KEY_HINT = (
     "substitute — formal searches need the Expanded tier."
 )
 
+#: WoS `doctype` → Crossref type vocabulary (see `base.CROSSREF_TYPES`).
+#: A record carries several doctypes ("Article", "Early Access",
+#: "Proceedings Paper"); `_crossref_type` takes the first one that maps,
+#: so a paper that is both an Article and Early Access is an article.
+#: Unmapped doctypes give `""` rather than a guess.
+_WOS_DOCTYPE_TO_CROSSREF = {
+    "article": "journal-article",
+    "review": "journal-article",
+    "editorial material": "journal-article",
+    "letter": "journal-article",
+    "note": "journal-article",
+    "correction": "journal-article",
+    "proceedings paper": "proceedings-article",
+    "book chapter": "book-chapter",
+    "book": "book",
+}
+
 
 class WosSearch(SearchSource):
     name = "wos"
@@ -108,14 +125,20 @@ class WosSearch(SearchSource):
         names = static.get("summary", {}).get("names", {}).get("name", [])
         if isinstance(names, dict):
             names = [names]
+        # `display_name` is WoS's comma form ("Smith, John A."), which
+        # import maps straight to firstName/lastName. `full_name` is the
+        # same shape; the `wos_standard` fallback ("Smith, JA") is worse
+        # but still splittable, and better than a display-order name that
+        # forces a Crossref round-trip to un-guess.
         authors = "; ".join(
-            n.get("display_name", n.get("full_name", ""))
+            n.get("display_name")
+            or n.get("full_name")
+            or n.get("wos_standard", "")
             for n in names if n.get("role") == "author"
         )
 
-        year = str(static.get("summary", {})
-                         .get("pub_info", {})
-                         .get("pubyear", ""))
+        pub_info = static.get("summary", {}).get("pub_info", {}) or {}
+        year = str(pub_info.get("pubyear", ""))
 
         id_list = (dynamic.get("cluster_related", {})
                           .get("identifiers", {})
@@ -155,8 +178,45 @@ class WosSearch(SearchSource):
             "year": year,
             "source": source,
             "issn": issn,
+            "volume": str(pub_info.get("vol", "") or ""),
+            "issue": str(pub_info.get("issue", "") or ""),
+            "pages": self._page_range(pub_info),
+            "type": self._crossref_type(static),
             "cited_by": cited_by,
             "wos_id": uid,
             "abstract": abstract,
         })
         return row
+
+    def _page_range(self, pub_info: dict) -> str:
+        """Pages from `pub_info.page`, which is a dict, not a string.
+
+        WoS gives `{"begin": "1", "end": "20", "page_count": 20,
+        "content": "1-20"}`. `content` is the rendered range when
+        present; otherwise begin/end are joined.
+        """
+        page = pub_info.get("page")
+        if isinstance(page, str):
+            return page.strip()
+        if not isinstance(page, dict):
+            return ""
+        content = str(page.get("content", "") or "").strip()
+        if content:
+            return content
+        begin = str(page.get("begin", "") or "").strip()
+        end = str(page.get("end", "") or "").strip()
+        if begin and end and begin != end:
+            return f"{begin}-{end}"
+        return begin or end
+
+    def _crossref_type(self, static: dict) -> str:
+        doctypes = (static.get("summary", {})
+                          .get("doctypes", {})
+                          .get("doctype", []))
+        if isinstance(doctypes, str):
+            doctypes = [doctypes]
+        for dt in doctypes or []:
+            mapped = _WOS_DOCTYPE_TO_CROSSREF.get(str(dt).strip().lower(), "")
+            if mapped:
+                return mapped
+        return ""

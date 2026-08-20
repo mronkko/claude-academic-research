@@ -29,6 +29,21 @@ BULK_ENDPOINT = "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
 PER_PAGE = 1000          # bulk-search max
 RATE_LIMIT_SLEEP = 0.5   # unauthenticated tier is aggressive
 
+#: Semantic Scholar `publicationTypes` entry → Crossref type vocabulary
+#: (see `base.CROSSREF_TYPES`). S2 attaches several types to one paper
+#: ("JournalArticle", "Review"); the first that maps wins. The search
+#: itself filters to JournalArticle, so this table mostly matters for
+#: papers S2 double-labels.
+_S2_TYPE_TO_CROSSREF = {
+    "journalarticle": "journal-article",
+    "review": "journal-article",
+    "editorial": "journal-article",
+    "lettersandcomments": "journal-article",
+    "conference": "proceedings-article",
+    "book": "book",
+    "booksection": "book-chapter",
+}
+
 
 class SemanticScholarSearch(SearchSource):
     name = "semantic_scholar"
@@ -58,6 +73,21 @@ class SemanticScholarSearch(SearchSource):
         api_key, _ = resolve_credential(
             "SEMANTIC_SCHOLAR_API_KEY", mode=CREDENTIAL_OPTIONAL,
         )
+        if not api_key:
+            # Said before the first request, not after the first stall.
+            # The unauthenticated tier is 1 rps shared across every
+            # anonymous caller on the internet, so a bulk search
+            # routinely spends minutes inside the retry policy's
+            # backoff; `http_client.VerboseRetry` narrates each wait,
+            # and this explains why they are happening.
+            print(
+                "  NOTE: no SEMANTIC_SCHOLAR_API_KEY — using the shared "
+                "unauthenticated tier (~1 request/second for all anonymous "
+                "callers). Expect 429s and multi-minute backoff waits on a "
+                "bulk search; that is throttling, not a hang. `/setup` "
+                "registers a free key.",
+                flush=True,
+            )
         issn_set = {i.strip() for i in ctx.issns if i.strip()}
 
         rows: list[dict] = []
@@ -110,7 +140,7 @@ class SemanticScholarSearch(SearchSource):
                 "fields": ",".join([
                     "title", "abstract", "year", "venue",
                     "authors", "externalIds", "citationCount",
-                    "openAccessPdf", "journal",
+                    "openAccessPdf", "journal", "publicationTypes",
                 ]),
             }
             if token:
@@ -201,6 +231,12 @@ class SemanticScholarSearch(SearchSource):
             "year": str(paper.get("year", "") or ""),
             "source": journal.get("name", "") or paper.get("venue", "") or "",
             "issn": "",  # not reliably exposed
+            # S2's `journal` sub-object carries volume and pages but no
+            # issue — the one gap among the four databases.
+            "volume": str(journal.get("volume", "") or "").strip(),
+            "issue": "",
+            "pages": str(journal.get("pages", "") or "").strip(),
+            "type": self._crossref_type(paper),
             "cited_by": paper.get("citationCount", 0) or 0,
             "s2_paper_id": paper.get("paperId", "") or "",
             "abstract": paper.get("abstract", "") or "",
@@ -208,3 +244,10 @@ class SemanticScholarSearch(SearchSource):
             "oa_url": oa.get("url", "") if oa else "",
         })
         return row
+
+    def _crossref_type(self, paper: dict) -> str:
+        for pt in paper.get("publicationTypes") or []:
+            mapped = _S2_TYPE_TO_CROSSREF.get(str(pt).strip().lower(), "")
+            if mapped:
+                return mapped
+        return ""

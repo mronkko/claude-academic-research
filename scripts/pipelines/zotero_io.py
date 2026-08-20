@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 import warnings
 from collections import defaultdict
@@ -503,6 +504,22 @@ class ZoteroClient:
         frame, which is what most callers actually want.
         """
         z = self._read_client()
+        return z.everything(z.items(itemType="journalArticle"))
+
+    def cloud_journal_articles(self) -> list[dict]:
+        """`journal_articles()` forced through api.zotero.org.
+
+        For callers that need to read back their own writes. Writes go
+        to the Web API; Zotero Desktop's local database only learns
+        about them at its next sync, so a caller that writes and then
+        asks the local client gets a stale answer with no error — which
+        is how one import created a full set of duplicates on a re-run.
+
+        Deliberately not `prefer_local=False` on the whole client: the
+        rest of a run is faster against the local server and is not
+        reading its own writes.
+        """
+        z = self.cloud
         return z.everything(z.items(itemType="journalArticle"))
 
     def abstractable_items(
@@ -1191,6 +1208,62 @@ class ZoteroClient:
         raise RuntimeError(
             f"create_collection failed for {name!r}: {failed!r}"
         )
+
+    #: A Zotero object key: 8 characters, upper-case letters and digits.
+    #: Distinguishing a key from a collection *name* is a guess, but a
+    #: safe one — a real collection called "AI_ETP_SR" is 9 characters,
+    #: and any 8-character all-caps name that isn't a key simply falls
+    #: through to the name lookup below and is found (or created) there.
+    _COLLECTION_KEY_RE = re.compile(r"^[A-Z0-9]{8}$")
+
+    def find_collection(
+        self, name_or_key: str, *, create: bool = False,
+    ) -> tuple[str, str]:
+        """Resolve a collection key **or** display name. Returns `(key, how)`.
+
+        `how` is `"key"`, `"name"` or `"created"`, so the caller can say
+        out loud which happened — the failure this exists to prevent was
+        silent. The skill documented `--collection <name>` and promised
+        it would be created; the script accepted only an existing key,
+        so a name was passed straight to the API as one and every single
+        item in the batch failed with an opaque 400. The agent driving
+        that run improvised inline Python to list and create collections
+        and then re-ran the import, which duplicated the whole corpus.
+
+        Lookup order: exact key match, then exact name match, then
+        (with `create=True`) create it. Raises ValueError when two
+        collections share the name — ambiguous, never guess, same rule
+        as `find_group_by_name`.
+        """
+        wanted = (name_or_key or "").strip()
+        if not wanted:
+            return "", ""
+        collections = self.cloud.everything(self.cloud.collections())
+        by_key = {c.get("key", ""): c for c in collections}
+        if self._COLLECTION_KEY_RE.match(wanted) and wanted in by_key:
+            return wanted, "key"
+
+        matches = [
+            c for c in collections
+            if (c.get("data", {}) or {}).get("name", "") == wanted
+        ]
+        if len(matches) > 1:
+            raise ValueError(
+                f"Ambiguous collection name {wanted!r}: "
+                f"{len(matches)} collections share it "
+                f"(keys {[c.get('key') for c in matches]}). Pass the key "
+                f"instead, or rename one of them."
+            )
+        if matches:
+            return matches[0].get("key", ""), "name"
+
+        if not create:
+            raise ValueError(
+                f"No collection named {wanted!r} in "
+                f"{self.describe_library()}, and it is not a collection "
+                f"key either."
+            )
+        return self.create_collection(wanted), "created"
 
     def delete_collection(self, collection_key: str) -> bool:
         """Delete a collection (used by mini_slr.py's teardown stage).

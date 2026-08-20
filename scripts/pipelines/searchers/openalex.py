@@ -17,6 +17,29 @@ from .base import SearchContext, SearchSource, empty_row
 PER_PAGE = 200           # OpenAlex max
 RATE_LIMIT_SLEEP = 0.2   # polite pool delay between requests
 
+#: OpenAlex work `type` → Crossref type vocabulary (see
+#: `base.CROSSREF_TYPES`). OpenAlex renamed `journal-article` to plain
+#: `article` in 2024 while keeping the rest of Crossref's spelling, so
+#: most of this table is identity and the entries that matter are the
+#: two renames and the editorial/letter/erratum family, which are
+#: journal articles wherever they are indexed. Anything unlisted maps to
+#: `""` — an honest "no idea", which sends the record down the
+#: identifier-fill path rather than mislabelling it an article.
+_OPENALEX_TYPE_TO_CROSSREF = {
+    "article": "journal-article",
+    "review": "journal-article",
+    "editorial": "journal-article",
+    "letter": "journal-article",
+    "erratum": "journal-article",
+    "book-chapter": "book-chapter",
+    "book": "book",
+    "monograph": "monograph",
+    "dissertation": "dissertation",
+    "report": "report",
+    "preprint": "posted-content",
+    "reference-entry": "reference-entry",
+}
+
 
 class OpenAlexSearch(SearchSource):
     name = "openalex"
@@ -80,7 +103,7 @@ class OpenAlexSearch(SearchSource):
             "per_page": PER_PAGE,
             "select": ",".join([
                 "id", "doi", "title", "publication_year", "publication_date",
-                "cited_by_count", "type", "authorships",
+                "cited_by_count", "type", "authorships", "biblio",
                 "primary_location", "open_access", "abstract_inverted_index",
             ]),
         }
@@ -111,6 +134,7 @@ class OpenAlexSearch(SearchSource):
         )
         abstract = self._reconstruct_abstract(w.get("abstract_inverted_index"))
         year_str = str(w.get("publication_year", "") or "")
+        biblio = w.get("biblio") or {}
 
         row = empty_row()
         row.update({
@@ -122,6 +146,12 @@ class OpenAlexSearch(SearchSource):
             "year": year_str,
             "source": src.get("display_name", "") or "",
             "issn": src.get("issn_l", "") or "",
+            "volume": str(biblio.get("volume") or ""),
+            "issue": str(biblio.get("issue") or ""),
+            "pages": self._page_range(biblio),
+            "type": _OPENALEX_TYPE_TO_CROSSREF.get(
+                str(w.get("type") or "").strip().lower(), "",
+            ),
             "cited_by": w.get("cited_by_count", 0) or 0,
             "openalex_id": w.get("id", "") or "",
             "abstract": abstract,
@@ -129,6 +159,19 @@ class OpenAlexSearch(SearchSource):
             "oa_url": oa.get("oa_url", "") or "",
         })
         return row
+
+    def _page_range(self, biblio: dict) -> str:
+        """`first_page`/`last_page` as one `123-145` string.
+
+        OpenAlex splits the range into two fields and often knows only
+        the first page; Zotero's `pages` takes either shape, so a lone
+        first page is emitted alone rather than as `123-`.
+        """
+        first = str(biblio.get("first_page") or "").strip()
+        last = str(biblio.get("last_page") or "").strip()
+        if first and last and first != last:
+            return f"{first}-{last}"
+        return first or last
 
     def _reconstruct_abstract(self, inverted_index: dict | None) -> str:
         """Rebuild plaintext from OpenAlex inverted index.

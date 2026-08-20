@@ -76,6 +76,16 @@ SEARCH_ROW_FIELDS = (
     "year",            # "YYYY" string
     "source",          # journal / venue name
     "issn",
+    # Bibliographic detail every one of the four APIs returns and the
+    # searchers used to discard. `import_to_zotero.py` maps these
+    # straight onto the Zotero item, so a row that carries them imports
+    # with no network call beyond Zotero itself; a row that doesn't
+    # costs one Crossref fetch per DOI to reconstruct what the search
+    # database already had in hand.
+    "volume",
+    "issue",
+    "pages",
+    "type",            # Crossref type vocabulary — see CROSSREF_TYPES
     "cited_by",        # int
     "abstract",
     # per-source identifiers (empty when not applicable)
@@ -86,6 +96,28 @@ SEARCH_ROW_FIELDS = (
     # OA metadata (populated by OpenAlex and Semantic Scholar when available)
     "oa_status",
     "oa_url",
+)
+
+
+#: The vocabulary the `type` column speaks: Crossref's own `type`
+#: strings. Every source normalises its native vocabulary into this one
+#: — Scopus says "Book Chapter", WoS says "Book Chapter" in a different
+#: place, OpenAlex says "book-chapter", and all three must arrive as
+#: `book-chapter` — because `import_to_zotero._CROSSREF_TYPE_TO_ZOTERO`
+#: is the single table that turns a type into a Zotero itemType, and it
+#: is keyed on Crossref. A source that cannot map a value emits `""`,
+#: which downstream reads as "ask the authority", not as "article".
+CROSSREF_TYPES = (
+    "journal-article",
+    "proceedings-article",
+    "book-chapter",
+    "book",
+    "monograph",
+    "edited-book",
+    "reference-entry",
+    "report",
+    "dissertation",
+    "posted-content",
 )
 
 

@@ -70,6 +70,47 @@ def _title_author_key(title: str, authors: str) -> str:
     return f"{t}|{first_last}" if t else ""
 
 
+#: Fields a duplicate row may contribute to the row that is kept:
+#: first non-empty value wins, so whichever database happened to be
+#: searched first stops deciding what metadata survives. Databases
+#: differ in what they populate — Semantic Scholar has no issue number,
+#: OpenAlex has no page range for some records — and dedup used to
+#: throw the complement away with the duplicate.
+_MERGEABLE_FIELDS = ("abstract", "volume", "issue", "pages", "type")
+
+
+def _has_comma_authors(authors: str) -> bool:
+    """True when every creator in the string is in `Last, First` form.
+
+    The distinction is worth a column: Scopus and WoS return names
+    already split at the comma, while OpenAlex and Semantic Scholar
+    return display order ("Jane Doe") and no split exists in their
+    responses. An import can build a correct Zotero creator from the
+    first shape offline; the second one has to be reconstructed from
+    Crossref, one HTTP request per record.
+    """
+    parts = [p.strip() for p in (authors or "").split(";") if p.strip()]
+    return bool(parts) and all("," in p for p in parts)
+
+
+def _merge_row(keeper: dict, other: dict) -> None:
+    """Fold what `other` knows into `keeper`, in place.
+
+    Never overwrites a value the keeper already has, with one exception:
+    comma-format authors replace display-order authors, because that is
+    a strictly better rendering of the same fact. A run that searched
+    OpenAlex and WoS therefore imports WoS's splittable names even when
+    OpenAlex's row arrived first — repairing the creators of every
+    overlapping record with no network calls at all.
+    """
+    for field in _MERGEABLE_FIELDS:
+        if not (keeper.get(field) or "") and other.get(field):
+            keeper[field] = other[field]
+    if not _has_comma_authors(keeper.get("authors", "")) and \
+            _has_comma_authors(other.get("authors", "")):
+        keeper["authors"] = other["authors"]
+
+
 def _dedup(rows: list[dict]) -> tuple[list[dict], int]:
     by_doi: dict[str, dict] = {}
     no_doi: list[dict] = []
@@ -80,8 +121,7 @@ def _dedup(rows: list[dict]) -> tuple[list[dict], int]:
         elif doi not in by_doi:
             by_doi[doi] = r
         else:
-            if not by_doi[doi]["abstract"] and r["abstract"]:
-                by_doi[doi]["abstract"] = r["abstract"]
+            _merge_row(by_doi[doi], r)
 
     title_to_doi: dict[str, str] = {}
     for doi, r in by_doi.items():
@@ -94,9 +134,7 @@ def _dedup(rows: list[dict]) -> tuple[list[dict], int]:
     for r in no_doi:
         tk = _title_author_key(r.get("title", ""), r.get("authors", ""))
         if tk and tk in title_to_doi:
-            keeper = by_doi[title_to_doi[tk]]
-            if not keeper["abstract"] and r.get("abstract"):
-                keeper["abstract"] = r["abstract"]
+            _merge_row(by_doi[title_to_doi[tk]], r)
             merged += 1
         else:
             unresolved.append(r)
