@@ -85,19 +85,73 @@ def _is_preview_warning(els_status: str) -> bool:
     return s.startswith("WARNING") or "not entitled" in s.lower()
 
 
-def _extract_xml_body(xml_bytes: bytes) -> str:
-    """Pull the article body from an Elsevier full-text XML response.
+#: Elsevier elements that annotate the body rather than continue it.
+#: Both are placed **at the point their marker appears**, so a plain
+#: document-order text walk splices the whole annotation between a
+#: clause and its continuation. `<ce:table-footnote>` has the identical
+#: shape and the identical problem, one level down inside a table.
+#:
+#: Tables and figures are deliberately *not* here. They are content
+#: rather than annotation, and Elsevier anchors them at block level via
+#: `<ce:float-anchor>` rather than mid-sentence, so they do not break
+#: the sentence they sit in. `<ce:bib-reference>` is not here either:
+#: it lives in the bibliography, outside `<body>`. Revisit if a real
+#: article shows otherwise.
+_ANNOTATION_TAGS = frozenset({"footnote", "table-footnote"})
 
-    Strips namespaces and concatenates all text nodes under the
-    `<body>` element. Returns an empty string if no body is found —
-    callers must treat that as "XML fallback also failed".
+#: Heading that separates relocated annotations from the body prose.
+_FOOTNOTES_HEADING = "Footnotes"
+
+
+def _element_text(el, skip: frozenset = frozenset()) -> list[str]:
+    """Text under `el` in document order, skipping `skip` subtrees.
+
+    A skipped child's **tail is still collected**. That tail is the
+    remainder of the sentence the annotation was anchored in — dropping
+    it along with the annotation would weld the words on either side of
+    the marker together, trading one corruption for another.
+    """
+    parts: list[str] = []
+    if el.text and el.text.strip():
+        parts.append(el.text.strip())
+    for child in el:
+        if child.tag not in skip:
+            parts.extend(_element_text(child, skip))
+        if child.tail and child.tail.strip():
+            parts.append(child.tail.strip())
+    return parts
+
+
+def _collect_annotations(el) -> list[str]:
+    """Every annotation subtree under `el`, in document order.
+
+    Does not descend into an annotation it has already collected, so a
+    footnote nested inside another is rendered once, as part of its
+    parent, rather than twice.
+    """
+    out: list[str] = []
+    for child in el:
+        if child.tag in _ANNOTATION_TAGS:
+            text = " ".join(_element_text(child))
+            if text:
+                out.append(text)
+        else:
+            out.extend(_collect_annotations(child))
+    return out
+
+
+def _extract_xml_parts(xml_bytes: bytes) -> tuple[str, list[str]]:
+    """Split an Elsevier full-text XML response into (prose, annotations).
+
+    Returns `("", [])` if the response has no `<body>` or does not
+    parse — callers must treat that as "XML fallback also failed".
     """
     try:
         import xml.etree.ElementTree as ET
         root = ET.fromstring(xml_bytes)
     except Exception as e:  # noqa: BLE001
         logger.debug("Elsevier XML parse failed: %s", e)
-        return ""
+        return "", []
     # Strip namespaces from every tag for tolerant element lookups.
     for el in root.iter():
         if isinstance(el.tag, str) and "}" in el.tag:
@@ -107,23 +161,99 @@ def _extract_xml_body(xml_bytes: bytes) -> str:
         body = el
         break
     if body is None:
+        return "", []
+    return (
+        " ".join(_element_text(body, _ANNOTATION_TAGS)),
+        _collect_annotations(body),
+    )
+
+
+def _extract_xml_body(xml_bytes: bytes) -> str:
+    """Readable article text from an Elsevier full-text XML response.
+
+    The body prose comes first, with footnotes lifted out of it and
+    re-attached as an endnote block under a `Footnotes` heading.
+
+    Relocating rather than dropping them is deliberate. In the law
+    reviews this fallback is most often used on, footnotes carry a
+    large share of the argument — one sampled article was 35 %
+    footnote by character count — so discarding them would lose real
+    content. Leaving them where the XML puts them is what this
+    replaced: each one landed between a clause and its continuation,
+    and every annotated sentence came out broken in two.
+
+    In-text markers (`<ce:cross-ref>` superscripts) stay where they
+    are, so a reader can still match a marker to its note.
+    """
+    return _assemble_body(*_extract_xml_parts(xml_bytes))
+
+
+def _assemble_body(prose: str, notes: list[str]) -> str:
+    """Join body prose and relocated annotations into one document."""
+    if not prose and not notes:
         return ""
-    parts: list[str] = []
-    for el in body.iter():
-        if el.text and el.text.strip():
-            parts.append(el.text.strip())
-        if el.tail and el.tail.strip():
-            parts.append(el.tail.strip())
-    return " ".join(parts)
+    if not notes:
+        return prose
+    return "\n\n".join([prose, _FOOTNOTES_HEADING, *notes])
 
 
-def _render_text_pdf(text: str, out_path: Path, *, title: str = "") -> None:
+def _plugin_version() -> str:
+    """This plugin's version string, or "unknown".
+
+    Read from `.claude-plugin/plugin.json` at the repo root rather than
+    hardcoded, so the stamp on a recovered PDF cannot drift from the
+    release that produced it.
+    """
+    try:
+        import json
+        manifest = (
+            Path(__file__).resolve().parents[3]
+            / ".claude-plugin" / "plugin.json"
+        )
+        version = json.loads(manifest.read_text(encoding="utf-8")).get("version")
+        return str(version) if version else "unknown"
+    except Exception:  # noqa: BLE001 — a stamp must never fail a download
+        return "unknown"
+
+
+def _recovery_note(n_annotations: int) -> str:
+    """The provenance line stamped onto a recovered PDF.
+
+    Names the version because the transformation changed in 0.15.0 and
+    files produced before it cannot otherwise be told apart: every
+    recovery ever made carries the same `-tdm-recovered` suffix, so a
+    corpus mixes silently-corrupted text with corrected text and
+    nothing in either file says which it is. Re-fetching is the only
+    remedy for the old ones, and this is what makes them identifiable.
+    """
+    made_by = (
+        f"Text recovered from Elsevier full-text XML by "
+        f"claude-academic-research {_plugin_version()}."
+    )
+    if not n_annotations:
+        return f"{made_by} No footnotes were present in the body."
+    return (
+        f"{made_by} {n_annotations} footnote(s) were moved out of the "
+        f"body text into the Footnotes section at the end; in-text "
+        f"markers are unchanged. This is not the publisher's PDF."
+    )
+
+
+def _render_text_pdf(
+    text: str, out_path: Path, *, title: str = "", note: str = "",
+) -> None:
     """Write `text` to `out_path` as a plain text-only PDF via reportlab.
 
     Layout is intentionally minimal — wrapped paragraphs, no styling.
     The point is that downstream `pdftotext` can recover the body for
     coding. Raises ImportError if reportlab is not installed; callers
     should catch and report a sensible error in that case.
+
+    `note` is a provenance line rendered above the body. A recovered
+    PDF is otherwise indistinguishable from a native one to anything
+    that does not look closely — it is well-formed, passes size and
+    text-length checks, and reads as a normal article — so the file
+    should say how it was made and what was moved.
     """
     # reportlab is declared in enrich_pdfs.py's PEP 723 deps — pulled in
     # automatically when fetchers run via `uv run`. Static analyzers
@@ -143,6 +273,9 @@ def _render_text_pdf(text: str, out_path: Path, *, title: str = "") -> None:
     flowables: list = []
     if title:
         flowables.append(Paragraph(_escape_xml(title), styles["Title"]))
+        flowables.append(Spacer(1, 12))
+    if note:
+        flowables.append(Paragraph(_escape_xml(note), styles["Italic"]))
         flowables.append(Spacer(1, 12))
     # reportlab Paragraph wraps and respects basic markup. Split on
     # blank lines / sentence-like breaks; very long single paragraphs
@@ -329,7 +462,8 @@ class ScienceDirectSource(AbstractFetcher, PdfFetcher):
         xml_status = xml_resp.headers.get("x-els-status", "") or xml_resp.headers.get("X-ELS-Status", "")
         if _is_preview_warning(xml_status):
             return None
-        body = _extract_xml_body(xml_resp.content)
+        prose, annotations = _extract_xml_parts(xml_resp.content)
+        body = _assemble_body(prose, annotations)
         if not body or len(body) < 500:
             # An entitled XML response with a truly empty body is
             # vanishingly rare — treat as not-recovered rather than
@@ -337,7 +471,9 @@ class ScienceDirectSource(AbstractFetcher, PdfFetcher):
             return None
         out_path = _cache_pdf_path(cache_dir, doi, recovered=True)
         try:
-            _render_text_pdf(body, out_path)
+            _render_text_pdf(
+                body, out_path, note=_recovery_note(len(annotations)),
+            )
         except ImportError:
             logger.warning(
                 "reportlab not installed; cannot render XML body to PDF for %s. "
