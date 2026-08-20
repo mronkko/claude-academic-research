@@ -816,6 +816,55 @@ def _create_new_items(
     return created, failed, created_keys
 
 
+def _format_item_preview(item: dict) -> list[str]:
+    """A few lines describing one item, for `--dry-run`.
+
+    Counts alone cannot answer the question a dry run is asked: does
+    this import produce *correct records*? Creators are where it goes
+    wrong invisibly — a single-field `name` blob and a properly split
+    creator both look like "1 item to create" in a summary.
+    """
+    creators = item.get("creators") or []
+    shown = []
+    for c in creators[:3]:
+        if c.get("name"):
+            shown.append(f"{c['name']} (single field)")
+        else:
+            shown.append(f"{c.get('lastName', '')}, {c.get('firstName', '')}")
+    if len(creators) > 3:
+        shown.append(f"… +{len(creators) - 3} more")
+    container = _container_field_of(item)
+    lines = [
+        f"    title    : {(item.get('title') or '')[:70]}",
+        f"    itemType : {item.get('itemType', '?')}",
+        f"    creators : {'; '.join(shown) or '(none)'}",
+        f"    volume/issue/pages: {item.get('volume', '') or '—'} / "
+        f"{item.get('issue', '') or '—'} / {item.get('pages', '') or '—'}",
+    ]
+    if container:
+        lines.append(f"    {container}: {item.get(container, '') or '—'}")
+    tags = [t.get("tag", "") for t in (item.get("tags") or [])]
+    if tags:
+        lines.append(f"    tags     : {', '.join(tags)}")
+    return lines
+
+
+def _print_dry_run_preview(samples: dict[str, dict]) -> None:
+    """One example per build path, so both can be eyeballed."""
+    labels = {
+        BUILD_SOURCE: "source-built (from the search row, no network)",
+        BUILD_AUTHORITY: "authority-filled (from Crossref via zotero-mcp)",
+        BUILD_FALLBACK: "fallback (row as-is; the authority was unavailable)",
+    }
+    for kind, label in labels.items():
+        item = samples.get(kind)
+        if not item:
+            continue
+        print(f"\n  Example {label}:", flush=True)
+        for line in _format_item_preview(item):
+            print(line, flush=True)
+
+
 def _print_provenance_summary(counts: dict[str, int], no_doi: int) -> None:
     """Say where the new items' metadata came from.
 
@@ -927,6 +976,7 @@ def main() -> int:
     build_counts: dict[str, int] = {
         BUILD_SOURCE: 0, BUILD_AUTHORITY: 0, BUILD_FALLBACK: 0,
     }
+    preview_samples: dict[str, dict] = {}
     fallback_no_doi = 0
 
     for row in rows:
@@ -963,6 +1013,7 @@ def main() -> int:
             session=csl_session, csl_cache=csl_cache,
         )
         build_counts[how] += 1
+        preview_samples.setdefault(how, item)
         if how == BUILD_FALLBACK and not doi:
             fallback_no_doi += 1
         idx = len(to_create)
@@ -980,6 +1031,7 @@ def main() -> int:
     _print_provenance_summary(build_counts, fallback_no_doi)
 
     if args.dry_run:
+        _print_dry_run_preview(preview_samples)
         print("\n[DRY RUN] No changes written.", flush=True)
         return 0
 

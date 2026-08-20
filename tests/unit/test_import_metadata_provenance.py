@@ -392,6 +392,74 @@ def test_the_item_template_rejects_an_unknown_type() -> None:
 
 
 # ---------------------------------------------------------------------------
+# What --dry-run shows
+# ---------------------------------------------------------------------------
+
+
+def test_dry_run_preview_shows_the_creators(capsys) -> None:
+    """Counts cannot answer the question a dry run is asked. A blob
+    creator and a split one are both "1 item to create"."""
+    item, _ = imp.build_item(
+        COMPLETE_ROW, None, session=_ExplodingSession(), csl_cache={},
+    )
+    imp._print_dry_run_preview({imp.BUILD_SOURCE: item})
+    out = capsys.readouterr().out
+    assert "Douglas, Evan J." in out
+    assert "35 / 1 / 105970" in out
+    assert "Journal of Business Venturing" in out
+
+
+def test_dry_run_preview_marks_a_single_field_creator(capsys) -> None:
+    """The failure mode that shipped: "Vanacker Tom" as one field. It
+    must be visible in the preview, not merely representable."""
+    item, _ = imp.build_item(
+        {**COMPLETE_ROW, "authors": "OECD"}, None,
+        session=_ExplodingSession(), csl_cache={},
+    )
+    imp._print_dry_run_preview({imp.BUILD_SOURCE: item})
+    assert "single field" in capsys.readouterr().out
+
+
+def test_dry_run_preview_labels_each_build_path(capsys) -> None:
+    item, _ = imp.build_item(
+        COMPLETE_ROW, None, session=_ExplodingSession(), csl_cache={},
+    )
+    imp._print_dry_run_preview({
+        imp.BUILD_SOURCE: item, imp.BUILD_AUTHORITY: item,
+        imp.BUILD_FALLBACK: item,
+    })
+    out = capsys.readouterr().out
+    assert "source-built" in out
+    assert "authority-filled" in out
+    assert "fallback" in out
+
+
+def test_dry_run_preview_is_silent_with_nothing_to_show(capsys) -> None:
+    imp._print_dry_run_preview({})
+    assert capsys.readouterr().out == ""
+
+
+def test_provenance_summary_counts_each_path(capsys) -> None:
+    imp._print_provenance_summary(
+        {imp.BUILD_SOURCE: 27, imp.BUILD_AUTHORITY: 3, imp.BUILD_FALLBACK: 1},
+        no_doi=1,
+    )
+    out = capsys.readouterr().out
+    assert "27" in out and "3" in out
+    assert "no DOI" in out
+
+
+def test_provenance_summary_is_silent_when_nothing_was_built(capsys) -> None:
+    """A run that only patches existing items has no provenance to
+    report — the line would be four zeroes."""
+    imp._print_provenance_summary(
+        {imp.BUILD_SOURCE: 0, imp.BUILD_AUTHORITY: 0, imp.BUILD_FALLBACK: 0},
+        no_doi=0,
+    )
+    assert capsys.readouterr().out == ""
+
+
+# ---------------------------------------------------------------------------
 # Creator parsing
 # ---------------------------------------------------------------------------
 
