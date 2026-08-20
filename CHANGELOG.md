@@ -7,6 +7,173 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-08-20
+
+Two threads. One is an end-to-end Antigravity demo run that succeeded in
+twelve minutes and left five defects behind it, each traceable to the
+same root: **the pipeline knew something and threw it away**, then paid
+to reconstruct it, or did not reconstruct it at all. The other is a
+recovered-PDF bug that made 35 % of a law review's extracted text
+unreadable without anything downstream being able to tell.
+
+### Added
+
+- **Search rows carry the bibliographic metadata the databases already
+  returned.** `volume`, `issue`, `pages` and `type` are new columns,
+  filled from each source's native response and normalised to Crossref's
+  type vocabulary. All four databases return them; all four searchers
+  used to discard them, so `import_to_zotero.py` re-bought the type from
+  Crossref one DOI at a time and never recovered the rest at all.
+
+- **A `PAID LLM RUN` banner** before the worker pool starts in
+  `abstract_screen.py` and `fulltext_code.py`: provider, model, stage,
+  item count, projected spend. The cost line used to print under
+  `--dry-run` only, so a real run went straight from "31 items in
+  collection" to "Screening with 8 parallel workers" with no indication
+  that money was now being spent. Local providers say so; unpriced
+  models say "unknown", never "free".
+
+- **An autonomy contract** in the `systematic-review` skill, mirrored in
+  `templates/sr_claude_md.md`. "Work autonomously" is honoured and
+  changes *when* you ask, not *whether*: every per-stage confirmation
+  folds into one up-front proposal — scope, model with its
+  justification, item counts, projected cost from a real `--dry-run` —
+  asked once before the first paid inference call. Search, import and
+  enrichment are not gated.
+
+- **A second IRON RULE in `zotero-operations`:** never compose Zotero
+  item metadata by hand. Items come from a pipeline script importing
+  database-retrieved rows, or from an identifier-based add. Typed-out
+  citations have no provenance, and their errors are invisible.
+
+- **`import_to_zotero.py --dry-run` shows what it would create** — one
+  example per build path with creators, volume/issue/pages and
+  container title, and it labels a single-field creator as one.
+
+- **Recovered Elsevier PDFs have a cover page and a document
+  structure.** They used to be one undifferentiated wall of text with
+  no title anywhere in the file — `<ce:section-title>` was concatenated
+  straight into the first sentence of its own section, so every article
+  opened "Introduction Fairness and discrimination in algorithmic
+  systems are…" and ran on from there.
+
+  The extractor now returns typed blocks and the renderer maps them to
+  styles: three heading levels, separate paragraphs, indented list
+  items, set-in block quotes, and pipe-separated table rows. The first
+  page carries what a journal PDF's front page carries — journal,
+  title, authors, labelled affiliations, citation line, DOI, ISSN,
+  abstract and keywords — all of it from the `<coredata>` that arrives
+  in the same response and none of which reached the file before. On
+  one 190,000-character article that is 8 first-level headings, 11
+  second-level, 3 third-level, 174 paragraphs, 19 bullets and 2 block
+  quotes.
+
+### Fixed
+
+- **Recovered Elsevier PDFs spliced footnote text into the middle of
+  sentences.** `_extract_xml_body()` walked the `<body>` subtree in
+  document order, and Elsevier places each `<ce:footnote>` at the point
+  its marker appears — so the whole footnote, citation and URL and
+  access date, landed between a clause and its continuation. On
+  Wachter, Mittelstadt & Russell (2021) — a law review with 301
+  footnotes in its body — **35 % of the extracted text was footnote
+  material interleaved into the prose**, and every annotated sentence
+  came out broken in two.
+
+  Nothing downstream could tell: the recovered PDF is well-formed,
+  passes size and text-length checks, and reads as a normal article to
+  anything that does not look closely. In the study that found this,
+  121 of 130 open PDF-identity questions were `tdm-recovered` files
+  whose title-similarity scores were depressed by exactly this, and two
+  articles were classified as the wrong article on that basis. Both
+  were correct.
+
+  Footnotes are now lifted out of the prose and re-attached as an
+  endnote block under a `Footnotes` heading — relocated rather than
+  dropped, because in the law reviews this fallback is most used on they
+  carry much of the argument. In-text markers stay put. `table-footnote`
+  gets the same treatment; tables and figures deliberately do not, being
+  content anchored at block level rather than annotations spliced
+  mid-sentence.
+
+  **Recovered PDFs now carry a provenance line** naming the plugin
+  version and how many footnotes were moved. Every recovery ever made
+  carries the same `-tdm-recovered` suffix, so without it a corpus mixes
+  silently-corrupted text with corrected text and no file says which it
+  is. Re-fetching is the only remedy for files already produced.
+
+- **A re-run of `import_to_zotero.py` duplicated the entire corpus.**
+  The dedup pre-check read Zotero Desktop's local database while the
+  script writes through the Web API. Desktop had not synced, so the
+  check saw an empty library and created all 31 items a second time —
+  after which PDF enrichment downloaded 62 files and the PRISMA count
+  guard failed downstream. The pre-check and the patch path now both
+  read the cloud API they write to.
+
+- **`--collection <name>` 400'd every item in the batch.** The skill has
+  always documented a name and promised it would be created; the script
+  accepted only an 8-character key and passed the name to the API as
+  one. It now resolves key -> unique name -> create, and says which
+  happened.
+
+- **Imported items had single-field creator names and no
+  volume/issue/pages.** `_parse_authors` expected `Last, First` while
+  all four searchers emitted display order, so every name became an
+  unsplit `name` blob. Rows now carry their own metadata (above), and a
+  record whose creators are display-order or whose type is unknown is
+  rebuilt from one Crossref CSL fetch via
+  `zotero_mcp.citation_import.csl_json_to_zotero`. An item is wholly
+  source-built or wholly authority-built.
+
+- **`--dry-run --remote` died with a 403.** `--dry-run` set the Zotero
+  key to `""`, but `--remote` reads go to api.zotero.org, which rejects
+  an empty key. The dry run — and the cost quote it exists to produce —
+  was unreachable in exactly the headless setup that needs it most. Both
+  screening orchestrators now load the key whenever reads are remote.
+
+- **The model listing's `released` column was blank for Anthropic.**
+  The parser accepted only an integer `created`; Anthropic returns an
+  ISO-8601 `created_at`. Dated snapshots are now annotated as such, so
+  `claude-sonnet-4-5-20250929` no longer sits undistinguished next to
+  its own successor. Nothing auto-picks a model; the skill gained a
+  proposing rule instead.
+
+- **Rate-limit backoff was silent.** The retry policy sleeps inside the
+  transport adapter, so a throttled Semantic Scholar search printed a
+  block label and then nothing for minutes, indistinguishable from a
+  hang. Every wait over three seconds now announces itself, for all
+  sources, and the S2 searcher says up front when it is on the shared
+  unauthenticated tier.
+
+### Changed
+
+- **Dedup merges field-wise across databases.** First non-empty value
+  wins for the bibliographic columns, and comma-format creators displace
+  display-order ones — so a run including Scopus or WoS repairs
+  OpenAlex-style names for every overlapping record with no network
+  calls at all.
+
+- **Crossref is documented as deliberately absent** from the
+  search-source table: no Boolean query language for a reportable PRISMA
+  search, sparse deposited abstracts, and OpenAlex subsumes its coverage
+  with a searchable surface. It is the metadata authority, not a
+  discovery source. `paper-search-mcp` exposes a Crossref search one
+  tool call away, hence the note.
+
+- **`--remote` is documented once** in the skill's Zotero-access section
+  and added to every quick-reference row that accepts it.
+
+### Internal
+
+- Two defects in `zotero-mcp`'s `csl_json_to_zotero` are worked around
+  locally and filed upstream (notes on the fork's
+  `docs/crossref-csl-import-defects` branch): Crossref's CSL transform
+  keeps Crossref's type names, which would type every filled record
+  `document` and silently drop its journal/volume/issue/pages; and it
+  returns `ISSN` as an array, which the converter `.strip()`s. The
+  local adapter can be removed once a fix ships to PyPI.
+
+
 ## [0.14.0] — 2026-08-18
 
 A reliability release, written almost entirely from one long live
