@@ -48,6 +48,7 @@ Nine user-invocable skills:
 | `academic-style` | rule-book (eager) | House-style conventions at drafting time — APA citations, voice, tense, hedging, synthesis-over-enumeration, terminology. |
 | `systematic-review` | procedure (explicit) | End-to-end SLR pipeline from search → screening → coding → export. |
 | `zotero-operations` | procedure (explicit) | Import, dedup, enrich, attach PDFs, maintain BBT keys. |
+| `dblp-bibformat` | procedure (explicit) | Normalise `.bib` entries to canonical DBLP BibTeX — DBLP keys, DBLP field set, fetched from dblp.org. |
 | `fact-check` | procedure (explicit) | Verify citations and quantitative claims against sources. |
 | `critic-loop` | procedure (explicit) | Run 4 parallel critics (evidence / method / argument / expert) until no MAJOR issues remain. |
 | `setup` | procedure (explicit) | Chat-driven configuration wizard for first-time install. |
