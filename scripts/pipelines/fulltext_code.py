@@ -100,6 +100,7 @@ from core.models import (  # noqa: E402
     default_for_stage,
     effective_model,
     model_flag_help,
+    paid_run_banner,
 )
 from log_schemas import fulltext_screening_fields  # noqa: E402
 
@@ -1396,8 +1397,11 @@ def main() -> int:
         fields = manifest_fields
     csv_columns = _csv_columns(fields)
 
-    api_key = "" if args.dry_run else require("zotero", "api_key",
-                                              env="ZOTERO_API_KEY")
+    # `--dry-run` writes nothing, but `--remote` reads still go to
+    # api.zotero.org, which 403s on an empty key. See abstract_screen.py.
+    needs_key = not args.dry_run or getattr(args, "remote", False)
+    api_key = require("zotero", "api_key",
+                      env="ZOTERO_API_KEY") if needs_key else ""
     # Emit and apply call no model, so they must not demand a credential:
     # a user whose compute is elsewhere may not have one at all.
     batch_mode = bool(args.emit_manifest or args.apply_responses)
@@ -1712,6 +1716,10 @@ def main() -> int:
                 },
             )
 
+        print(paid_run_banner(
+            model, stage="fulltext_coding", n_items=len(to_update),
+        ), flush=True)
+
         counts: dict[str, int] = {"updated": 0, "no_pdf": 0, "error": 0}
         done_count = 0
         total = len(to_update)
@@ -1816,6 +1824,10 @@ def main() -> int:
             }, fields)
         return _code_one(item, pdf_path, client, model, rendered_prompt, fields)
 
+    if not batch_mode:
+        print(paid_run_banner(
+            model, stage="fulltext_coding", n_items=len(to_code),
+        ), flush=True)
     print(f"Coding with {args.workers} parallel workers (model={model})...",
           flush=True)
 

@@ -75,6 +75,7 @@ from core.models import (  # noqa: E402
     default_for_stage,
     effective_model,
     model_flag_help,
+    paid_run_banner,
 )
 from log_schemas import ABSTRACT_SCREENING_FIELDS  # noqa: E402
 
@@ -549,8 +550,15 @@ def main() -> int:
         args.model, config_model, stage="ABSTRACT_SCREENING_MODEL",
     )
 
-    api_key = "" if args.dry_run else require("zotero", "api_key",
-                                              env="ZOTERO_API_KEY")
+    # A dry run needs no Zotero credential to *write* with — but it
+    # still has to read the collection, and `--remote` reads go to
+    # api.zotero.org, which rejects an empty key with 403. That
+    # combination died before printing anything, so the cost quote the
+    # dry run exists to produce never appeared and the run went ahead
+    # unpriced. Load the key whenever the reads are remote.
+    needs_key = not args.dry_run or getattr(args, "remote", False)
+    api_key = require("zotero", "api_key",
+                      env="ZOTERO_API_KEY") if needs_key else ""
     batch_mode = bool(args.emit_manifest or args.apply_responses)
     if not (args.dry_run or args.csv_backfill or batch_mode):
         llm_provider.require_credentials(model)
@@ -680,6 +688,10 @@ def main() -> int:
             model, stage="abstract_screening", n_items=len(to_screen),
         ), flush=True)
         return 0
+
+    print(paid_run_banner(
+        model, stage="abstract_screening", n_items=len(to_screen),
+    ), flush=True)
 
     client = llm_provider.get_provider(model)
     # Schema-stable + idempotent writes via csv_io.upsert_by_item_key.

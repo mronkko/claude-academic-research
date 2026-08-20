@@ -36,6 +36,7 @@ import tomllib
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from core import providers
@@ -137,13 +138,46 @@ def _normalise(spec: ProviderSpec, payload: dict | list) -> list[ModelInfo]:
         ident = str(m.get("id", ""))
         if not ident:
             continue
-        created = m.get("created") or m.get("created_at") or 0
         out.append(ModelInfo(
             id=ident,
-            created=int(created) if isinstance(created, int) else 0,
+            created=_as_epoch(m.get("created") or m.get("created_at")),
             display_name=str(m.get("display_name", "") or ""),
         ))
     return out
+
+
+def _as_epoch(value) -> int:
+    """Epoch seconds from whatever a provider calls its creation date.
+
+    OpenAI-compatible listings use an integer `created`; Anthropic's
+    `/v1/models` returns an ISO-8601 `created_at`
+    (`"2025-09-29T00:00:00Z"`). Only the integer was accepted, so the
+    `released` column was blank for every Anthropic model — which is
+    the column an agent reads to work out which of two models is newer.
+    Blank there is how one run pinned a dated snapshot of the previous
+    generation while its successor sat in the same listing.
+
+    Anything unparseable is 0, the same "no date known" the column
+    already renders as empty.
+    """
+    if isinstance(value, bool) or value is None:
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    text = str(value).strip()
+    if not text:
+        return 0
+    if text.isdigit():
+        return int(text)
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return int(parsed.timestamp())
 
 
 def list_models(spec: ProviderSpec, api_key: str = "", base_url: str = "") -> list[ModelInfo]:

@@ -125,6 +125,25 @@ def _released(created: int) -> str:
         return ""
 
 
+#: An ID ending in `-YYYYMMDD`. Providers publish both a rolling alias
+#: (`claude-sonnet-5`) and dated snapshots of it
+#: (`claude-sonnet-4-5-20250929`); alphabetical order puts the snapshot
+#: right next to its successor, where it reads as just another choice.
+_DATED_SNAPSHOT_RE = re.compile(r"-\d{8}$")
+
+
+def _snapshot_note(model_id: str) -> str:
+    """`dated snapshot` for an ID that pins a specific release date.
+
+    Purely lexical — no network, no vendor table, no ranking. It exists
+    because a listing that shows `claude-sonnet-4-5-20250929` and
+    `claude-sonnet-5` side by side, both undated in the `released`
+    column, gives a reader nothing to choose on. One live run picked the
+    snapshot of the older generation.
+    """
+    return "dated snapshot" if _DATED_SNAPSHOT_RE.search(model_id) else ""
+
+
 def listing_lines(spec: ProviderSpec, models: list) -> list[str]:
     """The model menu, one row per model, sorted by ID.
 
@@ -134,16 +153,23 @@ def listing_lines(spec: ProviderSpec, models: list) -> list[str]:
 
     The `tier?` column is `providers.tier_of`, a guess from the ID's
     wording, and is labelled as a guess. It narrows a long listing; it
-    does not decide anything.
+    does not decide anything. `notes` is the same kind of help: a fact
+    about the ID's shape, for a reader deciding between two rows.
     """
     rows = [
-        (providers.tier_label(spec, m.id), m.id, _released(m.created))
+        (providers.tier_label(spec, m.id), m.id, _released(m.created),
+         _snapshot_note(m.id))
         for m in sorted(models, key=lambda m: m.id)
     ]
-    tier_w = max([len(t) for t, _i, _r in rows] + [len("tier?")])
-    id_w = max([len(i) for _t, i, _r in rows] + [len("model")])
-    out = [f"  {'tier?':<{tier_w}}  {'model':<{id_w}}  released"]
-    out += [f"  {t:<{tier_w}}  {i:<{id_w}}  {r}".rstrip() for t, i, r in rows]
+    tier_w = max([len(t) for t, _i, _r, _n in rows] + [len("tier?")])
+    id_w = max([len(i) for _t, i, _r, _n in rows] + [len("model")])
+    rel_w = max([len(r) for _t, _i, r, _n in rows] + [len("released")])
+    out = [f"  {'tier?':<{tier_w}}  {'model':<{id_w}}  "
+           f"{'released':<{rel_w}}  notes"]
+    out += [
+        f"  {t:<{tier_w}}  {i:<{id_w}}  {r:<{rel_w}}  {n}".rstrip()
+        for t, i, r, n in rows
+    ]
     return out
 
 

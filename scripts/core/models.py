@@ -167,10 +167,44 @@ def effective_model(cli_model: str, config_model: str, *, stage: str) -> str:
     return resolved
 
 
+def paid_run_banner(
+    model: str, *, stage: str, n_items: int, provider: str = "",
+) -> str:
+    """The block printed immediately before a run starts spending money.
+
+    `cost_estimate_line` used to appear only under `--dry-run`. A real
+    run went straight from "N items in collection" to "Screening with 8
+    parallel workers" — no provider, no model, no price — so an agent
+    that skipped the dry run (or whose dry run failed, as one did on an
+    unrelated 403) started paid inference with nothing on screen saying
+    so, and the user learned the model and the cost afterwards.
+
+    Local providers say so plainly; an unpriced model says "unknown".
+    Never "free": that is the one wrong answer that cannot be walked
+    back.
+    """
+    name = provider or active_provider()
+    spec = providers.get(name)
+    label = spec.label if spec is not None else name
+    width = 66
+    lines = [
+        "=" * width,
+        "PAID LLM RUN — this stage sends every item to a model API.",
+        "=" * width,
+        f"  provider : {label} ({name})",
+        f"  model    : {model}",
+        f"  stage    : {stage}",
+        f"  items    : {n_items:,}",
+        f"  {cost_estimate_line(model, stage=stage, n_items=n_items, provider=name)}",
+        "=" * width,
+    ]
+    return "\n".join(lines)
+
+
 def cost_estimate_line(
     model: str, *, stage: str, n_items: int, provider: str = "",
 ) -> str:
-    """One line of projected spend, for the `--dry-run` paths.
+    """One line of projected spend, for `--dry-run` and the paid-run banner.
 
     The estimate is priced from the *model about to run*, classified
     back into a tier — not from the stage's default tier — because
