@@ -216,6 +216,10 @@ PLATFORM_PRIORITY: tuple[Platform, ...] = (
     Platform("aom", ("journals.aom.org", "aom.org"), ("academy of management",)),
     Platform("emerald", ("emerald.com",), ("emerald",)),
     Platform("aaa", ("aaahq.org",), ("american accounting association",)),
+    Platform("cambridge", ("cambridge.org",),
+             ("cambridge university press", "cambridge core")),
+    Platform("ieee", ("ieeexplore.ieee.org", "ieee.org"),
+             ("ieee xplore", "ieee electronic library", "ieee")),
     Platform("jstor", ("jstor.org",), ("jstor",)),
     Platform("proquest", ("proquest.com",), ("proquest",)),
 )

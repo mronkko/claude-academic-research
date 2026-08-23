@@ -97,6 +97,12 @@ KNOWN_DOIS: dict[str, str] = {
     "apa":      "10.1037/apl0001090",                  # JAP 2023
     "oup":      "10.1093/jleo/ewaa004",                # J of Law, Econ & Org 2020
     "aaa":      "10.2308/tar-2023-0399",               # Accounting Review 2024
+    # IEEE Trans. Circuits & Systems for Video Tech 2018. Verified live
+    # 2026-08-23: getPDF.jsp fired a download on a cold profile.
+    "ieee":     "10.1109/tcsvt.2016.2615518",
+    # The China Quarterly 2023. Verified live 2026-08-23: the landing
+    # page exposed "Save PDF (0.34 mb)" and the href downloaded direct.
+    "cambridge": "10.1017/s0305741023001467",
 }
 
 

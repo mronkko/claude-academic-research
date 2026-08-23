@@ -46,9 +46,9 @@ def test_registry_lists_all_custom_handlers() -> None:
     assert {"apa", "informs", "oup"} <= names
 
 
-def test_registry_has_exactly_ten_handlers() -> None:
+def test_registry_has_exactly_twelve_handlers() -> None:
     """Pin the total so a silently-dropped handler fails a test."""
-    assert len(all_handlers()) == 10
+    assert len(all_handlers()) == 12
 
 
 def test_registry_handler_names_are_unique() -> None:

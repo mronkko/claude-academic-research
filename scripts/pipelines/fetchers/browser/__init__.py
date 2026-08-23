@@ -31,6 +31,7 @@ from .base import (
     launch_context,
     progress_tag,
 )
+from .cambridge import CambridgeHandler
 from .connector import (
     ZoteroConnectorHandler,
     ping_zotero_desktop,
@@ -39,6 +40,7 @@ from .connector import (
 )
 from .ebsco import EbscoHandler, is_ebsco_target
 from .emerald import EmeraldHandler
+from .ieee import IeeeHandler
 from .informs import InformsHandler
 from .oup import OupHandler
 from .sage import SageHandler
@@ -85,7 +87,9 @@ def all_handlers() -> list[PublisherHandler]:
         AaaHandler(),
         AomHandler(),
         ApaHandler(),
+        CambridgeHandler(),
         EmeraldHandler(),
+        IeeeHandler(),
         InformsHandler(),
         OupHandler(),
         SageHandler(),
@@ -146,9 +150,11 @@ __all__ = [
     "AomHandler",
     "ApaHandler",
     "BrowserSource",
+    "CambridgeHandler",
     "Counter",
     "EbscoHandler",
     "EmeraldHandler",
+    "IeeeHandler",
     "InformsHandler",
     "OupHandler",
     "PageNavigationHandler",
