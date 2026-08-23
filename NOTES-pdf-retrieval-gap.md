@@ -352,3 +352,142 @@ vocabularies per prompt.
 | informs | 47 |
 | cambridge | 32 |
 | oup | 26 |
+
+---
+
+# Inspection of the Cambridge failures (2026-08-23)
+
+**Count correction: 8 failure *events*, 7 distinct items.** Item 6 of 27 failed,
+which opened the setup step, and the handler retried the same item after it —
+so `publisher_done` reported `failed=8` while only seven DOIs are involved.
+
+Verified against Crossref (`type`, ISBN/ISSN) and by loading each landing page.
+
+| DOI | Zotero type | Crossref type | Verdict |
+|---|---|---|---|
+| 10.1017/s0147547903000231 | journalArticle | **journal-article** | **not a book chapter** — see below |
+| 10.1017/9781108610070.031 | journalArticle | book-chapter | confirmed chapter |
+| 10.1017/9781316717653.004 | journalArticle | book-chapter | confirmed chapter |
+| 10.1017/9781108610070.037 | journalArticle | book-chapter | confirmed chapter |
+| 10.1017/cbo9781139026918.007 | journalArticle | book-chapter | confirmed chapter |
+| 10.1017/9781108610070.025 | journalArticle | book-chapter | confirmed chapter |
+| 10.1017/cbo9781107282018.004 | journalArticle | book-chapter | confirmed chapter |
+
+## The six chapters: confirmed, and also paywalled
+
+All six carry ISBNs and no ISSN, and all resolve to
+`cambridge.org/core/books/**abs**/…` chapter pages. Loading them shows:
+
+```
+access phrases: ['Get access', 'purchase', 'Buy', 'Log in', 'Check access', 'institutional']
+```
+
+So there are **two independent reasons** these cannot be fetched: they are
+mis-typed as `journalArticle` in Zotero, and this institution has no
+entitlement to the books. Correcting the item type would not produce PDFs — it
+would move them out of scope honestly, which is the right outcome. A
+chapter-aware handler would not help either.
+
+## The seventh is a real article with a dead DOI target
+
+`10.1017/s0147547903000231` — Surh, "Ekaterinoslav City in 1905: Workers, Jews,
+and Violence", *International Labor and Working-Class History*, ISSN 0147-5479.
+Crossref types it `journal-article`.
+
+It fails because `doi.org` redirects to the **retired** Cambridge Journals
+Online host, which answers **HTTP 404**:
+
+```
+status=404  final=https://www.journals.cambridge.org/abstract_S0147547903000231
+body: "default backend - 404"
+```
+
+The handler is blameless — there is no page to parse. Crossref's
+`resource.primary.URL` still points at that dead host, which is why the
+redirect goes there.
+
+**But the article is reachable.** Crossref's `link` field (the TDM link) gives a
+live Cambridge Core URL, and it downloads:
+
+```
+https://www.cambridge.org/core/services/aop-cambridge-core/content/view/S0147547903000231
+  → DOWNLOAD FIRED, S0147547903000231.pdf
+```
+
+That is the same `/content/view/` shape `CambridgeHandler` already downloads
+from. **Suggested fix:** when the landing-page navigation 404s or yields no PDF
+anchor, fall back to the Crossref `link` URL before giving up. Cheap, and it
+would recover legacy-DOI articles across Cambridge generally, not just this one.
+
+---
+
+# JSTOR via Zotero Connector (2026-08-23) — 44/47
+
+Run with `--sources connector --control-file`, responder answering the terminal
+prompts. **44 attached, 2 failed, 1 partial** (saved but no PDF found).
+
+**JSTOR is reachable after all.** The earlier read — "the landing page exposes
+no PDF anchor, so this is an access gap" — was true of navigating to jstor.org
+directly and wrong about the route the pipeline uses. The Alma resolver hands
+the Connector an authenticated `uresolver.do` link that redirects into
+`jstor.org/stable/<id>`, where Zotero's JSTOR translator saves the article and
+its PDF:
+
+```
+│  URL: https://aalto.alma.exlibrisgroup.com/view/action/uresolver.do?...
+│  Translator ready (3 available). Firing save…
+│  Save fired on tab (https://www.jstor.org/stable/3116217?origin=crossref).
+│  New item saved locally (RHMZSYE5). Waiting for cloud sync…
+│  Merging into keeper RJA6QVFZ…
+└─ ATTACHED: 1 child moved.
+```
+
+**It ran effectively unattended.** The responder answered exactly one prompt —
+the initial `Ready to start?` gate. No per-host login, no reCAPTCHA, and no
+"Select which items" picker fired across 47 items, because the resolver link
+carries the entitlement. The caveat that the Connector "needs a human at the
+keyboard for the first item per host" did not hold for this platform on this
+network.
+
+Pre-flight worth repeating before any Connector run: Zotero Desktop's
+`/connector/getSelectedCollection` reported `{"libraryID":1,"libraryName":"My
+Library","libraryEditable":true}`, confirming saves would land in the right
+library. The earlier "could not determine selected library" warning was
+transient.
+
+Three still missing, all logged `connector_save_failed` (ILL candidates):
+
+- 10.2307/3342183 — Derickson (1983), *Journal of Public Health Policy*
+- 10.2307/144329 — Pallares-Barbera (1998), *Economic Geography*
+- 10.2307/2172576 — Erickson (1949), *Population Studies*
+
+## Running total
+
+| Measure | Start of day | Now |
+|---|---|---|
+| journalArticle in subtree | 9,457 | 9,457 |
+| **without a PDF** | **1,821** | **1,408** |
+
+**413 recovered:** 231 API cascade + 59 EBSCO + 50 IEEE + 29 Cambridge + 44
+JSTOR/Connector.
+
+JSTOR (10.2307) has dropped out of the unhandled-prefix table entirely —
+106 → 3.
+
+### Remaining by route
+
+| Route | Count |
+|---|---|
+| NO HANDLER | 513 |
+| tandf | 172 |
+| aom | 131 |
+| apa | 128 |
+| sage | 116 |
+| springer | 101 |
+| wiley | 77 |
+| emerald | 64 |
+| informs | 47 |
+| cambridge | 32 |
+| oup | 26 |
+
+The ~880 items behind existing handlers have still never had a browser pass.
