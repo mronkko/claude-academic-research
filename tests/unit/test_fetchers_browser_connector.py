@@ -465,3 +465,88 @@ def test_poll_doi_match_is_not_subject_to_the_recency_window() -> None:
     assert _poll_for_new_item(
         zot, "10.1/x", "KEEPER", timeout_s=0.2, title="anything",
     ) == "NEW"
+
+
+# ---------------------------------------------------------------------------
+# Search-result-page guard.
+#
+# A BMJ item routed to JSTOR produced doBasicSearch?Query=sn:09598138 AND
+# surname:"Iacobucci" AND year:2017 — 172 hits, JSTOR itself admitting the
+# inbound link had no exact match. Firing the translator there blocks the
+# run on Zotero's item picker, and any non-exact pick attaches the wrong
+# article's PDF.
+# ---------------------------------------------------------------------------
+
+
+import asyncio  # noqa: E402
+
+from fetchers.browser.connector import (  # noqa: E402
+    _click_matching_result,
+    _is_result_list,
+)
+
+
+def test_is_result_list_detects_the_jstor_search_page() -> None:
+    assert _is_result_list(
+        "https://www.jstor.org/action/doBasicSearch?Query=sn%3A09598138"
+        "+AND+surname%3A%22Iacobucci%22+AND+year%3A2017&so=rel"
+    )
+    assert _is_result_list("https://www.jstor.org/action/doAdvancedSearch?q=x")
+
+
+def test_is_result_list_passes_a_real_jstor_article_through() -> None:
+    assert not _is_result_list("https://www.jstor.org/stable/3116217")
+
+
+def test_is_result_list_does_not_catch_other_platforms() -> None:
+    """EBSCO's result pages resolve to the article on their own; catching
+    them here would skip items that currently succeed."""
+    assert not _is_result_list(
+        "https://web.p.ebscohost.com/ehost/results?vid=1&sid=abc"
+    )
+    assert not _is_result_list("")
+
+
+class _FakePage:
+    def __init__(self, href: str = "", raise_on_goto: bool = False) -> None:
+        self._href = href
+        self._raise = raise_on_goto
+        self.url = "https://www.jstor.org/action/doBasicSearch?Query=x"
+        self.goto_calls: list[str] = []
+
+    async def evaluate(self, _script, _arg=None):
+        return self._href
+
+    async def goto(self, url, **_kw):
+        if self._raise:
+            raise RuntimeError("nav failed")
+        self.goto_calls.append(url)
+        self.url = url
+
+    async def wait_for_timeout(self, _ms):
+        return None
+
+
+def test_click_matching_result_navigates_on_an_exact_title_match() -> None:
+    page = _FakePage(href="https://www.jstor.org/stable/999")
+    assert asyncio.run(
+        _click_matching_result(page, "Some Article Title")
+    ) is True
+    assert page.goto_calls == ["https://www.jstor.org/stable/999"]
+
+
+def test_click_matching_result_gives_up_when_nothing_matches() -> None:
+    """No fuzzy fallback on purpose — we are here because the resolver
+    already failed to identify the article, so a second guess would
+    attach some other paper."""
+    page = _FakePage(href="")
+    assert asyncio.run(
+        _click_matching_result(page, "Some Article Title")
+    ) is False
+    assert page.goto_calls == []
+
+
+def test_click_matching_result_needs_a_title() -> None:
+    page = _FakePage(href="https://www.jstor.org/stable/999")
+    assert asyncio.run(_click_matching_result(page, "")) is False
+    assert page.goto_calls == []

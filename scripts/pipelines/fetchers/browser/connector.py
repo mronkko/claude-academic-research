@@ -414,6 +414,30 @@ class ZoteroConnectorHandler(PublisherHandler):
                 return False
             self._confirmed_hosts.add(item_host)
 
+        # Bail out of a search-result page before the translator sees
+        # it. Firing the save here raises Zotero's item picker, which
+        # blocks the run until a human clicks — and with the poll window
+        # now at 240s, each such item would stall four minutes before
+        # failing anyway. Try the exact-title route first; skip if that
+        # cannot identify the article.
+        if _is_result_list(page.url):
+            print("  │  Landed on a search-result list — the resolver could "
+                  "not identify\n  │  the article. Trying an exact title "
+                  "match…", flush=True)
+            if await _click_matching_result(page, item.get("title", "")):
+                print(f"  │  Matched by title → {page.url[:80]}", flush=True)
+            else:
+                print(
+                    "  └─ SKIPPED: search-result page with no exact title\n"
+                    "         match. Not firing the translator: it would\n"
+                    "         raise Zotero's item picker and block, and any\n"
+                    "         non-exact pick would attach a different\n"
+                    "         article's PDF. Logged as an ILL candidate.",
+                    flush=True,
+                )
+                counter.failed += 1
+                return False
+
         # Wait for the Connector to parse the page and load a
         # translator. When the user's institutional SSO or Cloudflare
         # challenge is in the way, this poll will time out.
@@ -727,6 +751,75 @@ def _normalise_title(text: str) -> str:
     so an exact string compare is useless here.
     """
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+#: URL signatures of *search-result* pages, per host. Reaching one of
+#: these means the resolver's OpenURL failed to identify the article and
+#: the platform fell back to a query.
+#:
+#: Live case that motivated this: a BMJ item routed to JSTOR produced
+#: `doBasicSearch?Query=sn:09598138 AND surname:"Iacobucci" AND year:2017`
+#: — **172 results**, matched on ISSN, surname and year only, with
+#: JSTOR's own banner admitting "your inbound link did not have an exact
+#: match in our database". Firing the translator at that page makes
+#: Zotero raise its "Select which items" picker and block until a human
+#: chooses, which defeats an unattended run; and choosing from 172
+#: loosely-matched hits risks attaching a *different article's* PDF,
+#: which is worse than attaching nothing.
+#:
+#: Deliberately keyed on hosts we have evidence for rather than a
+#: generic "looks like a list" heuristic — EBSCO's result pages resolve
+#: to the article by themselves and must not be caught here.
+_RESULT_LIST_URL_MARKERS: dict[str, tuple[str, ...]] = {
+    "jstor.org": ("/action/doBasicSearch", "/action/doAdvancedSearch",
+                  "/action/showBasicSearch"),
+}
+
+
+def _is_result_list(url: str) -> bool:
+    low = (url or "").lower()
+    for host, markers in _RESULT_LIST_URL_MARKERS.items():
+        if host in low and any(m.lower() in low for m in markers):
+            return True
+    return False
+
+
+async def _click_matching_result(page, title: str) -> bool:
+    """On a result list, navigate to the entry whose title matches.
+
+    Only an exact normalised-title match counts. A "closest match" would
+    be precisely the wrong thing here: the reason we are on this page is
+    that the resolver could not identify the article, so a fuzzy second
+    guess would attach some other paper's PDF with no signal that
+    anything went wrong.
+    """
+    want = _normalise_title(title)
+    if not want:
+        return False
+    try:
+        href = await page.evaluate(
+            """
+            (want) => {
+                const norm = s => (s || "").toLowerCase()
+                    .replace(/[^a-z0-9]+/g, " ").trim();
+                for (const a of document.querySelectorAll("a")) {
+                    if (norm(a.textContent) === want) return a.href;
+                }
+                return "";
+            }
+            """,
+            want,
+        )
+    except Exception:
+        return False
+    if not href:
+        return False
+    try:
+        await page.goto(href, wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(2000)
+    except Exception:
+        return False
+    return True
 
 
 def _poll_for_new_item(
