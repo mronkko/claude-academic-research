@@ -24,7 +24,20 @@ filename component rather than as a directory.
 
 from __future__ import annotations
 
+import re
+
 from .base import PdfLinkNavigationHandler
+
+#: Cambridge's legacy journal DOIs are `10.1017/s<digits>`, and their
+#: content-view path is the suffix upper-cased — nothing else. Verified
+#: against Crossref's `link` field for six such DOIs: derived == deposited
+#: in every case.
+_LEGACY_JOURNAL_DOI = re.compile(r"^10\.1017/(s\d{5,})$", re.IGNORECASE)
+
+_CONTENT_VIEW = (
+    "https://www.cambridge.org/core/services/aop-cambridge-core"
+    "/content/view/{ident}"
+)
 
 
 class CambridgeHandler(PdfLinkNavigationHandler):
@@ -50,3 +63,28 @@ class CambridgeHandler(PdfLinkNavigationHandler):
         "If you see 'Get access' or a purchase price instead, this\n"
         "title is not reachable from the current session."
     )
+
+    def fallback_pdf_urls(self, doi: str) -> list[str]:
+        """Content-view URL for a legacy `10.1017/s<digits>` DOI.
+
+        Some pre-Cambridge-Core DOIs still carry a `resource.primary` of
+        `journals.cambridge.org/abstract_<ID>` — a host retired years ago
+        that now answers a bare `404 default backend`. `doi.org` follows
+        that registration, so the handler lands on nothing and has no
+        anchor to read, even though the article is live on Cambridge Core
+        and this institution can download it.
+
+        Live case: `10.1017/s0147547903000231` (Surh, *International Labor
+        and Working-Class History*) 404s through `doi.org` and downloads
+        immediately from the derived URL.
+
+        Only the `s<digits>` form is rewritten. Modern DOIs (`als.2015.2`,
+        `lap.2019.62`) resolve to a working landing page and are left to
+        the normal path, and book chapters (`9781108610070.037`,
+        `cbo9781107282018.004`) are deliberately excluded — those are
+        genuinely out of scope for a journal handler.
+        """
+        m = _LEGACY_JOURNAL_DOI.match((doi or "").strip())
+        if not m:
+            return []
+        return [_CONTENT_VIEW.format(ident=m.group(1).upper())]

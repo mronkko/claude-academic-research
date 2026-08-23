@@ -258,3 +258,52 @@ def test_handler_default_setup_url_falls_back_to_url_template() -> None:
     from fetchers.browser import OupHandler
     h = OupHandler()
     assert h._setup_url_for("10.1093/x") == "https://doi.org/10.1093/x"
+
+
+# ---------------------------------------------------------------------------
+# PdfLinkNavigationHandler.fallback_pdf_urls
+#
+# The hook exists for DOIs whose `doi.org` redirect points at a retired
+# host, so the landing page cannot be read at all. Cambridge is the
+# worked example; the default must stay empty so every other subclass
+# keeps its single-candidate behaviour.
+# ---------------------------------------------------------------------------
+
+
+def test_pdf_link_handler_has_no_fallback_urls_by_default() -> None:
+    from fetchers.browser import OupHandler
+    assert OupHandler().fallback_pdf_urls("10.1093/jleo/ewaa004") == []
+
+
+def test_cambridge_derives_content_view_url_for_legacy_doi() -> None:
+    """`10.1017/s<digits>` → the upper-cased suffix on the content-view
+    path. Verified against Crossref's deposited `link` for six DOIs."""
+    from fetchers.browser import CambridgeHandler
+    urls = CambridgeHandler().fallback_pdf_urls("10.1017/s0147547903000231")
+    assert urls == [
+        "https://www.cambridge.org/core/services/aop-cambridge-core"
+        "/content/view/S0147547903000231"
+    ]
+
+
+def test_cambridge_legacy_fallback_is_case_insensitive() -> None:
+    from fetchers.browser import CambridgeHandler
+    assert (
+        CambridgeHandler().fallback_pdf_urls("10.1017/S0022050700025146")
+        == CambridgeHandler().fallback_pdf_urls("10.1017/s0022050700025146")
+    )
+
+
+def test_cambridge_offers_no_fallback_for_modern_or_book_dois() -> None:
+    """Modern DOIs have a working landing page, and book chapters are out
+    of scope for a journal handler — neither should be rewritten."""
+    from fetchers.browser import CambridgeHandler
+    h = CambridgeHandler()
+    for doi in (
+        "10.1017/als.2015.2",                 # modern journal DOI
+        "10.1017/lap.2019.62",                # modern journal DOI
+        "10.1017/9781108610070.037",          # book chapter
+        "10.1017/cbo9781107282018.004",       # book chapter
+        "",
+    ):
+        assert h.fallback_pdf_urls(doi) == [], doi

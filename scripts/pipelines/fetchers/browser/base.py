@@ -1052,6 +1052,23 @@ class PdfLinkNavigationHandler(PublisherHandler):
     # flaky on slow loads, so we poll up to this budget instead.
     pdf_link_timeout_ms: int = 15000
 
+    def fallback_pdf_urls(self, doi: str) -> list[str]:
+        """PDF URLs to try when the landing page yields no anchor.
+
+        Default is empty, which keeps the single-candidate behaviour
+        every existing subclass had. Override for platforms where the
+        PDF URL *is* derivable even though the landing page is
+        unreliable — the motivating case is a DOI whose `doi.org`
+        redirect still points at a retired host, so there is no page to
+        read a link off at all. See `CambridgeHandler`.
+
+        Deliberately synchronous and network-free: it runs inside the
+        browser handler, where an extra HTTP client would sidestep the
+        shared `build_session()` retry policy.
+        """
+        del doi
+        return []
+
     async def download(
         self, page, ctx, item, cache_dir,
         *, counter: Counter, total: int, t_start: float,
@@ -1065,30 +1082,54 @@ class PdfLinkNavigationHandler(PublisherHandler):
 
         url = self.url_template.format(doi=doi)
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            candidates: list[str] = []
             try:
+                await page.goto(url, wait_until="domcontentloaded",
+                                timeout=30000)
                 await page.wait_for_selector(
                     self.pdf_link_selector, state="attached",
                     timeout=self.pdf_link_timeout_ms,
                 )
+                # `a.href` (not get_attribute) so relative hrefs come
+                # back absolute.
+                candidates.append(await page.locator(
+                    self.pdf_link_selector,
+                ).first.evaluate("a => a.href"))
             except Exception:
+                # A dead landing page is not fatal when the platform's
+                # PDF URL can be derived; only the absence of *any*
+                # candidate is.
+                pass
+            for extra in self.fallback_pdf_urls(doi):
+                if extra and extra not in candidates:
+                    candidates.append(extra)
+            if not candidates:
                 raise RuntimeError(
                     f"PDF link not found on "
                     f"{self.display_name or self.name} landing page within "
                     f"{self.pdf_link_timeout_ms // 1000}s"
                 ) from None
-            # `a.href` (not get_attribute) so relative hrefs come back
-            # absolute.
-            pdf_href = await page.locator(
-                self.pdf_link_selector,
-            ).first.evaluate("a => a.href")
 
-            async with page.expect_download(timeout=30000) as dl_info:
+            dl = None
+            pdf_href = ""
+            for cand in candidates:
                 try:
-                    await page.goto(pdf_href, wait_until="commit", timeout=15000)
+                    async with page.expect_download(timeout=30000) as dl_info:
+                        try:
+                            await page.goto(cand, wait_until="commit",
+                                            timeout=15000)
+                        except Exception:
+                            pass  # download event interrupts navigation
+                    dl = await dl_info.value
+                    pdf_href = cand
+                    break
                 except Exception:
-                    pass  # download event interrupts navigation
-            dl = await dl_info.value
+                    continue
+            if dl is None:
+                raise RuntimeError(
+                    f"No candidate URL produced a download for {doi} "
+                    f"({len(candidates)} tried)"
+                )
             out.parent.mkdir(parents=True, exist_ok=True)
             await dl.save_as(str(out))
         except Exception as e:
