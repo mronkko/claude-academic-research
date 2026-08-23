@@ -1391,6 +1391,47 @@ class ZoteroClient:
     # zotero-mcp's merge_duplicates (MIT-licensed).
     # -----------------------------------------------------------------
 
+    #: Fields Zotero's API *returns* but pyzotero's `check_items()`
+    #: allowlist rejects on write. `lastRead` is set by Zotero's built-in
+    #: PDF reader, so it appears on exactly the attachments this plugin
+    #: creates and users then open — which made every merge involving a
+    #: read PDF fail with `InvalidItemFieldsError`. Live case: merging a
+    #: Connector-saved duplicate whose PDF the operator had opened.
+    _UNWRITABLE_FIELDS = frozenset({"lastRead"})
+
+    def _safe_update_item(self, item: dict) -> None:
+        """`update_item` with server-only fields stripped.
+
+        Two layers, because the denylist above is a snapshot and Zotero
+        keeps adding reader state: drop the known fields first, then, if
+        pyzotero still objects, take the field names out of its own error
+        message and retry once. That keeps the fix working for fields
+        that do not exist yet without silently discarding anything the
+        API would have accepted.
+        """
+        data = item.get("data", item)
+        for field in self._UNWRITABLE_FIELDS:
+            data.pop(field, None)
+        try:
+            self.cloud.update_item(item)
+            return
+        except Exception as e:
+            if type(e).__name__ != "InvalidItemFieldsError":
+                raise
+            offenders = set(
+                re.findall(r"Invalid keys present in item \d+: (.*)", str(e))
+            )
+            names = {n for group in offenders for n in group.split()}
+            if not names:
+                raise
+            logger.warning(
+                "zotero_io: stripping unwritable field(s) %s and retrying",
+                ", ".join(sorted(names)),
+            )
+            for field in names:
+                data.pop(field, None)
+            self.cloud.update_item(item)
+
     def merge_duplicate_item(
         self,
         target_key: str,
@@ -1449,7 +1490,7 @@ class ZoteroClient:
             target_data["tags"] = [
                 {"tag": t} for t in sorted(existing_tags | new_tags)
             ]
-            self.cloud.update_item(target)
+            self._safe_update_item(target)
             target = self.get_item(target_key)          # refresh version
 
         # Step 2: collection union.
@@ -1488,7 +1529,7 @@ class ZoteroClient:
                     skipped_dupes.append(child_key)
                     continue
             fd["parentItem"] = target_key
-            self.cloud.update_item(fresh)
+            self._safe_update_item(fresh)
             moved.append(child_key)
 
         # Step 4: trash the duplicate with PATCH {"deleted": 1}.

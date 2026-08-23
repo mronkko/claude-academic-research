@@ -604,3 +604,73 @@ as designed.
 4. 78 still-missing items carry a book-style DOI but `itemType=journalArticle` —
    Routledge 29, Cambridge 16, Palgrave 7, OUP 7, De Gruyter 5. No journal
    handler can fetch these; re-typing them moves them out of scope honestly.
+
+---
+
+# Stray cleanup (2026-08-23) — and a correction
+
+**The "strays" were not junk.** Eight of the ten carried a PDF. Cross-referenced
+against the Connector log by timestamp, five of them are items the run reported
+as failures:
+
+```
+6XN7ZFKK  = Connector [1/304]  reported FAIL     — had a PDF
+KTQE77MM  = Connector [2/304]  reported FAIL     — had a PDF
+KKICEVGF  = Connector [3/304]  reported FAIL     — had a PDF
+NHQ56966  = Connector [4/304]  reported PARTIAL  — had a PDF
+PY8FEVWB  = Connector [5/304]  reported FAIL     — had a PDF
+```
+
+So the earlier conclusion — "the Connector residual yields nothing, 0 of 8" —
+was wrong, and stopping that run on the strength of it was the wrong call. The
+Connector was saving PDFs; the pipeline could not see them and abandoned an
+unmerged duplicate each time.
+
+Two causes in `fetchers/browser/connector.py`:
+
+1. **Detection matches on DOI** (`_poll_for_new_item(zot, doi, …)`), but the
+   translator often saves a record with **no DOI field at all** — three of the
+   orphans had none. No timeout would have helped those.
+2. **The poll window is hardcoded to 120 s** (`connector.py:511`), and the log
+   shows items sitting at "117 s elapsed, ~2 s remaining". Saves were landing
+   right at the deadline.
+
+## What was cleaned
+
+Ten items, all resolved. Trash only — nothing permanently deleted.
+
+| Duplicate | → Keeper | Basis |
+|---|---|---|
+| TWS345RN | TQ35PQFV | same DOI |
+| NHQ56966 | 2AMJBBJS | title |
+| KKICEVGF | F6CUA29T | title |
+| 6XN7ZFKK | WV9NZWB6 | title |
+| PY8FEVWB | DUGN9GAT | DOI alias (10.2307 ↔ 10.1177) |
+| KTQE77MM | 9SDMCPXN | DOI alias (10.1191 ↔ 10.1177) |
+| 5EPIYW4Q | 3HS272AJ | DOI alias (10.1080 ↔ 10.2307) |
+| EELD2HSX | 7UDKUBM9 | DOI alias (10.1111 ↔ 10.2307) |
+| NS96P7CC | — | trashed: no title, no DOI, no PDF |
+| C89NRHNR | — | trashed: no keeper, no PDF, no collection |
+
+The four alias pairs were each verified on title + journal + year + volume +
+issue + pages before merging; `merge_duplicate_item`'s DOI guard correctly
+refused them, so the duplicate's DOI was cleared first (it is trashed anyway)
+rather than the guard being weakened. All eight keepers now hold their PDF.
+
+## Bug found and fixed: `lastRead` made read PDFs unmergeable
+
+The first merge failed with
+`InvalidItemFieldsError: Invalid keys present in item 1: lastRead`.
+
+Zotero's built-in PDF reader writes `lastRead` onto an attachment when you open
+it. The API returns that field, but pyzotero's `check_items()` allowlist
+(`_client.py`) rejects it on write. So **any attachment the user had opened
+could no longer be re-parented** — which is a permanent trap for a plugin whose
+job is attaching PDFs that users then read.
+
+`ZoteroClient._safe_update_item()` now strips known server-only fields before
+writing and, if pyzotero still objects, recovers the offending field names from
+its own error message and retries once — so a field Zotero adds later degrades
+to one wasted request instead of a hard failure. Both writes inside
+`merge_duplicate_item` route through it. Three unit tests cover the denylist
+path, the parse-and-retry path, and that unrelated errors still propagate.

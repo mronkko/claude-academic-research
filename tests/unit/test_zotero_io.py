@@ -1316,3 +1316,71 @@ def test_the_template_is_copied_not_shared(tmp_path) -> None:
     tmpl["filename"] = "something.pdf"
     assert zotero_io._IMPORTED_FILE_TEMPLATE == before
     assert zotero_io._IMPORTED_FILE_TEMPLATE["filename"] == ""
+
+
+# ---------------------------------------------------------------------------
+# _safe_update_item
+#
+# Zotero's API returns `lastRead` on any attachment the user has opened
+# in its PDF reader, but pyzotero's check_items() allowlist rejects it on
+# write — so merging a duplicate whose PDF had been read failed outright.
+# ---------------------------------------------------------------------------
+
+
+class _InvalidItemFieldsError(Exception):
+    """Stands in for pyzotero's exception, which is matched by name."""
+
+
+def _client_with_cloud(cloud):
+    from zotero_io import ZoteroClient
+    z = ZoteroClient.__new__(ZoteroClient)
+    z._cloud = cloud
+    return z
+
+
+def test_safe_update_item_strips_known_unwritable_field():
+    seen = []
+
+    class Cloud:
+        def update_item(self, item):
+            seen.append(dict(item["data"]))
+
+    z = _client_with_cloud(Cloud())
+    item = {"data": {"key": "A", "parentItem": "B", "lastRead": 1699999999}}
+    z._safe_update_item(item)
+
+    assert len(seen) == 1
+    assert "lastRead" not in seen[0]
+    assert seen[0]["parentItem"] == "B"
+
+
+def test_safe_update_item_retries_on_unknown_field_from_error_text():
+    """The denylist is a snapshot; a field Zotero adds later must still
+    be recovered from pyzotero's own message rather than hard-failing."""
+    calls = []
+
+    class Cloud:
+        def update_item(self, item):
+            calls.append(dict(item["data"]))
+            if "someFutureField" in item["data"]:
+                raise _InvalidItemFieldsError(
+                    "Invalid keys present in item 1: someFutureField"
+                )
+
+    _InvalidItemFieldsError.__name__ = "InvalidItemFieldsError"
+    z = _client_with_cloud(Cloud())
+    item = {"data": {"key": "A", "someFutureField": 1}}
+    z._safe_update_item(item)
+
+    assert len(calls) == 2
+    assert "someFutureField" not in calls[1]
+
+
+def test_safe_update_item_reraises_unrelated_errors():
+    class Cloud:
+        def update_item(self, item):
+            raise RuntimeError("network down")
+
+    z = _client_with_cloud(Cloud())
+    with pytest.raises(RuntimeError, match="network down"):
+        z._safe_update_item({"data": {"key": "A"}})
