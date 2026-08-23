@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 from .base import AbstractFetcher, PdfFetcher, Source
+from .base_search import BaseSearchSource
 from .browser import BrowserSource
 from .core import (
     REPOSITORY_COPY_TAG,
@@ -20,6 +21,7 @@ from .core import (
     is_repository_copy_path,
 )
 from .crossref import CrossrefSource
+from .openaire import OpenAireSource
 from .openalex import OpenAlexContentSource, OpenAlexSource
 from .pmc import PmcSource
 from .preprint import PREPRINT_VERSION_TAG, PreprintSource, is_preprint_path
@@ -78,6 +80,7 @@ def pdf_sources(
             OpenAlex Content API ($0.01/PDF, opt-in)
         Stage 3 — open access, often the author's accepted manuscript
             OpenAlex OA tier → Unpaywall → Semantic Scholar → CORE
+            → OpenAIRE → BASE
             → [preprint, only with `allow_preprints`]
         Stage 4 — browser handlers for Cloudflare/SSO-gated publishers
                   (APA, Sage, AOM, T&F, OUP, Emerald, INFORMS, …)
@@ -98,6 +101,19 @@ def pdf_sources(
     other source here is free or already covered by an institutional
     subscription — and it is skippable via
     `[openalex] use_paid_content_api = false`.
+
+    OpenAIRE and BASE sit below CORE, and below is the right place: all
+    three are repository indexes returning accepted manuscripts, and
+    these two measured *worse*. Over a 60-DOI sample of items the rest
+    of the cascade had already failed, OpenAIRE produced zero files —
+    its `bestaccessright: OPEN` flag is routinely set on records whose
+    only instance is the publisher landing page the cascade just failed
+    on. BASE could not be measured at all: its API is gated by
+    organisational IP registration and refuses unregistered callers.
+    Both stay in because this plugin runs across disciplines and a
+    European repository index that is useless for Anglophone management
+    journals may not be for an EU-funded corpus — but neither should be
+    expected to move the numbers, and both self-disable silently.
 
     CORE sits last among the OA sources deliberately: it indexes
     institutional repositories, so what it returns is usually the
@@ -145,6 +161,8 @@ def pdf_sources(
         UnpaywallSource(http, config),
         SemanticScholarSource(http, config),
         CoreSource(http, config),
+        OpenAireSource(http, config),
+        BaseSearchSource(http, config),
         PreprintSource(http, config),
         BrowserSource(http, config),
     ])
@@ -170,9 +188,11 @@ __all__ = [
     "is_preprint_path",
     "is_repository_copy_path",
     "is_tdm_recovered_path",
+    "BaseSearchSource",
     "BrowserSource",
     "CoreSource",
     "CrossrefSource",
+    "OpenAireSource",
     "OpenAlexContentSource",
     "OpenAlexSource",
     "PmcSource",

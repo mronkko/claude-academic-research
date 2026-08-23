@@ -224,10 +224,12 @@ def test_a_valid_cache_entry_is_served_without_a_request(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_core_is_last_in_the_default_cascade() -> None:
-    """It serves the accepted manuscript rather than the version of
-    record, so it must only answer for DOIs nothing else could."""
+def test_repository_sources_are_last_in_the_default_cascade() -> None:
+    """CORE, OpenAIRE and BASE all serve the accepted manuscript rather
+    than the version of record, so they must only answer for DOIs
+    nothing else could — and CORE leads them, being the only one of the
+    three with measured recall on a real corpus."""
     import fetchers
 
     names = [s.name for s in fetchers.pdf_sources(MagicMock(), None)]
-    assert names[-1] == "core", names
+    assert names[-3:] == ["core", "openaire", "base"], names

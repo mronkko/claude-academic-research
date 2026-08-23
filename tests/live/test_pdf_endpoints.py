@@ -164,6 +164,61 @@ def test_core_search_returns_a_download_url() -> None:
     )
 
 
+def test_openaire_search_returns_a_record() -> None:
+    """OpenAIRE resolves a DOI to a record with usable full-text links.
+
+    Asserts the *record*, not a downloaded file. Measured against 60
+    DOIs the rest of the cascade had already failed, OpenAIRE produced
+    zero PDFs — its `bestaccessright: OPEN` is frequently set on records
+    whose only instance is the publisher landing page. Asserting a
+    download here would encode that optimism as a test and fail for a
+    reason that is not a regression.
+    """
+    import urllib.parse
+
+    from fetchers.openaire import candidate_urls
+
+    doi = KNOWN_DOIS["openaire"]
+    status, body, _ = http_get(
+        "https://api.openaire.eu/search/publications?format=json&doi="
+        + urllib.parse.quote(doi, safe=""),
+    )
+    assert status == 200, f"OpenAIRE returned {status}"
+    payload = json.loads(body) or {}
+    results = ((payload.get("response") or {}).get("results") or {}).get("result")
+    assert results, f"OpenAIRE has no record for {doi}; update KNOWN_DOIS"
+    # Shape check: the extractor must survive the real response without
+    # raising, which is the part that actually breaks when they change it.
+    assert isinstance(candidate_urls(payload), list)
+
+
+def test_base_search_is_reachable_or_ip_gated() -> None:
+    """BASE either answers with records or refuses this IP.
+
+    Its API is gated by organisational IP registration rather than an
+    API key, so an unregistered network gets HTTP 200 with an `error`
+    body. That is an entitlement gap, not a failure, and it must skip
+    rather than fail — but the refusal has to be *recognised*, because a
+    200 with no `results` key would otherwise read as "no coverage"
+    forever.
+    """
+    from fetchers.base_search import candidate_urls, is_access_denied
+
+    doi = KNOWN_DOIS["base"]
+    status, body, _ = http_get(
+        "https://api.base-search.net/cgi-bin/BaseHttpSearchInterface.fcgi"
+        f'?func=PerformSearch&query=dcdoi:"{doi}"&format=json&hits=5',
+    )
+    assert status == 200, f"BASE returned {status}"
+    payload = json.loads(body) or {}
+    if is_access_denied(payload):
+        pytest.skip(
+            "BASE refused this IP — its API needs organisational IP "
+            "registration (https://www.base-search.net/about/en/faq_use.php)."
+        )
+    assert isinstance(candidate_urls(payload), list)
+
+
 def test_preprint_discovery_finds_a_preprint_hosted_pdf() -> None:
     """A published DOI resolves to a preprint copy on a preprint host.
 
