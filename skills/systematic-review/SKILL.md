@@ -1243,6 +1243,18 @@ attach the run log (`--log-csv`) so the failure can be reproduced.
 > — it answers every challenge with "skip" and records which publishers
 > were bypassed in the run log.
 
+> **`--plan` is read-only, not free.** It classifies the queue and names
+> the publishers that will need an interactive solve, without opening a
+> browser, fetching anything, or attaching anything — safe to run from
+> the Bash tool. But classification asks the library's link resolver
+> about each item it has no cached answer for, serially, at roughly two
+> seconds each: a few thousand items is an hour. The run prints that
+> estimate before it starts; read it before deciding to wait. If you
+> partition runs by scope — a cache directory per ladder so the logs
+> stay separable — point every one of them at the same
+> `--resolver-cache-dir`, or each pass re-asks the resolver everything
+> the last one already learned.
+
 **Phase 3 — Zotero Connector + institutional SFX/OpenURL**
 (`enrich_pdfs.py` with Connector handlers). For items the browser
 cascade can't reach directly — typically paywalled content accessed via

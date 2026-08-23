@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -61,6 +62,8 @@ from fetchers.resolvers import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     import requests
 
 logger = logging.getLogger(__name__)
@@ -78,11 +81,17 @@ _DEFAULT_TIMEOUT_S = 10
 class ResolverCache:
     """On-disk DOI → `{"targets": [...]}` cache.
 
-    Lives alongside the PDF cache directory, so deleting that directory
-    also clears this. Stale entries are low-risk: if a library adds a
-    subscription, the worst case is that a route we already knew about
-    stays cached, and a fresh run after deleting the cache picks up the
-    change.
+    Lives alongside the PDF cache directory by default, so deleting that
+    directory also clears this. `enrich_pdfs.py --resolver-cache-dir`
+    separates the two, because their economics are opposite: the PDF
+    cache is gigabytes and cheap to rebuild in parallel, while this is a
+    few megabytes rebuilt one serial query at a time against an
+    institutional endpoint. A caller keeping one cache directory per pass
+    — the natural thing to do when `--log-csv` is also per-pass — silently
+    fragments the expensive one. Stale entries are low-risk: if a library
+    adds a subscription, the worst case is that a route we already knew
+    about stays cached, and a fresh run after deleting the cache picks up
+    the change.
 
     The file is `resolver_cache.json`. Earlier versions wrote
     `sfx_cache.json` with a bare URL list (`{"urls": [...]}`) and, before
@@ -170,7 +179,7 @@ class ResolverCache:
 
     def put(self, key: str, targets: list[FulltextTarget]) -> None:
         self._data[key] = {"targets": [t.as_cache_dict() for t in targets]}
-        self._write()
+        self._write(key)
 
     def put_miss(self, key: str) -> None:
         """Record that the resolver answered, with nothing.
@@ -179,14 +188,51 @@ class ResolverCache:
         on which it is allowed to be forgotten.
         """
         self._data[key] = {"targets": [], "miss_at": time.time()}
-        self._write()
+        self._write(key)
 
-    def _write(self) -> None:
+    def _write(self, fresh_key: str | None = None) -> None:
         # Best-effort write — don't crash the pipeline on a filesystem
         # hiccup. Losing a cache entry costs one repeated query.
+        #
+        # Re-read and merge first. tmp+replace is atomic, so this file was
+        # never at risk of corruption, but atomic is not the same as
+        # correct when two processes share it: each holds the whole dict
+        # from its own startup, and the later writer replaces the file
+        # with a snapshot that never saw the earlier one's entries. That
+        # did not matter while the cache was pinned to the PDF cache
+        # directory, since every run had its own. `--resolver-cache-dir`
+        # exists precisely so several passes can share one, which makes
+        # last-writer-wins a way to lose exactly the answers the sharing
+        # was meant to preserve.
+        #
+        # **Disk wins every key except the one that triggered this
+        # write.** Our copy of any other key was either loaded at startup
+        # or written by us earlier, so whatever is on disk now is at
+        # least as new; `fresh_key` is the single fact this process knows
+        # more recently than the file does. The opposite rule — keeping
+        # our own — reads plausibly and is wrong: a long-running pass
+        # that cached a miss early would re-publish that miss over
+        # another pass's later positive answer, on every subsequent
+        # write. Timestamps cannot arbitrate instead, because positives
+        # deliberately carry none.
+        #
+        # Cost is one small read per put, against ~400 ms of network per
+        # item.
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".json.tmp")
+            if self.path.exists():
+                try:
+                    on_disk = json.loads(self.path.read_text())
+                except Exception:
+                    on_disk = {}
+                if isinstance(on_disk, dict):
+                    for key, entry in on_disk.items():
+                        if key != fresh_key:
+                            self._data[key] = entry
+            # Per-process scratch name. A shared directory means two
+            # runs would otherwise write the same `.tmp` file, and one
+            # `replace()` would publish the other's half-written bytes.
+            tmp = self.path.with_suffix(f".json.{os.getpid()}.tmp")
             tmp.write_text(json.dumps(self._data, indent=1))
             tmp.replace(self.path)
         except Exception as e:
@@ -713,6 +759,51 @@ def lookup_dual(
     )
 
 
+def dual_cache_keys(doi: str, cfg: LibraryResolverConfig) -> list[str]:
+    """Every cache key `lookup_dual(doi, cfg)` would consult.
+
+    Kept beside `lookup_dual` rather than derived by callers, because the
+    two must not drift: the key set depends on the primary dialect's
+    `supports_date_threshold` and on how many libraries are configured,
+    and a caller reasoning about "is this DOI warm" from the bare DOI
+    would be right only in the single-SFX-library case.
+    """
+    variants = [False]
+    if cfg.resolver is not None and cfg.resolver.supports_date_threshold:
+        variants.append(True)
+    keys: list[str] = []
+    for index, resolver in enumerate(cfg.resolvers):
+        resolver_id = "" if index == 0 else resolver.openurl_base
+        keys.extend(_cache_key(doi, ignore, resolver_id) for ignore in variants)
+    return keys
+
+
+def cached_answer_count(
+    dois: Iterable[str], cfg: LibraryResolverConfig,
+) -> int:
+    """How many of `dois` `lookup_dual` could answer from disk alone.
+
+    Read-only and network-free. It exists so a caller can price a
+    pre-flight sweep *before* running it: a sweep is serial and roughly
+    two seconds per uncached item, so a queue of a few thousand is an
+    hour, and the user should be told that up front rather than discover
+    it forty minutes in.
+
+    A DOI counts only when **every** key the dual lookup would consult is
+    already present. Counting a partially-warm DOI would make the
+    estimate optimistic in precisely the case that matters — the first
+    run after adding a second institution, where the primary's answers
+    are all warm and every item still costs a round-trip.
+    """
+    cache = cfg.cache
+    if cache is None or not cfg.resolvers:
+        return 0
+    return sum(
+        1 for doi in dois
+        if all(cache.get(key) is not None for key in dual_cache_keys(doi, cfg))
+    )
+
+
 def targets_match_domains(
     targets: list[FulltextTarget],
     domains: tuple[str, ...],
@@ -757,6 +848,8 @@ __all__ = [
     "Platform",
     "ResolverCache",
     "TargetLookup",
+    "cached_answer_count",
+    "dual_cache_keys",
     "effective_host",
     "first_fulltext_target_preferred",
     "has_fulltext_access",

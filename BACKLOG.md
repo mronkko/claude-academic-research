@@ -1271,6 +1271,39 @@ S10's `csl_json_to_zotero` reasoning) — but it surfaced two live defects.
 
 ## Tier 4 — do if convenient
 
+- **P17** — extend `--resolver-cache-dir` to the Crossref DOI cache, or
+  decide not to. Shipped covering `resolver_cache.json` only (issue #9);
+  `doi_resolver_cache.json` stays under `--cache-dir`, so a flag named
+  "resolver cache dir" governs one of two files whose names contain
+  "resolver". The help text names the file explicitly to keep that
+  honest. Deliberate: the DOI cache is rebuilt in parallel and cheaply,
+  and threading a second directory through `_triage_context` /
+  `_try_cascade` / `_cached_pdf_for` is 5-6 call sites of risk for a
+  cache nobody has complained about. Revisit only if a user reports the
+  same fragmentation there.
+- **P18** — issue #9's own alternative, `--library-coverage <json>`
+  (identifier → known route), for callers that run their own pre-flight
+  and already know the answers. `--resolver-cache-dir` covers the
+  reported case by making the cache shareable; this would cover the case
+  where the answers came from somewhere that is not our cache at all.
+  Not built — one mechanism for one problem until a second problem
+  appears.
+- **P19** — the unfiltered coverage query is skipped at *secondary*
+  resolvers when the primary cannot filter by date. `lookup_dual` reads
+  `cfg.resolver.supports_date_threshold` — the primary's — and applies
+  that decision to every configured library, so an Alma primary
+  suppresses the `sfx.ignore_date_threshold` query at an SFX secondary,
+  degrading Case 2 detection there to "unknown". Surfaced while writing
+  `dual_cache_keys` for the pre-flight cost estimate (which mirrors the
+  behaviour deliberately — an estimate that disagreed with the loop
+  would be worse than none). Affects only multi-institution setups where
+  the two libraries run different products, and it fails safe: an
+  unknown coverage verdict does not gate the fetch. Fix is to make the
+  variant list per-resolver in `_query_targets`, and to update
+  `dual_cache_keys` in the same commit or the estimate silently drifts.
+  Pinned by `test_dual_cache_keys_cover_every_library`, which will need
+  its expectation changed.
+
 - **S5** — expand `skills/setup/SKILL.md` (101 lines currently) with
   guidance on rotating a single API key, re-running the wizard, and
   auditing what's already configured. The wizard is idempotent but

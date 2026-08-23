@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`--resolver-cache-dir` on `enrich_pdfs.py`** (issue #9), defaulting
+  to `--cache-dir` so nothing changes for anyone who does not set it.
+  The two caches it separates are asymmetric in exactly the wrong
+  direction: the PDF cache is gigabytes and refetched in parallel, while
+  `resolver_cache.json` is a few megabytes rebuilt one serial query at a
+  time against an institutional endpoint. Since `--log-csv`,
+  `--failure-log-csv` and `--cache-dir` are all per-invocation, the
+  natural thing — one directory per pass, so the logs stay separable —
+  silently fragmented the expensive one. The reporting user measured it:
+  966 of 2,551 queued items had a cached answer where 2,406 did, and
+  merging the directories by hand saved ~48 minutes on a single pass.
+  This package already caches resolver *misses* for a week precisely
+  because those lookups were the slowest thing in the pre-flight; tying
+  them to the most-partitioned directory worked against that.
+
+  `ResolverCache` now merges on write rather than replacing, since
+  sharing a directory is the entire point and last-writer-wins would
+  discard the answers the sharing was meant to preserve. Disk wins every
+  key except the one being written — the opposite rule reads more
+  plausibly and is wrong: a long pass that cached a miss early would
+  stamp it back over another pass's later positive answer on every
+  subsequent write. The scratch file is per-pid for the same reason.
+
+### Fixed
+
+- **`--plan` told users it was attaching PDFs while it was attaching
+  nothing** (issue #8). The fetch itself was gated on the flag in
+  0.15.0, but the pre-flight banner narrating it was not, so a preview
+  run kept announcing "a retry against Wiley TDM / Elsevier / Springer …
+  a real fetch, and it attaches". A user read their own terminal,
+  believed it over the code, and filed a bug against the fix — quoting
+  the banner as evidence. The banner now branches on `--plan` and states
+  plainly that nothing is fetched and nothing is attached.
+
+  This is not a cosmetic defect. `--plan` exists to say what a run will
+  do to your library, and a preview that misdescribes itself fails at
+  the one job it has — credibly, which is worse than failing loudly.
+
+- **`--plan`'s cost is now visible before it is spent** (also issue #8).
+  Classification runs the link-resolver sweep, which is serial and
+  roughly two seconds per uncached item; on a 2,551-item queue that is
+  ~85 minutes, and the help promised only "exit without opening a
+  browser". The pre-flight now prints how many queued DOIs already have
+  a cached answer, how many still need a query, and roughly how long
+  that will take, before starting — and the progress line carries a
+  running ETA from the live rate. The sweep itself stays: it only reads,
+  and Case 1a/1b/2/3 classification is what makes the printed queue
+  worth printing. The right fix for a cost is to price it, not to hide
+  it. That count also makes cache fragmentation legible — "0 already
+  cached" on a queue you swept an hour ago is the symptom
+  `--resolver-cache-dir` cures.
+
+  `--plan`'s help and the no-terminal hint both say the same four things
+  now: no browser, no fetching, no attaching, but a resolver query per
+  uncached item.
+
 ## [0.15.0] — 2026-08-20
 
 Two threads. One is an end-to-end Antigravity demo run that succeeded in

@@ -783,7 +783,84 @@ def _log_browser_failure(
 #: often enough to see movement without turning the log into a scroll.
 _PREFLIGHT_TICK = 50
 
+#: Seconds per uncached resolver item, for the up-front estimate only.
+#: Two OpenURL round-trips on SFX, one on Alma, plus a Crossref DOI
+#: resolution — measured at ~0.5 items/s on a live 2,551-item queue.
+#: Deliberately a constant rather than a measurement: the estimate has
+#: to be printed *before* the loop, which is the whole point of it. Once
+#: the loop is running the progress line reports the real rate, which
+#: supersedes this.
+_PREFLIGHT_SECONDS_PER_ITEM = 2.0
+
 _DETAIL_MAX = 300
+
+
+def _humanize_duration(seconds: float) -> str:
+    """Coarse wall-clock estimate: seconds, minutes or hours and minutes.
+
+    Deliberately coarse. This answers "do I have time for this before my
+    meeting", not "how long exactly", and a false precision like
+    "47.3 min" on a figure derived from a constant rate would claim more
+    than it knows.
+    """
+    if seconds < 90:
+        return f"{int(round(seconds))}s"
+    minutes = int(round(seconds / 60))
+    if minutes < 90:
+        return f"{minutes} min"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m"
+
+
+def _preflight_cost_line(dois: list[str], resolver_cfg) -> str:
+    """One line pricing the resolver sweep before it starts.
+
+    The sweep is serial and runs against an institutional endpoint, so a
+    few thousand queued items is an hour. That hour used to be
+    undiscoverable until it was half spent: the banner said how many
+    items *might* be asked about and nothing about how many had already
+    been answered on a previous run. Under `--plan` — a flag whose whole
+    job is to tell you what a run will cost you — that omission was the
+    substance of issue #8's complaint, and it is not fixed by a
+    `--help` string, because the number depends on the cache.
+
+    It also makes cache fragmentation visible. A caller running one
+    directory per pass silently re-asks everything; seeing "0 already
+    cached" where thousands were expected is the symptom, and
+    `--resolver-cache-dir` is the cure.
+    """
+    import textwrap
+
+    from fetchers.library_resolver import cached_answer_count
+
+    total = len(dois)
+    if not total:
+        body = "No DOIs in the queue — nothing to ask the resolver about."
+    else:
+        cached = cached_answer_count(dois, resolver_cfg)
+        todo = total - cached
+        if not todo:
+            body = (
+                f"All {total} queued DOI{'' if total == 1 else 's'} already "
+                f"{'has' if total == 1 else 'have'} a cached resolver "
+                f"answer — this pre-flight is free."
+            )
+        else:
+            estimate = _humanize_duration(todo * _PREFLIGHT_SECONDS_PER_ITEM)
+            body = (
+                f"Up to {todo} of {total} queued DOIs still "
+                f"{'needs' if todo == 1 else 'need'} a resolver query "
+                f"({cached} already cached) — roughly {estimate}. "
+                f"Answers persist, so a re-run pays only for what is new. "
+                f"Progress every {_PREFLIGHT_TICK} queries."
+            )
+    # `break_on_hyphens=False`: the default splits "pre-flight" across
+    # lines, which reads as a typo in output whose whole job is to be
+    # believed.
+    return textwrap.fill(
+        body, width=74, initial_indent="  ", subsequent_indent="  ",
+        break_on_hyphens=False,
+    )
 
 
 def _http_status_of(exc: BaseException) -> int | None:
@@ -1997,7 +2074,10 @@ def _exit_no_interactive_surface(args: argparse.Namespace) -> None:
         "  • To run it yourself instead — macOS: ⌘-Space → Terminal → paste:\n"
         f"      {base}\n"
         "  • To see which publishers this will ask you to solve, without\n"
-        "    opening a browser (safe to run anywhere, including here):\n"
+        "    opening a browser (read-only — fetches nothing, attaches\n"
+        "    nothing — so it is safe to run anywhere, including here;\n"
+        "    budget an hour per few thousand uncached items, since it\n"
+        "    asks the link resolver about each one):\n"
         f"      {base} --plan\n"
         "  • For unattended runs (no prompts; auto-skip on first "
         "publisher failure), add `--no-prompt`.\n"
@@ -2110,11 +2190,19 @@ def _run_browser_in_process(
     resolver_session = _requests.Session()
     # `--refresh-resolver-cache` sets the miss TTL to zero, so every
     # cached "no route" is re-asked while cached routes are kept. The
-    # alternative used to be deleting `resolver_cache.json`, which lives
-    # in a directory that also holds the PDF cache and both Chromium
-    # profiles — a blunt instrument for re-checking one library's answer.
+    # alternative used to be deleting `resolver_cache.json`, which by
+    # default sits in a directory that also holds the PDF cache and both
+    # Chromium profiles — a blunt instrument for re-checking one
+    # library's answer.
+    #
+    # `--resolver-cache-dir` separates the two directories outright, for
+    # the opposite need: keeping the answers *across* runs that partition
+    # everything else per-pass. Defaulting to `--cache-dir` keeps the
+    # documented "delete that directory and this goes too" property for
+    # anyone who does not set it.
     resolver_cfg = load_from_config(
-        resolver_session, args.cache_dir,
+        resolver_session,
+        getattr(args, "resolver_cache_dir", None) or args.cache_dir,
         miss_ttl_s=0 if getattr(args, "refresh_resolver_cache", False)
         else None,
     )
@@ -2164,9 +2252,10 @@ def _run_browser_in_process(
     #: down *are* deliberate under `--plan` (they answer "what will this
     #: ask of me"); fetching is not, because a preview that mutates is
     #: not a preview.
+    plan_only = bool(getattr(args, "plan", False))
     pass2_api_sources: list = []
     if (not connector_only and session is not None and config is not None
-            and not getattr(args, "plan", False)):
+            and not plan_only):
         try:
             pass2_api_sources = [
                 s for s in fetchers.pdf_sources(session, config)
@@ -2193,24 +2282,57 @@ def _run_browser_in_process(
     # see) is fixed by a config key they need to be told about.
     no_entitlement: dict[str, int] = {}
 
+    # Upper bound on the sweep, and the basis for its cost estimate. Not
+    # every queued item reaches the resolver — no-DOI and no-handler
+    # items bail out earlier, and `--publisher` discards other
+    # publishers' items before they are asked about — so this counts
+    # what *could* be asked, and the wording below says "up to".
+    preflight_dois = [
+        doi for doi in (
+            (zi.get("data", {}).get("DOI") or "").strip().lower()
+            for zi in to_process
+        ) if doi
+    ]
+
     if resolver_cfg is not None and not connector_only:
         print(
             f"\nChecking library access via {resolver_cfg.describe()}...",
             flush=True,
         )
-        print(
-            f"  Two things happen here, per item, one item at a time:\n"
-            f"    1. a retry against Wiley TDM / Elsevier / Springer when "
-            f"Crossref\n"
-            f"       says the DOI lives on their host — a real fetch, and "
-            f"it attaches;\n"
-            f"    2. the resolver coverage queries themselves.\n"
-            f"  So lines from those publishers below are attempts, not "
-            f"resolver output.\n"
-            f"  Up to {len(to_process)} items; progress every "
-            f"{_PREFLIGHT_TICK} resolver queries.",
-            flush=True,
-        )
+        #: Two audiences, two truths. A real run does fetch here — the
+        #: Pass 2 API retry downloads and attaches on its way through —
+        #: and that had to be said, because publisher lines in the
+        #: middle of resolver output read as resolver output.
+        #:
+        #: Under `--plan` it does not, and has not since the retry was
+        #: gated on the flag. But this banner kept announcing the fetch
+        #: regardless, so a `--plan` run told the user it was attaching
+        #: PDFs while it was attaching nothing. They filed a bug against
+        #: a fix, reasonably, quoting their own terminal (issue #8). A
+        #: preview that misdescribes itself is the same defect as a
+        #: preview that mutates, one layer up.
+        if plan_only:
+            print(
+                "  Read-only: the resolver coverage queries and nothing "
+                "else.\n"
+                "  No PDF is fetched and nothing is attached — the Pass 2 "
+                "API retry\n"
+                "  that would do that is switched off under --plan.",
+                flush=True,
+            )
+        else:
+            print(
+                "  Two things happen here, per item, one item at a time:\n"
+                "    1. a retry against Wiley TDM / Elsevier / Springer when "
+                "Crossref\n"
+                "       says the DOI lives on their host — a real fetch, and "
+                "it attaches;\n"
+                "    2. the resolver coverage queries themselves.\n"
+                "  So lines from those publishers below are attempts, not "
+                "resolver output.",
+                flush=True,
+            )
+        print(_preflight_cost_line(preflight_dois, resolver_cfg), flush=True)
 
     # Counter for that progress line. Only items that actually reach the
     # resolver are counted, so the number means "queries made", not
@@ -2372,8 +2494,19 @@ def _run_browser_in_process(
             checked += 1
             if checked % _PREFLIGHT_TICK == 0:
                 rate = checked / max(time.monotonic() - t_preflight, 1e-6)
+                # An upper bound, and said as one: `len(preflight_dois)`
+                # counts every DOI in the queue, while `checked` counts
+                # only those that reached the resolver, so the remainder
+                # over-states. The live rate is the honest half — it
+                # already reflects this run's cache hit mix, which the
+                # constant-rate estimate printed before the loop cannot.
+                left = max(len(preflight_dois) - checked, 0)
+                eta = (
+                    f", ≤{_humanize_duration(left / rate)} left"
+                    if left and rate > 0 else ""
+                )
                 print(
-                    f"  … {checked} checked ({rate:.1f}/s)",
+                    f"  … {checked} checked ({rate:.1f}/s{eta})",
                     flush=True,
                 )
             dual = lookup_dual(
@@ -2443,7 +2576,7 @@ def _run_browser_in_process(
             # are slow, and a normal run reaches Pass 4a's own banner
             # soon enough anyway. --plan exists to answer "what will this
             # cost me", so paying for the answer there is the trade.
-            if getattr(args, "plan", False) and resolver_cfg is not None:
+            if plan_only and resolver_cfg is not None:
                 print(
                     f"    (resolving targets for {len(connector_upfront)} "
                     f"items to split unattended from manual...)",
@@ -2528,7 +2661,7 @@ def _run_browser_in_process(
         print("\nNothing to do via the browser path.", flush=True)
         return 0
 
-    if getattr(args, "plan", False):
+    if plan_only:
         print(
             "\n--plan: stopping here without opening a browser. Re-run the "
             "same command without --plan to execute.",
@@ -3237,7 +3370,23 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--cache-dir", default=DEFAULT_CACHE_DIR,
-                        help=f"PDF cache directory (default: {DEFAULT_CACHE_DIR}).")
+                        help=f"PDF cache directory (default: "
+                             f"{DEFAULT_CACHE_DIR}). Also holds the Chromium "
+                             f"profiles and, unless --resolver-cache-dir "
+                             f"says otherwise, the link-resolver cache.")
+    parser.add_argument(
+        "--resolver-cache-dir", default=None, metavar="PATH",
+        help="Directory for the link-resolver cache "
+             "(`resolver_cache.json`). Defaults to --cache-dir. Point "
+             "several runs at one directory to share coverage answers "
+             "while keeping per-run PDF caches and logs: the PDF cache is "
+             "gigabytes and cheap to rebuild in parallel, whereas these "
+             "answers are rebuilt one serial query at a time against your "
+             "library's resolver. Concurrent runs sharing a directory "
+             "merge rather than overwrite. Note this is not the Crossref "
+             "DOI cache (`doi_resolver_cache.json`), which stays under "
+             "--cache-dir.",
+    )
     parser.add_argument("--workers", type=int, default=6,
                         help="Parallel download threads (default: 6). "
                              "API cascade only — see --browser-workers for "
@@ -3338,14 +3487,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="(browser mode) Classify items and print the publisher queue — "
              "including which publishers will need an interactive "
              "Cloudflare / SSO solve — then exit without opening a browser. "
-             "Run this first so you know what the real run will ask of you.",
+             "Run this first so you know what the real run will ask of you. "
+             "Read-only: no PDF is fetched and nothing is attached. It is "
+             "not, however, free — classification runs the link-resolver "
+             "coverage sweep, which is serial and costs roughly one query "
+             "per uncached item (~2s each, so a few thousand items is an "
+             "hour). The run prints that estimate before starting, and "
+             "cached answers make a re-run cheap; see --resolver-cache-dir "
+             "to share them across passes. Safe to run beside another pass "
+             "— it cannot duplicate attachments — but both will be "
+             "queueing against the same institutional resolver.",
     )
     parser.add_argument(
         "--refresh-resolver-cache", action="store_true",
         help="Re-ask the link resolver about items it previously reported "
              "no route for. Cached routes are kept; only the misses are "
-             "re-queried. Use after gaining access to a title, or when "
-             "you suspect the resolver's answer was wrong — misses are "
+             "re-queried. Applies to whichever cache is in use — see "
+             "--resolver-cache-dir. Use after gaining access to a title, "
+             "or when you suspect the resolver's answer was wrong — "
+             "misses are "
              "cached for a week, cheaply enough that a ten-block browser "
              "session asks once, but that window is also long enough to "
              "outlast a new subscription.",

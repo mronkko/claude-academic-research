@@ -33,6 +33,8 @@ import pytest
 from fetchers.library_resolver import (
     LibraryResolverConfig,
     ResolverCache,
+    cached_answer_count,
+    dual_cache_keys,
     has_fulltext_access,
     load_from_config,
     lookup_dual,
@@ -481,6 +483,166 @@ def test_cache_entry_without_targets_key_is_a_miss(tmp_path: Path) -> None:
         '{"' + DOI + '": {"other": 1}}',
     )
     assert ResolverCache(tmp_path).get(DOI) is None
+
+
+# ---------------------------------------------------------------------------
+# Sharing the cache across runs
+# ---------------------------------------------------------------------------
+
+
+def test_a_second_writer_does_not_erase_the_first(tmp_path) -> None:
+    """Two runs sharing one directory must both keep their answers.
+
+    tmp+replace was always atomic, so the file was never corrupt — but
+    each instance holds the dict it loaded at startup, so the later
+    writer used to publish a snapshot that had never seen the earlier
+    one's entries. Harmless while every run had its own cache directory;
+    the whole point of `--resolver-cache-dir` is that they no longer do,
+    and losing half the answers is exactly what sharing was meant to
+    prevent.
+    """
+    first = ResolverCache(tmp_path)
+    second = ResolverCache(tmp_path)      # started before `first` wrote
+
+    first.put("10.1/a", [FulltextTarget(url="https://x/a")])
+    second.put("10.1/b", [FulltextTarget(url="https://x/b")])
+
+    reloaded = ResolverCache(tmp_path)
+    assert reloaded.get("10.1/a") is not None
+    assert reloaded.get("10.1/b") is not None
+
+
+def test_a_stale_miss_cannot_republish_over_a_newer_answer(tmp_path) -> None:
+    """Disk wins every key except the one being written.
+
+    The tempting rule is the opposite — keep what this process has, since
+    it asked most recently. It is wrong, and this is the case that shows
+    it: a long-running pass that cached a miss early holds that miss in
+    memory for hours, and on *every* subsequent write would stamp it back
+    over another pass's later positive answer. Timestamps cannot arbitrate
+    instead, because positives deliberately carry none.
+    """
+    stale = ResolverCache(tmp_path)
+    stale.put_miss(DOI)
+
+    fresh = ResolverCache(tmp_path)
+    fresh.put(DOI, [FulltextTarget(url="https://x/found")])
+
+    stale.put("10.1/unrelated", [FulltextTarget(url="https://x/u")])
+    assert ResolverCache(tmp_path).get(DOI) == [
+        FulltextTarget(url="https://x/found"),
+    ]
+
+
+def test_concurrent_writers_do_not_share_a_scratch_file(tmp_path) -> None:
+    """The temp name carries the pid, so two processes writing the same
+    shared cache cannot publish each other's half-written bytes.
+    """
+    import os
+
+    cache = ResolverCache(tmp_path)
+    cache.put(DOI, [FulltextTarget(url="https://x/1")])
+    assert str(os.getpid()) in cache.path.with_suffix(
+        f".json.{os.getpid()}.tmp",
+    ).name
+    # And nothing is left behind.
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+# ---------------------------------------------------------------------------
+# Pricing a sweep before running it
+# ---------------------------------------------------------------------------
+
+
+def _cfg(base: str, cache: ResolverCache | None, *extra: str):
+    from fetchers.resolvers import resolver_for
+    return LibraryResolverConfig(
+        resolver=resolver_for(base),
+        additional_resolvers=tuple(resolver_for(b) for b in extra),
+        session=MagicMock(),
+        cache=cache,
+    )
+
+
+def test_dual_cache_keys_follow_the_dialect(tmp_path) -> None:
+    """SFX asks twice per DOI (date-filtered and not), Alma once — so
+    "is this DOI warm" is a different question on each, and a caller
+    cannot answer it from the bare DOI.
+    """
+    assert dual_cache_keys(DOI, _cfg(SFX_BASE, None)) == [DOI, f"{DOI}::any"]
+    assert dual_cache_keys(DOI, _cfg(ALMA_BASE, None)) == [DOI]
+
+
+def test_dual_cache_keys_cover_every_library(tmp_path) -> None:
+    """A second institution is queried and cached separately. The primary
+    keeps the bare-DOI key, so adding a library must not silently make
+    every previously-warm DOI count as warm for the new one too.
+
+    Note the asymmetry in the expected keys: the *primary* dialect alone
+    decides whether the unfiltered second query happens, and that choice
+    is then applied to every configured library. So an Alma primary
+    suppresses the `::any` query at an SFX secondary as well. This helper
+    mirrors that deliberately rather than correcting it — its contract is
+    to predict what the sweep will actually ask, and an estimate that
+    disagreed with the loop would be worse than no estimate. The
+    asymmetry itself is `lookup_dual`'s to answer for.
+    """
+    keys = dual_cache_keys(DOI, _cfg(ALMA_BASE, None, SFX_BASE))
+    assert keys == [DOI, f"{DOI}@@{SFX_BASE}"]
+
+    # SFX primary, and both libraries are asked both ways.
+    assert dual_cache_keys(DOI, _cfg(SFX_BASE, None, ALMA_BASE)) == [
+        DOI, f"{DOI}::any",
+        f"{DOI}@@{ALMA_BASE}", f"{DOI}::any@@{ALMA_BASE}",
+    ]
+
+
+def test_a_partly_warm_doi_is_not_counted_as_cached(tmp_path) -> None:
+    """The estimate exists to be trusted before an hour is spent, so it
+    must not round in the flattering direction. On SFX a DOI answered
+    date-filtered but not unfiltered still costs a round-trip.
+    """
+    cache = ResolverCache(tmp_path)
+    cache.put(DOI, [FulltextTarget(url="https://x/1")])
+    cfg = _cfg(SFX_BASE, cache)
+    assert cached_answer_count([DOI], cfg) == 0
+
+    cache.put(f"{DOI}::any", [FulltextTarget(url="https://x/1")])
+    assert cached_answer_count([DOI], cfg) == 1
+
+
+def test_a_cached_miss_still_counts_as_answered(tmp_path) -> None:
+    """A miss inside its TTL is an answer the sweep will not re-ask, so
+    counting it as work-to-do would over-state the cost of a queue whose
+    items are mostly unlicensed — the queue shape where a user is most
+    likely to give up on the pre-flight entirely.
+    """
+    cache = ResolverCache(tmp_path)
+    cache.put_miss(DOI)
+    assert cached_answer_count([DOI], _cfg(ALMA_BASE, cache)) == 1
+
+
+def test_an_expired_miss_is_work_again(tmp_path) -> None:
+    cache = ResolverCache(tmp_path, miss_ttl_s=0)
+    cache.put_miss(DOI)
+    assert cached_answer_count([DOI], _cfg(ALMA_BASE, cache)) == 0
+
+
+def test_counting_is_free_when_there_is_no_cache() -> None:
+    """No cache and no resolver both mean "nothing is known", and neither
+    may raise: this runs on the banner path, before any lookup.
+    """
+    assert cached_answer_count([DOI], _cfg(ALMA_BASE, None)) == 0
+    assert cached_answer_count([DOI], LibraryResolverConfig(
+        resolver=None, session=MagicMock(), cache=None,
+    )) == 0
+
+
+def test_counting_asks_the_resolver_nothing(tmp_path) -> None:
+    """It is printed before the sweep, so it must not *be* the sweep."""
+    cfg = _cfg(ALMA_BASE, ResolverCache(tmp_path))
+    cached_answer_count([DOI, "10.1/other"], cfg)
+    cfg.session.get.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

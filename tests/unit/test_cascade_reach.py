@@ -127,14 +127,94 @@ def test_plan_mode_builds_no_fetching_sources() -> None:
 
     src = inspect.getsource(enrich_pdfs._run_browser_in_process)
     head = src.split("pass2_api_sources: list = []")[1].split("\n\n")[0]
-    assert 'getattr(args, "plan", False)' in head, (
+    assert "plan_only" in head, (
         "the Pass 2 API retry source list is built without consulting "
         "--plan; a preview would fetch and attach again"
     )
+    # `plan_only` is only a gate if it comes from the flag. Spelled once
+    # and reused, so the banner and the exit cannot disagree with the
+    # thing that actually suppresses fetching.
+    assert 'plan_only = bool(getattr(args, "plan", False))' in src
 
     # And the flag it already honoured is still honoured.
     assert "args.dry_run" in src
     argparse.Namespace(plan=True)  # documents the shape the gate reads
+
+
+def test_the_preflight_banner_does_not_promise_fetching_under_plan() -> None:
+    """The fetch gate above shipped and the banner narrating it did not
+    move, so `--plan` spent three days announcing "a real fetch, and it
+    attaches" while attaching nothing. A user read their own terminal,
+    believed it over the code, and filed issue #8 against the fix.
+
+    That is not a cosmetic defect. `--plan` exists to tell you what a run
+    will do to your library; a preview that misdescribes itself fails at
+    the one job it has, and it fails *credibly*, which is worse than
+    failing loudly. So the banner is pinned to the same flag the gate
+    reads: under `--plan` it must not claim anything is fetched or
+    attached.
+    """
+    import inspect
+
+    import enrich_pdfs
+
+    src = inspect.getsource(enrich_pdfs._run_browser_in_process)
+    banner = src.split("Checking library access via")[1].split(
+        "preflight_cost_line",
+    )[0]
+    assert "if plan_only:" in banner, (
+        "the pre-flight banner does not branch on --plan; whatever it "
+        "says is being said to both audiences"
+    )
+    plan_branch = banner.split("if plan_only:")[1].split("else:")[0]
+    for promise in ("it attaches", "a real fetch"):
+        assert promise not in plan_branch, (
+            f"the --plan banner still promises {promise!r} — this is the "
+            f"exact sentence that produced issue #8"
+        )
+    assert "nothing is attached" in plan_branch
+
+
+def test_the_preflight_prices_itself_before_it_starts() -> None:
+    """A serial sweep at ~2s per uncached item is an hour on a few
+    thousand, and issue #8 was filed by someone who found that out at
+    600/3,542. The cost cannot live in `--help`, because the number that
+    matters is how many answers are already cached — so it is computed
+    and printed before the loop.
+
+    Pinned at the count rather than the wording: an estimate that ignores
+    the cache would be worse than none, since it would be wrong in the
+    direction that discourages re-running a warm queue.
+    """
+    from unittest.mock import MagicMock
+
+    import enrich_pdfs
+    from fetchers.library_resolver import ResolverCache
+
+    cfg = MagicMock()
+    cfg.cache = None      # nothing cached, so nothing is free
+    cfg.resolvers = ()
+    line = " ".join(
+        enrich_pdfs._preflight_cost_line(["10.1/a", "10.1/b"], cfg).split()
+    )
+    assert "2 of 2" in line and "0 already cached" in line
+    assert "min" in line or "s" in line
+
+    assert enrich_pdfs._preflight_cost_line([], cfg).startswith("  No DOIs")
+    assert isinstance(ResolverCache, type)
+
+
+def test_the_cost_estimate_stays_coarse() -> None:
+    """A duration derived from a constant rate must not be printed as if
+    it were measured. `47.3 min` claims a precision the input does not
+    have; `47 min` claims the right one.
+    """
+    import enrich_pdfs
+
+    assert enrich_pdfs._humanize_duration(12) == "12s"
+    assert enrich_pdfs._humanize_duration(600) == "10 min"
+    assert enrich_pdfs._humanize_duration(3 * 3600 + 300) == "3h05m"
+    assert "." not in enrich_pdfs._humanize_duration(1234.567)
 
 
 # --- 4. --publisher must not pay for publishers it discards ----------
@@ -187,3 +267,48 @@ def test_the_preflight_reports_progress() -> None:
     assert enrich_pdfs._PREFLIGHT_TICK > 0
     src = inspect.getsource(enrich_pdfs._run_browser_in_process)
     assert "checked % _PREFLIGHT_TICK" in src
+
+
+# --- 5. the resolver cache can outlive a per-pass cache directory ----
+
+
+def test_resolver_cache_dir_defaults_to_the_pdf_cache_dir() -> None:
+    """Issue #9: `--log-csv`, `--failure-log-csv` and `--cache-dir` are all
+    per-invocation, which encourages one directory per pass so the logs
+    stay separable — and that silently fragmented the one cache that is
+    expensive to rebuild. On a 2,551-item pass it cost ~48 minutes of
+    re-asking answers established minutes earlier.
+
+    The two caches are asymmetric in exactly the wrong direction: the PDF
+    cache is gigabytes and refetched in parallel; the resolver cache is
+    megabytes, rebuilt serially against an institutional endpoint, and
+    this package already caches its *misses* for a week because those
+    lookups were the slowest thing in the pre-flight.
+
+    Defaulting to `--cache-dir` keeps the documented "delete that
+    directory and this goes too" property for anyone who does not opt in.
+    """
+    import enrich_pdfs
+
+    parser = enrich_pdfs._build_parser()
+    args = parser.parse_args([])
+    assert args.resolver_cache_dir is None
+    assert (args.resolver_cache_dir or args.cache_dir) == args.cache_dir
+
+    args = parser.parse_args(["--resolver-cache-dir", "/shared/resolver"])
+    assert (args.resolver_cache_dir or args.cache_dir) == "/shared/resolver"
+
+
+def test_the_resolver_cache_dir_reaches_load_from_config() -> None:
+    """One call site, so the whole feature is one argument — but an
+    argument parsed and never passed is the most plausible way for this
+    to ship broken, and it would fail silently: the run would simply be
+    slow again.
+    """
+    import inspect
+
+    import enrich_pdfs
+
+    src = inspect.getsource(enrich_pdfs._run_browser_in_process)
+    call = src.split("resolver_cfg = load_from_config(")[1].split("\n    )")[0]
+    assert 'getattr(args, "resolver_cache_dir", None) or args.cache_dir' in call
