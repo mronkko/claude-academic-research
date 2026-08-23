@@ -491,3 +491,116 @@ JSTOR (10.2307) has dropped out of the unhandled-prefix table entirely —
 | oup | 26 |
 
 The ~880 items behind existing handlers have still never had a browser pass.
+
+---
+
+# Big browser pass over the 894 handler-routed items (2026-08-23)
+
+`--sources browser --control-file`, auto-responder answering the terminal
+prompts. Resolver pre-flight took ~35 min for 838 uncached DOIs.
+
+Pass 3 sent only 429 of the 894 to their own publisher: **193 items were
+skipped because the resolver lists a licensed route that is not via that
+publisher** (Academy of Management 131 of them), and the rest went to the
+resolver-routed queue.
+
+| Publisher | Queued | New | Failed |
+|---|---|---|---|
+| Taylor & Francis | 131 | 89 (+4 cached) | 39 |
+| Springer Nature | 79 | 58 | 22 |
+| Emerald | 60 | 50 | 11 |
+| APA PsycNET | 129 | **1** | **129** |
+| Oxford University Press | 18 | 12 | 7 |
+| Sage | 3 | 0 | 4 |
+| Cambridge University Press | 7 | 0 | 8 |
+| Wiley (fallback) | 2 | 0 | 3 |
+| **EBSCOhost (resolver-routed)** | **423** | **291** (+9 cached) | 123 |
+| Zotero Connector (residual) | 304 | 0 of 8 tried | stopped |
+
+**515 attached in this run.**
+
+## APA is blocked by SSO, not by the handler
+
+All 129 APA items failed with the session bounced to
+`sso.apa.org/apasso/idm/login?CheckAccess=1&...`. The browser profile is not
+signed in to APA and IP auth alone is not enough. Nothing in the automated path
+can clear this — it is a web login form, not a prompt. **A one-time manual
+sign-in in the Chromium window would very likely unlock these**, and the
+session persists in the profile afterwards. Note `[library] direct_access`
+already lists `apa`, so the resolver gate is not what is stopping them.
+
+Some were recovered anyway: after the operator signed in to EBSCO mid-run, the
+EBSCO segment started attaching `10.1037/...` items, taking APA from 128
+missing to 70.
+
+## The Connector residual is not worth running
+
+The final 304 were items where both the publisher and EBSCO had already failed.
+First 8: **5 `FAIL: no new item appeared in the target group`, 3 `PARTIAL:
+Connector saved but no PDF found`, 0 attached.** At ~90 s each the remaining 296
+would have held the single live lane for ~7 h at roughly zero yield, so the run
+was stopped there. This is the opposite of the JSTOR Connector queue (44/47),
+and the difference is that there the resolver had a real licensed route to hand
+the translator; here it had none left.
+
+## Side effect: 12 stray items need cleaning up
+
+Connector saves create a new Zotero item and then merge it into the keeper.
+When the save half-succeeds, the new parent survives. Twelve `journalArticle`
+items were added to the library today and never merged:
+
+```
+C89NRHNR  10.1287/deca.2019.0400   Comparative Analysis of Terrorists' Objectives…
+NS96P7CC  -                        [No title found]
+EGEA7QWS  10.13165/VPA-20-19-2-04  Determinants of Public Trust…      ┐ duplicate
+N8IYDKYE  10.13165/VPA-20-19-2-04  Determinants of public trust…      ┘ pair
+EELD2HSX  10.1111/j.1944-8287.1998.tb00020.x  Changing Production Systems…
+5EPIYW4Q  10.1080/00324728.1949.10415511      The encouragement of emigration…
+6XN7ZFKK  -                        Peasant Rebellions of the Caspian Region…
+KTQE77MM  10.1191/096973397669924911          Professional Solidarity…
+KKICEVGF  -                        Scientific Specialties and Technical Systems
+NHQ56966  -                        The Political Economy of Early Southern Unionism…
+PY8FEVWB  10.2307/2522418          The Influence of Negotiators' Self-Interest…
+W54SFSC4  -                        Just a moment...
+```
+
+`W54SFSC4` is a Cloudflare interstitial saved as a bibliographic record. Left in
+place rather than deleted — removing items from a live library is the
+operator's call.
+
+## Census
+
+| Measure | Start of day | Now |
+|---|---|---|
+| **without a PDF** | **1,821** | **893** |
+
+**928 recovered today.** INFORMS went 47 → **0**, entirely via EBSCO — the
+`no_access = ['informs']` config plus the resolver's EBSCO route works exactly
+as designed.
+
+| Route | Start | Now |
+|---|---|---|
+| NO HANDLER | 818 | 513 |
+| sage | 147 | 109 |
+| tandf | 177 | 71 |
+| apa | 134 | 70 |
+| cambridge | 61 | 31 |
+| springer | 109 | 31 |
+| wiley | 146 | 24 |
+| oup | 28 | 18 |
+| emerald | 69 | 14 |
+| aom | 137 | 10 |
+| informs | 55 | **0** |
+
+## Next levers, in order
+
+1. **The 513 unhandled items have never had a resolver/EBSCO pass at all.** This
+   run was scoped to `handlers.keys`; `output/unhandled.keys` was excluded.
+   EBSCO recovered 291 of 423 (69%) from the handler queue, so this is the
+   highest-yield remaining action and it is unattended.
+2. **APA: sign in once**, then re-run the 70 direct.
+3. **Sage barely moved** (147 → 109) and only 3 items went direct. Worth a look
+   at where the other Sage items are being routed.
+4. 78 still-missing items carry a book-style DOI but `itemType=journalArticle` —
+   Routledge 29, Cambridge 16, Palgrave 7, OUP 7, De Gruyter 5. No journal
+   handler can fetch these; re-typing them moves them out of scope honestly.
