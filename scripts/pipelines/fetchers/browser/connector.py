@@ -29,7 +29,9 @@ Design reference:
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -54,6 +56,16 @@ _CONNECTOR_EXT_ID = "ekhagklcjbdpajgpjgmbionohlpdbjgc"
 # enabled (default). If this is unreachable, translators can load but
 # saveWithTranslator will never actually deposit anything.
 _CONNECTOR_PING_URL = "http://127.0.0.1:23119/connector/ping"
+
+#: How long to wait for Zotero Desktop to write the Connector's save.
+#:
+#: Was 120s, and a live run over 304 items showed saves landing *at* that
+#: deadline — the log repeatedly printed "117s elapsed, ~2s remaining"
+#: and then declared failure for items that had in fact saved, leaving an
+#: unmerged duplicate holding the PDF. The wait covers Zotero fetching
+#: the PDF as well as writing the record, so it scales with file size and
+#: publisher latency, not just with the user clicking a picker.
+_SAVE_POLL_TIMEOUT_S = 240.0
 
 
 def _default_extension_search_paths() -> list[Path]:
@@ -505,10 +517,11 @@ class ZoteroConnectorHandler(PublisherHandler):
         # OpenURL that redirects to a list page (common on EBSCO)
         # triggers Zotero's item picker, and the user needs time to
         # click through it.
-        print("  │  Waiting for Zotero Desktop to save item "
-              "(up to 120s)…", flush=True)
+        print(f"  │  Waiting for Zotero Desktop to save item "
+              f"(up to {int(_SAVE_POLL_TIMEOUT_S)}s)…", flush=True)
         new_key = await asyncio.to_thread(
-            _poll_for_new_item, zot, doi, item["item_key"], 120,
+            _poll_for_new_item, zot, doi, item["item_key"],
+            _SAVE_POLL_TIMEOUT_S, title=item.get("title", ""),
         )
         if new_key is None:
             # What to blame depends on something we already know. Once
@@ -705,13 +718,36 @@ def ping_zotero_desktop(session, timeout_s: float = 3.0) -> bool:
     return resp.status_code == 200
 
 
+def _normalise_title(text: str) -> str:
+    """Lower-case, alphanumeric-only form for comparing two titles.
+
+    Publishers and Zotero translators disagree about case, punctuation
+    and diacritics for the same article ("RUSSIAN MINERS BOW TO THE
+    ANGEL OF HISTORY" vs "Russian Miners Bow to the Angel of History"),
+    so an exact string compare is useless here.
+    """
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
 def _poll_for_new_item(
     zot, doi: str, keeper_key: str, timeout_s: float,
     *,
     hint_every_s: float = 15.0,
+    title: str = "",
 ) -> str | None:
-    """Return the item_key of a newly-created Zotero item whose DOI
-    matches `doi` and whose key is NOT `keeper_key`.
+    """Return the item_key of the item the Connector just created.
+
+    Matches on DOI **or** title, and that is not redundant: Zotero's
+    translators routinely save a record with no DOI field at all —
+    three of five orphans left by one live run had none — so a
+    DOI-only match declared failure for items that had saved
+    perfectly, abandoning a duplicate that held the PDF.
+
+    The recency window applies to the **title** path only. A DOI is
+    specific enough to identify the article on its own, but a title is
+    not: without the window a title match would happily return some
+    pre-existing copy elsewhere in the library and the caller would
+    merge the wrong pair. `keeper_key` is excluded on both paths.
 
     Polls LOCAL Zotero — Zotero Desktop writes new items here
     immediately after the Connector saves. Cloud sync happens
@@ -720,12 +756,19 @@ def _poll_for_new_item(
 
     When the SFX URL redirects to a list page (EBSCO / JSTOR search
     results are the common cases), Zotero pops a "Select which items"
-    picker that blocks on user input. The poll's timeout must be
-    generous enough for the user to click through that UI; 120s is
-    the caller's default. While waiting, `hint_every_s` seconds pass
-    a reminder is printed so a quiet terminal doesn't look hung.
+    picker that blocks on user input, so the timeout must leave room
+    for a human to click through it. While waiting, every
+    `hint_every_s` seconds a reminder is printed so a quiet terminal
+    doesn't look hung.
     """
     needle = doi.strip().lower()
+    want_title = _normalise_title(title)
+    # A few seconds of slack: the local clock and Zotero's dateAdded
+    # (UTC, second resolution) need not agree exactly, and losing the
+    # real save to a one-second skew would reintroduce the bug.
+    cutoff = (
+        _dt.datetime.now(_dt.UTC) - _dt.timedelta(seconds=10)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
     start = time.monotonic()
     deadline = start + timeout_s
     next_hint_at = start + hint_every_s
@@ -737,8 +780,15 @@ def _poll_for_new_item(
         for it in items:
             if it.get("key") == keeper_key:
                 continue
-            it_doi = (it.get("data", {}).get("DOI") or "").strip().lower()
-            if it_doi == needle:
+            data = it.get("data", {})
+            it_doi = (data.get("DOI") or "").strip().lower()
+            if needle and it_doi == needle:
+                return it["key"]
+            if (
+                want_title
+                and (data.get("dateAdded") or "") >= cutoff
+                and _normalise_title(data.get("title")) == want_title
+            ):
                 return it["key"]
         now = time.monotonic()
         if now >= next_hint_at:

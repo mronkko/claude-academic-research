@@ -399,3 +399,69 @@ def test_both_branches_offer_the_no_access_explanation() -> None:
     src = inspect.getsource(connector).lower()
     assert "subscription" in src
     assert "vpn" in src or "proxy" in src
+
+
+# ---------------------------------------------------------------------------
+# Title fallback in _poll_for_new_item.
+#
+# Zotero translators frequently save a record with no DOI field, so a
+# DOI-only match reported failure for items that had saved perfectly and
+# left an unmerged duplicate holding the PDF. Three of five orphans from
+# one live run had no DOI at all.
+# ---------------------------------------------------------------------------
+
+import datetime as _dt  # noqa: E402
+
+from fetchers.browser.connector import _normalise_title  # noqa: E402
+
+
+def _recent(seconds_ago: int = 1) -> str:
+    return (
+        _dt.datetime.now(_dt.UTC) - _dt.timedelta(seconds=seconds_ago)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_normalise_title_ignores_case_and_punctuation() -> None:
+    assert (
+        _normalise_title("RUSSIAN MINERS BOW TO THE ANGEL OF HISTORY")
+        == _normalise_title("Russian Miners Bow to the Angel of History")
+    )
+
+
+def test_poll_matches_on_title_when_the_save_has_no_doi() -> None:
+    zot = MagicMock()
+    zot.journal_articles.return_value = [
+        {"key": "NEW", "data": {"DOI": "", "title": "Scientific Specialties",
+                                "dateAdded": _recent()}},
+    ]
+    assert _poll_for_new_item(
+        zot, "10.1/x", "KEEPER", timeout_s=0.2,
+        title="Scientific  Specialties!",
+    ) == "NEW"
+
+
+def test_poll_title_match_ignores_items_predating_the_poll() -> None:
+    """Without the recency window a title match would return a
+    pre-existing copy and the caller would merge the wrong pair."""
+    zot = MagicMock()
+    zot.journal_articles.return_value = [
+        {"key": "OLDCOPY", "data": {"DOI": "", "title": "Scientific Specialties",
+                                    "dateAdded": "2019-01-01T00:00:00Z"}},
+    ]
+    assert _poll_for_new_item(
+        zot, "10.1/x", "KEEPER", timeout_s=0.2,
+        title="Scientific Specialties",
+    ) is None
+
+
+def test_poll_doi_match_is_not_subject_to_the_recency_window() -> None:
+    """A DOI identifies the article on its own; narrowing that path
+    would change behaviour that was already correct."""
+    zot = MagicMock()
+    zot.journal_articles.return_value = [
+        {"key": "NEW", "data": {"DOI": "10.1/x",
+                                "dateAdded": "2019-01-01T00:00:00Z"}},
+    ]
+    assert _poll_for_new_item(
+        zot, "10.1/x", "KEEPER", timeout_s=0.2, title="anything",
+    ) == "NEW"
