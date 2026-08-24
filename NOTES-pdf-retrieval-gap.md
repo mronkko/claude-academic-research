@@ -674,3 +674,115 @@ its own error message and retries once — so a field Zotero adds later degrades
 to one wasted request instead of a hard failure. Both writes inside
 `merge_duplicate_item` route through it. Three unit tests cover the denylist
 path, the parse-and-retry path, and that unrelated errors still propagate.
+
+---
+
+# Day 2 (2026-08-24) — diminishing returns, and why
+
+## Overnight night-1 result
+
+Slices 02–11 ran cleanly: **1,821 → 759 missing**. The result-list guard fired
+23 times, each one a ~4-minute stall avoided.
+
+Slices 12–21 never ran. At 07:44 Zotero's local API began returning **HTTP 500**
+and ten slices burned through in under a second each:
+
+```
+pyzotero.errors.HTTPError: Code: 500
+URL: http://localhost:23119/api/users/0/items?itemKey=...
+```
+
+Transient — Zotero was healthy again by morning. The driver now polls
+`localhost:23119` before each slice and waits rather than consuming the queue.
+
+**Driver bug, night 1:** the first driver died silently because a cleanup step
+ran `pkill -f responder.sh`, and the responder path had been passed as the
+driver's *argument* — so the pattern matched the driver's own command line. The
+path is hardcoded inside the script now.
+
+## The rate collapsed
+
+| | Recovered | Time |
+|---|---|---|
+| Day 1 | 1,062 | ~14 h |
+| Day 2 | ~30 | ~10 h |
+
+Each pass strips the reachable items and re-attempts a hardened residue. At
+~2.6 items/hour against 727 remaining, the slice grind is finished as a
+strategy.
+
+## Sage: two hypotheses, both wrong
+
+Sage was the largest bucket with a working handler (93 items), so it looked like
+the best lead. It was not a bug at all.
+
+1. *Resolver misrouting?* No — only 4 of 93 reached the Sage queue, but the
+   resolver was right to divert the rest.
+2. *`ctx.request` rejected by Cloudflare?* Partly: the request path does 403.
+   But switching to real page navigation cleared Cloudflare and then every PDF
+   URL redirected to `/doi/abs/` — the abstract.
+
+The actual answer is licensing:
+
+```
+Sage era        has PDF   missing
+  pre-2000           38        91
+  2000-2009         123         1
+  2010+             834         1
+```
+
+Aalto covers Sage from 2000 at **957 of 959**. The pre-2000 backfile is not
+licensed. The resolver's `2-out-of-coverage` classification was correct the
+whole time.
+
+## The pattern generalises
+
+```
+era          has PDF  missing   share missing
+  pre-2000       330      276      45.5%
+  2000-2009     1336       92       6.4%
+  2010+         6996      354       4.8%
+```
+
+Pre-2000 is ~9× worse. Backfile licensing, not tooling, is the dominant
+structural driver of what remains.
+
+But the largest *absolute* group is 2010+ (354), and profiling it dissolved that
+lead too: BMJ 49 + RCNi 18 + APA 34 are confirmed no-access, and 28 of the T&F
+entries are `10.4324/978…` Routledge **book chapters** mis-typed as
+`journalArticle`. After excluding books and known-dead publishers only **34**
+remained — and those had already failed repeated passes (Emerald 0/8, T&F 0/4,
+Springer 0/2 on a dedicated run).
+
+## JYU: 0/31, and a correctness bug found
+
+With JYU VPN on, the first item opened *"Industrial Relations: A Current
+Review"* — a **book** from the eBook Academic Collection, downloadable.
+
+`EbscoHandler` has **no title check**. It trusts the resolver's OpenURL and only
+reacts to EBSCO's own "no exact match" text. The book would have been fetched
+and attached to the journal article's Zotero item as a clean success, and
+nothing downstream could have caught it — the bytes are a valid PDF. Across the
+queue that was 31 books filed as articles.
+
+Answered `n`; the run attached nothing by design. Fixed in `1b5af8d`: the
+handler now reads EBSCO's own database label and refuses an eBook record. It
+**fails open** on an unreadable page, because the cost of a false positive is a
+PDF we could have had and this route produced 291 attachments in one run.
+
+JYU is a dead route regardless of VPN: its EBSCO package is the eBook
+collection, not the journal databases these articles live in.
+
+## Where it stands
+
+**1,821 → 727 missing. 1,094 recovered (60%).**
+
+Remaining, honestly categorised:
+
+- **~276 pre-2000** — largely unlicensed backfile. ILL.
+- **~166** BMJ / Ovid / RCNi / APA — probed, no Aalto access. ILL.
+- **~78** book-style DOIs mis-typed as `journalArticle` — re-type, don't fetch.
+- The rest have survived several passes each.
+
+`ILL-candidates.csv` (728 rows: key, DOI, year, journal, title) is the
+worksheet for the first two groups.
