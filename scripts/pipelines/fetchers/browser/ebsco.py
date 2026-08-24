@@ -129,6 +129,24 @@ VERDICT_AMBIGUOUS = "ambiguous_records"
 VERDICT_NO_MATCH_UNCONFIRMED = "no_exact_match_unconfirmed"
 #: Nothing legible. The pre-existing "never reached the viewer" outcome.
 VERDICT_UNKNOWN = ""
+#: The resolver's OpenURL landed on a *book* record. Live case: a JYU
+#: EZproxy route for a journal article opened "Industrial Relations: A
+#: Current Review" from the eBook Academic Collection — downloadable, and
+#: entirely the wrong document. This handler has no title check of its
+#: own, so without this the book would have been fetched and attached to
+#: the article's Zotero item, with nothing downstream able to notice.
+VERDICT_WRONG_RECORD_TYPE = "wrong_record_type"
+
+#: Text EBSCO puts on a record page to say the item is a book. Matched
+#: case-insensitively against the visible text. Kept narrow on purpose:
+#: the cost of a false positive is a PDF we could have had, and the
+#: EBSCO route otherwise works (291 attachments in one live run).
+_EBOOK_MARKERS = (
+    "ebook academic collection",
+    "ebook collection (ebscohost)",
+    "ebook business collection",
+    "ebook public library collection",
+)
 
 
 def is_search_landing(url: str) -> bool:
@@ -422,6 +440,11 @@ class EbscoHandler(PublisherHandler):
                 "found the record by DOI, but could not reach its PDF "
                 "viewer from the result"
             )
+        if self.last_verdict == VERDICT_WRONG_RECORD_TYPE:
+            return (
+                "resolver landed on a book record, not the article — "
+                "refused rather than attach the wrong document"
+            )
         if self.last_verdict == VERDICT_NO_MATCH_UNCONFIRMED:
             return (
                 "page reports no exact match through this institution "
@@ -433,6 +456,20 @@ class EbscoHandler(PublisherHandler):
                 "abstract-only here)"
             )
         return f"never reached the viewer (stopped at {url[:70]})"
+
+    async def _looks_like_a_book(self, page) -> bool:
+        """True when the landed record is an EBSCO eBook, not an article.
+
+        Reads the record's own database label rather than guessing from
+        the title: EBSCO names the source collection on the page
+        ("Database: eBook Academic Collection (EBSCOhost)"), and that is
+        both unambiguous and stable, where an h1 could as easily be the
+        journal name as the article title.
+        """
+        text = (await self._page_text(page)).lower()
+        if not text:
+            return False          # unreadable → fail open
+        return any(marker in text for marker in _EBOOK_MARKERS)
 
     @staticmethod
     async def _page_text(page) -> str:
@@ -582,6 +619,22 @@ class EbscoHandler(PublisherHandler):
                 page.remove_listener("response", _on_response)
 
         if not pdf_url:
+            counter.failed += 1
+            print(
+                f"  {progress_tag(counter, total, t_start)} "
+                f"FAIL: {self._failure_hint(page.url or '')}",
+                flush=True,
+            )
+            return None
+
+        # Refuse a book record before spending the download. EBSCO will
+        # happily serve an eBook for an OpenURL built from a journal
+        # article's metadata, and this handler has no title check — so
+        # the bytes would land on the article's item and look like a
+        # success. Fails *open*: an unreadable page keeps the previous
+        # behaviour rather than dropping items that currently work.
+        if await self._looks_like_a_book(page):
+            self.last_verdict = VERDICT_WRONG_RECORD_TYPE
             counter.failed += 1
             print(
                 f"  {progress_tag(counter, total, t_start)} "

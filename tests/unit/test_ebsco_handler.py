@@ -291,3 +291,61 @@ def test_no_solve_handlers_skip_the_setup_prompt() -> None:
     guard = src.index("needs_solve_for")
     call = src.index("handler.setup(")
     assert guard < call, "the gate is read after setup() is already called"
+
+
+# ---------------------------------------------------------------------------
+# eBook guard.
+#
+# Live case: a JYU EZproxy OpenURL for a journal article opened
+# "Industrial Relations: A Current Review" from the eBook Academic
+# Collection — downloadable, and the wrong document entirely. This
+# handler has no title check, so the book would have been attached to the
+# article's Zotero item with nothing downstream able to notice.
+# ---------------------------------------------------------------------------
+
+
+
+
+class _TextPage:
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self.url = "https://research.ebsco.com/c/abc/viewer/pdf/xyz"
+
+    async def inner_text(self, _sel):
+        if self._text is None:
+            raise RuntimeError("page will not give up its text")
+        return self._text
+
+
+def _handler():
+    from fetchers.browser.ebsco import EbscoHandler
+    return EbscoHandler()
+
+
+def test_ebook_collection_record_is_refused() -> None:
+    page = _TextPage(
+        "Industrial Relations : A Current Review\n"
+        "Published in: 2006\n"
+        "Database: eBook Academic Collection (EBSCOhost)\nBy: Richard Hall"
+    )
+    assert asyncio.run(_handler()._looks_like_a_book(page)) is True
+
+
+def test_ordinary_journal_record_is_allowed() -> None:
+    page = _TextPage(
+        "Models of Militancy: Support for Strikes and Work Actions\n"
+        "ILR Review, 1982\nDatabase: Business Source Complete"
+    )
+    assert asyncio.run(_handler()._looks_like_a_book(page)) is False
+
+
+def test_unreadable_page_fails_open() -> None:
+    """An unreadable page must keep the previous behaviour — the EBSCO
+    route works (291 attachments in one live run) and a guard that
+    silently dropped those would cost far more than it saves."""
+    page = _TextPage(None)
+    assert asyncio.run(_handler()._looks_like_a_book(page)) is False
+
+
+def test_empty_page_fails_open() -> None:
+    assert asyncio.run(_handler()._looks_like_a_book(_TextPage(""))) is False
