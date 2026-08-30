@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.15.1] — 2026-08-30
 
 ### Added
 
@@ -33,6 +33,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subsequent write. The scratch file is per-pid for the same reason.
 
 ### Fixed
+
+- **`test_citations.py` test 3 could not fail on the dominant APA
+  citation form.** The check is the designed control for
+  `grounded-citations` core rule 2 — every in-text reference must be a
+  `[@citekey]` — and it runs inside the `critic-loop` test gate, so a
+  green result is what downstream consumers trust. Its regex required
+  `\s*` between the author group and the year, which matches the
+  *narrative* form (`Ert et al. (2016)`) but not the *parenthetical* one
+  (`Varma et al., 2016`), where APA puts a comma. Every release from
+  0.11.0 onward shipped it blind to roughly the majority of citations in
+  ordinary prose.
+
+  Found in a real drafting session that loaded `grounded-citations`,
+  then wrote a 101-entry `references.bib` with hand-crafted keys
+  (`schaefers2016` — the style rule 2 forbids by name), zero `[@citekey]`
+  in prose, and 106 parenthetical author-year citations. Rules 1 and 3
+  were satisfied, so `test_citations.py` reported "Tests passed: 5/5" on
+  a manuscript with no grounded citations at all; the fixed check flags
+  294 mentions in it. A control that cannot fail is worse than no
+  control, because it is trusted.
+
+  The separator is now `[,\s]*`. `tests/unit/test_citations_template.py`
+  pins both citation forms, plus the cases that must stay silent
+  (`[@key]`, `[@a; @b]`, suppressed-author `[-@key]`, and structural
+  words like `Table 3, 2016`).
 
 - **`--plan` told users it was attaching PDFs while it was attaching
   nothing** (issue #8). The fetch itself was gated on the flag in

@@ -118,9 +118,14 @@ def test_no_uncited_author_year_mentions() -> None:
     coauthor_re = (
         rf"(?:,?\s+(?:et\s+al\.?|&\s+{surname_re}|and\s+{surname_re}))?"
     )
+    # `[,\s]*` before the year, not `\s*`: APA's parenthetical form puts a
+    # comma there (`Varma et al., 2016`) and it is the dominant form in
+    # prose. With `\s*` this test matched only narrative citations
+    # (`Ert et al. (2016)`) and passed a manuscript with 106 parenthetical
+    # citations and zero citekeys.
     pattern = re.compile(
         rf"(?<![@\w])({surname_re}){coauthor_re}"
-        rf"\s*(?:\((\d{{4}})[a-z]?\)|(\d{{4}})[a-z]?\b)"
+        rf"[,\s]*(?:\((\d{{4}})[a-z]?\)|(\d{{4}})[a-z]?\b)"
     )
 
     violations: list[str] = []
