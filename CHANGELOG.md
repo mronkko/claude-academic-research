@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] — 2026-09-03
+
+### Changed
+
+- **`fulltext_code.py` now filters to abstract-stage survivors, as the
+  documentation always said it did.** It enumerated every
+  `journalArticle` in the collection and filtered only on `fulltext:*`
+  resume tags; `abstract:` appeared nowhere in the file except one line
+  of its docstring. Stage tags are applied in place, in one collection,
+  so nothing else narrowed the population either. A review with 615
+  items, 439 of them past abstract screening, got a dry run offering to
+  code 614.
+
+  **This changes which items a given invocation processes** — hence the
+  minor bump rather than a patch. Runs that were silently coding
+  abstract-excluded items will now code fewer.
+
+  Wasted spend was the smaller half. The decision is written back as an
+  authoritative `fulltext:include` tag, and `export_coded_includes.py`
+  selects on that tag with no cross-check against the abstract stage, so
+  an abstract-excluded item that coded as include would enter the final
+  corpus and the PRISMA counts wearing a tag nothing downstream could
+  tell from a legitimate one.
+
+  The filter auto-detects rather than applying unconditionally: a
+  collection with no `abstract:*` tag anywhere was never screened, and
+  filtering it would return nothing and read as "nothing to code" — the
+  same bug pointing the other way. Such a collection passes through whole
+  with a notice naming `abstract_screen.py`. Both enumerations are
+  narrowed, including the re-read after `--full-recode`, with an AST
+  guard so a third one cannot be added unnarrowed. `--csv-backfill` and
+  `--apply-responses` are deliberately untouched: they apply decisions
+  that already exist, and their populations come from the CSV and the
+  manifest.
+
+  The skill now also records that `export_coded_includes.py` does not
+  re-check the abstract stage, and that `abstract:exclude` plus any
+  `fulltext:*` tag is a contradiction worth querying for after a run.
+
 ## [0.19.2] — 2026-09-03
 
 ### Fixed

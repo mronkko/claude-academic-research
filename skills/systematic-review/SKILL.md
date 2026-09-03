@@ -969,10 +969,19 @@ unless `--full-recode` is passed.
   / `--full-recode` flags are the escape hatches for re-processing
   specific items.
 - **Filtering downstream stages.** `fulltext_code.py` processes items
-  tagged `abstract:include` OR `abstract:borderline`.
+  tagged `abstract:include` OR `abstract:borderline`, and prints the
+  split it applied (`N in collection, M eligible, K not carried
+  forward`) before spending anything. A collection with no `abstract:*`
+  tags at all is treated as unscreened and processed whole, with a
+  notice — so running full-text coding on a collection you screened
+  elsewhere still works.
   `export_coded_includes.py` reads items tagged `fulltext:include`
   (adjudication flips propagate automatically because tags are
-  authoritative).
+  authoritative). **It does not re-check the abstract stage**, so a
+  `fulltext:include` on an abstract-excluded item would enter the final
+  corpus indistinguishably. `abstract:exclude` plus any `fulltext:*` tag
+  is a contradiction worth querying for after a coding run; it should
+  always be empty.
 - **Never hand-craft tags in a manuscript chunk or stats script.**
   Tags come from Zotero; if a stat needs a count of `fulltext:include`
   items, `manuscript_stats.py` queries Zotero, not the CSV.

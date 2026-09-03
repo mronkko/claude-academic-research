@@ -14,9 +14,11 @@
 # ///
 """LLM-driven full-text screening + structured coding for an SLR.
 
-Reads items from a Zotero collection (typically those marked
-`abstract:include` or `abstract:borderline` at the abstract stage),
-locates each paper's PDF attachment, extracts the full text
+Reads items from a Zotero collection and narrows them to those marked
+`abstract:include` or `abstract:borderline` at the abstract stage — a
+collection carrying no `abstract:*` tags at all is taken to be
+unscreened and processed whole, with a notice. Then locates each
+paper's PDF attachment, extracts the full text
 (pdfplumber with pypdf fallback), then passes title + full text to
 Claude Sonnet for a single decision (`include` / `exclude`) plus
 extraction of the coding fields declared in the project's
@@ -382,6 +384,12 @@ def _csv_columns(coding_fields: list[dict]) -> list[str]:
 STAGE_TAG_PREFIX = "fulltext:"
 STAGE_TAG_VALUES = ("include", "exclude")
 
+#: The upstream stage this one consumes. Only these two verdicts proceed
+#: to full text — the skill's tag table is the source of that rule, and
+#: `abstract:exclude` is a decision already made, not a starting point.
+ABSTRACT_TAG_PREFIX = "abstract:"
+ABSTRACT_PASS_VALUES = ("include", "borderline")
+
 # "No PDF to read" is not the same failure as "coding blew up", and the
 # distinction drives what you do next: find the PDF, versus re-run the
 # model. Both were logged as `decision=error` and told apart afterwards by
@@ -413,6 +421,54 @@ def no_pdf_row(base: dict, fields: list[dict]) -> dict:
         "reason": NO_PDF_REASON,
         **{f["name"]: "" for f in fields},
     }
+
+
+def _abstract_stage_eligible(
+    items: list[dict],
+) -> tuple[list[dict], str | None]:
+    """Narrow a collection to what the abstract stage passed forward.
+
+    Returns `(eligible, report)`; `report` is a line to print, never None,
+    because this decides what the run is about to spend money on.
+
+    Stage tags live on the items, in one collection — nothing moves
+    between collections — so without this the enumeration is the whole
+    corpus and full-text coding re-opens decisions the abstract stage
+    already made. A downstream review saw a dry run offer to code 614 of
+    615 items where 439 had passed screening.
+
+    Coding an excluded item is not just wasted spend. The decision is
+    written back as an authoritative `fulltext:include` tag, and
+    `export_coded_includes.py` selects on that tag alone — so the item
+    would enter the final corpus and the PRISMA counts wearing a tag
+    nothing downstream can distinguish from a legitimate one.
+
+    **Auto-detecting, not unconditional.** A collection with no
+    `abstract:*` tag anywhere was never abstract-screened; filtering it
+    would return nothing and read as "nothing to code", which is this
+    same failure pointing the other way. So an unscreened collection
+    passes through whole, and says so.
+    """
+    screened = screening_common.items_with_stage_tag(
+        items, prefix=ABSTRACT_TAG_PREFIX,
+    )
+    if not screened:
+        return list(items), (
+            f"  No abstract:* tags in this collection — it does not look "
+            f"abstract-screened, so all {len(items)} item(s) are eligible. "
+            f"If you meant to screen first, run abstract_screen.py; if this "
+            f"collection is already the screened subset, nothing is wrong."
+        )
+    eligible_keys = screening_common.items_with_stage_tag(
+        items, prefix=ABSTRACT_TAG_PREFIX, values=ABSTRACT_PASS_VALUES,
+    )
+    eligible = [it for it in items if it["key"] in eligible_keys]
+    return eligible, (
+        f"  Abstract stage: {len(items)} item(s) in collection, "
+        f"{len(eligible)} eligible "
+        f"({'/'.join(ABSTRACT_PASS_VALUES)}), "
+        f"{len(items) - len(eligible)} not carried forward."
+    )
 
 
 def _already_tagged(items: list[dict]) -> set[str]:
@@ -1509,6 +1565,14 @@ def main() -> int:
             skip_already_tagged=args.skip_already_tagged,
         )
 
+    # Narrow to what the abstract stage passed forward, before anything
+    # is counted, priced or sent. Deliberately after the --csv-backfill
+    # and --apply-responses returns above: those apply decisions that
+    # already exist rather than choosing what to decide, and their
+    # populations are defined by the CSV and the manifest.
+    items, _stage_report = _abstract_stage_eligible(items)
+    print(_stage_report, flush=True)
+
     attachments = zot.all_attachments()
     atts_by_parent: dict[str, list[dict]] = {}
     for a in attachments:
@@ -1532,10 +1596,14 @@ def main() -> int:
             except Exception as e:  # noqa: BLE001
                 print(f"  WARN: could not clear tag on {it['key']}: {e}",
                       flush=True)
-        # Refresh items to reflect the tag clearing.
+        # Refresh items to reflect the tag clearing. Re-narrow: this is a
+        # fresh enumeration of the whole collection, so without it
+        # --full-recode would quietly re-admit the abstract-excluded items
+        # that the pass above removed.
         items = zot.collection_items(
             args.collection, item_type="journalArticle",
         )
+        items, _ = _abstract_stage_eligible(items)
         if args.only_keys:
             wanted = {k.strip() for k in args.only_keys.split(",") if k.strip()}
             items = [it for it in items if it["key"] in wanted]
