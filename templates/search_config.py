@@ -117,9 +117,17 @@ BLOCK_B_TERMS = [
 # reviewing: a method or estimator, a scale or instrument, a theoretical
 # framework, a widely reused dataset.
 #
-# The year window above still applies. `JOURNALS` deliberately does NOT —
-# escaping venue scope is the point of the stream, since a method travels
-# well outside the journals that a protocol lists.
+# The year window above always applies. `JOURNALS` applies too, by
+# default: `--citation-journal-scope auto` (the default) scopes the
+# stream whenever JOURNALS is non-empty, and `off` opens it to any venue.
+#
+# Choose deliberately. Scoped asks "which papers in my journals cite this
+# without matching my keywords?" — still a real gain over the keyword
+# stream, and much cheaper, since OpenAlex filters venues server-side.
+# Open asks "who cites this anywhere?" — right when the review's object
+# is the method itself rather than a literature in a venue list, at the
+# cost of volume: one review's seed returned 1839 citing works of which
+# 107 were in its 22 target journals.
 #
 # Rows are tagged `discovery_source = "citation_search"` in the output
 # CSVs and counted separately in `search_metadata.json`, because PRISMA

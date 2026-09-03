@@ -1168,10 +1168,32 @@ uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/search.py --config ./search_co
 Both streams land in one corpus under one DOI hash, so `import_to_zotero.py`
 and the integrity machinery need no separate path. Four things to know:
 
-- **`FROM_YEAR` / `TO_YEAR` apply; `JOURNALS` does not.** Escaping venue
-  scope is the entire point — the citing paper is in a journal the
-  protocol never listed, by construction. Do not "fix" this by adding an
-  ISSN filter; it would reduce the stream to a slower copy of Stream A.
+- **`FROM_YEAR` / `TO_YEAR` always apply. `JOURNALS` applies by
+  default** — `--citation-journal-scope auto`, the default, scopes the
+  stream whenever `JOURNALS` is non-empty; `off` keeps it open to any
+  venue. Decide this deliberately, because the two answer different
+  questions.
+
+  *Scoped* asks: which papers **in my journals** cite this work without
+  matching my keywords? That is still a real gain over Stream A — a
+  paper in a target journal that applies the method but describes only
+  its topic — and it is far cheaper. OpenAlex ANDs the venue filter into
+  the `cites:` query server-side, so out-of-scope records are never
+  fetched: 1670 citing works open-scope against 68 scoped, on one seed.
+
+  *Open* asks: who cites this work **anywhere**? Use it when the review's
+  object is the method or instrument itself rather than a literature in
+  a venue list, and accept the volume — one review's seed returned 1839
+  citing works of which 107 were in its 22 target journals.
+
+  Semantic Scholar cannot filter venues server-side (`/citations` takes
+  no such parameter), so there the scope is applied after the fact: it
+  saves import and screening, not API calls.
+
+  **A changed scope changes the corpus.** The resolved value is recorded
+  in `search_metadata.json` as `citation_journal_scope`, alongside
+  `plugin_version` — two runs of the same config can differ on either,
+  and neither is recoverable from the search date.
 - **Report it as "other sources", not as a database.** PRISMA counts a
   citation search separately from the database totals. Every row carries
   a `discovery_source` column (`keyword_search` / `citation_search`), and

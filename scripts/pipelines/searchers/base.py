@@ -202,6 +202,10 @@ class SearchContext:
       sources that can only match on a name. Semantic Scholar returns no
       ISSN at all, so an ISSN-only scope check rejected every paper it
       ever returned; see `normalize_journal_title`.
+    - `citation_journal_scope`: whether `run_citations` restricts to the
+      journal scope above. False by default, which is the unscoped
+      behaviour the stream shipped with; `search.py` turns it on
+      whenever `JOURNALS` is non-empty unless told otherwise.
     - `mailto`: `CROSSREF_MAILTO` value if set; OpenAlex uses it for
       polite-pool identification.
     - `session`: the shared `requests.Session` every HTTP-based source
@@ -211,6 +215,7 @@ class SearchContext:
     to_year: int
     issns: list[str]
     journal_titles: list[str] = field(default_factory=list)
+    citation_journal_scope: bool = False
     mailto: str = ""
     session: Any = field(default=None, repr=False)
 
@@ -300,10 +305,16 @@ class SearchSource(ABC):
 
         Two rules bind an implementation:
 
-        - **No journal or ISSN restriction.** Scope by venue is what the
-          stream exists to escape; a method travels outside the journals
-          a protocol lists.
-        - **`from_year` / `to_year` still apply**, and rows carry
+        - **Venue scope is applied only when `ctx.citation_journal_scope`
+          is set.** Unscoped is what the stream was built for — a method
+          travels outside the journals a protocol lists — but an open
+          stream can also be overwhelmingly out of scope: on one review a
+          seed returned 1839 citing works of which 107 were in the target
+          journals. Scoped, the stream still earns its place: it finds
+          papers *in* those journals that cite the seed without matching
+          any keyword. Filter server-side where the API allows it, so the
+          out-of-scope records are never transferred.
+        - **`from_year` / `to_year` always apply**, and rows carry
           `discovery_source = DISCOVERY_CITATION` so PRISMA can report
           the stream as "other sources" rather than folding it into the
           database counts.

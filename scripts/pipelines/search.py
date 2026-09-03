@@ -60,6 +60,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import screening_common  # noqa: E402
+from plugin_version import plugin_version  # noqa: E402
 from searchers import (  # noqa: E402
     DISCOVERY_CITATION,
     DISCOVERY_KEYWORD,
@@ -160,6 +161,34 @@ def _dedup(rows: list[dict]) -> tuple[list[dict], int]:
         else:
             unresolved.append(r)
     return list(by_doi.values()) + unresolved, merged
+
+
+def _resolve_citation_scope(choice: str, *, issns: list[str]) -> bool:
+    """Whether the citation stream restricts to the config's journal list.
+
+    `auto` (the default) scopes whenever `JOURNALS` names anything. That
+    default was chosen against the alternative of opting in, and the
+    tradeoff is worth being explicit about: an open citation stream can
+    be almost entirely out of scope — on one review a seed returned 1839
+    citing works of which 107 were in the 22 target journals, and the
+    other 1732 spanned 760 unrelated venues that were fetched, imported
+    and then trashed by hand — but a changed default also means the same
+    config returns a different corpus across releases with no flag
+    change. `search_metadata.json` records the resolved value and the
+    plugin version, and the banner prints it, so the change is at least
+    never silent.
+
+    With no journals named there is nothing to scope to, so `auto` stays
+    open: scoping against an empty list would empty the stream.
+    """
+    if choice not in ("auto", "on", "off"):
+        sys.exit(f"ERROR: --citation-journal-scope must be auto, on or off "
+                 f"(got {choice!r}).")
+    if choice == "off":
+        return False
+    if choice == "on":
+        return True
+    return bool([i for i in issns if str(i).strip()])
 
 
 def _resolve_stream_databases(
@@ -274,6 +303,18 @@ def main() -> int:
                              "only. `none` runs no citation search. May name "
                              "a database absent from --databases; that flag "
                              "is a default, not a ceiling.")
+    parser.add_argument("--citation-journal-scope", default="auto",
+                        choices=("auto", "on", "off"),
+                        help="Restrict the citation stream to the config's "
+                             "JOURNALS list. `auto` (default) scopes "
+                             "whenever JOURNALS is non-empty; `off` keeps "
+                             "the stream open to any venue, which is what "
+                             "it was originally built for. OpenAlex applies "
+                             "this server-side so out-of-scope citing works "
+                             "are never fetched; Semantic Scholar's "
+                             "/citations takes no venue filter, so there it "
+                             "is applied after the fact and saves import "
+                             "rather than API calls.")
     parser.add_argument("--streams", default="keyword,citation",
                         help="Which search streams to run: `keyword` (the "
                              "journal- and term-restricted database search) "
@@ -290,6 +331,9 @@ def main() -> int:
                  f"Available: keyword, citation")
 
     cfg = _load_config(args.config)
+    citation_scope = _resolve_citation_scope(
+        args.citation_journal_scope, issns=list(cfg.JOURNALS.keys()),
+    )
     seeds = [
         str(d).strip() for d in getattr(cfg, "CITATION_SEEDS", []) or []
         if str(d).strip()
@@ -305,6 +349,7 @@ def main() -> int:
             entry[1] for entry in cfg.JOURNALS.values()
             if isinstance(entry, (list, tuple)) and len(entry) > 1
         ],
+        citation_journal_scope=citation_scope,
         mailto=os.environ.get("CROSSREF_MAILTO", ""),
     )
 
@@ -378,6 +423,11 @@ def main() -> int:
         print(f"    keyword:  {', '.join(keyword_dbs) or '(none)'}")
         print(f"    citation: {', '.join(citation_dbs) or '(none)'}")
     if "citation" in streams:
+        print(
+            "  Cite scope: "
+            + ("journal-scoped to JOURNALS" if citation_scope
+               else "open (any venue)")
+        )
         if seeds:
             print(f"  Seeds:     {len(seeds)} cited work(s) — "
                   f"{', '.join(seeds[:3])}"
@@ -473,6 +523,10 @@ def main() -> int:
     doi_hash = hashlib.sha256("\n".join(sorted_dois).encode()).hexdigest()
 
     metadata: dict[str, object] = {
+        # A search config does not determine a corpus on its own: 0.16.0
+        # and 0.17.0 return different keyword corpora from identical
+        # configs, and the date and database list could not explain it.
+        "plugin_version": plugin_version(),
         "search_date_start": run_start,
         "search_date_end": run_end,
         "databases": selected,
@@ -490,6 +544,7 @@ def main() -> int:
         "streams": streams,
         "keyword_databases": keyword_dbs,
         "citation_databases": citation_dbs,
+        "citation_journal_scope": citation_scope,
         "citation_seeds": seeds,
         "per_database_citation_counts": citation_counts,
         "unique_records_by_discovery_source": {

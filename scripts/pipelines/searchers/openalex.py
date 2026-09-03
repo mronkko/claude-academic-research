@@ -85,6 +85,17 @@ class OpenAlexSearch(SearchSource):
                 f"publication_year:{ctx.from_year}-{ctx.to_year},"
                 f"type:article"
             )
+            # OpenAlex ANDs comma-joined filters, so venue scope rides
+            # inside the same query and the out-of-scope citing works are
+            # never transferred: measured on one seed, 1670 open-scope
+            # against 68 scoped. Guarded on a non-empty ISSN list because
+            # `issn:` with no value is a filter OpenAlex rejects, and
+            # `--citation-journal-scope on` with no JOURNALS is merely
+            # pointless, not a reason to fail a run.
+            if ctx.citation_journal_scope and ctx.issns:
+                scope = "|".join(i.strip() for i in ctx.issns if i.strip())
+                if scope:
+                    filter_str += f",primary_location.source.issn:{scope}"
             print(f"  OpenAlex cites:{doi} ({work_id}): ", end="", flush=True)
             works = self._fetch_all_cursor(filter_str, ctx)
             print(f"{len(works)} citing works", flush=True)

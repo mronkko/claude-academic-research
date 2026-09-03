@@ -146,9 +146,15 @@ class SemanticScholarSearch(SearchSource):
             print(f"  Semantic Scholar cites:{doi}: ", end="", flush=True)
             papers = self._fetch_citations(doi, ctx, api_key)
             kept = [p for p in papers if self._in_year_window(p, ctx)]
+            if ctx.citation_journal_scope:
+                # Necessarily after the fact: `/citations` takes no venue
+                # parameter, so unlike OpenAlex there is no server-side
+                # filter to push this into. The API calls happen either
+                # way; what this saves is import, dedup and screening.
+                kept = [p for p in kept if self._paper_in_scope(p, ctx)]
             print(
                 f"{len(kept)} citing works "
-                f"(from {len(papers)} before the year filter)",
+                f"(from {len(papers)} before filtering)",
                 flush=True,
             )
             for paper in kept:

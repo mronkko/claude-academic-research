@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] — 2026-09-03
+
+### Changed
+
+- **The citation stream now applies `JOURNALS` scope by default.**
+  `--citation-journal-scope auto` (the default) restricts forward
+  snowballing to the config's journal list whenever that list is
+  non-empty; `off` restores the open-to-any-venue behaviour 0.16.0 and
+  0.17.0 had.
+
+  **This changes the corpus a given config produces.** A review that ran
+  on 0.17.0 and re-runs on 0.18.0 without passing `off` will get a
+  smaller citation stream and a different DOI hash. That is a deliberate
+  choice and not a free one; two things exist so it is never silent — the
+  resolved value is recorded in `search_metadata.json` as
+  `citation_journal_scope` and printed in the run banner, and the
+  metadata now stamps `plugin_version` (see below).
+
+  The motivation is that an open stream can be almost entirely out of
+  scope. On one review a single seed returned 1839 citing works, of which
+  107 (5.8%) were in the 22 target journals; the remaining 1732 spanned
+  760 venues the review had no interest in, and were fetched, deduped and
+  imported before being trashed by hand. Scoped, the stream still earns
+  its place: it finds papers *in* the target journals that cite the seed
+  without matching any keyword, which is precisely what Stream A cannot
+  reach.
+
+  Where the filter runs differs by source, and the difference is the
+  whole efficiency argument. OpenAlex ANDs the venue filter into the
+  `cites:` query server-side, so out-of-scope records are never
+  transferred — measured live on one seed, 1670 citing works open-scope
+  against 68 scoped. Semantic Scholar's `/citations` endpoint accepts no
+  venue parameter, so there the scope is applied after the fact: it saves
+  import, dedup and screening, not API calls. For quota, OpenAlex remains
+  the cheaper citation source.
+
+### Added
+
+- **`plugin_version` in `search_metadata.json`.** A search config does
+  not determine a corpus on its own, and this release is the second
+  consecutive demonstration: 0.16.0 and 0.17.0 return different keyword
+  corpora from identical configs (0.17.0 fixed a scope filter that had
+  been rejecting every Semantic Scholar record), and 0.18.0 changes the
+  citation stream's default scope. The metadata recorded the search date
+  and the database list but nothing about the code in between, so a
+  reviewer comparing two runs had no way to see why they differed.
+
+  `scripts/pipelines/plugin_version.py` is now the single reader, shared
+  with the provenance stamp on TDM-recovered PDFs — a later run uses that
+  stamp to decide whether a cached file predates a transformation change,
+  so the two must never disagree about which release produced them. A
+  guard test asserts they match.
+
 ## [0.17.0] — 2026-09-03
 
 ### Fixed

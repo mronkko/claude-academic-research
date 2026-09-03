@@ -418,18 +418,15 @@ def _document_flow(
 def _plugin_version() -> str:
     """This plugin's version string, or "unknown".
 
-    Read from `.claude-plugin/plugin.json` at the repo root rather than
-    hardcoded, so the stamp on a recovered PDF cannot drift from the
-    release that produced it.
+    Delegates to `plugin_version`, which `search.py` also uses to stamp
+    `search_metadata.json` — one reader, so a recovered PDF and a search
+    run cannot disagree about which release produced them. Imported
+    lazily and inside the guard because this sits on the download path:
+    a stamp must never fail the work it annotates.
     """
     try:
-        import json
-        manifest = (
-            Path(__file__).resolve().parents[3]
-            / ".claude-plugin" / "plugin.json"
-        )
-        version = json.loads(manifest.read_text(encoding="utf-8")).get("version")
-        return str(version) if version else "unknown"
+        from plugin_version import plugin_version
+        return plugin_version()
     except Exception:  # noqa: BLE001 — a stamp must never fail a download
         return "unknown"
 
