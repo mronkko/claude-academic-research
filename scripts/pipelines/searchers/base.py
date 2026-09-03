@@ -16,7 +16,9 @@ merges and deduplicates across sources.
 
 from __future__ import annotations
 
+import html
 import os
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -148,6 +150,47 @@ def empty_row() -> dict:
     return row
 
 
+#: Words dropped from the front of a journal title before matching.
+#: S2 returned both "Journal of Applied Psychology" and "The Journal of
+#: applied psychology" in one query — the same journal, a third of its
+#: papers reachable by exact equality.
+_TITLE_LEADERS = ("the ",)
+
+
+def normalize_journal_title(title: str | None) -> str:
+    """A comparison key for a journal name, or "" if there is nothing to key.
+
+    Journal scope is declared once in `search_config.JOURNALS` and then
+    compared against whatever each API happens to return, and the APIs do
+    not agree with the config or with themselves. Semantic Scholar alone
+    returned three shapes in one live query: title case, sentence case
+    with a leading "The", and an HTML-escaped ampersand.
+
+    Unescaping comes first — `&amp;` has to become `&` before `&` can
+    become "and". Everything after that is lossy on purpose: case, a
+    leading article, punctuation and spacing all vary between renderings
+    of one journal and none of them distinguishes two journals.
+
+    Deliberately NOT fuzzy. This key is a scope boundary: "Journal of
+    Management" and "Journal of Management Studies" are different
+    journals, and a near-match that admitted one for the other would
+    widen a corpus past what the protocol declared — a quieter and worse
+    failure than dropping a record.
+
+    Returns "" for empty input, which must never match: a paper with no
+    journal name would otherwise land inside every scope.
+    """
+    if not title:
+        return ""
+    text = html.unescape(str(title)).strip().lower()
+    for leader in _TITLE_LEADERS:
+        if text.startswith(leader):
+            text = text[len(leader):]
+    text = text.replace("&", " and ")
+    text = re.sub(r"[^a-z0-9]+", " ", text).strip()
+    return re.sub(r"\s+", " ", text)
+
+
 @dataclass
 class SearchContext:
     """State shared across all sources in a search run.
@@ -155,6 +198,10 @@ class SearchContext:
     - `from_year` / `to_year`: inclusive year bounds from `search_config.py`.
     - `issns`: flat list of ISSNs (sources that filter server-side use
       this; sources that don't use it for client-side post-filtering).
+    - `journal_titles`: the full journal titles from `JOURNALS`, for
+      sources that can only match on a name. Semantic Scholar returns no
+      ISSN at all, so an ISSN-only scope check rejected every paper it
+      ever returned; see `normalize_journal_title`.
     - `mailto`: `CROSSREF_MAILTO` value if set; OpenAlex uses it for
       polite-pool identification.
     - `session`: the shared `requests.Session` every HTTP-based source
@@ -163,8 +210,22 @@ class SearchContext:
     from_year: int
     to_year: int
     issns: list[str]
+    journal_titles: list[str] = field(default_factory=list)
     mailto: str = ""
     session: Any = field(default=None, repr=False)
+
+    def journal_title_keys(self) -> frozenset[str]:
+        """`journal_titles` as normalised comparison keys.
+
+        Empty when the caller supplied no titles, which is both the
+        backward-compatible default and the correct state for a citation
+        search — that stream is deliberately unscoped by venue.
+        """
+        return frozenset(
+            key for key in (
+                normalize_journal_title(t) for t in self.journal_titles
+            ) if key
+        )
 
     def http(self) -> requests.Session:
         """The run's shared `requests.Session`, built on first use.

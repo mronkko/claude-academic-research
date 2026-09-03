@@ -23,6 +23,7 @@ from .base import (
     SearchContext,
     SearchSource,
     empty_row,
+    normalize_journal_title,
     resolve_credential,
 )
 
@@ -94,8 +95,6 @@ class SemanticScholarSearch(SearchSource):
                 "registers a free key.",
                 flush=True,
             )
-        issn_set = {i.strip() for i in ctx.issns if i.strip()}
-
         rows: list[dict] = []
         for label, terms in blocks:
             # Semantic Scholar bulk-search syntax uses `|` for OR between
@@ -104,11 +103,28 @@ class SemanticScholarSearch(SearchSource):
             query = " | ".join(f'"{t}"' for t in terms)
             print(f"  Semantic Scholar {label}: ", end="", flush=True)
             papers = self._fetch_all(query, ctx, api_key)
-            # Client-side ISSN filter — S2 does not do this server-side.
-            kept = [p for p in papers
-                    if self._paper_matches_issn(p, issn_set)]
+            # Client-side scope filter — S2 does not do this server-side.
+            kept = [p for p in papers if self._paper_in_scope(p, ctx)]
             print(f"{len(kept)} results (from {len(papers)} unfiltered)",
                   flush=True)
+            if papers and not kept:
+                # The silence that hid the ISSN bug for a whole release.
+                # A scope filter that rejects a non-empty result set is
+                # reporting a mismatch between the config and what the
+                # API returns; an empty literature looks identical in the
+                # count and is a completely different situation.
+                print(
+                    f"  WARNING: the journal scope filter rejected all "
+                    f"{len(papers)} paper(s) this query returned, so this "
+                    f"database contributes nothing to the corpus. That is "
+                    f"a config/API mismatch, not an empty literature: "
+                    f"Semantic Scholar returns no ISSN, so scope is "
+                    f"matched on JOURNALS titles, and a title that does "
+                    f"not match what S2 calls the journal drops every "
+                    f"paper in it. Check a few titles against the `source` "
+                    f"column of a run with no journal scope.",
+                    flush=True,
+                )
             for paper in kept:
                 rows.append(self._paper_to_row(paper, label))
         return rows
@@ -225,23 +241,47 @@ class SemanticScholarSearch(SearchSource):
             time.sleep(RATE_LIMIT_SLEEP)
         return papers
 
-    def _paper_matches_issn(self, paper: dict, issn_set: set[str]) -> bool:
-        if not issn_set:
+    def _paper_in_scope(self, paper: dict, ctx: SearchContext) -> bool:
+        """Is this paper inside the protocol's journal scope?
+
+        S2 cannot filter by venue server-side, so scope is enforced here
+        or not at all. It used to be enforced on ISSN alone, and S2
+        returns no ISSN: not on the `journal` object, and not in
+        `externalIds`, whose live keys are MAG, DOI, CorpusId, PubMed,
+        PubMedCentral, DBLP and ArXiv. Every paper therefore failed, and
+        this source contributed zero rows to every run that set
+        `JOURNALS` — reported as a count of 0, indistinguishable from a
+        query that found nothing.
+
+        Title matching is what replaces it, against the titles `JOURNALS`
+        already declares. ISSN is still checked first: it costs nothing,
+        it is the stronger signal, and S2 may populate it one day.
+
+        An unscoped context keeps everything — the citation stream passes
+        no scope, deliberately.
+        """
+        issn_set = {i.strip() for i in ctx.issns if i.strip()}
+        title_keys = ctx.journal_title_keys()
+        if not issn_set and not title_keys:
             return True
-        journal = paper.get("journal") or {}
+
         external = paper.get("externalIds") or {}
         candidates: list[str] = []
-        if isinstance(journal.get("name"), str):
-            # S2 doesn't expose ISSN on the journal field; fall back to
-            # external ids where possible.
-            pass
         for field in ("ISSN", "ISSNs"):
             val = external.get(field)
             if isinstance(val, str):
                 candidates.append(val.strip())
             elif isinstance(val, list):
                 candidates.extend(str(v).strip() for v in val)
-        return any(c in issn_set for c in candidates)
+        if any(c in issn_set for c in candidates):
+            return True
+
+        if not title_keys:
+            # Caller declared an ISSN scope and no titles. Honour it as
+            # given rather than silently becoming unscoped.
+            return False
+        journal = paper.get("journal") or {}
+        return normalize_journal_title(journal.get("name")) in title_keys
 
     def _fetch_all(self, query: str, ctx: SearchContext,
                    api_key: str) -> list[dict]:
