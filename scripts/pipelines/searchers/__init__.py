@@ -6,7 +6,9 @@ by the orchestrator `search.py`; each source can also be run
 standalone via the `search_<name>.py` single-DB wrappers.
 
 Add a new database by subclassing `SearchSource`, implementing
-`run(config, ctx)`, and adding the class to `ALL_SOURCE_CLASSES`.
+`run(config, ctx)`, and adding the class to `ALL_SOURCE_CLASSES`. A
+source that can also list the works citing a DOI sets
+`supports_citation_search` and implements `run_citations(seeds, ctx)`.
 """
 
 from __future__ import annotations
@@ -14,6 +16,8 @@ from __future__ import annotations
 from .base import (
     CREDENTIAL_OPTIONAL,
     CREDENTIAL_REQUIRED,
+    DISCOVERY_CITATION,
+    DISCOVERY_KEYWORD,
     SEARCH_ROW_FIELDS,
     SearchContext,
     SearchSource,
@@ -39,6 +43,8 @@ def searchers_by_name() -> dict[str, SearchSource]:
 __all__ = (
     "CREDENTIAL_OPTIONAL",
     "CREDENTIAL_REQUIRED",
+    "DISCOVERY_CITATION",
+    "DISCOVERY_KEYWORD",
     "SEARCH_ROW_FIELDS",
     "SearchContext",
     "SearchSource",

@@ -98,3 +98,44 @@ BLOCK_B_TERMS = [
     "venture growth",
     "high-growth",
 ]
+
+
+# ---------------------------------------------------------------------------
+# 5. Citation seeds — forward snowballing (optional second search stream)
+#
+# DOIs whose CITING works should be retrieved, with no journal
+# restriction. This is a different retrieval operation from the keyword
+# search above, and it finds a different population.
+#
+# Why it is worth running: a paper that applies a method cites the paper
+# that introduced the method, but often uses none of your topic's
+# vocabulary in its title or abstract. No keyword query reaches it and no
+# amount of term tuning will — the words are simply not there. Citing the
+# seed is the only signal, so the seed is what you search on.
+#
+# Seed a DOI when a specific named work defines the thing you are
+# reviewing: a method or estimator, a scale or instrument, a theoretical
+# framework, a widely reused dataset.
+#
+# The year window above still applies. `JOURNALS` deliberately does NOT —
+# escaping venue scope is the point of the stream, since a method travels
+# well outside the journals that a protocol lists.
+#
+# Rows are tagged `discovery_source = "citation_search"` in the output
+# CSVs and counted separately in `search_metadata.json`, because PRISMA
+# reports a citation search under "other sources" rather than in the
+# database counts. A record found by both streams is credited to the
+# database search.
+#
+# Supported by OpenAlex and Semantic Scholar. Scopus needs a Scopus EID
+# rather than a DOI for `REFEID()`, and the Web of Science Starter tier
+# exposes no cited-reference endpoint; both are skipped with a message.
+#
+# Leave empty ([]) to run the keyword search alone. To pilot a seed
+# before committing to a full run:
+#     uv run search.py --config ./search_config.py --streams citation
+# ---------------------------------------------------------------------------
+
+CITATION_SEEDS: list[str] = [
+    # "10.1037/0021-9010.91.4.917",   # Dawson & Richter (2006), 3-way interactions
+]

@@ -1117,6 +1117,57 @@ databases, so an OpenAlex+WoS run imports correct creators for every
 overlapping record with no extra requests. An OpenAlex-only corpus
 pays one Crossref fetch per record to reconstruct them.
 
+**Citation search (forward snowballing) — a second search stream.**
+A keyword search restricted to a journal list has a blind spot it cannot
+close by adding terms: a paper that *applies* something often uses none
+of the review's topic vocabulary. What it does contain is a citation to
+the work that introduced the thing. When the object of the review is a
+specific named work — a method or estimator, a scale or instrument, a
+theoretical framework, a widely reused dataset — searching on that
+citation reaches a population no query string will.
+
+Set the seed DOIs in the config and run the normal search:
+
+```python
+# search_config.py
+CITATION_SEEDS = ["10.1037/0021-9010.91.4.917"]
+```
+
+```bash
+uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/search.py --config ./search_config.py
+uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/search.py --config ./search_config.py --streams citation   # pilot one seed
+```
+
+Both streams land in one corpus under one DOI hash, so `import_to_zotero.py`
+and the integrity machinery need no separate path. Four things to know:
+
+- **`FROM_YEAR` / `TO_YEAR` apply; `JOURNALS` does not.** Escaping venue
+  scope is the entire point — the citing paper is in a journal the
+  protocol never listed, by construction. Do not "fix" this by adding an
+  ISSN filter; it would reduce the stream to a slower copy of Stream A.
+- **Report it as "other sources", not as a database.** PRISMA counts a
+  citation search separately from the database totals. Every row carries
+  a `discovery_source` column (`keyword_search` / `citation_search`), and
+  `search_metadata.json` records `citation_seeds`,
+  `per_database_citation_counts` and `unique_records_by_discovery_source`.
+  Pull those numbers through the stats dictionary like any other; never
+  type them into prose.
+- **A record found by both streams counts as a database hit.** The
+  citation stream is credited for what it *adds*. This is decided in
+  `_dedup`, not by which stream happened to run first.
+- **OpenAlex and Semantic Scholar only.** Scopus needs a Scopus EID
+  rather than a DOI for `REFEID()`, and the WoS Starter tier exposes no
+  cited-reference endpoint; both are skipped with a message rather than
+  failing the run. OpenAlex pages with a cursor and so has no result
+  ceiling; Semantic Scholar's `/citations` stops at 10,000 per seed and
+  says so when it does. For a heavily cited seed, OpenAlex is the one to
+  trust for completeness.
+
+**State the seeds in the protocol before running.** A citation search
+chosen after seeing the keyword results is a different thing from one
+the protocol specified — the same objection as adding a database
+post hoc.
+
 **Technical tips for search design:**
 
 - **Wildcard multi-word phrases for WoS.** Scopus stems phrases; WoS does

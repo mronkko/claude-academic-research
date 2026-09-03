@@ -19,6 +19,7 @@ import time
 
 from .base import (
     CREDENTIAL_OPTIONAL,
+    DISCOVERY_CITATION,
     SearchContext,
     SearchSource,
     empty_row,
@@ -26,7 +27,11 @@ from .base import (
 )
 
 BULK_ENDPOINT = "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
+GRAPH_BASE = "https://api.semanticscholar.org/graph/v1"
 PER_PAGE = 1000          # bulk-search max
+CITATIONS_PER_PAGE = 1000  # /citations max
+#: The `/citations` endpoint refuses `offset + limit > 10000`.
+CITATIONS_MAX = 10000
 RATE_LIMIT_SLEEP = 0.5   # unauthenticated tier is aggressive
 
 #: Semantic Scholar `publicationTypes` entry → Crossref type vocabulary
@@ -49,6 +54,7 @@ class SemanticScholarSearch(SearchSource):
     name = "semantic_scholar"
     supports_journal_scope = False   # no reliable API-level ISSN filter
     supports_block_queries = True
+    supports_citation_search = True
 
     def __init__(self) -> None:
         # Set once a 403 proves SEMANTIC_SCHOLAR_API_KEY is being rejected,
@@ -106,6 +112,118 @@ class SemanticScholarSearch(SearchSource):
             for paper in kept:
                 rows.append(self._paper_to_row(paper, label))
         return rows
+
+    def run_citations(self, seeds: list[str], ctx: SearchContext) -> list[dict]:
+        """Papers citing each seed DOI, via the Graph API `/citations` endpoint.
+
+        The endpoint takes no year or type filter, so both are applied
+        client-side. It also refuses `offset + limit > 10000`; a seed
+        past that ceiling is reported rather than silently truncated,
+        because a citation stream that quietly returns its first 10,000
+        hits looks exactly like one that returned everything.
+        """
+        api_key, _ = resolve_credential(
+            "SEMANTIC_SCHOLAR_API_KEY", mode=CREDENTIAL_OPTIONAL,
+        )
+        rows: list[dict] = []
+        for doi in seeds:
+            print(f"  Semantic Scholar cites:{doi}: ", end="", flush=True)
+            papers = self._fetch_citations(doi, ctx, api_key)
+            kept = [p for p in papers if self._in_year_window(p, ctx)]
+            print(
+                f"{len(kept)} citing works "
+                f"(from {len(papers)} before the year filter)",
+                flush=True,
+            )
+            for paper in kept:
+                row = self._paper_to_row(paper, f"cites:{doi}")
+                row["discovery_source"] = DISCOVERY_CITATION
+                rows.append(row)
+        return rows
+
+    def _in_year_window(self, paper: dict, ctx: SearchContext) -> bool:
+        """Year bounds, applied here because `/citations` has no filter.
+
+        A paper with no year is kept. S2 leaves `year` null on records it
+        has not fully resolved, and dropping those would silently narrow
+        the stream on a metadata gap rather than on the protocol's dates.
+        """
+        year = paper.get("year")
+        if year is None:
+            return True
+        try:
+            return ctx.from_year <= int(year) <= ctx.to_year
+        except (TypeError, ValueError):
+            return True
+
+    def _fetch_citations(self, doi: str, ctx: SearchContext,
+                         api_key: str) -> list[dict]:
+        headers: dict = {}
+        if api_key and not self._key_rejected:
+            headers["x-api-key"] = api_key
+        url = f"{GRAPH_BASE}/paper/DOI:{doi.strip()}/citations"
+        papers: list[dict] = []
+        offset = 0
+        while True:
+            limit = min(CITATIONS_PER_PAGE, CITATIONS_MAX - offset)
+            if limit <= 0:
+                print(
+                    f"\n    WARNING: stopped at the endpoint's "
+                    f"{CITATIONS_MAX}-record ceiling for {doi}; this seed "
+                    f"has more citing works than /citations will return. "
+                    f"Run the same seed through OpenAlex, which pages past "
+                    f"it with a cursor.",
+                    flush=True,
+                )
+                break
+            params = {
+                "offset": offset,
+                "limit": limit,
+                "fields": ",".join([
+                    "title", "abstract", "year", "venue", "authors",
+                    "externalIds", "citationCount", "openAccessPdf",
+                    "journal", "publicationTypes",
+                ]),
+            }
+            resp = ctx.http().get(
+                url, params=params, headers=headers, timeout=60,
+            )
+            if resp.status_code == 404:
+                print("seed not indexed by Semantic Scholar — ", end="",
+                      flush=True)
+                break
+            if resp.status_code == 403 and headers.get("x-api-key"):
+                # Same fallback the bulk endpoint makes: a 403 with a key
+                # attached means the key is dead, not that the call is
+                # disallowed. Warn once, continue unauthenticated.
+                print(
+                    "\n  WARNING: SEMANTIC_SCHOLAR_API_KEY was rejected "
+                    "(403 Forbidden). Continuing unauthenticated.",
+                    flush=True,
+                )
+                self._key_rejected = True
+                headers.pop("x-api-key", None)
+                continue
+            if resp.status_code == 429:
+                raise RuntimeError(
+                    "Semantic Scholar citation search stayed rate-limited "
+                    "after retries. Re-run in a few minutes, or drop this "
+                    "source from --databases and use OpenAlex for the "
+                    "citation stream."
+                )
+            resp.raise_for_status()
+            data = resp.json()
+            batch = data.get("data") or []
+            # Each entry wraps the citing paper: {"citingPaper": {...}}.
+            papers.extend(
+                entry.get("citingPaper") or {}
+                for entry in batch if entry.get("citingPaper")
+            )
+            if len(batch) < limit:
+                break
+            offset += len(batch)
+            time.sleep(RATE_LIMIT_SLEEP)
+        return papers
 
     def _paper_matches_issn(self, paper: dict, issn_set: set[str]) -> bool:
         if not issn_set:

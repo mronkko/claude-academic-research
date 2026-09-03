@@ -117,6 +117,7 @@ def _search_stats() -> dict:
             if SEARCH_METADATA_PATH.exists() else {})
     run = (json.loads(SEARCH_RUN_PATH.read_text(encoding="utf-8"))
            if SEARCH_RUN_PATH.exists() else {})
+    by_stream = meta.get("unique_records_by_discovery_source", {}) or {}
     return {
         "search.from_year": meta.get("from_year"),
         "search.to_year": meta.get("to_year"),
@@ -126,6 +127,13 @@ def _search_stats() -> dict:
         "search.unique_records": run.get("unique_records", 0),
         "search.unique_dois": run.get("unique_dois", 0),
         "search.doi_sha256": run.get("doi_sha256", ""),
+        # PRISMA reports a citation search under "other sources", never
+        # inside the database counts, so the flow diagram needs the two
+        # numbers apart. Both are 0 on a keyword-only run.
+        "search.n_citation_seeds": len(meta.get("citation_seeds", []) or []),
+        "search.citation_seeds": ", ".join(meta.get("citation_seeds", []) or []),
+        "search.n_from_databases": by_stream.get("keyword_search", 0),
+        "search.n_from_citation_search": by_stream.get("citation_search", 0),
     }
 
 

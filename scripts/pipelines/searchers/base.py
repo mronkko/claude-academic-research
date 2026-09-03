@@ -96,7 +96,19 @@ SEARCH_ROW_FIELDS = (
     # OA metadata (populated by OpenAlex and Semantic Scholar when available)
     "oa_status",
     "oa_url",
+    # Which search stream found this record. PRISMA counts a citation
+    # search as "other sources", separately from the database totals, so
+    # the two cannot be collapsed into one number after the fact. Last in
+    # the tuple deliberately: readers use DictReader, but a column
+    # inserted mid-schema would still shift every hand-inspected CSV.
+    "discovery_source",
 )
+
+#: `discovery_source` values. A record reached the corpus either because
+#: a database query matched it, or because it cites a work the protocol
+#: named as a seed.
+DISCOVERY_KEYWORD = "keyword_search"
+DISCOVERY_CITATION = "citation_search"
 
 
 #: The vocabulary the `type` column speaks: Crossref's own `type`
@@ -129,6 +141,10 @@ def empty_row() -> dict:
     """
     row: dict = {k: "" for k in SEARCH_ROW_FIELDS}
     row["cited_by"] = 0
+    # The overwhelmingly common case, and the only one every source
+    # produced before citation search existed. `run_citations`
+    # implementations override it.
+    row["discovery_source"] = DISCOVERY_KEYWORD
     return row
 
 
@@ -193,6 +209,13 @@ class SearchSource(ABC):
     # shape from `config` directly.
     supports_block_queries: bool = False
 
+    # True if the source can list the works citing a given DOI, i.e.
+    # implements `run_citations`. The orchestrator checks this before
+    # calling — a source that cannot do it is skipped with a message,
+    # not failed, because a citation stream is a supplement to the
+    # database search and not every database exposes the relation.
+    supports_citation_search: bool = False
+
     @abstractmethod
     def run(self, config, ctx: SearchContext) -> list[dict]:
         """Run every query this source can derive from `config`.
@@ -202,6 +225,33 @@ class SearchSource(ABC):
         `BLOCK_A_TERMS`, `BLOCK_B_TERMS`, etc.). Returns a list of rows
         in the SEARCH_ROW_FIELDS schema.
         """
+
+    def run_citations(self, seeds: list[str], ctx: SearchContext) -> list[dict]:
+        """Every work citing each DOI in `seeds`, as SEARCH_ROW_FIELDS rows.
+
+        Forward citation search — "snowballing" — is a standard
+        recall-improvement step in a systematic review, and it finds a
+        different population than a keyword query does. A paper that
+        applies a method often cites the paper that introduced it while
+        using none of the review's topic vocabulary in its title or
+        abstract, so no keyword query reaches it and no amount of term
+        tuning will.
+
+        Two rules bind an implementation:
+
+        - **No journal or ISSN restriction.** Scope by venue is what the
+          stream exists to escape; a method travels outside the journals
+          a protocol lists.
+        - **`from_year` / `to_year` still apply**, and rows carry
+          `discovery_source = DISCOVERY_CITATION` so PRISMA can report
+          the stream as "other sources" rather than folding it into the
+          database counts.
+
+        Only called when `supports_citation_search` is True.
+        """
+        raise NotImplementedError(
+            f"{self.name} does not implement citation search"
+        )
 
     def credentials_error(self, ctx: SearchContext) -> str | None:
         """Return None if the source is ready to run; otherwise an

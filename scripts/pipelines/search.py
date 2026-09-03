@@ -22,6 +22,16 @@ with a title+first-author fallback, and writes:
     <metadata-dir>/search_metadata.json   — parameters, timestamps, counts
     <metadata-dir>/search_run.json        — DOI-set hash (integrity gatekeeper)
 
+Two streams feed those files. The **keyword** stream is the journal- and
+term-restricted database search. The **citation** stream — forward
+snowballing — lists everything citing each DOI in the config's
+`CITATION_SEEDS`, with no journal restriction, because a paper that
+applies a method cites the paper that introduced it while often using
+none of the review's topic vocabulary. Both land in one corpus under one
+DOI hash; the `discovery_source` column keeps them separable, which
+PRISMA requires (a citation search is reported under "other sources",
+not in the database counts).
+
 The DOI-set hash in `search_run.json` is the single load-bearing
 invariant: downstream test suites compare each manuscript render
 against this hash to catch silent scope changes.
@@ -30,6 +40,7 @@ Usage:
     uv run search.py --config ./search_config.py
     uv run search.py --config ./search_config.py --databases scopus,wos
     uv run search.py --config ./search_config.py --databases openalex
+    uv run search.py --config ./search_config.py --streams citation
 """
 
 from __future__ import annotations
@@ -50,6 +61,8 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import screening_common  # noqa: E402
 from searchers import (  # noqa: E402
+    DISCOVERY_CITATION,
+    DISCOVERY_KEYWORD,
     SEARCH_ROW_FIELDS,
     SearchContext,
     searchers_by_name,
@@ -109,6 +122,14 @@ def _merge_row(keeper: dict, other: dict) -> None:
     if not _has_comma_authors(keeper.get("authors", "")) and \
             _has_comma_authors(other.get("authors", "")):
         keeper["authors"] = other["authors"]
+    # A record both streams found is reported as a database hit. PRISMA
+    # counts a citation search for what it *adds*, so attributing an
+    # overlap to it would inflate "other sources" and understate the
+    # databases. Stated as a rule rather than left to arrival order,
+    # which changes with --databases and --streams.
+    if DISCOVERY_KEYWORD in (keeper.get("discovery_source"),
+                             other.get("discovery_source")):
+        keeper["discovery_source"] = DISCOVERY_KEYWORD
 
 
 def _dedup(rows: list[dict]) -> tuple[list[dict], int]:
@@ -141,6 +162,48 @@ def _dedup(rows: list[dict]) -> tuple[list[dict], int]:
     return list(by_doi.values()) + unresolved, merged
 
 
+def _run_keyword_stream(source, cfg, ctx: SearchContext) -> list[dict]:
+    """The journal- and term-restricted database search for one source.
+
+    A source whose query shape is absent from the config is skipped with
+    a message rather than failed: a config that defines only block terms
+    is a valid OpenAlex/S2 run, and one that defines only QUERY_DEFS is a
+    valid Scopus/WoS run.
+    """
+    name = source.name
+    if name in ("scopus", "wos") and not hasattr(cfg, "QUERY_DEFS"):
+        print(f"  ({name} needs QUERY_DEFS in the config — skipping)",
+              flush=True)
+        return []
+    if (name in ("openalex", "semantic_scholar")
+        and not (getattr(cfg, "BLOCK_A_TERMS", None)
+                 or getattr(cfg, "BLOCK_B_TERMS", None))):
+        print(f"  ({name} needs BLOCK_A_TERMS / BLOCK_B_TERMS — skipping)",
+              flush=True)
+        return []
+    return source.run(cfg, ctx)
+
+
+def _run_citation_stream(
+    source, seeds: list[str], ctx: SearchContext,
+) -> list[dict]:
+    """Forward snowballing: everything citing each seed DOI.
+
+    Skipped with a message for a source that cannot list citing works.
+    Scopus needs an EID rather than a DOI for `REFEID(...)`, and the WoS
+    Starter tier exposes no cited-reference endpoint at all; neither is a
+    reason to fail a run whose other databases can do it.
+    """
+    if not source.supports_citation_search:
+        print(
+            f"  ({source.name} cannot list citing works — citation stream "
+            f"skipped for this database)",
+            flush=True,
+        )
+        return []
+    return source.run_citations(seeds, ctx)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="./search_config.py",
@@ -154,9 +217,26 @@ def main() -> int:
                         help="Comma-separated source names (scopus, wos, "
                              "openalex, semantic_scholar). Default: every "
                              "source with usable credentials.")
+    parser.add_argument("--streams", default="keyword,citation",
+                        help="Which search streams to run: `keyword` (the "
+                             "journal- and term-restricted database search) "
+                             "and/or `citation` (forward snowballing from "
+                             "CITATION_SEEDS). Default: both. Use "
+                             "`--streams citation` to pilot a seed before "
+                             "committing to a full run.")
     args = parser.parse_args()
 
+    streams = [s.strip() for s in args.streams.split(",") if s.strip()]
+    unknown_streams = [s for s in streams if s not in ("keyword", "citation")]
+    if unknown_streams or not streams:
+        sys.exit(f"ERROR: unknown stream(s): {unknown_streams or ['(none)']}. "
+                 f"Available: keyword, citation")
+
     cfg = _load_config(args.config)
+    seeds = [
+        str(d).strip() for d in getattr(cfg, "CITATION_SEEDS", []) or []
+        if str(d).strip()
+    ]
     ctx = SearchContext(
         from_year=cfg.FROM_YEAR,
         to_year=cfg.TO_YEAR,
@@ -180,6 +260,13 @@ def main() -> int:
             sys.exit("ERROR: no database has usable credentials. Check the "
                      "wizard set-up or pass --databases explicitly.")
 
+    if streams == ["citation"] and not seeds:
+        sys.exit(
+            "ERROR: --streams citation was requested but the config defines "
+            "no CITATION_SEEDS. Add the DOI(s) whose citing works you want, "
+            "e.g. CITATION_SEEDS = [\"10.1037/0021-9010.91.4.917\"]."
+        )
+
     output_dir = Path(args.output_dir)
     metadata_dir = Path(args.metadata_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -200,10 +287,20 @@ def main() -> int:
         a = len(getattr(cfg, "BLOCK_A_TERMS", []) or [])
         b = len(getattr(cfg, "BLOCK_B_TERMS", []) or [])
         print(f"  Blocks:    A={a} terms, B={b} terms (OpenAlex/S2)")
+    print(f"  Streams:   {', '.join(streams)}")
+    if "citation" in streams:
+        if seeds:
+            print(f"  Seeds:     {len(seeds)} cited work(s) — "
+                  f"{', '.join(seeds[:3])}"
+                  + (" …" if len(seeds) > 3 else ""))
+        else:
+            print("  Seeds:     none (CITATION_SEEDS is empty or absent "
+                  "in the config — citation stream will find nothing)")
     print()
 
     all_rows: list[dict] = []
     counts: dict = {}
+    citation_counts: dict = {}
     failed: dict[str, str] = {}
     for name in selected:
         source = registry[name]
@@ -212,18 +309,12 @@ def main() -> int:
             print(f"SKIP {name}: {err}", flush=True)
             continue
         print(f"── {name} ──", flush=True)
-        if name in ("scopus", "wos") and not hasattr(cfg, "QUERY_DEFS"):
-            print(f"  ({name} needs QUERY_DEFS in the config — skipping)",
-                  flush=True)
-            continue
-        if (name in ("openalex", "semantic_scholar")
-            and not (getattr(cfg, "BLOCK_A_TERMS", None)
-                     or getattr(cfg, "BLOCK_B_TERMS", None))):
-            print(f"  ({name} needs BLOCK_A_TERMS / BLOCK_B_TERMS — skipping)",
-                  flush=True)
-            continue
         try:
-            rows = source.run(cfg, ctx)
+            rows: list[dict] = []
+            if "keyword" in streams:
+                rows.extend(_run_keyword_stream(source, cfg, ctx))
+            if "citation" in streams and seeds:
+                rows.extend(_run_citation_stream(source, seeds, ctx))
         except Exception as e:  # noqa: BLE001
             # One throttled database used to abort the process and throw
             # away every other database's results with it — a Semantic
@@ -236,6 +327,9 @@ def main() -> int:
             print()
             continue
         counts[name] = len(rows)
+        citation_counts[name] = sum(
+            1 for r in rows if r.get("discovery_source") == DISCOVERY_CITATION
+        )
         all_rows.extend(rows)
         print()
 
@@ -301,6 +395,17 @@ def main() -> int:
         "total_raw_rows": len(all_rows),
         "total_unique_records": len(deduped),
         "records_without_doi": no_doi_count,
+        # PRISMA reports a citation search separately from the database
+        # counts, so the split has to survive into the metadata rather
+        # than being recoverable only by re-reading the CSV.
+        "streams": streams,
+        "citation_seeds": seeds,
+        "per_database_citation_counts": citation_counts,
+        "unique_records_by_discovery_source": {
+            value: sum(1 for r in deduped
+                       if r.get("discovery_source") == value)
+            for value in (DISCOVERY_KEYWORD, DISCOVERY_CITATION)
+        },
     }
     if hasattr(cfg, "QUERY_DEFS"):
         metadata["query_defs"] = [

@@ -12,7 +12,7 @@ import time
 
 import http_client
 
-from .base import SearchContext, SearchSource, empty_row
+from .base import DISCOVERY_CITATION, SearchContext, SearchSource, empty_row
 
 PER_PAGE = 200           # OpenAlex max
 RATE_LIMIT_SLEEP = 0.2   # polite pool delay between requests
@@ -45,6 +45,7 @@ class OpenAlexSearch(SearchSource):
     name = "openalex"
     supports_journal_scope = True
     supports_block_queries = True
+    supports_citation_search = True
 
     def run(self, config, ctx: SearchContext) -> list[dict]:
         filter_str = self._build_filter(ctx.issns, ctx.from_year, ctx.to_year)
@@ -66,6 +67,102 @@ class OpenAlexSearch(SearchSource):
             for w in works:
                 rows.append(self._work_to_row(w, label))
         return rows
+
+    def run_citations(self, seeds: list[str], ctx: SearchContext) -> list[dict]:
+        """Works citing each seed DOI, via OpenAlex's `cites:` filter."""
+        rows: list[dict] = []
+        for doi in seeds:
+            work_id = self._resolve_work_id(doi, ctx)
+            if not work_id:
+                print(
+                    f"  OpenAlex cites:{doi}: seed not found in OpenAlex "
+                    f"— no citing works can be listed for it",
+                    flush=True,
+                )
+                continue
+            filter_str = (
+                f"cites:{work_id},"
+                f"publication_year:{ctx.from_year}-{ctx.to_year},"
+                f"type:article"
+            )
+            print(f"  OpenAlex cites:{doi} ({work_id}): ", end="", flush=True)
+            works = self._fetch_all_cursor(filter_str, ctx)
+            print(f"{len(works)} citing works", flush=True)
+            for w in works:
+                row = self._work_to_row(w, f"cites:{doi}")
+                row["discovery_source"] = DISCOVERY_CITATION
+                rows.append(row)
+        return rows
+
+    def _resolve_work_id(self, doi: str, ctx: SearchContext) -> str:
+        """The short OpenAlex id (`W2075867231`) for a DOI, or "".
+
+        `cites:` takes an OpenAlex work id, not a DOI, so a citation
+        search is always two calls: resolve, then page. A seed that
+        OpenAlex does not hold yields "" and is reported rather than
+        raising — one unresolvable seed should not sink a run that has
+        other seeds and a whole keyword stream behind it.
+        """
+        params: dict = {"select": "id"}
+        if ctx.mailto:
+            params["mailto"] = ctx.mailto
+        data = http_client.get_json(
+            ctx.http(),
+            f"https://api.openalex.org/works/doi:{doi.strip().lower()}",
+            params=params, timeout=60,
+        )
+        if not data:
+            return ""
+        return str(data.get("id", "")).rsplit("/", 1)[-1]
+
+    def _fetch_all_cursor(self, filter_str: str,
+                          ctx: SearchContext) -> list[dict]:
+        """Page a filter-only query with a cursor rather than `page=`.
+
+        Page-number paging stops at OpenAlex's 10,000-result ceiling.
+        That is a real limit for this stream and not for the keyword one:
+        a seminal method paper — the kind a protocol names as a seed
+        precisely because everything applying the method cites it — can
+        have more citing works than that, and silently returning the
+        first 10,000 would understate the search while looking complete.
+        """
+        all_works: list[dict] = []
+        cursor = "*"
+        while cursor:
+            data = self._fetch_page_cursor(filter_str, cursor, ctx)
+            results = data.get("results", [])
+            if not results:
+                break
+            all_works.extend(results)
+            cursor = (data.get("meta") or {}).get("next_cursor") or ""
+            if cursor:
+                time.sleep(RATE_LIMIT_SLEEP)
+        return all_works
+
+    def _fetch_page_cursor(self, filter_str: str, cursor: str,
+                           ctx: SearchContext) -> dict:
+        params: dict = {
+            "filter": filter_str,
+            "cursor": cursor,
+            "per_page": PER_PAGE,
+            "select": ",".join([
+                "id", "doi", "title", "publication_year", "publication_date",
+                "cited_by_count", "type", "authorships", "biblio",
+                "primary_location", "open_access", "abstract_inverted_index",
+            ]),
+        }
+        if ctx.mailto:
+            params["mailto"] = ctx.mailto
+        data = http_client.get_json(
+            ctx.http(), "https://api.openalex.org/works",
+            params=params, timeout=60,
+        )
+        if data is None:
+            raise RuntimeError(
+                f"OpenAlex rejected the citation-search request (or its "
+                f"retries were exhausted). Filter: {filter_str}"
+            )
+        return data
 
     def _build_filter(self, issns: list[str], from_year: int,
                       to_year: int) -> str:
@@ -97,7 +194,6 @@ class OpenAlexSearch(SearchSource):
     def _fetch_page(self, query: str, filter_str: str, page: int,
                     ctx: SearchContext) -> dict:
         params: dict = {
-            "search": query,
             "filter": filter_str,
             "page": page,
             "per_page": PER_PAGE,
@@ -107,6 +203,11 @@ class OpenAlexSearch(SearchSource):
                 "primary_location", "open_access", "abstract_inverted_index",
             ]),
         }
+        # A citation search has no search terms — the `cites:` filter is
+        # the whole query. Sending `search=` empty makes OpenAlex
+        # relevance-rank against nothing and drops results.
+        if query:
+            params["search"] = query
         if ctx.mailto:
             params["mailto"] = ctx.mailto
         data = http_client.get_json(
