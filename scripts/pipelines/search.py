@@ -162,6 +162,51 @@ def _dedup(rows: list[dict]) -> tuple[list[dict], int]:
     return list(by_doi.values()) + unresolved, merged
 
 
+def _resolve_stream_databases(
+    *,
+    default: list[str],
+    keyword: str,
+    citation: str,
+    available: list[str],
+) -> tuple[list[str], list[str]]:
+    """Which databases each stream runs against.
+
+    `--databases` is the default for both; `--keyword-databases` and
+    `--citation-databases` override it per stream. A flat list cannot
+    express a database that belongs in one stream and not the other, and
+    that case is real rather than hypothetical: Semantic Scholar returns
+    no ISSN, so it cannot be scoped to a journal list at all, while for a
+    citation search it returned about 50% more citing works than OpenAlex
+    on a live seed.
+
+    An override may name a database outside `--databases`: that flag is a
+    default, not a ceiling, and needing a source in one stream should not
+    force it into the other.
+
+    The literal `none` empties a stream — distinct from omitting the
+    flag, and the way to run one stream's databases without disabling the
+    other stream wholesale.
+    """
+    def parse(raw: str, flag: str) -> list[str] | None:
+        if not raw.strip():
+            return None
+        if raw.strip().lower() == "none":
+            return []
+        names = [n.strip() for n in raw.split(",") if n.strip()]
+        unknown = [n for n in names if n not in available]
+        if unknown:
+            sys.exit(f"ERROR: unknown database(s) in {flag}: {unknown}. "
+                     f"Available: {available}")
+        return names
+
+    parsed_keyword = parse(keyword, "--keyword-databases")
+    parsed_citation = parse(citation, "--citation-databases")
+    return (
+        list(default) if parsed_keyword is None else parsed_keyword,
+        list(default) if parsed_citation is None else parsed_citation,
+    )
+
+
 def _run_keyword_stream(source, cfg, ctx: SearchContext) -> list[dict]:
     """The journal- and term-restricted database search for one source.
 
@@ -217,6 +262,18 @@ def main() -> int:
                         help="Comma-separated source names (scopus, wos, "
                              "openalex, semantic_scholar). Default: every "
                              "source with usable credentials.")
+    parser.add_argument("--keyword-databases", default="",
+                        help="Override --databases for the keyword stream "
+                             "only. `none` runs no keyword search. Use this "
+                             "when a database is unsuitable for a "
+                             "journal-restricted query but wanted for "
+                             "citations — Semantic Scholar returns no ISSN, "
+                             "so it cannot be scoped to a journal list.")
+    parser.add_argument("--citation-databases", default="",
+                        help="Override --databases for the citation stream "
+                             "only. `none` runs no citation search. May name "
+                             "a database absent from --databases; that flag "
+                             "is a default, not a ceiling.")
     parser.add_argument("--streams", default="keyword,citation",
                         help="Which search streams to run: `keyword` (the "
                              "journal- and term-restricted database search) "
@@ -241,6 +298,13 @@ def main() -> int:
         from_year=cfg.FROM_YEAR,
         to_year=cfg.TO_YEAR,
         issns=list(cfg.JOURNALS.keys()),
+        # Semantic Scholar returns no ISSN, so an ISSN-only scope check
+        # rejected every paper it produced. `JOURNALS` maps
+        # ISSN -> (rating, full_title); index 1 is the title.
+        journal_titles=[
+            entry[1] for entry in cfg.JOURNALS.values()
+            if isinstance(entry, (list, tuple)) and len(entry) > 1
+        ],
         mailto=os.environ.get("CROSSREF_MAILTO", ""),
     )
 
@@ -259,6 +323,26 @@ def main() -> int:
         if not selected:
             sys.exit("ERROR: no database has usable credentials. Check the "
                      "wizard set-up or pass --databases explicitly.")
+
+    keyword_dbs, citation_dbs = _resolve_stream_databases(
+        default=selected,
+        keyword=args.keyword_databases,
+        citation=args.citation_databases,
+        available=list(registry),
+    )
+    # A source is visited if either stream wants it. Registry order keeps
+    # the run deterministic regardless of flag order.
+    selected = [
+        name for name in registry
+        if (name in keyword_dbs and "keyword" in streams)
+        or (name in citation_dbs and "citation" in streams)
+    ]
+    if not selected:
+        sys.exit(
+            "ERROR: no database is selected for any requested stream. Check "
+            "--databases / --keyword-databases / --citation-databases "
+            "against --streams."
+        )
 
     if streams == ["citation"] and not seeds:
         sys.exit(
@@ -288,6 +372,11 @@ def main() -> int:
         b = len(getattr(cfg, "BLOCK_B_TERMS", []) or [])
         print(f"  Blocks:    A={a} terms, B={b} terms (OpenAlex/S2)")
     print(f"  Streams:   {', '.join(streams)}")
+    if keyword_dbs != citation_dbs:
+        # Only worth the lines when the two differ; otherwise the
+        # Databases line above already said it.
+        print(f"    keyword:  {', '.join(keyword_dbs) or '(none)'}")
+        print(f"    citation: {', '.join(citation_dbs) or '(none)'}")
     if "citation" in streams:
         if seeds:
             print(f"  Seeds:     {len(seeds)} cited work(s) — "
@@ -311,9 +400,9 @@ def main() -> int:
         print(f"── {name} ──", flush=True)
         try:
             rows: list[dict] = []
-            if "keyword" in streams:
+            if "keyword" in streams and name in keyword_dbs:
                 rows.extend(_run_keyword_stream(source, cfg, ctx))
-            if "citation" in streams and seeds:
+            if "citation" in streams and name in citation_dbs and seeds:
                 rows.extend(_run_citation_stream(source, seeds, ctx))
         except Exception as e:  # noqa: BLE001
             # One throttled database used to abort the process and throw
@@ -399,6 +488,8 @@ def main() -> int:
         # counts, so the split has to survive into the metadata rather
         # than being recoverable only by re-reading the CSV.
         "streams": streams,
+        "keyword_databases": keyword_dbs,
+        "citation_databases": citation_dbs,
         "citation_seeds": seeds,
         "per_database_citation_counts": citation_counts,
         "unique_records_by_discovery_source": {

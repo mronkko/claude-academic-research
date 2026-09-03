@@ -1090,7 +1090,7 @@ blocking on a missing subscription:
 | 1 (preferred) | **Web of Science Expanded** | Script only, via `WOS_API_KEY_EXTENDED`. No MCP. | Strongest field coverage for social-sciences SR. Use `WOS_API_KEY_EXTENDED`, not `WOS_API_KEY` — Starter's `IS=` ISSN filter returns 0 results and blocks journal-list filtering. |
 | 2 | **Scopus** | Script + MCP (`mcp__scopus__*`). Requires `ELSEVIER_API_KEY` or `SCOPUS_API_KEY`. | Strong alternative when WoS is unavailable. Covers the same journal set as WoS with different dedup patterns. |
 | 3 | **OpenAlex** | Script + MCP (`mcp__openalex__*`). Free, no subscription. | Open-access baseline; always usable. Weaker field-precision for niche social-sciences topics, but improves year over year. |
-| 4 | **Semantic Scholar** | Script + MCP (`mcp__semantic-scholar__*`). Free tier available. | Good for recent work and preprints; complementary to the above. |
+| 4 | **Semantic Scholar** | Script + MCP (`mcp__semantic-scholar__*`). Free tier available. | Good for recent work and preprints; complementary to the above. **Cannot be scoped by ISSN** — S2 returns no ISSN field, so journal scope is matched on `JOURNALS` titles client-side and a title S2 spells differently drops every paper in that journal. Strong for the citation stream, weak for a journal-restricted keyword search; see `--keyword-databases` / `--citation-databases`. |
 
 A formal SR typically combines **two or three** sources from this list
 — the exact mix depends on access. A user without WoS or Scopus can
@@ -1116,6 +1116,33 @@ return display order only. Dedup carries the better rendering across
 databases, so an OpenAlex+WoS run imports correct creators for every
 overlapping record with no extra requests. An OpenAlex-only corpus
 pays one Crossref fetch per record to reconstruct them.
+
+**Per-stream database selection.** `--databases` sets the default for
+both streams; `--keyword-databases` and `--citation-databases` override
+it for one stream only, and either may name a database absent from
+`--databases` (that flag is a default, not a ceiling). `none` empties a
+stream.
+
+This exists because a database can be right for one stream and wrong for
+the other, and the leading case is Semantic Scholar. It returns no ISSN,
+so it cannot be scoped to a journal list at the source; its keyword
+contribution to a journal-restricted review is structurally weak. For a
+citation search it is the opposite — on one real seed it returned about
+50% more citing works than OpenAlex. So:
+
+```bash
+uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/search.py --config ./search_config.py \
+    --databases wos,openalex --citation-databases openalex,semantic_scholar
+```
+
+**Do not resolve this by admitting the database to both streams and
+calling it a deviation.** A project that did exactly that wrote "cost is
+screening volume" into its scope note, and the real cost was nothing at
+all: under journal scope the keyword stream contributed zero rows, so
+there was no precision trade-off to accept. If a database returns 0 in
+`per_database_counts`, find out why before describing it — the search
+prints a warning naming the cause when a scope filter rejects a whole
+non-empty result set.
 
 **Citation search (forward snowballing) — a second search stream.**
 A keyword search restricted to a journal list has a blind spot it cannot

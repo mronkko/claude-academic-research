@@ -134,6 +134,15 @@ BLOCK_B_TERMS = [
 # Leave empty ([]) to run the keyword search alone. To pilot a seed
 # before committing to a full run:
 #     uv run search.py --config ./search_config.py --streams citation
+#
+# A database can suit one stream and not the other. Semantic Scholar
+# returns no ISSN, so it cannot be scoped to the JOURNALS list above at
+# the source (scope is matched on journal titles client-side), which
+# makes it weak for a journal-restricted keyword search — but it is
+# strong for citation search. Split them per stream rather than
+# admitting it to both:
+#     uv run search.py --config ./search_config.py \
+#         --databases wos,openalex --citation-databases openalex,semantic_scholar
 # ---------------------------------------------------------------------------
 
 CITATION_SEEDS: list[str] = [

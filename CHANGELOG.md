@@ -5,6 +5,64 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] — 2026-09-03
+
+### Fixed
+
+- **Semantic Scholar's keyword stream returned zero rows in every
+  journal-scoped run.** `run()` post-filters client-side against
+  `ctx.issns`, because S2 cannot filter by venue server-side, and the
+  filter's only source of an ISSN was `externalIds["ISSN"]` /
+  `["ISSNs"]`. S2 populates neither. Sampled live across 500 papers, the
+  keys returned are MAG, DOI, CorpusId, PubMed, PubMedCentral, DBLP and
+  ArXiv; the `journal` object carries name, volume and pages and no ISSN.
+  So the filter rejected every paper whenever `JOURNALS` was non-empty —
+  measured on one query with only `issns` differing, 0 results from 911
+  unfiltered with three ISSNs set against 822 with none.
+
+  `JOURNALS` is a required key in `search_config.py`, which makes this
+  every journal-scoped run of this pipeline, reported as
+  `semantic_scholar: 0` in `per_database_counts` with nothing saying why.
+  The dead `if isinstance(journal.get("name"), str): pass` stub inside
+  the filter suggests the gap had been seen and not closed. No test
+  covered the filter at all.
+
+  Scope is now matched on the journal *title*, which `JOURNALS` already
+  declares and S2 does return, via a normalised key: the live data shows
+  S2 rendering one journal several ways in a single query ("Journal of
+  Applied Psychology" and "The Journal of applied psychology" both
+  appeared) and leaking HTML entities ("Business &amp; Change
+  Management"), so unescaping precedes case-, article- and
+  punctuation-folding. Matching stays exact on that key rather than
+  fuzzy — journal scope is a protocol boundary, and admitting "Journal of
+  Management Studies" for "Journal of Management" would widen a corpus
+  more quietly than dropping a record. ISSN is still checked first, for
+  the day S2 populates it.
+
+  A client-side scope filter that rejects a whole non-empty result set
+  now says so, naming the likely cause. Silence is what made a config/API
+  mismatch indistinguishable from an empty literature for a release.
+
+### Added
+
+- **`--keyword-databases` / `--citation-databases` on `search.py`.**
+  `--databases` was one flat list applied to both streams, forcing an
+  all-or-nothing choice on a database that suits one stream and not the
+  other. The leading case is the bug above: Semantic Scholar cannot be
+  scoped to a journal list at the source, which makes it structurally
+  weak for a journal-restricted keyword search, while for a citation
+  search it returned about 50% more citing works than OpenAlex on a real
+  seed. Each flag overrides `--databases` for one stream and may name a
+  database absent from it — that flag is a default, not a ceiling. `none`
+  empties a stream. Recorded in `search_metadata.json` as
+  `keyword_databases` / `citation_databases`.
+
+  The project that hit this had resolved it by admitting the database to
+  both streams and documenting an accepted precision trade-off. There was
+  no trade-off: under journal scope the keyword stream contributed
+  nothing. The skill now says not to describe a 0 that way without
+  finding out what caused it.
+
 ## [0.16.0] — 2026-09-03
 
 ### Added
