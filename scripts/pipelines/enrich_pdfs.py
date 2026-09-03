@@ -394,10 +394,10 @@ def _open_log(path: str):
 # retry that actually works.
 #
 # In practice `pdf_map()` still gates these items — they carry an
-# attachment, so they drop out before any fetch — which is why the run
-# report tells the user to delete the attachment first. Keeping the
-# status out of this tuple at least stops the run-log from asserting
-# something the evidence contradicts.
+# attachment, so they drop out before any fetch. `--replace` is the way
+# past that gate: it re-admits them and swaps the file only once a
+# replacement is attached. Keeping the status out of this tuple stops the
+# run-log from asserting something the evidence contradicts.
 #
 # `attached_via_connector` IS here. It is a real attachment made by the
 # Zotero Connector translator; leaving it out re-queued every Connector
@@ -922,6 +922,81 @@ def _pdf_has_text(pdf_path, item_key: str) -> bool | None:
     return bool((text or "").strip())
 
 
+#: item key -> attachment keys to delete once a replacement is attached.
+#:
+#: Populated once in `main()` when `--replace` is set, and read by
+#: `_attach_and_log`. Module state rather than a parameter because the
+#: attach path has four call sites across the cache-recovery, API-cascade
+#: and browser routes; threading a per-item list through all of them would
+#: put the swap in the hands of every caller, and the one guarantee worth
+#: having here is that the delete cannot happen anywhere except
+#: immediately after a successful attach.
+_REPLACE_TARGETS: dict[str, list[str]] = {}
+
+
+def _drop_replaced_attachments(zot, item_key: str, *, keep: str | None) -> None:
+    """Delete the attachments `item_key`'s new PDF replaces.
+
+    `keep` is the attachment just created, and is never deleted even if
+    the registry names it — a stale entry there would otherwise remove
+    the replacement and leave the item with nothing at all.
+
+    A failed delete is reported and swallowed. The new PDF is already on
+    the item, so the fetch succeeded; returning failure would send the
+    item back into the retry population and attach a third copy, which is
+    a worse outcome than one leftover attachment the user can see.
+    """
+    for attachment_key in _REPLACE_TARGETS.get(item_key, []):
+        if attachment_key == keep:
+            continue
+        try:
+            zot.delete_item(attachment_key)
+        except Exception as exc:
+            print(
+                f"  WARN: attached, but removing the replaced attachment "
+                f"{attachment_key} failed: {_failure_detail(exc)}",
+                flush=True,
+            )
+
+
+def _partition_by_attachment(
+    candidates: list[dict],
+    pdf_map: dict[str, tuple[bool, list[str]]],
+    real_map: dict[str, list[str]],
+    *,
+    replace: bool,
+) -> tuple[list[dict], list[str], dict[str, list[str]]]:
+    """Split candidates into what to fetch, what stubs to delete, what to swap.
+
+    Returns `(to_process, stub_keys, replace_targets)`.
+
+    Without `replace`, an item that already holds a real PDF drops out
+    here and never reaches a fetcher — the long-standing behaviour, and
+    the reason the run report used to tell users to delete an attachment
+    by hand before they could get a better copy.
+
+    With it, those items are re-admitted and their existing attachments
+    are recorded for deletion *after* a replacement is attached.
+    """
+    to_process: list[dict] = []
+    stub_keys: list[str] = []
+    replace_targets: dict[str, list[str]] = {}
+    for item in candidates:
+        key = item["key"]
+        has_real, stubs = pdf_map.get(key, (False, []))
+        stub_keys.extend(stubs)
+        if not has_real:
+            to_process.append(item)
+            continue
+        if not replace:
+            continue
+        to_process.append(item)
+        existing = real_map.get(key) or []
+        if existing:
+            replace_targets[key] = list(existing)
+    return to_process, stub_keys, replace_targets
+
+
 def _attach_and_log(
     zot,
     log_writer,
@@ -983,7 +1058,7 @@ def _attach_and_log(
         return False
 
     try:
-        zot.attach_pdf(item_key, str(pdf_path))
+        new_attachment_key = zot.attach_pdf(item_key, str(pdf_path))
     except Exception as exc:
         detail = _failure_detail(exc)
         print(f"→ upload failed: {detail}", flush=True)
@@ -1005,7 +1080,14 @@ def _attach_and_log(
                 pass         # diagnostics must never sink the run
         return False
 
-    # Attached. Everything below is best-effort annotation.
+    # Attached — so, and only so, the file this one replaces can go. The
+    # ordering is the whole point of `--replace`: fetch, attach, then
+    # delete. Every earlier `return False` above leaves the old
+    # attachment untouched, which is what makes the flag safe to run
+    # across a corpus rather than one cautious item at a time.
+    _drop_replaced_attachments(zot, item_key, keep=new_attachment_key)
+
+    # Everything below is best-effort annotation.
     provenance_tags = [
         tag for predicate, tag in (
             (fetchers.is_tdm_recovered_path, fetchers.TDM_RECOVERED_TAG),
@@ -3468,6 +3550,17 @@ def _build_parser() -> argparse.ArgumentParser:
              "solving a Cloudflare challenge.",
     )
     parser.add_argument(
+        "--replace", action="store_true",
+        help="Re-fetch items that already hold a PDF and swap the new file "
+             "in, deleting the old attachment only after the new one is "
+             "attached. Without this, an item with an attachment never "
+             "reaches a fetcher, so the only way to get a better copy is to "
+             "delete the one you have first and hope a replacement arrives. "
+             "Use it to repair a corpus — e.g. TDM-recovered PDFs written by "
+             "a superseded XML transformation. Ignores the resume log, and "
+             "costs one extra pass over the library's attachments.",
+    )
+    parser.add_argument(
         "--all", action="store_true",
         help="Run Pass 1 (API cascade) and Pass 2 (browser + Connector) in "
              "one invocation. Pass 2 only processes items Pass 1 couldn't "
@@ -3682,31 +3775,34 @@ def main() -> int:
     # scoped to these so a filtered run doesn't dump the whole log.
     scope_keys = {it["key"] for it in all_items}
 
-    # Items with DOI that haven't already been attached
+    # Items with DOI that haven't already been attached. `--replace` is
+    # explicitly asking to redo work the log calls finished, so the
+    # resume set does not apply to it.
     candidates = [
         it for it in all_items
         if (it.get("data", {}).get("DOI") or "").strip()
-        and it["key"].strip().lower() not in done_items
+        and (args.replace or it["key"].strip().lower() not in done_items)
     ]
     print(f"Items not yet processed: {len(candidates)}", flush=True)
 
     print("Checking for existing PDF attachments...", end=" ", flush=True)
     pdf_map = zot.pdf_map()
-    to_process: list[dict] = []
+    real_map = zot.real_pdf_map() if args.replace else {}
+    to_process, stub_keys, replace_targets = _partition_by_attachment(
+        candidates, pdf_map, real_map, replace=args.replace,
+    )
+    _REPLACE_TARGETS.clear()
+    _REPLACE_TARGETS.update(replace_targets)
     stubs_deleted = 0
-    for it in candidates:
-        key = it["key"]
-        has_real, stubs = pdf_map.get(key, (False, []))
-        for stub_key in stubs:
-            try:
-                zot.delete_item(stub_key)
-                stubs_deleted += 1
-            except Exception as e:
-                print(f"  stub delete {stub_key} failed: {e}", flush=True)
-        if not has_real:
-            to_process.append(it)
+    for stub_key in stub_keys:
+        try:
+            zot.delete_item(stub_key)
+            stubs_deleted += 1
+        except Exception as e:
+            print(f"  stub delete {stub_key} failed: {e}", flush=True)
     print(
         f"{len(to_process)} items without real PDF"
+        + (f", {len(replace_targets)} to replace" if replace_targets else "")
         + (f" ({stubs_deleted} stubs deleted)" if stubs_deleted else "") + ".",
         flush=True,
     )

@@ -54,11 +54,13 @@ STATUS_INFO: dict[str, tuple[str, str]] = {
         "Most likely a bad copy, NOT a scan. Every textless file in the "
         "incident behind this check came back perfect from a different "
         "source (3 via Wiley TDM, 2 via the Sage browser handler, 19-44 "
-        "real pages each); none needed OCR. To retry you must delete the "
-        "existing attachment first — the item otherwise looks complete "
-        "and every run skips it. Then re-run against the publisher's own "
-        "route (`--sources wiley` / `--sources elsevier` / "
-        "`--sources browser`). Only if a different source returns the "
+        "real pages each); none needed OCR. Retry with `--replace` against "
+        "the publisher's own route (`--sources wiley --replace` / "
+        "`--sources elsevier --replace` / `--sources browser --replace`). "
+        "The flag is needed because the item otherwise looks complete and "
+        "every run skips it; it swaps the new file in only once that file "
+        "is attached, so a retry that finds nothing leaves you the copy "
+        "you already had. Only if a different source returns the "
         "same textless file is this plausibly a genuine scan, which "
         "would need OCR this pipeline does not do.",
     ),

@@ -110,11 +110,14 @@ def test_textless_guidance_leads_with_a_bad_copy_not_ocr() -> None:
     assert "different source" in lead
 
 
-def test_textless_guidance_says_to_delete_the_attachment_first() -> None:
-    """Without that step the item looks complete and every run skips
-    it — the reason recovery needed manual intervention."""
+def test_textless_guidance_points_at_the_non_destructive_retry() -> None:
+    """The item looks complete and every run skips it, so the guidance has
+    to name the way past that gate. It used to say "delete the existing
+    attachment first", which made the retry destructive by construction:
+    you had to give up the only copy you had before finding out whether a
+    replacement would arrive. `--replace` swaps on success instead."""
     text = report.format_report([_row(status="attached_no_text")])
-    assert "delete" in text.lower()
+    assert "--replace" in text
 
 
 def test_corrupt_pdf_guidance_points_at_a_different_source() -> None:

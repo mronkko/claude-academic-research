@@ -584,6 +584,25 @@ class ZoteroClient:
         z = self._read_client()
         return z.everything(z.collection_items(collection_key, itemType=item_type))
 
+    def real_pdf_map(
+        self, *, stub_grace_seconds: int = 3600,
+    ) -> dict[str, list[str]]:
+        """{parent_key: [attachment_key, ...]} for PDF attachments holding bytes.
+
+        The keys `pdf_map` reduces to a bare `has_real_pdf` boolean. Only
+        `enrich_pdfs --replace` needs them — to delete the attachment a
+        newly fetched PDF replaces — and it is a second pass over
+        `all_attachments()`, so it stays a separate call rather than
+        widening `pdf_map`'s return shape for every caller that does not.
+        """
+        by_parent = self._pdf_attachments_by_parent(
+            stub_grace_seconds=stub_grace_seconds,
+        )
+        return {
+            parent: [a["key"] for a in real]
+            for parent, (real, _stubs) in by_parent.items() if real
+        }
+
     def pdf_map(
         self, *, stub_grace_seconds: int = 3600,
     ) -> dict[str, tuple[bool, list[str]]]:
@@ -600,6 +619,22 @@ class ZoteroClient:
         those prematurely would destroy an in-flight upload. After
         the grace window expires, a missing md5 genuinely indicates
         a failed upload.
+        """
+        return {
+            k: (bool(real), [s["key"] for s in stubs])
+            for k, (real, stubs) in self._pdf_attachments_by_parent(
+                stub_grace_seconds=stub_grace_seconds,
+            ).items()
+        }
+
+    def _pdf_attachments_by_parent(
+        self, *, stub_grace_seconds: int = 3600,
+    ) -> dict[str, tuple[list, list]]:
+        """{parent_key: ([real attachments], [stub attachments])}, full dicts.
+
+        The shared walk behind `pdf_map` and `real_pdf_map`; see
+        `pdf_map` for what separates a real attachment from a stub and
+        why the grace window exists.
         """
         import datetime
         pdfs = [a for a in self.all_attachments()
@@ -634,8 +669,7 @@ class ZoteroClient:
             else:
                 by_parent[parent][1].append(pdf)
 
-        return {k: (bool(real), [s["key"] for s in stubs])
-                for k, (real, stubs) in by_parent.items()}
+        return dict(by_parent)
 
     def get_item(self, item_key: str) -> dict:
         """Fetch a single item's current payload (used for version refresh)."""
@@ -1099,8 +1133,16 @@ class ZoteroClient:
 
         Runs pyzotero's full 3-step S3 upload — create attachment item →
         auth request → PUT bytes → register — via `Zupload`, and returns
-        the new attachment key on success, None if the file was already
-        attached.
+        the key of the attachment item it created. Raises if the API
+        rejected the file.
+
+        **It never returns None on a path that changed the library**, and
+        never reports "already attached": the attachment item is created
+        before the server is asked whether it needs the bytes, so there is
+        no outcome here that leaves the parent item as it was. See the
+        comment on the return below for what the `unchanged` bucket
+        actually means and the duplicate attachments that reading it as a
+        no-op produced.
 
         **Not** `attachment_simple`, and the difference is load-bearing.
         That helper sets the attachment item's `filename` field to the
@@ -1161,17 +1203,39 @@ class ZoteroClient:
             self.cloud, [template], item_key, basedir=path.parent,
         ).upload()
 
-        success = result.get("success") or []
-        if success:
-            first = success[0]
-            if isinstance(first, dict):
-                return first.get("key") or first.get("data", {}).get("key")
-            return str(first)
-
-        unchanged = result.get("unchanged") or []
-        if unchanged:
-            logger.info("attach_pdf: %s already has this file attached", item_key)
-            return None
+        # `unchanged` is NOT a no-op, and reading it as one misreports the
+        # library. `Zupload` creates the attachment item first, on every
+        # call, in `_create_prelim`; only afterwards does it ask for an
+        # upload authorisation, and only there can the server answer
+        # `exists` — meaning it already holds these bytes, so skip the
+        # transfer (`_upload.py:299-302`). The child item it just created
+        # stays. So that bucket separates "bytes sent" from "bytes already
+        # there", never "attachment added" from "nothing done".
+        #
+        # Returning None here told callers nothing had happened while the
+        # parent had in fact just gained a second attachment. A repair loop
+        # downstream read those Nones as "already attached, skip" and
+        # reported 137 swaps plus 2 items with no key; both figures were
+        # wrong, and two items were left holding byte-identical duplicate
+        # PDFs added 49 seconds apart. Since no path through this method
+        # leaves the library unchanged, there is no no-op to report, and
+        # the honest answer on every non-raising path is a key.
+        for bucket in ("success", "unchanged"):
+            entries = result.get(bucket) or []
+            if not entries:
+                continue
+            if bucket == "unchanged":
+                logger.info(
+                    "attach_pdf: %s — the library already held these bytes; "
+                    "a new attachment item was created for them anyway",
+                    item_key,
+                )
+            first = entries[0]
+            if not isinstance(first, dict):
+                return str(first)
+            key = first.get("key") or first.get("data", {}).get("key")
+            if key:
+                return str(key)
 
         failure = result.get("failure") or []
         raise RuntimeError(f"attach_pdf failed for {item_key}: {failure!r}")

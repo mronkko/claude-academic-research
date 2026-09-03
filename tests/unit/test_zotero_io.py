@@ -332,9 +332,12 @@ def test_attach_pdf_sends_a_bare_filename_not_a_path(tmp_path) -> None:
     assert (call["basedir"] / sent).exists()
 
 
-def test_attach_pdf_returns_none_on_unchanged(tmp_path) -> None:
-    """pyzotero returns the file under 'unchanged' if the same hash
-    is already attached — not an error, just a no-op."""
+def test_attach_pdf_returns_the_key_on_unchanged(tmp_path) -> None:
+    """pyzotero files the entry under 'unchanged' when the server already
+    holds these bytes — but it created the attachment item first, before
+    it could know that, so this is not a no-op and must not report as one.
+    See tests/unit/test_attach_pdf_contract.py for the mechanism and the
+    duplicate attachments the old None return produced."""
     zc = _client()
     zc._cloud = _cloud_with_template()
 
@@ -343,7 +346,7 @@ def test_attach_pdf_returns_none_on_unchanged(tmp_path) -> None:
         "failure": [],
         "unchanged": [{"key": "ALREADY_THERE"}],
     }):
-        assert zc.attach_pdf("PARENT1", _real_pdf(tmp_path)) is None
+        assert zc.attach_pdf("PARENT1", _real_pdf(tmp_path)) == "ALREADY_THERE"
 
 
 def test_attach_pdf_raises_on_failure(tmp_path) -> None:
