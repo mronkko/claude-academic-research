@@ -27,10 +27,12 @@ cache filename so audits can tell a real PDF from a TDM-recovered one.
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import re
 import urllib.parse
+import zlib
 from pathlib import Path
 
 from fetchers import _pdf_validate
@@ -455,6 +457,134 @@ def _recovery_note(n_annotations: int) -> str:
     )
 
 
+#: The release whose XML→PDF transformation is the current one. A cached
+#: recovery stamped below this was produced by the older transformation —
+#: no front matter (no title, authors, abstract or DOI anywhere in the
+#: document) and footnotes spliced into the middle of sentences — and has
+#: to be re-fetched rather than served.
+#:
+#: Raise this only when the transformation itself changes in a way that
+#: makes older output wrong. It is not the plugin version: bumping it for
+#: an unrelated release would invalidate every cache on every machine and
+#: spend a publisher's API quota re-fetching files that were already fine.
+_CURRENT_RECOVERY_VERSION: tuple[int, ...] = (0, 15, 0)
+
+#: Matches the version in `_recovery_note`'s "…by claude-academic-research
+#: 0.15.1." — in the PDF's Info dictionary, and in the page text.
+_STAMP_RE = re.compile(rb"claude-academic-research\s+(\d+(?:\.\d+)+)")
+
+#: A PDF string literal. reportlab escapes `(` and `)` inside text, so
+#: these never nest.
+_PDF_STRING_RE = re.compile(rb"\((?:[^()\\]|\\.)*\)", re.DOTALL)
+
+#: Cap on decoded content-stream bytes. A recovered PDF is text; anything
+#: claiming to be much larger is not worth decompressing to read a stamp.
+_MAX_DECODED_BYTES = 8 * 1024 * 1024
+
+
+def _parse_version(text: str) -> tuple[int, ...] | None:
+    """`"0.15.1"` -> `(0, 15, 1)`; None for anything unparseable.
+
+    `_plugin_version` returns the string `"unknown"` when the manifest
+    cannot be read, and that must not compare as a version.
+    """
+    parts = text.strip().split(".")
+    try:
+        return tuple(int(p) for p in parts)
+    except ValueError:
+        return None
+
+
+def _decoded_page_text(data: bytes) -> bytes:
+    """The text drawn on the page, recovered from the content streams.
+
+    reportlab compresses page content (ASCII85 then Flate), so the stamp
+    is not in the file as plain bytes — a naive search finds nothing. Both
+    codecs are stdlib, which matters: `_pdf_validate`'s docstring makes the
+    case that a validator running inside every fetcher must not depend on
+    an optional binary or a PDF library, or it silently no-ops on exactly
+    the machines that need it.
+
+    Text is returned as the string literals joined by spaces rather than
+    as the raw stream, because a paragraph is drawn one line per operator
+    and the stamp can wrap between them.
+
+    Any failure to decode yields b"" and so reads as "unstamped", which
+    re-fetches. That is the safe direction: a wasted fetch costs quota, a
+    wrongly-trusted cache entry costs correctness.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    for match in re.finditer(rb"stream[\r\n]+", data):
+        start = match.end()
+        end = data.find(b"endstream", start)
+        if end < 0:
+            continue
+        raw = data[start:end].strip()
+        for decode in (
+            lambda b: zlib.decompress(base64.a85decode(b, adobe=True)),
+            zlib.decompress,
+        ):
+            try:
+                decoded = decode(raw)
+            except Exception:  # noqa: BLE001 — wrong codec for this stream
+                continue
+            chunks.append(decoded)
+            total += len(decoded)
+            break
+        if total > _MAX_DECODED_BYTES:
+            break
+    blob = b"\n".join(chunks)
+    return b" ".join(m.group()[1:-1] for m in _PDF_STRING_RE.finditer(blob))
+
+
+def stamped_recovery_version(path: str | Path) -> tuple[int, ...] | None:
+    """The plugin version that produced a recovered PDF, or None.
+
+    Looks in the Info dictionary first — reportlab writes it uncompressed,
+    so it is a plain byte search, and it keeps working if reportlab ever
+    changes how it encodes page content. Falls back to the page text,
+    which is where the only stamp lives in files written by 0.15.0 and
+    0.15.1: those predate the Info-dictionary entry, and re-fetching a
+    corpus of them needlessly would spend real publisher quota.
+    """
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return None
+    match = _STAMP_RE.search(data) or _STAMP_RE.search(_decoded_page_text(data))
+    if not match:
+        return None
+    return _parse_version(match.group(1).decode("ascii", "replace"))
+
+
+def _stale_recovery_reason(path: str | Path) -> str | None:
+    """Why a cached recovery must not be served, or None if it may be.
+
+    Deliberately says nothing about file size. Short recovered articles
+    are real — correspondence items and conference abstracts render to
+    3-4KB — and a byte floor rejects them for being what they are.
+    """
+    version = stamped_recovery_version(path)
+    if version is None:
+        return (
+            "no version stamp, so it predates "
+            f"{_version_str(_CURRENT_RECOVERY_VERSION)}, when the XML "
+            "transformation changed"
+        )
+    if version < _CURRENT_RECOVERY_VERSION:
+        return (
+            f"produced by {_version_str(version)}, before the XML "
+            f"transformation changed in "
+            f"{_version_str(_CURRENT_RECOVERY_VERSION)}"
+        )
+    return None
+
+
+def _version_str(version: tuple[int, ...]) -> str:
+    return ".".join(str(p) for p in version)
+
+
 #: Block kind -> (stylesheet name, space after, left indent).
 #: `note` is deliberately the same size as body text: the footnotes are
 #: content in the articles this fallback serves, not marginalia.
@@ -585,7 +715,13 @@ def _render_text_pdf(
         ]
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    doc = SimpleDocTemplate(str(out_path), pagesize=letter)
+    # The note also goes in the Info dictionary, which reportlab writes
+    # uncompressed. The visible line on page 1 is for the reader; this
+    # copy is for `stamped_recovery_version`, which has to decide whether
+    # a cache entry is current without a PDF library on hand.
+    doc = SimpleDocTemplate(
+        str(out_path), pagesize=letter, subject=note or None,
+    )
     styles = getSampleStyleSheet()
     flowables: list = []
     if meta:
@@ -689,10 +825,37 @@ class ScienceDirectSource(AbstractFetcher, PdfFetcher):
         if not key:
             return None
         # Prefer a recovered cache if one exists; that's the higher-
-        # quality artefact for this DOI from a previous run.
+        # quality artefact for this DOI from a previous run — but only
+        # once it has been checked, for the reason the non-recovered
+        # branch below states, and one more besides. A recovery written
+        # before 0.15.0 has no front matter and its footnotes are spliced
+        # mid-sentence, and nothing in the filename says so. Served
+        # unchecked, it turns a deliberate re-fetch into a no-op that
+        # reports success, which is indistinguishable from the real thing
+        # in the return value.
         recovered_path = _cache_pdf_path(cache_dir, doi, recovered=True)
         if recovered_path.exists():
-            return recovered_path, f"cache://{recovered_path}"
+            _defect = _pdf_validate.file_defect(recovered_path)
+            _stale = None if _defect else _stale_recovery_reason(recovered_path)
+            if _defect is not None:
+                # Corrupt: worthless to anyone, and keeping it would make
+                # the corruption permanent. Same call the branch below makes.
+                logger.warning(
+                    "discarding corrupt recovered PDF for %s — %s", doi, _defect,
+                )
+                recovered_path.unlink(missing_ok=True)
+            elif _stale is not None:
+                # Outdated, not corrupt — the text is real, just badly
+                # shaped. Refuse to serve it so the run has to go and get
+                # a current one, but leave it on disk: if the publisher is
+                # now unreachable, deleting it would take away the only
+                # copy the user has, and returning None at least says so.
+                logger.warning(
+                    "not serving cached recovered PDF for %s — %s; re-fetching",
+                    doi, _stale,
+                )
+            else:
+                return recovered_path, f"cache://{recovered_path}"
         path = _cache_pdf_path(cache_dir, doi)
         if path.exists():
             # Validate before serving: an entry written by an earlier,

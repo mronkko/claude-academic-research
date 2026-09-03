@@ -21,12 +21,13 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 from fetchers.sciencedirect import (
     TDM_RECOVERED_TAG,
     ScienceDirectSource,
     _extract_xml_body,
     _is_preview_warning,
+    _recovery_note,
+    _render_text_pdf,
     is_tdm_recovered_path,
 )
 
@@ -145,13 +146,22 @@ def test_fetch_pdf_skips_preview_and_falls_back_to_xml(tmp_path: Path) -> None:
     """
     src = _make_source()
 
-    # The XML body is small enough that we need >=500 chars to clear
-    # the body-quality threshold in _fetch_xml_fallback.
+    # Body text has to sit in `<para>` inside a `<section>`: since 0.15.0
+    # the extractor walks elements rather than joining raw text, so a bare
+    # string under `<body>` yields zero blocks and the fallback declines.
+    # This fixture previously did exactly that, and the test read the
+    # resulting None as "reportlab is missing" and skipped — so the
+    # rendering path it exists to cover went unexercised for a whole
+    # release, which is the failure mode the reportlab dev-dependency was
+    # added to prevent.
     long_body = "Section text. " * 80  # ~1100 chars
     xml_payload = (
         b"<?xml version='1.0'?>"
         b"<article xmlns='http://example.com/elsevier'>"
-        b"<body>" + long_body.encode("utf-8") + b"</body>"
+        b"<body><sections><section>"
+        b"<section-title>Introduction</section-title>"
+        b"<para>" + long_body.encode("utf-8") + b"</para>"
+        b"</section></sections></body>"
         b"</article>"
     )
 
@@ -164,15 +174,12 @@ def test_fetch_pdf_skips_preview_and_falls_back_to_xml(tmp_path: Path) -> None:
         _xml_response(content=xml_payload, els_status="OK"),
     ]
     result = src.fetch_pdf("10.1016/j.jbusvent.2020.05.001", cache_dir=tmp_path)
-    if result is None:
-        pytest.skip(
-            "reportlab not available in test env — XML body recovered "
-            "but rendering skipped. Run via `uv run pytest` for full coverage."
-        )
+    assert result is not None, "XML fallback produced no recovered PDF"
     path, source_label = result
     assert path.is_file()
     assert "-tdm-recovered" in path.name
     assert "xml-fallback" in source_label
+    assert path.read_bytes().startswith(b"%PDF")
 
 
 def test_fetch_pdf_returns_none_when_xml_also_unentitled(tmp_path: Path) -> None:
@@ -212,11 +219,22 @@ def test_fetch_pdf_prefers_cached_recovered_pdf_over_fresh_call(
 ) -> None:
     """A previously-recovered PDF in the cache (from an earlier run)
     short-circuits the network call. The naming convention
-    `<doi>-tdm-recovered.pdf` is what makes this lookup work."""
+    `<doi>-tdm-recovered.pdf` is what makes this lookup work.
+
+    The cached file has to be one this build would produce: an entry with
+    no version stamp is refused and re-fetched, because it predates the
+    0.15.0 transformation change. See
+    tests/unit/test_recovered_cache_validation.py for that half.
+    """
     src = _make_source()
     doi = "10.1016/j.cached.2020.01.001"
     cached = tmp_path / "10.1016_j.cached.2020.01.001-tdm-recovered.pdf"
-    cached.write_bytes(_fake_pdf(b"cached recovered"))
+    _render_text_pdf(
+        [("p", "Recovered body text. " * 20)],
+        cached,
+        note=_recovery_note(0),
+        meta={"title": "Cached", "doi": doi},
+    )
     src.http.get.side_effect = AssertionError("should not be called on cache hit")
 
     result = src.fetch_pdf(doi, cache_dir=tmp_path)
