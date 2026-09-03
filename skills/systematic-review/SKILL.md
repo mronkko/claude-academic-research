@@ -661,10 +661,15 @@ the procedure.
 
 **Revision during screening.** If the user wants to tighten a
 criterion after seeing real decisions: bump
-`ABSTRACT_SCREENING_PROMPT_VERSION`, have the user re-approve, and
-re-run with `--rerun` so the new version replaces prior decisions
-on the affected items. The append-only log preserves the original
-decisions under the old version for audit.
+`ABSTRACT_SCREENING_PROMPT_VERSION` and have the user re-approve.
+
+To re-screen items already decided under the old version, **remove
+their `abstract:*` tags first** — resume is tag-driven, so
+`abstract_screen.py` skips anything already tagged and a plain re-run
+does nothing. `abstract_screen.py` has no `--rerun` or `--full-recode`
+flag; this instruction previously named `--rerun`, which that script
+does not accept. The append-only log preserves the original decisions
+under the old version for audit, so removing the tag loses no history.
 
 ---
 
@@ -1580,7 +1585,10 @@ phases is a data-quality signal, not a failure to hide.
   the LLM sometimes emits chain-of-thought before the object. Use
   `llm_helpers.extract_json_from_response()` which walks for the first
   balanced `{...}`. Errored rows write `decision=error` with truncated
-  response in `reason`; `--rerun` retries only those.
+  response in `reason`. On `fulltext_code.py`, `--rerun` retries exactly
+  those rows and nothing else, and cannot be combined with
+  `--full-recode`. (`abstract_screen.py` has no such flag — re-screening
+  there means removing the stage tag.)
 
 ### Predatory journal flag
 

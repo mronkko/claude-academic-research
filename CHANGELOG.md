@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] — 2026-09-03
+
+### Changed
+
+- **`fulltext_code.py --rerun` now retries only the error rows, as its
+  help and the skill both said it did.** It selected nothing: it removed
+  the guard holding `error` rows out of the ordinary population and left
+  that population alone, so it *added* the failures to a normal run
+  rather than narrowing to them. A user retrying 7 JSON-parse failures
+  processed 182 items, and two abstract-excluded items were given real
+  `fulltext:exclude` tags.
+
+  0.20.0's abstract-stage filter already closed that contamination path —
+  it narrows the collection before this logic runs — but it did not make
+  the flag mean what it says. On a completed run the two coincided by
+  accident; on an interrupted run, or a collection that had gained items,
+  `--rerun` still coded everything untagged.
+
+  A plain run is unchanged, so nothing loses coverage: between the two
+  modes every untagged item is still reachable, and a narrow retry is now
+  narrow. `--rerun` and `--full-recode` are now mutually exclusive —
+  "only the failures" and "all of it again" cannot both hold, and
+  silently honouring one is how a flag stops meaning what it says.
+
+### Fixed
+
+- **The skill told users to re-screen abstracts with a flag that does not
+  exist.** The revision-during-screening procedure said to "re-run with
+  `--rerun`"; `abstract_screen.py` has no `--rerun`, no `--full-recode`
+  and no `--only-keys`, so following it gives an argparse error. Resume
+  there is tag-driven, so re-screening means removing the item's
+  `abstract:*` tag first — which the procedure now says, along with the
+  note that the append-only log keeps the superseded decisions for audit.
+
 ## [0.20.0] — 2026-09-03
 
 ### Changed

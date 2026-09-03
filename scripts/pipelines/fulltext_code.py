@@ -423,6 +423,48 @@ def no_pdf_row(base: dict, fields: list[dict]) -> dict:
     }
 
 
+def _select_to_code(
+    items: list[dict],
+    *,
+    tagged: set[str],
+    last_decisions: dict[str, str],
+    rerun: bool,
+) -> list[dict]:
+    """Which eligible items this invocation should send to the model.
+
+    Two modes, and `--rerun` picks between them rather than widening one.
+
+    Default: everything not already carrying a `fulltext:*` tag, except
+    rows whose last logged decision was `error`. Those are held back
+    because an error is usually a transient parse failure and re-running
+    the whole stage should not silently re-spend on them.
+
+    `--rerun`: exactly those error rows, and nothing else.
+
+    The flag used to do neither. It removed the `error` guard and left
+    the population alone, so it *added* the error rows to the ordinary
+    run instead of narrowing to them — while its help said "Re-process
+    items whose last logged decision is `error`" and the skill said
+    "retries only those". A user retrying 7 parse failures processed 182
+    items, two of which received `fulltext:exclude` tags they should
+    never have been eligible for.
+
+    Between the two modes every untagged item is still reachable, so
+    nothing lost coverage; what changed is that a narrow retry is now
+    narrow.
+    """
+    out: list[dict] = []
+    for item in items:
+        if item["key"] in tagged:
+            continue
+        errored = last_decisions.get(item["key"], "") == "error"
+        if errored != rerun:
+            # rerun -> keep only error rows; default -> keep only the rest.
+            continue
+        out.append(item)
+    return out
+
+
 def _abstract_stage_eligible(
     items: list[dict],
 ) -> tuple[list[dict], str | None]:
@@ -1362,8 +1404,13 @@ def main() -> int:
                         help="Comma-separated Zotero item keys to process "
                              "(overrides collection enumeration).")
     parser.add_argument("--rerun", action="store_true",
-                        help="Re-process items whose last logged decision is "
-                             "`error`.")
+                        help="Retry ONLY the items whose last logged "
+                             "decision is `error` (transient parse or API "
+                             "failures). Nothing else is considered, so this "
+                             "is a narrow retry rather than a resume — a "
+                             "plain run already codes everything untagged "
+                             "except those rows. Cannot be combined with "
+                             "--full-recode.")
     parser.add_argument("--full-recode", action="store_true",
                         help="Back up the log file and re-code everything.")
     parser.add_argument("--workers", type=int, default=5,
@@ -1423,6 +1470,16 @@ def main() -> int:
                              "fulltext:include. Other fields in each note are "
                              "preserved. Use --only-keys to restrict to a subset.")
     args = parser.parse_args()
+
+    if args.rerun and args.full_recode:
+        # "Only the failures" and "all of it again" cannot both hold, and
+        # silently honouring one is how a flag stops meaning what it says.
+        parser.error(
+            "--rerun and --full-recode are mutually exclusive: --rerun "
+            "retries only the rows whose last decision was `error`, while "
+            "--full-recode clears every fulltext:* tag and codes the whole "
+            "eligible set. Pick one."
+        )
 
     prompt_template, fields, config_model, prompt_version = _load_screening_config(
         args.config)
@@ -1612,17 +1669,15 @@ def main() -> int:
         # Resume: skip items already carrying fulltext:include / fulltext:exclude.
         tagged = _already_tagged(items)
         last = _load_last_decisions(output_path)
-        to_code: list[dict] = []
-        for it in items:
-            if it["key"] in tagged:
-                continue
-            last_decision = last.get(it["key"], "")
-            # CSV-only: an 'error' row not yet tagged — usually the
-            # screening-time tag write failed OR pre-Zotero-as-truth state.
-            # Only retry if --rerun.
-            if last_decision == "error" and not args.rerun:
-                continue
-            to_code.append(it)
+        to_code = _select_to_code(
+            items, tagged=tagged, last_decisions=last, rerun=args.rerun,
+        )
+        if args.rerun:
+            print(
+                f"  --rerun: retrying {len(to_code)} item(s) whose last "
+                f"logged decision was `error`; nothing else is considered.",
+                flush=True,
+            )
 
         # Warn on tag/CSV drift (CSV decision exists but no tag yet).
         drift_count = sum(
