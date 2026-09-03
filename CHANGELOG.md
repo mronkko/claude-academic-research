@@ -5,6 +5,101 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] — 2026-09-03
+
+### Added
+
+- **Forward citation search as a second search stream** (`search.py`).
+  A keyword search restricted to a journal list has a blind spot no term
+  tuning closes: a paper that *applies* a method frequently uses none of
+  the review's topic vocabulary — the words are not in the document — so
+  no query string reaches it. What it does contain is a citation to the
+  paper that introduced the method. `CITATION_SEEDS` in
+  `search_config.py` names the DOIs whose citing works to retrieve, and
+  `--streams {keyword,citation}` scopes a run for piloting.
+
+  Both streams land in one corpus under one DOI hash, so
+  `import_to_zotero.py` and the integrity machinery need no second path.
+  `JOURNALS` is deliberately not applied — escaping venue scope is the
+  point; `FROM_YEAR`/`TO_YEAR` still bind. Every row carries a
+  `discovery_source` column and `search_metadata.json` records
+  `citation_seeds`, `per_database_citation_counts` and
+  `unique_records_by_discovery_source`, because PRISMA reports a
+  citation search under "other sources" rather than in the database
+  counts and the two cannot be recovered from one number afterwards. A
+  record both streams found counts as a database hit: the citation
+  stream is credited for what it *adds*, decided in `_dedup` as a rule
+  rather than left to arrival order.
+
+  OpenAlex and Semantic Scholar only. Scopus needs a Scopus EID rather
+  than a DOI for `REFEID()`, and the WoS Starter tier exposes no
+  cited-reference endpoint; both are skipped with a message rather than
+  failing the run. OpenAlex pages with a cursor and so has no result
+  ceiling — page-number paging caps at 10,000, which is a real limit for
+  a seminal seed and would understate the search while looking complete.
+  Semantic Scholar's `/citations` cannot page past 10,000 and says so
+  when it stops.
+
+- **`enrich_pdfs.py --replace`.** An item that already carries an
+  attachment dropped out at `pdf_map()` before any fetch, and the run
+  report told the user to delete the attachment to get a new one — which
+  makes a legitimate re-fetch destructive by construction: you give up
+  the only copy you have before learning whether a replacement will
+  arrive, once per item, across a corpus. `--replace` re-admits those
+  items and swaps on success only: fetch, attach, then delete the old
+  attachment. Every failure path returns before the delete, so a retry
+  that finds nothing leaves the library exactly as it was.
+
+### Fixed
+
+- **The recovered-PDF cache was served with no validation at all**
+  (`fetchers/sciencedirect.py`). `fetch_pdf` returned
+  `<doi>-tdm-recovered.pdf` unchecked, three lines above a branch that
+  validates and explains why: "an entry written by an earlier,
+  unvalidated run may be truncated, and returning it unchecked made the
+  corruption permanent."
+
+  The recovered branch had that failure mode and a worse one. The
+  XML→PDF transformation changed in 0.15.0 — before it, recovered files
+  had no front matter and footnotes spliced mid-sentence — and every
+  recovery ever made carries the same `-tdm-recovered` suffix, so the
+  filename cannot tell the two apart. Served unchecked, a deliberate
+  re-fetch became a no-op that reported success, indistinguishable from
+  the real thing in the return value. A downstream corpus had 131 such
+  files; that run escaped only because it happened to pass a scratch
+  cache directory.
+
+  The stamp `_recovery_note` already writes is now read back — from the
+  Info dictionary, which reportlab leaves uncompressed, falling back to
+  decoding the page content streams (ASCII85+Flate, both stdlib) so
+  files written by 0.15.0 and 0.15.1 are still recognised as current
+  rather than needlessly re-fetched. A corrupt entry is deleted, as the
+  non-recovered branch already does; a stale one is refused but left on
+  disk, since the text is real and deleting it would take away the only
+  copy if the publisher is now unreachable. No size floor anywhere:
+  short recovered articles are real, and a downstream 5KB threshold
+  flagged four correspondence and conference items that were all
+  correct.
+
+- **`attach_pdf` returned None while still attaching the file.**
+  `Zupload.upload()` creates the attachment item first, on every call;
+  only afterwards can the server answer `exists` and skip the byte
+  transfer. The child item it created stays, so `unchanged` separates
+  "bytes sent" from "bytes already there" — never "attachment added"
+  from "nothing done". Reporting it as None told callers nothing had
+  happened while the parent had just gained a second attachment: a
+  repair loop downstream read those Nones as "already attached, skip",
+  reported 137 swaps plus 2 items with no key, and left two items
+  holding byte-identical duplicate PDFs. The return is now always an
+  attachment key.
+
+- **A test of the XML-fallback rendering path had gone vacuous.** Its
+  fixture put body text directly under `<body>`, which yields zero
+  blocks under the 0.15.0 element walk; the test read the resulting None
+  as "reportlab is missing" and skipped. The path it exists to cover was
+  unexercised for a release — the exact silent-skip failure the
+  reportlab dev-dependency was added to prevent.
+
 ## [0.15.1] — 2026-08-30
 
 ### Added
