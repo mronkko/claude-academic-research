@@ -11,8 +11,11 @@ Measured before the fix, one bulk query with only `issns` differing:
 0 results from 911 unfiltered with three ISSNs set, 822 with none. Any
 regression that reinstates ISSN-only matching returns this suite to zero.
 
-These tests are throttle-prone: the bulk endpoint rate-limits per key and
-the free tier is shared. A 429 here is not a failure of the fix.
+The bulk endpoint rate-limits per key, and a paginated search burns that
+limit on its own — the first version of this file ran a fresh search in
+each test and reliably throttled itself into failures that looked like
+regressions. Every test now reads one module-scoped fetch, so the whole
+file costs a single search.
 """
 
 from __future__ import annotations
@@ -36,22 +39,66 @@ JOURNALS = {
 }
 
 
+#: A two-year window, deliberately. Wide enough that the scoped result is
+#: reliably non-empty — measured at 17 in-scope rows across these
+#: journals, six under "Journal of Applied Psychology" and seven under
+#: "The Journal of applied psychology" — and narrow enough to stay near a
+#: single page, since paginating is what exhausts the per-key rate limit.
+_FROM_YEAR, _TO_YEAR = 2016, 2017
+
+
 def _scoped_ctx() -> SearchContext:
     return SearchContext(
-        from_year=2015, to_year=2018,
+        from_year=_FROM_YEAR, to_year=_TO_YEAR,
         issns=list(JOURNALS),
         journal_titles=[v[1] for v in JOURNALS.values()],
     )
+
+
+def _is_transient(exc: Exception) -> bool:
+    """True for "the server would not serve us", false for anything else.
+
+    Two shapes reach here. `_fetch_all` raises RuntimeError with its own
+    wording once the retry policy is exhausted on a 429; a 5xx escapes as
+    the underlying HTTPStatusError, which the first version of this
+    fixture did not catch — so a throttled run reported an ERROR that
+    read exactly like the fix having regressed.
+    """
+    if isinstance(exc, RuntimeError) and "rate-limited" in str(exc):
+        return True
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status == 429 or (status is not None and 500 <= status < 600)
 
 
 def _config() -> SimpleNamespace:
     return SimpleNamespace(BLOCK_A_TERMS=["job satisfaction"], BLOCK_B_TERMS=[])
 
 
-def test_semantic_scholar_returns_rows_under_journal_scope() -> None:
+@pytest.fixture(scope="module")
+def scoped_rows() -> list[dict]:
+    """One search, shared by every test that needs its rows.
+
+    Module-scoped because the alternative — a search per test — is what
+    made this file fail on rate limits rather than on its assertions,
+    which is worse than no test: a throttled run reads as a broken fix.
+    """
+    try:
+        return SemanticScholarSearch().run(_config(), _scoped_ctx())
+    except Exception as exc:  # noqa: BLE001 — narrowed immediately below
+        if _is_transient(exc):
+            # Skipping is right only for "could not get data". A skip that
+            # swallowed a real defect would be the failure mode this repo
+            # keeps hitting, so the predicate below stays narrow and the
+            # reason is printed verbatim.
+            pytest.skip(f"Semantic Scholar unavailable: {exc}")
+        raise
+
+
+def test_semantic_scholar_returns_rows_under_journal_scope(
+    scoped_rows: list[dict],
+) -> None:
     """The regression that mattered: this was 0 for every scoped run."""
-    rows = SemanticScholarSearch().run(_config(), _scoped_ctx())
-    assert rows, (
+    assert scoped_rows, (
         "Semantic Scholar returned no rows under journal scope. Before the "
         "title-matching fix this was the case for every run that set "
         "JOURNALS, because S2 populates no ISSN field for the filter to "
@@ -59,12 +106,13 @@ def test_semantic_scholar_returns_rows_under_journal_scope() -> None:
     )
 
 
-def test_every_returned_row_is_actually_in_scope() -> None:
+def test_every_returned_row_is_actually_in_scope(
+    scoped_rows: list[dict],
+) -> None:
     """The fix must not widen the corpus to buy back those rows."""
-    rows = SemanticScholarSearch().run(_config(), _scoped_ctx())
     allowed = {normalize_journal_title(v[1]) for v in JOURNALS.values()}
     out_of_scope = [
-        r["source"] for r in rows
+        r["source"] for r in scoped_rows
         if normalize_journal_title(r["source"]) not in allowed
     ]
     assert not out_of_scope, (

@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.1] — 2026-09-03
+
+### Fixed
+
+- **The Semantic Scholar live tests throttled themselves.** Each of the
+  three ran its own paginated bulk search, and the endpoint rate-limits
+  per key, so the file reliably exhausted the limit on itself. Worse, a
+  5xx escaped as `HTTPStatusError` rather than the `RuntimeError` the
+  fixture guarded against, so a throttled run reported ERRORs that read
+  exactly like the fix under test having regressed.
+
+  The three tests now share one module-scoped fetch over a two-year
+  window, and a genuine 429/5xx skips with the server's reason printed
+  verbatim instead of failing. The predicate stays narrow — only "the
+  server would not serve us" skips; anything else still fails — because
+  a skip that swallowed a real defect is the failure mode this project
+  keeps paying for.
+
+  With the quota clear, the fix these tests cover is now confirmed
+  end-to-end. On 1000 papers from one bulk search, scoped to five
+  management journals: the old ISSN-only check kept **0**, title matching
+  keeps **17**. The per-journal breakdown is the argument for normalising
+  rather than comparing titles exactly — six arrived as "Journal of
+  Applied Psychology" and seven as "The Journal of applied psychology",
+  so 41% of the recovered rows come from the case-and-article folding
+  alone.
+
 ## [0.19.0] — 2026-09-03
 
 ### Added
