@@ -167,7 +167,16 @@ class ResolverCache:
             return None
         miss_at = entry.get("miss_at")
         if miss_at is not None:
-            if time.time() - float(miss_at) > self.miss_ttl_s:
+            # `>=`, not `>`. With `miss_ttl_s=0` — "do not keep misses at
+            # all" — a strict comparison depends on the clock having
+            # advanced between writing the miss and reading it back, and
+            # on Windows `time.time()` moves in ~15.6ms steps. Inside one
+            # step the elapsed time is exactly 0.0, the miss never
+            # expires, and a DOI the resolver could now answer stays
+            # permanently unasked: the JBE incident this TTL exists to
+            # prevent, reintroduced by a rounding artefact. For any real
+            # TTL the two forms are indistinguishable.
+            if time.time() - float(miss_at) >= self.miss_ttl_s:
                 return None
             return []
         out = []

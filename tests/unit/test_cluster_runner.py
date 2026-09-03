@@ -744,7 +744,15 @@ def test_limit_runs_a_pilot(tmp_path, capsys) -> None:
 
 
 def test_the_run_record_path_sits_beside_the_responses() -> None:
-    """`--apply-responses` finds the record by this rule and no other."""
+    """`--apply-responses` finds the record by this rule and no other.
+
+    Compared as paths rather than as strings. The two implementations
+    differ by design — `run_batch.py` runs on the cluster and stays on
+    plain string operations, while `batch_manifest.py` uses `Path` — and
+    on Windows that yields "/tmp/out.run.json" against "\\tmp\\out.run.json".
+    Both name the same file, since Windows accepts either separator, and
+    naming the same file is the contract; identical spelling is not.
+    """
     for name in ("out.jsonl", "out.jsonl.gz"):
-        expected = str(bm.run_record_path(Path("/tmp") / name))
-        assert runner.run_record_path("/tmp/" + name) == expected
+        expected = bm.run_record_path(Path("/tmp") / name)
+        assert Path(runner.run_record_path("/tmp/" + name)) == expected

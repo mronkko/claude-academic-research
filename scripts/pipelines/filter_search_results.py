@@ -104,4 +104,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # Windows takes stdout's encoding from the locale when output is
+    # redirected — normally cp1252, which cannot encode the arrows and em
+    # dashes printed below. Inline rather than via scripts/core/console.py
+    # because this script must stand on its own.
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())

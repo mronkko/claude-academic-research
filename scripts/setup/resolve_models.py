@@ -440,4 +440,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # Windows takes stdout's encoding from the locale when output is
+    # redirected — normally cp1252, which cannot encode the arrows, em
+    # dashes and rules printed below. See scripts/core/console.py.
+    from core.console import enable_utf8_output
+    enable_utf8_output()
     sys.exit(main())

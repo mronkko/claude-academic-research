@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.2] — 2026-09-03
+
+### Fixed
+
+- **Every script crashed on Windows when its output was redirected.**
+  Python takes stdout's encoding from the locale when stdout is not a
+  terminal; on Windows that is cp1252, which cannot encode the em dashes,
+  arrows, `──` section rules or `•` bullets these scripts print. Any
+  redirect — to a file, through a pipe, into a subprocess — turned the
+  first such line into `UnicodeEncodeError` and killed the run. A search
+  that had already completed died on its own progress banner.
+
+  It survived a CI matrix that includes Windows because an attached
+  Windows console handles UTF-8 separately, and nothing captured a
+  script's stdout there until a test ran one as a subprocess.
+
+  26 entry points now set UTF-8 with `errors="replace"` before doing
+  anything: via `scripts/core/console.py` where the package is
+  importable, inline where the script must stand alone (`run_batch.py`
+  ships to a GPU node). `tests/unit/test_console_encoding.py` runs each
+  one under `PYTHONIOENCODING=cp1252` — the bug is about the encoding,
+  not the platform, so it reproduces and regression-tests everywhere —
+  and a guard fails the build if a new entry point prints something
+  cp1252 cannot represent without being covered.
+
+- **A cached resolver miss never expired on Windows.** The check was
+  `time.time() - miss_at > miss_ttl_s`, and `miss_ttl_s=0` means "do not
+  keep misses at all". Windows' `time.time()` advances in ~15.6ms steps,
+  so within one step the elapsed time is exactly 0.0, the comparison is
+  false, and the miss persists — turning a soft miss into the permanent
+  one the TTL was added to prevent (15 articles the user demonstrably had
+  access to, skipped). Now `>=`; indistinguishable for any real TTL.
+
+- **A cross-platform test compared path spellings, not paths.**
+  `run_batch.py` runs on the cluster and stays on string operations while
+  `batch_manifest.py` uses `Path`, so on Windows the same rule yields
+  `/tmp/out.run.json` and `\tmp\out.run.json`. Both name the same file —
+  Windows accepts either separator — and naming the same file is the
+  contract. Compared as paths now.
+
+  These last two predate this release series; CI has been red on Windows
+  since 2026-08-17.
+
 ## [0.19.1] — 2026-09-03
 
 ### Fixed
