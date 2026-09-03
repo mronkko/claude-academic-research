@@ -148,13 +148,17 @@ def test_journal_articles_uses_local_client() -> None:
 
 
 def test_collection_items_filters_by_type() -> None:
+    """A real Zotero collection key is 8 upper-case alphanumerics, and
+    `collection_items` now resolves anything else as a display name — so
+    the fixture has to be key-shaped or it exercises the name path. See
+    tests/unit/test_collection_name_resolution.py."""
     zc = _client()
     fake = MagicMock()
     fake.everything.return_value = []
     zc._local = fake
 
-    zc.collection_items("COLLKEY", item_type="book")
-    fake.collection_items.assert_called_once_with("COLLKEY", itemType="book")
+    zc.collection_items("COLLKEY1", item_type="book")
+    fake.collection_items.assert_called_once_with("COLLKEY1", itemType="book")
 
 
 def test_pdf_map_groups_real_vs_stub_attachments() -> None:

@@ -163,6 +163,22 @@ def _dedup(rows: list[dict]) -> tuple[list[dict], int]:
     return list(by_doi.values()) + unresolved, merged
 
 
+def _validate_search_fields(value: str) -> str:
+    """Check `--search-fields`, which decides what "searched" means.
+
+    Worth validating rather than defaulting on a typo: the two settings
+    retrieve materially different populations. OpenAlex's default
+    `search=` covers full text, and across six management journals
+    "three-way interaction" appears in 17 titles or abstracts against 113
+    full texts — so a silent fallback could change a review's recall by
+    an order of magnitude without changing a visible parameter.
+    """
+    if value not in ("all", "title_abstract"):
+        sys.exit(f"ERROR: --search-fields must be `all` or "
+                 f"`title_abstract` (got {value!r}).")
+    return value
+
+
 def _resolve_citation_scope(choice: str, *, issns: list[str]) -> bool:
     """Whether the citation stream restricts to the config's journal list.
 
@@ -303,6 +319,18 @@ def main() -> int:
                              "only. `none` runs no citation search. May name "
                              "a database absent from --databases; that flag "
                              "is a default, not a ceiling.")
+    parser.add_argument("--search-fields", default="all",
+                        choices=("all", "title_abstract"),
+                        help="Which fields the keyword stream searches "
+                             "where the database lets us choose. `all` "
+                             "(default) uses OpenAlex's full-text search; "
+                             "`title_abstract` restricts it to title and "
+                             "abstract, matching what Scopus "
+                             "TITLE-ABS-KEY and WoS TS= can reach. Use "
+                             "title_abstract for comparability across "
+                             "databases; leave it on `all` for recall. "
+                             "Recorded in search_metadata.json — PRISMA "
+                             "requires reporting the fields searched.")
     parser.add_argument("--citation-journal-scope", default="auto",
                         choices=("auto", "on", "off"),
                         help="Restrict the citation stream to the config's "
@@ -331,6 +359,7 @@ def main() -> int:
                  f"Available: keyword, citation")
 
     cfg = _load_config(args.config)
+    search_fields = _validate_search_fields(args.search_fields)
     citation_scope = _resolve_citation_scope(
         args.citation_journal_scope, issns=list(cfg.JOURNALS.keys()),
     )
@@ -350,6 +379,7 @@ def main() -> int:
             if isinstance(entry, (list, tuple)) and len(entry) > 1
         ],
         citation_journal_scope=citation_scope,
+        search_fields=search_fields,
         mailto=os.environ.get("CROSSREF_MAILTO", ""),
     )
 
@@ -416,6 +446,7 @@ def main() -> int:
         a = len(getattr(cfg, "BLOCK_A_TERMS", []) or [])
         b = len(getattr(cfg, "BLOCK_B_TERMS", []) or [])
         print(f"  Blocks:    A={a} terms, B={b} terms (OpenAlex/S2)")
+    print(f"  Fields:    {'title+abstract only' if search_fields == 'title_abstract' else 'full text where available (OpenAlex); title/abstract/keywords on Scopus + WoS'}")
     print(f"  Streams:   {', '.join(streams)}")
     if keyword_dbs != citation_dbs:
         # Only worth the lines when the two differ; otherwise the
@@ -544,6 +575,14 @@ def main() -> int:
         "streams": streams,
         "keyword_databases": keyword_dbs,
         "citation_databases": citation_dbs,
+        # PRISMA requires reporting the fields searched, and the four
+        # databases do not search the same ones.
+        "search_fields": search_fields,
+        "search_field_note": (
+            "OpenAlex `search=` covers full text; Scopus TITLE-ABS-KEY "
+            "and WoS TS= cover title, abstract and keywords only. "
+            "`title_abstract` restricts OpenAlex to match them."
+        ),
         "citation_journal_scope": citation_scope,
         "citation_seeds": seeds,
         "per_database_citation_counts": citation_counts,

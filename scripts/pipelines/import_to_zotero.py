@@ -645,6 +645,34 @@ def _title_author_key(title: str, authors) -> str:
     return f"{t}|{first_last}"
 
 
+#: True when a dry run could not read the library, so the "already in
+#: library" figure is unknown rather than zero. Module state because the
+#: summary is printed far from the lookup, and a count that silently
+#: means "not measured" is the whole defect being fixed here.
+_existing_lookup_failed = False
+
+
+def _print_existing_summary(*, n_to_add: int, n_to_create: int) -> None:
+    """The patch-versus-create preview, or an honest refusal to give one.
+
+    A dry run used to skip the library lookup entirely and still print
+    "Already in library (patch only): 0", which is not a measurement —
+    it is the initial value of a counter nothing incremented. On a
+    602-record import into a library holding 480 of them, that reads as
+    "nothing will be patched, everything will be created", which is the
+    setup for exactly the duplicate-creation incident recorded in
+    `_fetch_existing_items`.
+    """
+    if _existing_lookup_failed:
+        print("  Already in library (patch only): NOT CHECKED "
+              "(library lookup unavailable)", flush=True)
+        print(f"  New items to create:             at most {n_to_create} "
+              f"(some may already exist)", flush=True)
+        return
+    print(f"  Already in library (patch only): {n_to_add}", flush=True)
+    print(f"  New items to create:             {n_to_create}", flush=True)
+
+
 def _fetch_existing_items(
     zot: zotero_io.ZoteroClient, dry_run: bool,
 ) -> tuple[dict[str, str], dict[str, str]]:
@@ -661,16 +689,41 @@ def _fetch_existing_items(
 
     Local stays the default everywhere else; it is faster and those
     callers are not reading back their own writes.
+
+    **Runs under `--dry-run` too.** It used to return empty there, on the
+    reasoning that a dry run patches nothing — but the summary then
+    reported "already in library: 0" for every dry run regardless of the
+    library's contents, and previewing patch-versus-create is the main
+    thing a dry run is for. A dry run that cannot reach the API degrades
+    to "not checked"; a real run still raises, because proceeding blind
+    is how the duplicate-creation incident above happened.
     """
-    if dry_run:
-        return {}, {}
+    global _existing_lookup_failed
+    _existing_lookup_failed = False
     print(
         "Fetching existing library items via the Zotero Web API "
         "(api.zotero.org — this script writes there, so it must read "
         "there too)...",
         flush=True,
     )
-    items = zot.cloud_journal_articles()
+    try:
+        items = zot.cloud_journal_articles()
+    except Exception as exc:  # noqa: BLE001
+        if not dry_run:
+            # A real run that cannot see the library would re-create
+            # everything already in it. That is the incident this
+            # function exists to prevent; there is no safe fallback.
+            raise
+        # A dry run writes nothing, so it may proceed — but it must not
+        # then present "0 already in library" as a finding.
+        _existing_lookup_failed = True
+        print(
+            f"  WARNING: could not read the library ({exc}). The dry run "
+            f"continues, but it cannot tell which records already exist, "
+            f"so the counts below are reported as unchecked.",
+            flush=True,
+        )
+        return {}, {}
 
     doi_map: dict[str, str] = {}
     title_map: dict[str, str] = {}
@@ -1023,8 +1076,7 @@ def main() -> int:
         if tk:
             batch_title_seen[tk] = idx
 
-    print(f"  Already in library (patch only): {len(to_add)}", flush=True)
-    print(f"  New items to create:             {len(to_create)}", flush=True)
+    _print_existing_summary(n_to_add=len(to_add), n_to_create=len(to_create))
     if dropped_within_batch:
         print(f"  Within-batch duplicates merged:  {dropped_within_batch}",
               flush=True)

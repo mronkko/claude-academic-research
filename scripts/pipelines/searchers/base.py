@@ -202,6 +202,13 @@ class SearchContext:
       sources that can only match on a name. Semantic Scholar returns no
       ISSN at all, so an ISSN-only scope check rejected every paper it
       ever returned; see `normalize_journal_title`.
+    - `search_fields`: `"all"` (default) or `"title_abstract"`. Which
+      fields a source searches, where the source can choose. It matters
+      more than it looks: OpenAlex's `search=` covers full text while
+      Scopus `TITLE-ABS-KEY` and WoS `TS=` do not, and across six
+      management journals "three-way interaction" appears in 17 titles
+      or abstracts against 113 full texts. Sources that cannot vary this
+      ignore it; PRISMA still requires reporting what was searched.
     - `citation_journal_scope`: whether `run_citations` restricts to the
       journal scope above. False by default, which is the unscoped
       behaviour the stream shipped with; `search.py` turns it on
@@ -216,6 +223,7 @@ class SearchContext:
     issns: list[str]
     journal_titles: list[str] = field(default_factory=list)
     citation_journal_scope: bool = False
+    search_fields: str = "all"
     mailto: str = ""
     session: Any = field(default=None, repr=False)
 

@@ -61,8 +61,18 @@ class OpenAlexSearch(SearchSource):
         rows: list[dict] = []
         for label, terms in blocks:
             query = " OR ".join(f'"{t}"' for t in terms)
+            block_filter = filter_str
+            if ctx.search_fields == "title_abstract":
+                # OpenAlex expresses a field-limited search as a filter,
+                # not as `search=`, so the terms move out of the query
+                # parameter entirely. Left in both places they would be
+                # ANDed with themselves across different fields.
+                block_filter = (
+                    f"{filter_str},title_and_abstract.search:{query}"
+                )
+                query = ""
             print(f"  OpenAlex {label}: ", end="", flush=True)
-            works = self._fetch_all(query, filter_str, ctx)
+            works = self._fetch_all(query, block_filter, ctx)
             print(f"{len(works)} results", flush=True)
             for w in works:
                 rows.append(self._work_to_row(w, label))

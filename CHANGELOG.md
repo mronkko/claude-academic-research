@@ -5,6 +5,69 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] — 2026-09-03
+
+### Added
+
+- **`--search-fields {all,title_abstract}`, and the doctrine behind it.**
+  OpenAlex's `search=` covers full text; Scopus `TITLE-ABS-KEY` and WoS
+  `TS=` cover title, abstract and keywords only. Every mixed run has
+  always inherited that asymmetry, and nothing said so — not the config,
+  not the metadata, not the skill.
+
+  It is not a footnote. Across six management journals, 2011+: "job
+  satisfaction" appears in 160 titles/abstracts and 415 full texts
+  (2.6x), "moderated mediation" 95 and 271 (2.9x) — but "three-way
+  interaction" 17 and 113 (6.6x), and "common method bias" 1 and 181
+  (181x). Papers advertise their topic and bury their method. When the
+  inclusion criterion is methodological, an abstract-limited search has a
+  hard recall ceiling that no term list reaches past; one review measured
+  16.2% recall against its own ground truth where the field split
+  predicts 15%.
+
+  `all` (default) keeps OpenAlex's full-text reach. `title_abstract`
+  restricts it to match the subscription databases, for a protocol that
+  needs every database searched comparably. Both are recorded in
+  `search_metadata.json` — PRISMA requires reporting the fields searched,
+  and a protocol cannot report what it was never told. The
+  `systematic-review` skill now carries the measurements, and warns
+  against reaching for citation seeds to fix a field problem: on that
+  same population the seed paper reached 14% and a union of three
+  canonical methods sources 22%, with reference coverage at 90%, so
+  snowballing is a much smaller lever than searching the right field.
+
+### Fixed
+
+- **`--dry-run` reported "Already in library (patch only): 0" without
+  looking.** `_fetch_existing_items` returned `({}, {})` under
+  `--dry-run`, on the reasoning that a dry run patches nothing — but the
+  summary underneath it did not know that, so every dry run routed every
+  row into "New items to create". A user previewing a 602-record import
+  into a library already holding 480 of them was shown "0 already in
+  library, 602 new to create", and caught it only by reading the source.
+
+  Previewing patch-versus-create is the decision a dry run exists to
+  inform, so the lookup now runs under `--dry-run` too and the counts are
+  real. A dry run that cannot reach the API degrades to
+  "NOT CHECKED (library lookup unavailable)" and reports the create count
+  as an upper bound; a real run still raises, because proceeding blind is
+  how the duplicate-creation incident recorded in that function happened.
+
+- **`--collection <name>` worked locally and 404'd with `--remote`.**
+  `collection_items` passed its argument to the API as a key. Zotero's
+  local HTTP server tolerates a display name, so local runs succeeded and
+  the same command with `--remote` asked api.zotero.org for
+  `/collections/SLR/items` and got "Collection not found" — naming
+  nothing the user had typed. `import_to_zotero.py` already resolved keys
+  and names on both paths and documented it, so the two disagreed.
+
+  Names now resolve on the read path as well, through the caller's read
+  client rather than the cloud, so a local run gains no credential
+  requirement. Anything already shaped like a key (8 upper-case
+  alphanumerics) is used untouched, so the common path costs no extra
+  request. An unknown name now lists the collections that do exist, and
+  an ambiguous one refuses rather than guessing.
+
 ## [0.18.0] — 2026-09-03
 
 ### Changed

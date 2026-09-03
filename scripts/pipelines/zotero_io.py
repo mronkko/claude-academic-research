@@ -578,11 +578,73 @@ class ZoteroClient:
         z = self._read_client()
         return z.everything(z.items(itemType="attachment"))
 
-    def collection_items(self, collection_key: str, *,
+    def collection_items(self, collection: str, *,
                          item_type: str = "journalArticle") -> list[dict]:
-        """Items in a specific collection, filtered by type."""
+        """Items in a collection, named by key **or** display name, by type.
+
+        Accepts a name because the CLI flags that feed this are written
+        `--collection SLR` in the skills and by users. The argument used
+        to go straight to the API as a key, which worked only by accident:
+        Zotero's local HTTP server tolerates a name, so a local run
+        succeeded and the same command with `--remote` got a 404
+        "Collection not found" from api.zotero.org naming nothing the user
+        had typed. `import_to_zotero.py` resolved names on both paths and
+        documented it, so the two disagreed.
+        """
         z = self._read_client()
-        return z.everything(z.collection_items(collection_key, itemType=item_type))
+        key = self._resolve_collection_for_read(collection, z)
+        return z.everything(z.collection_items(key, itemType=item_type))
+
+    def _resolve_collection_for_read(self, collection: str, z) -> str:
+        """A collection key for `collection`, resolving a name if needed.
+
+        Anything already shaped like a key is returned untouched, so the
+        common path costs no extra request.
+
+        Resolution reads through `z` — the caller's read client — rather
+        than `self.cloud`. `find_collection` deliberately uses the cloud,
+        because it serves the write path and has to see a collection this
+        pipeline just created; this one only reads, and routing it through
+        the cloud would give a local run a credential requirement it did
+        not have before.
+        """
+        wanted = (collection or "").strip()
+        if not wanted:
+            raise ValueError(
+                "collection_items: no collection given (empty name or key)."
+            )
+        if self._COLLECTION_KEY_RE.match(wanted):
+            return wanted
+
+        collections = z.everything(z.collections())
+        matches = [
+            c for c in collections
+            if (c.get("data", {}) or {}).get("name", "") == wanted
+        ]
+        if len(matches) > 1:
+            raise ValueError(
+                f"Ambiguous collection name {wanted!r}: "
+                f"{len(matches)} collections share it "
+                f"(keys {[c.get('key') for c in matches]}). Pass the key "
+                f"instead, or rename one of them."
+            )
+        if matches:
+            return matches[0].get("key", "")
+
+        # Name what exists: the API's own 404 says "Collection not found"
+        # and repeats nothing the user typed, which is how a typo turns
+        # into a hunt through the Zotero UI.
+        names = sorted(
+            (c.get("data", {}) or {}).get("name", "")
+            for c in collections
+            if (c.get("data", {}) or {}).get("name")
+        )
+        listed = ", ".join(names[:20]) + (" …" if len(names) > 20 else "")
+        raise ValueError(
+            f"No collection named {wanted!r} in {self.describe_library()}, "
+            f"and it is not a collection key either. Collections here: "
+            f"{listed or '(none)'}"
+        )
 
     def real_pdf_map(
         self, *, stub_grace_seconds: int = 3600,

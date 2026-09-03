@@ -1217,6 +1217,48 @@ chosen after seeing the keyword results is a different thing from one
 the protocol specified — the same objection as adding a database
 post hoc.
 
+**The databases do not search the same fields, and it can dominate
+recall.** OpenAlex's `search=` covers **full text**. Scopus
+`TITLE-ABS-KEY` and WoS `TS=` cover **title, abstract and keywords
+only**. Every mixed run has always inherited that asymmetry silently.
+
+It is not a footnote. Measured across six management journals, 2011+:
+
+| phrase | title+abstract | full text | ratio |
+|---|---|---|---|
+| "job satisfaction" (topic) | 160 | 415 | 2.6x |
+| "moderated mediation" (topic) | 95 | 271 | 2.9x |
+| "three-way interaction" (method) | 17 | 113 | 6.6x |
+| "common method bias" (method) | 1 | 181 | 181x |
+
+Papers advertise their **topic** in the abstract and bury their
+**method** in the Methods section. So when the review's target population
+is defined by something the paper *did* rather than what it is *about* —
+a specific estimator, a scale, a design, a robustness check — an
+abstract-limited search has a hard recall ceiling, and no amount of term
+tuning reaches past it because the words are not in the indexed fields.
+One review measured 16.2% recall against its own ground truth of
+three-way-interaction papers; the field split above predicts 15%.
+
+Three consequences for protocol design:
+
+- **Ask early whether your inclusion criterion is topical or
+  methodological.** If methodological, expect Scopus and WoS to
+  under-retrieve, plan for OpenAlex to carry recall, and say so in the
+  limitations rather than discovering it in a recall check.
+- **`--search-fields` makes the choice explicit.** `all` (default) keeps
+  OpenAlex's full-text reach; `title_abstract` restricts it to match
+  what Scopus and WoS can see, which is the setting for a protocol that
+  needs every database searched comparably. Both are recorded in
+  `search_metadata.json`, because **PRISMA requires reporting the fields
+  searched** and a protocol cannot report what it was never told.
+- **Do not reach for citation seeds to fix a field problem.** On that
+  same population, the seed paper reached 14% of it and a union of three
+  canonical methods sources reached 22% — and reference coverage was not
+  the limit (OpenAlex held reference lists for 90%). Papers that apply a
+  method often cite no canonical source for it. Snowballing is a real
+  lever, but a much smaller one than searching the right field.
+
 **Technical tips for search design:**
 
 - **Wildcard multi-word phrases for WoS.** Scopus stems phrases; WoS does

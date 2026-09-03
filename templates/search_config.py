@@ -87,6 +87,16 @@ QUERY_DEFS = [
 # Leave empty ([]) if you are not using OpenAlex.
 # ---------------------------------------------------------------------------
 
+# NOTE ON FIELDS: these block terms go to OpenAlex's `search=`, which
+# covers FULL TEXT, while QUERY_DEFS above go to Scopus TITLE-ABS-KEY and
+# WoS TS=, which cover title/abstract/keywords only. That difference is
+# large when your target papers are defined by what they DID rather than
+# what they are ABOUT: across six management journals, "three-way
+# interaction" appears in 17 titles/abstracts and 113 full texts, and
+# "common method bias" in 1 versus 181. Pass `--search-fields
+# title_abstract` to restrict OpenAlex to match the others; the choice is
+# recorded in search_metadata.json, which PRISMA requires you to report.
+
 BLOCK_A_TERMS = [
     "motivation",
     "intention",
