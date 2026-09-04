@@ -158,7 +158,14 @@ def test_get_bbt_keys_sends_item_keys_named_param() -> None:
     unit-level half; `tests/live/test_zotero_io_bbt.py` is the half that
     would actually have caught the original bug."""
     zc = _client()
-    with patch.object(zc, "bbt_json_rpc", return_value={"result": {}}) as mock:
+    # `items_by_keys` must be stubbed too: `get_bbt_keys` reads Zotero's
+    # native `citationKey` first and only falls back to BBT for what that
+    # does not cover. Unstubbed it makes a real request — which passes on
+    # a machine with Zotero running and fails in CI, so this exact stub is
+    # what keeps the test a unit test.
+    with patch.object(zc, "items_by_keys", return_value=[]), \
+            patch.object(zc, "bbt_json_rpc",
+                         return_value={"result": {}}) as mock:
         zc.get_bbt_keys(["ABCD0001", "ABCD0002"])
     mock.assert_called_once_with(
         "item.citationkey", {"item_keys": ["ABCD0001", "ABCD0002"]},

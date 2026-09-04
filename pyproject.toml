@@ -67,6 +67,7 @@ markers = [
     "live_browser: Playwright live tests for Cloudflare-gated publishers (user clicks through CF); opt in with `pytest -m live_browser`",
     "live_slr: full live end-to-end mini systematic review against a real Zotero group (~5-12 min, real API spend); opt in with `pytest -m live_slr`",
     "live_cluster: batch screening against a real GPU cluster over ssh/sbatch; needs ACADEMIC_RESEARCH_CLUSTER_HOST and queue time, and can never run in CI; opt in with `pytest -m live_cluster`",
+    "allow_network: unit test that deliberately reaches the socket layer (e.g. probing a closed port for an unreachable-host path); exempts it from the no-network guard in tests/unit/conftest.py",
 ]
 
 [tool.ruff]

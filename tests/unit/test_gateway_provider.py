@@ -198,10 +198,16 @@ def test_the_missing_endpoint_outranks_the_missing_pin() -> None:
     assert result.status is model_health.ConnectionStatus.UNREACHABLE
 
 
+@pytest.mark.allow_network
 def test_a_configured_endpoint_still_probes_normally() -> None:
     """The guard must not swallow the real path — an unroutable host
     should reach the network layer and come back UNREACHABLE from there,
-    with the host in the detail rather than the env var name."""
+    with the host in the detail rather than the env var name.
+
+    Opts out of the unit-suite network block (see tests/unit/conftest.py):
+    reaching the socket layer is the point of this test. Port 9 is the
+    discard port, so it fails immediately and depends on nothing.
+    """
     result = model_health.check_connection(
         GATEWAY, "m", "k", "http://127.0.0.1:9",
     )
