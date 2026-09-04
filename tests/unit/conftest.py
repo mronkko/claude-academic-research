@@ -38,8 +38,16 @@ def _no_network(request: pytest.FixtureRequest,
     rather than at each client, so a new dependency cannot slip past it.
 
     `socket.socketpair` and AF_UNIX are left alone: they are local IPC,
-    used by tooling rather than by code under test, and blocking them
-    breaks pytest itself on some platforms.
+    used by tooling rather than by code under test.
+
+    `socketpair` needs an explicit bypass rather than merely being
+    ignored. On POSIX it is AF_UNIX and never reaches this check, but
+    Windows has no AF_UNIX, so CPython falls back to a real loopback
+    TCP connect — and asyncio builds its event loop's self-pipe that way
+    (`proactor_events._make_self_pipe`). Blocking it took out every
+    async test on the Windows matrix while all six POSIX jobs passed,
+    which is a good reminder that "works on my machine" and "works on
+    the platform this guard is protecting" are different claims.
 
     A test that genuinely needs the network layer — probing a closed port
     to exercise an unreachable-host path, say — opts out with
@@ -50,9 +58,21 @@ def _no_network(request: pytest.FixtureRequest,
     if request.node.get_closest_marker("allow_network"):
         return
     real_connect = socket.socket.connect
+    real_socketpair = socket.socketpair
+    # Set while CPython's own socketpair fallback runs, so the loopback
+    # connect it makes internally is not mistaken for a test reaching out.
+    building_socketpair = False
+
+    def guarded_socketpair(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal building_socketpair
+        building_socketpair = True
+        try:
+            return real_socketpair(*args, **kwargs)
+        finally:
+            building_socketpair = False
 
     def guarded(self, address, *args, **kwargs):  # type: ignore[no-untyped-def]
-        if self.family == getattr(socket, "AF_UNIX", object()):
+        if building_socketpair or self.family == getattr(socket, "AF_UNIX", object()):
             return real_connect(self, address, *args, **kwargs)
         raise NetworkAccessInUnitTest(
             f"unit test attempted a network connection to {address!r}. "
@@ -62,3 +82,4 @@ def _no_network(request: pytest.FixtureRequest,
         )
 
     monkeypatch.setattr(socket.socket, "connect", guarded)
+    monkeypatch.setattr(socket, "socketpair", guarded_socketpair)
