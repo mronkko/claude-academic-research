@@ -22,19 +22,23 @@ import zotero_io
 # ---------------------------------------------------------------------------
 
 
+# `extra` is the legacy source: Zotero now carries the key natively and
+# BBT no longer writes the line. These pin the fallback that keeps
+# older-keyed items working; the native path lives in
+# tests/unit/test_citation_key_source.py.
 def test_bibtex_key_from_extra_parses_bbt_line() -> None:
     extra = "Citation Key: foobar2020baz\nOther: stuff"
-    assert exp._bibtex_key_from_extra(extra) == "foobar2020baz"
+    assert exp._citation_key({"extra": extra}) == "foobar2020baz"
 
 
 def test_bibtex_key_from_extra_is_case_insensitive() -> None:
-    assert exp._bibtex_key_from_extra("CITATION KEY: abc2020") == "abc2020"
-    assert exp._bibtex_key_from_extra("citation key: xyz2019") == "xyz2019"
+    assert exp._citation_key({"extra": "CITATION KEY: abc2020"}) == "abc2020"
+    assert exp._citation_key({"extra": "citation key: xyz2019"}) == "xyz2019"
 
 
 def test_bibtex_key_from_extra_returns_empty_when_absent() -> None:
-    assert exp._bibtex_key_from_extra("") == ""
-    assert exp._bibtex_key_from_extra("DOI: 10.1/x\nPMID: 1") == ""
+    assert exp._citation_key({"extra": ""}) == ""
+    assert exp._citation_key({"extra": "DOI: 10.1/x\nPMID: 1"}) == ""
 
 
 def test_authors_string_joins_author_lastnames() -> None:

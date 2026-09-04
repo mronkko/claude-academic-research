@@ -1475,12 +1475,43 @@ class ZoteroClient:
         """
         if not item_keys:
             return {}
-        body = self.bbt_json_rpc("item.citationkey", {"item_keys": list(item_keys)})
+
+        # Zotero's own `citationKey` field first. It is authoritative,
+        # it needs no BBT round-trip, and for a group library it is the
+        # only route that works at all: BBT's `item.citationkey`
+        # resolves bare keys against the personal library and answers
+        # null for everything else. Measured on Zotero 10.0.1 with BBT
+        # 9.0.63 — `41:SQR3R8QW` (the *local* library id) resolves,
+        # while `6658025:SQR3R8QW` (the cloud group id) and a bare
+        # `SQR3R8QW` both return null. This client knows its cloud group
+        # id and has no mapping to the local one, so the prefixed form is
+        # not available to it.
+        out: dict[str, str] = {}
+        for item in self.items_by_keys(item_keys):
+            key = item.get("key", "")
+            native = (item.get("data", {}).get("citationKey") or "").strip()
+            if key and native:
+                out[key] = native
+
+        remaining = [k for k in item_keys if k not in out]
+        if not remaining:
+            return out
+
+        # Legacy path: an older Zotero that does not expose the field, or
+        # items BBT has keyed but Zotero has not surfaced yet. Best
+        # effort — a BBT outage must not discard the keys already found.
+        try:
+            body = self.bbt_json_rpc("item.citationkey", {"item_keys": remaining})
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("BBT citation-key fallback failed: %s", exc)
+            return out
         result = body.get("result")
-        if not isinstance(result, dict):
-            return {}
-        # BBT returns {"<zotero_key>": "<bbt_key>", ...}; filter empty values.
-        return {k: v for k, v in result.items() if isinstance(v, str) and v}
+        if isinstance(result, dict):
+            # BBT returns {"<zotero_key>": "<bbt_key>", ...}; skip empties.
+            for key, value in result.items():
+                if isinstance(value, str) and value:
+                    out[key] = value
+        return out
 
     def populate_missing_bbt_keys(
         self,

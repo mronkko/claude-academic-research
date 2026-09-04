@@ -51,9 +51,25 @@ def test_get_group_library_ids_returns_list() -> None:
     assert all(isinstance(i, int) for i in ids)
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="BBT 9.0.63 cannot resolve a library id for whole-library "
+           "export; see get_bibtex_export's docstring. strict=True so an "
+           "XPASS fails the run — that is how we learn BBT fixed it.",
+)
 def test_get_bibtex_export_personal_library_returns_string() -> None:
     """BBT serves the personal library at library_id=1. The export may
-    be empty (fresh install) but must be a string, not raise."""
+    be empty (fresh install) but must be a string, not raise.
+
+    Currently xfail. BBT's `LibraryHandler` matches the URL and captures
+    the id, then its own library lookup fails and it answers 404. Every
+    id form was tried against a live install — with and without the
+    leading slash, a local library id and the matching cloud group id —
+    so there is no URL correction available on our side.
+
+    Deliberately still exercising library_id=1 rather than a group: the
+    point is the contract, and a passing run would mean BBT changed.
+    """
     _bbt_or_skip()
     out = get_bibtex_export(library_id=1)
     assert isinstance(out, str)
@@ -117,3 +133,33 @@ def test_get_bbt_keys_resolves_real_items_from_the_local_library() -> None:
     )
     assert set(resolved) <= set(item_keys)
     assert all(isinstance(v, str) and v for v in resolved.values())
+
+
+def test_zotero_exposes_a_native_citation_key() -> None:
+    """The premise of `_citation_key` and `get_bbt_keys`, asserted.
+
+    BBT stopped writing `Citation Key:` into `extra`, and Zotero carries
+    the key natively instead. Reading only `extra` silently produced an
+    empty `bibtex_key` for every exported row — 140 of 140 in one live
+    project. If this field ever goes away, that failure returns silently,
+    so it is worth a live assertion rather than an assumption.
+    """
+    import zotero_io
+
+    from tests.live.conftest import require_config
+
+    api_key = require_config("zotero", "api_key", env="ZOTERO_API_KEY")
+    group = zotero_io.find_group_by_name("academic-research-e2e",
+                                         api_key=api_key, user_id=None)
+    if group is None:
+        pytest.skip("academic-research-e2e group not available")
+    zc = zotero_io.ZoteroClient(api_key=api_key, group_id=str(group["id"]))
+    items = [i for i in zc.cloud.top(limit=25)
+             if i.get("data", {}).get("citationKey")]
+    if not items:
+        pytest.skip("no BBT-keyed items in the e2e group")
+    data = items[0]["data"]
+    assert isinstance(data["citationKey"], str) and data["citationKey"]
+    # The whole point: the key is reachable without touching `extra`.
+    assert zc.get_bbt_keys([items[0]["key"]]).get(items[0]["key"]) == \
+        data["citationKey"]

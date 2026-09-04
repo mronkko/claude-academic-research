@@ -135,14 +135,16 @@ def test_get_bbt_keys_returns_only_non_empty_string_values() -> None:
     BBT key isn't yet generated. Filter them out so callers can compute
     `set(item_keys) - result.keys()` to find missing items."""
     zc = _client()
-    with patch.object(zc, "bbt_json_rpc", return_value={
-        "result": {
-            "ABCD0001": "smith2020Foo",
-            "ABCD0002": "",          # empty string — should be filtered
-            "ABCD0003": None,        # null — should be filtered
-            "ABCD0004": "jones2021Bar",
-        },
-    }):
+    # No native citationKey on these, so the BBT fallback is what answers.
+    with patch.object(zc, "items_by_keys", return_value=[]), \
+            patch.object(zc, "bbt_json_rpc", return_value={
+                "result": {
+                    "ABCD0001": "smith2020Foo",
+                    "ABCD0002": "",          # empty string — filtered
+                    "ABCD0003": None,        # null — filtered
+                    "ABCD0004": "jones2021Bar",
+                },
+            }):
         out = zc.get_bbt_keys(["ABCD0001", "ABCD0002", "ABCD0003", "ABCD0004"])
     assert out == {"ABCD0001": "smith2020Foo", "ABCD0004": "jones2021Bar"}
 
@@ -173,7 +175,9 @@ def test_get_bbt_keys_empty_input_short_circuits() -> None:
 
 def test_get_bbt_keys_returns_empty_when_result_not_dict() -> None:
     zc = _client()
-    with patch.object(zc, "bbt_json_rpc", return_value={"error": {"message": "bad"}}):
+    with patch.object(zc, "items_by_keys", return_value=[]), \
+            patch.object(zc, "bbt_json_rpc",
+                         return_value={"error": {"message": "bad"}}):
         assert zc.get_bbt_keys(["A"]) == {}
 
 
@@ -201,3 +205,45 @@ def test_populate_missing_bbt_keys_walks_top_items_when_no_input() -> None:
     # top_items entries with empty key are skipped before lookup.
     mock_keys.assert_called_once_with(["AAAA0001", "AAAA0002"])
     assert result == {"keyed": ["AAAA0001"], "missing": ["AAAA0002"]}
+
+
+def test_library_export_404_raises_a_distinguishable_error() -> None:
+    """"BBT is offline" and "this BBT cannot export a library by id" need
+    different remedies, so they must not arrive as the same exception.
+
+    Observed on BBT 9.0.63 with Zotero 10.0.1: the endpoint matches the
+    URL, captures the id, then fails its own library lookup and answers
+    404 with this body. Every id form 404s identically — local library
+    id and matching cloud group id alike — so a caller cannot fix it by
+    passing something else, and the error says so.
+    """
+    import urllib.error
+    from io import BytesIO
+
+    err = urllib.error.HTTPError(
+        "http://127.0.0.1:23119/better-bibtex/export/library?/1/library.bibtex",
+        404, "Not Found", {},  # type: ignore[arg-type]
+        BytesIO(b"Could not export bibliography: library '/1/library.bibtex' "
+                b"does not exist"),
+    )
+    with patch.object(bbt_client.urllib.request, "urlopen", side_effect=err):
+        with pytest.raises(bbt_client.BBTLibraryExportUnsupported) as exc:
+            bbt_client.get_bibtex_export(library_id=1)
+    message = str(exc.value)
+    assert "item.export" in message, "the message must name the working route"
+    assert not isinstance(exc.value, bbt_client.BBTUnreachableError)
+
+
+def test_an_unrelated_http_error_is_not_swallowed() -> None:
+    """Only the specific library-lookup 404 is reinterpreted. A 500, or a
+    404 from something else, has to surface as itself."""
+    import urllib.error
+    from io import BytesIO
+
+    err = urllib.error.HTTPError(
+        "http://127.0.0.1:23119/x", 500, "Server Error", {},  # type: ignore[arg-type]
+        BytesIO(b"boom"),
+    )
+    with patch.object(bbt_client.urllib.request, "urlopen", side_effect=err):
+        with pytest.raises(urllib.error.HTTPError):
+            bbt_client.get_bibtex_export(library_id=1)

@@ -65,10 +65,31 @@ DEFAULT_PROVENANCE_COLUMNS = [
 ]
 
 
-def _bibtex_key_from_extra(extra: str) -> str:
-    """Extract the Better BibTeX citation key from a Zotero item's
-    `extra` field. BBT writes `Citation Key: foobar2020baz` there."""
-    for line in (extra or "").splitlines():
+def _citation_key(data: dict) -> str:
+    """The item's Better BibTeX citation key, or "" if it has none.
+
+    Reads Zotero's native `citationKey` field first and falls back to
+    parsing `Citation Key:` out of `extra`.
+
+    The order is the fix, not a preference. BBT used to write the key
+    into `extra` and this function read nothing else; Zotero now carries
+    it natively and BBT no longer populates `extra` at all — on Zotero
+    10.0.1 with BBT 9.0.63, `data["citationKey"]` is populated while
+    `data["extra"]` is empty on every item checked. The old reader
+    therefore returned "" for everything, which is not a visible failure:
+    the exported `bibtex_key` column was simply blank, and a downstream
+    review shipped 140 of 140 included papers that way before anyone
+    noticed the manuscript had nothing to match against.
+
+    `extra` is still read because items keyed by an older BBT keep the
+    line, and a mixed library is the normal case after an upgrade. The
+    native field wins when both are present: a stale `extra` line
+    outlives a rename, and Zotero's own field is the one BBT maintains.
+    """
+    native = (data.get("citationKey") or "").strip()
+    if native:
+        return native
+    for line in (data.get("extra") or "").splitlines():
         line = line.strip()
         if line.lower().startswith("citation key:"):
             return line.split(":", 1)[1].strip()
@@ -108,7 +129,7 @@ def _row_from_item(
     data = item.get("data", {})
     row: dict = {
         "item_key": data.get("key", item.get("key", "")),
-        "bibtex_key": _bibtex_key_from_extra(data.get("extra", "")),
+        "bibtex_key": _citation_key(data),
         "doi": (data.get("DOI") or "").strip(),
         "title": (data.get("title") or "").strip(),
         "authors": _authors_string(data.get("creators") or []),

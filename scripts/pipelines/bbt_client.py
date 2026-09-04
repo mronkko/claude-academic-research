@@ -37,6 +37,16 @@ class BBTUnreachableError(RuntimeError):
     """BBT's local endpoint did not respond — Zotero or BBT plugin offline."""
 
 
+class BBTLibraryExportUnsupported(RuntimeError):
+    """BBT answered, but could not resolve the requested library id.
+
+    Distinct from `BBTUnreachableError`: the service is up and the URL
+    is understood. Raised so a caller can tell "BBT is not running" from
+    "this BBT version cannot do whole-library export by id", which are
+    different problems with different remedies.
+    """
+
+
 def bbt_json_rpc(method: str, params: dict | None = None, *, timeout: int = 30) -> dict:
     """Call a Better BibTeX JSON-RPC method.
 
@@ -78,12 +88,41 @@ def get_bibtex_export(library_id: int | str, *, timeout: int = 60) -> str:
     form this function used previously — returns HTTP 404.
 
     Returns the BibTeX as a single string. Raises BBTUnreachableError
-    on transport failure.
+    on transport failure, and `BBTLibraryExportUnsupported` when BBT
+    accepts the request but cannot resolve the library id.
+
+    **Known broken on BBT 9.0.63 (observed with Zotero 10.0.1).** BBT's
+    own `LibraryHandler` matches this URL and captures the id, then
+    fails its internal library lookup and answers 404 "Could not export
+    bibliography: library '<path>' does not exist". Every id form was
+    tried against a live install — with and without the leading slash, a
+    local library id (40) and the corresponding cloud group id
+    (6637302) — and all four 404 the same way, so this is not a URL
+    shape we can correct from here. Nothing in this package calls it;
+    `generate_bib.py` gets BibTeX through `bbt_json_rpc("item.export",
+    ...)`, which works, and that is the route to prefer.
     """
     url = f"{BBT_BASE}/export/library?/{library_id}/library.bibtex"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
             return resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", "replace").strip()
+        except Exception:  # noqa: BLE001 — diagnostics only
+            pass
+        if exc.code == 404 and "does not exist" in body:
+            raise BBTLibraryExportUnsupported(
+                f"BBT accepted the request but could not resolve library "
+                f"{library_id!r} ({body}). Observed on BBT 9.0.63 with "
+                f"Zotero 10.0.1 for every id form tried, including the "
+                f"matching cloud group id — the endpoint's own library "
+                f"lookup fails, so no URL change here helps. Use "
+                f"`bbt_json_rpc('item.export', ...)` with the item keys "
+                f"you need, which is what generate_bib.py does."
+            ) from exc
+        raise
     except urllib.error.URLError as exc:
         raise BBTUnreachableError(
             f"BBT library export unreachable at {url} — is Zotero "

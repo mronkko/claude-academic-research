@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.1] — 2026-09-04
+
+Zotero 10.0.1 / Better BibTeX 9.0.63 compatibility. Everything the
+pipeline actually uses works on Zotero 10 — local read API, connector,
+BBT JSON-RPC, cloud API — but citation keys moved and one BBT endpoint
+regressed.
+
+### Fixed
+
+- **Citation keys came back empty for every exported item.** BBT used to
+  write `Citation Key: foo2020bar` into a Zotero item's `extra`, and
+  `export_coded_includes._bibtex_key_from_extra` read nothing else.
+  Zotero now carries the key natively as `data["citationKey"]` and BBT no
+  longer populates `extra` at all — confirmed live, `citationKey` set and
+  `extra` empty on every item checked. Nothing raised: the `bibtex_key`
+  column was simply blank, and a downstream review exported 140 of 140
+  included papers that way before noticing the manuscript had nothing to
+  match against.
+
+  Now reads the native field first and falls back to `extra`, so items
+  keyed by an older BBT still resolve — a mixed library is the normal
+  case after an upgrade. The native field wins when both are present: a
+  stale `extra` line outlives a rename.
+
+- **`get_bbt_keys` returned `{}` for every group-library item.** It asks
+  BBT's `item.citationkey` with bare item keys, which BBT resolves only
+  against the personal library. Measured on this install: `41:SQR3R8QW`
+  (the **local** library id) resolves, while `6658025:SQR3R8QW` (the
+  cloud group id) and a bare `SQR3R8QW` both return null — and a
+  `ZoteroClient` knows only the cloud id. It now reads Zotero's native
+  field first, which needs no such mapping, and consults BBT only for
+  items the field does not cover. A BBT outage no longer discards the
+  keys Zotero already supplied.
+
+- **`get_bibtex_export` fails with an explanation instead of a bare
+  404.** BBT 9.0.63's `LibraryHandler` matches the URL and captures the
+  id, then its own library lookup fails; every id form 404s identically —
+  with and without the leading slash, local library id and matching cloud
+  group id alike — so there is no URL correction available here. The new
+  `BBTLibraryExportUnsupported` says so and names the working route
+  (`bbt_json_rpc("item.export", …)`, which is what `generate_bib.py`
+  already uses). No pipeline code calls the export helper. Its live test
+  is now `xfail(strict=True)`, so an XPASS reports that BBT fixed it.
+
 ## [0.21.0] — 2026-09-03
 
 ### Changed
