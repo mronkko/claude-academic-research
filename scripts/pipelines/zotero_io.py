@@ -618,6 +618,26 @@ class ZoteroClient:
         """File uploads, which have no local implementation here."""
         return self.cloud
 
+    @property
+    def write_surface(self) -> str:
+        """`"local"` or `"cloud"` — where metadata writes land.
+
+        For run-logs. The two surfaces keep unrelated version counters,
+        so a reader reconciling a log against item versions afterwards
+        has no way to tell which one produced a row, and choosing wrong
+        makes every version in it look stale.
+        """
+        return "local" if self.local_writes_enabled else "cloud"
+
+    @property
+    def upload_surface(self) -> str:
+        """Always `"cloud"` — see `_upload_client`.
+
+        Separate from `write_surface` so a caller logging an attachment
+        cannot accidentally claim it went local on a local-write client.
+        """
+        return "cloud"
+
     # -----------------------------------------------------------------
     # Reads
     # -----------------------------------------------------------------

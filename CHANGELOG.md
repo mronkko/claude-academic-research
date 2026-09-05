@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.0] — 2026-09-06
+
+### Changed
+
+- **The abstract run-log records which Zotero surface a write went to.**
+  New `surface` column on `ABSTRACT_FETCH_FIELDS`: `local`, `cloud`, or
+  empty when no write was attempted (`no_doi`, `not_found`,
+  `lookup_failed`, `dry_run`). With writes now possible on either
+  surface, and the two libraries keeping unrelated version counters, a
+  reader reconciling a log against item versions afterwards could not
+  tell which one a row described — and picking wrong makes every version
+  in it look stale. Appended last, so `shared_orchestrators.open_log`
+  migrates an existing 7-column log in place.
+
+  Deliberately *not* added to `PDF_FETCH_FIELDS`: `attach_pdf` always
+  uses the cloud, so the column would be constant. When
+  `upload_attachments()` gives uploads a local route it earns its place.
+  Raised by the AI-literature-review-study session after a 108-item run.
+
+
 ## [0.22.0] — 2026-09-06
 
 Zotero writes can now go to the local API instead of `api.zotero.org`,

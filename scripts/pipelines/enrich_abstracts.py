@@ -259,10 +259,12 @@ def _select_items(
         it for it in zot.items_by_keys(keys)
         if (it.get("data", {}).get("itemType") or "") in wanted
     ]
+    # A leading newline closes main's "Fetching Zotero items... " line;
+    # without it the count that follows runs straight into this note.
     print(
         f"\n  --filter-keys-file: asked for {len(keys)} key(s), "
         f"{len(items)} matched an abstractable item type.",
-        end="", flush=True,
+        flush=True,
     )
     return items
 
@@ -380,7 +382,7 @@ def main() -> int:
                 log_writer.writerow({
                     "run_date": run_date, "item_key": key, "doi": doi,
                     "title": title, "source": "none", "status": status,
-                    "detail": result.detail(),
+                    "detail": result.detail(), "surface": "",
                 })
             print(f"{prefix} {title:<70} {note}", flush=True)
             return
@@ -393,7 +395,7 @@ def main() -> int:
                 log_writer.writerow({
                     "run_date": run_date, "item_key": key, "doi": doi,
                     "title": title, "source": source, "status": "dry_run",
-                    "detail": "",
+                    "detail": "", "surface": "",
                 })
             print(f"{prefix} {title:<70} found ({source}) [dry-run]",
                   flush=True)
@@ -419,7 +421,7 @@ def main() -> int:
             log_writer.writerow({
                 "run_date": run_date, "item_key": key, "doi": doi,
                 "title": title, "source": source, "status": status,
-                "detail": detail,
+                "detail": detail, "surface": zot.write_surface,
             })
         if ok:
             print(f"{prefix} {title:<70} ({source}) → updated", flush=True)
