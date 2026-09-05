@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "pyzotero>=1.6",
+#     "pyzotero>=1.15.1",
 #     "requests>=2.31",
 #     "urllib3>=2.0",
 #     "tenacity>=8.0",
@@ -229,6 +229,44 @@ def group_by_doi(items: list[dict]) -> dict[str, list[dict]]:
     return groups
 
 
+def _select_items(
+    zot,
+    item_types: list[str] | None,
+    filter_keys_file: str | None,
+) -> list[dict]:
+    """The items this run will consider, fetched at the run's own scope.
+
+    A scoped run asks Zotero for its keys; only an unscoped one sweeps
+    the library. The filter used to be applied *after*
+    `abstractable_items()` had already paginated through everything, so
+    `--filter-keys-file` reduced what got enriched but not what got
+    fetched — against a 27,000-item library a few-hundred-key run spent
+    most of its wall time on items it was about to discard, and paid for
+    the sweep again on every backoff retry. `enrich_pdfs.py` already
+    routed through `items_by_keys`; this puts the two on equal footing.
+
+    `items_by_keys` does no type filtering and answers with the
+    requested items *and* their attachment children, so the item-type
+    filter is applied here rather than assumed away by the query.
+    """
+    if not filter_keys_file:
+        return zot.abstractable_items(item_types)
+
+    with open(filter_keys_file) as f:
+        keys = [line.strip() for line in f if line.strip()]
+    wanted = set(item_types or zot.ABSTRACTABLE_ITEM_TYPES)
+    items = [
+        it for it in zot.items_by_keys(keys)
+        if (it.get("data", {}).get("itemType") or "") in wanted
+    ]
+    print(
+        f"\n  --filter-keys-file: asked for {len(keys)} key(s), "
+        f"{len(items)} matched an abstractable item type.",
+        end="", flush=True,
+    )
+    return items
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -282,15 +320,8 @@ def main() -> int:
 
     print("Fetching Zotero items...", end=" ", flush=True)
     item_types = [t.strip() for t in args.item_types.split(",") if t.strip()]
-    all_items = zot.abstractable_items(item_types or None)
+    all_items = _select_items(zot, item_types or None, args.filter_keys_file)
     print(f"{len(all_items)} items.", flush=True)
-
-    if args.filter_keys_file:
-        with open(args.filter_keys_file) as f:
-            target = {line.strip() for line in f if line.strip()}
-        all_items = [it for it in all_items if it["key"] in target]
-        print(f"  After --filter-keys-file: {len(all_items)} items.",
-              flush=True)
 
     missing = [
         it for it in all_items

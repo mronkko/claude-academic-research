@@ -5,6 +5,82 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] — 2026-09-06
+
+Zotero writes can now go to the local API instead of `api.zotero.org`,
+which closes the read-your-own-writes gap the pipeline has worked around
+for its whole life. Requires pyzotero >= 1.15.1.
+
+### Added
+
+- **Writes go to Zotero Desktop when `[zotero] local_api_key` is set.**
+  `zotero_io` has always read from `localhost:23119` and written through
+  the Web API, and Zotero Desktop only learns about those writes at its
+  next sync. A script that wrote an item and read it back locally saw
+  nothing, with no error, and reported it as "already done" —
+  `cloud_journal_articles()` exists solely to work around that, and one
+  import created a full set of duplicates on a re-run for the same
+  reason. Zotero 10.0.1 accepts writes on the local API once the user
+  grants a key through its own consent dialog, so the split is no longer
+  forced.
+
+  Verified live against Zotero 10.0.1, not only in unit tests: a local
+  write is visible to a local read with no sync wait, item versions
+  increment across it, and a stale version is still refused with 412 —
+  so the optimistic-concurrency protection the pipeline relies on
+  survives the move.
+
+  Without a key nothing changes: every existing install keeps the cloud
+  write path it has always used. `--remote` turns local writes off along
+  with local reads, since honouring it for one and not the other would
+  split a single run across two surfaces.
+
+- **`/setup` asks for the key.** The grant is a modal dialog in Zotero,
+  which a `uv run` script in a background lane cannot answer, and Zotero
+  rate-limits the endpoint — so the wizard is the only place that asks
+  and nothing retries it. Only "Always Allow" is stored: "Allow" returns
+  a key good for exactly one write, and storing that would leave a
+  config entry that works once and then looks like a bug.
+
+### Changed
+
+- **`--filter-keys-file` now scopes the fetch in `enrich_abstracts.py`,
+  not just the enrichment.** It was applied after `abstractable_items()`
+  had already paginated the whole library, so a run scoped to a few
+  hundred keys against a 27,000-item library spent most of its wall time
+  fetching items it was about to discard — and paid for the sweep again
+  on every backoff retry. It now asks for the keys it wants, 50 per
+  request, the way `enrich_pdfs.py` already did.
+
+- **pyzotero floor raised to 1.15.1** in `pyproject.toml` and all ten
+  PEP 723 blocks. `zotero-mcp-server` 0.9.1 requires `>=1.13.3` with no
+  upper cap, so the two agree.
+
+### Fixed
+
+- **Every HTTP 412 retry had quietly become dead code under pyzotero
+  1.15.** Through 1.14 pyzotero let httpx's `HTTPStatusError` out of any
+  non-2xx call, and three write paths caught it and read
+  `.response.status_code` to tell a version conflict (retry after
+  re-fetching) from a real failure. 1.15 raises its own typed errors
+  instead — `PreConditionFailedError` and friends — which are not httpx
+  subclasses and carry no response object at all. So `except
+  httpx.HTTPStatusError` matched nothing, `VersionConflictError` was
+  never raised, tenacity never retried, and a routine conflict between
+  two writers would have surfaced as an uncaught pyzotero exception.
+
+  `_http_status_of()` now recovers the status from an httpx response
+  when there is one, from the exception's type for the codes pyzotero
+  classifies, and from the `Code: NNN` line its message formatter always
+  writes — the last being the only signal for a 5xx, which has no
+  dedicated class and which the attachment-upload retry has to tell
+  apart from a 404.
+
+  Found by the live local-write round trip rather than by a mock: the
+  assertion that a stale-version PATCH raises an httpx error is what
+  failed. A mock would have kept asserting our idea of pyzotero's
+  behaviour instead of pyzotero's.
+
 ## [0.21.1] — 2026-09-04
 
 Zotero 10.0.1 / Better BibTeX 9.0.63 compatibility. Everything the

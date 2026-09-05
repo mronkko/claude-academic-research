@@ -433,7 +433,7 @@ If an item genuinely has no identifier anywhere (grey literature, an
 unpublished working paper), say so explicitly and ask the user how they
 want it recorded, rather than quietly typing it in.
 
-## Local client for reads, remote for writes
+## Which Zotero surface a call uses
 
 `pyzotero.zotero.Zotero(group, "group", key, local=True)` reads from
 `localhost:23119` (Zotero must be running). Much faster than the remote
@@ -441,8 +441,24 @@ API for bulk operations — a library of a few thousand items that would
 time out on `api.zotero.org` returns in milliseconds from the local
 client.
 
-Use the remote API (`api.zotero.org`) for writes: PATCH, new items,
-child notes, tag updates.
+**Writes go local too when `[zotero] local_api_key` is set.** Zotero 10
+accepts writes on the local API once the user grants a key through its
+own consent dialog; `/setup` asks for one. Writing where we already
+read closes a gap that has bitten this pipeline repeatedly — a script
+that wrote through `api.zotero.org` and read back locally saw nothing
+until Zotero Desktop synced, and reported it as "already done".
+
+Without a key, writes go to `api.zotero.org` exactly as before. Two
+operations stay there regardless, and both are deliberate: **file
+uploads** (`attach_pdf` — pyzotero's 3-step S3 handshake has no local
+form here) and **`merge_duplicate_item`** (its trash step is a
+hand-built PATCH needing a header pyzotero only computes privately).
+
+Never mix the two surfaces within one operation. `update_item` sends
+`If-Unmodified-Since-Version`, and local and cloud version counters are
+unrelated, so a version read from one and sent to the other is rejected
+412 every time. `ZoteroClient._write_client()` is the read client for
+anything about to be written back.
 
 ## Citation keys (Better BibTeX)
 

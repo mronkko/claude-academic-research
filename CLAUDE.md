@@ -88,7 +88,7 @@ Two habits that make these prompts cheap to write: keep a `## STATE` section at 
 - Scripts run via `uv run` with PEP 723 inline dependency declarations (no venv, no `requirements.txt`).
 - Secrets live in `~/.config/academic-research/config.toml` (mode 0600) or env vars; env takes precedence.
 - A `permissions.deny` rule blocks the Read tool from the config file so API keys never enter a conversation.
-- Zotero writes go through the Zotero Web API; reads prefer the local HTTP server at `localhost:23119` (Better BibTeX must be enabled in Zotero desktop).
+- Zotero reads prefer the local HTTP server at `localhost:23119` (Better BibTeX must be enabled in Zotero desktop). Writes go there too when `[zotero] local_api_key` is set — Zotero 10 accepts local writes after a one-time consent dialog the `/setup` wizard requests — and fall back to the Web API when it is not. File uploads (`attach_pdf`) and `merge_duplicate_item` stay on the Web API either way; see `zotero_io.py`'s module docstring for why, and for the rule that a read feeding a write must use the write's own surface.
 
 ### Cross-platform notes
 

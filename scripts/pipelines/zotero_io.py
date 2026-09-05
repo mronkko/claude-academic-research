@@ -8,10 +8,37 @@ Design notes:
     - Local pyzotero client for reads (localhost:23119, requires Zotero
       desktop + Better BibTeX). Falls back to the cloud client if the
       local server is unreachable.
-    - Cloud pyzotero client for writes. pyzotero's `attachment_simple`
-      runs the 3-step S3 upload internally, and `update_item` sends
-      `If-Unmodified-Since-Version` automatically, so the custom code
-      that used to live in attach_pdfs.py / fetch_abstracts.py is gone.
+    - Writes go local too when `[zotero] local_api_key` is configured,
+      and to the cloud otherwise. Zotero 10.0.1 accepts local writes
+      after a one-time consent dialog; `/setup` grants the key, because
+      a dialog is not something an unattended `uv run` script can
+      answer. Writing where we read removes the staleness gap that
+      `cloud_journal_articles()` exists to work around — a script that
+      wrote through the Web API and read back locally saw nothing until
+      Desktop synced, and reported it as "already done".
+    - **Whichever surface a write uses, the read that feeds it uses the
+      same one.** `update_item` sends `If-Unmodified-Since-Version`, and
+      local and cloud version counters are unrelated, so a version read
+      from one surface and sent to the other is rejected 412 every time.
+      `_write_client()` is therefore the read client for anything that
+      is about to be written back.
+    - **The surface is chosen by configuration, never by comparing
+      library versions.** A downstream project gated "prefer local" on
+      the local API's `Last-Modified-Version` matching the Web API's.
+      Zotero 9 served the last synced server version there; Zotero 10
+      serves `clientVersion`, a per-transaction local counter unrelated
+      to Web API versions, so the check can never pass. Theirs returned
+      "cannot determine" forever and fell back to the metered surface on
+      every call with nothing said — 46 of 67 live tests skipped on that
+      gate. A reachability probe would fail the same way, so there is
+      none: if a key is configured the local API is used, and if it is
+      down the write raises instead of quietly costing quota.
+    - Uploads (`attach_pdf`) stay on the cloud client regardless.
+      pyzotero's `attachment_simple` / `attachment_both` and the 3-step
+      S3 handshake have no local equivalent (`upload_attachments()` is
+      the local route, unimplemented here). An upload creates a *child*
+      item and never bumps the parent's version, so it does not collide
+      with metadata written locally.
     - tenacity wraps `update_abstract` to retry on version conflicts
       (HTTP 412): we re-fetch the item, re-apply the abstract, and
       re-PATCH.
@@ -54,6 +81,7 @@ except Exception:
     pass
 
 import httpx
+from pyzotero import errors as _pyzotero_errors
 from pyzotero import zotero
 from tenacity import (
     retry,
@@ -71,6 +99,51 @@ logger = logging.getLogger(__name__)
 _RETRYABLE_UPLOAD_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 
+#: Status codes pyzotero gives a dedicated exception class, inverted so
+#: an exception's TYPE yields its status. Built from pyzotero's own map
+#: rather than restated, so a class it adds later is picked up free.
+_PYZOTERO_ERROR_STATUS: dict[type, int] = {
+    cls: code for code, cls in _pyzotero_errors.ERROR_CODES.items()
+}
+
+#: `Code: 503` — the first line of pyzotero's formatted error message.
+_PYZOTERO_CODE_RE = re.compile(r"\bCode:\s*(\d{3})\b")
+
+
+def _http_status_of(exc: BaseException) -> int | None:
+    """The HTTP status behind an exception, across two pyzotero eras.
+
+    Through 1.14, pyzotero let httpx's `HTTPStatusError` out of any
+    non-2xx call and the status was on `.response.status_code`. 1.15
+    raises its own typed errors, which are not httpx subclasses and
+    carry no response at all — so the old `except httpx.HTTPStatusError`
+    matched nothing and every 412 retry here quietly became dead code.
+
+    Three sources, most reliable first: the httpx response if there is
+    one; the exception's type, for the statuses pyzotero classifies; and
+    finally the `Code: NNN` line its message formatter always writes,
+    which is the only signal for a 5xx — those map to the generic
+    `HTTPError` with no class of their own, and the upload retry needs
+    to tell a 503 from a 404.
+    """
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if isinstance(status, int):
+        return status
+
+    for cls, code in _PYZOTERO_ERROR_STATUS.items():
+        if type(exc) is cls:
+            return code
+    if isinstance(exc, _pyzotero_errors.PyZoteroError):
+        for cls, code in _PYZOTERO_ERROR_STATUS.items():
+            if isinstance(exc, cls):
+                return code
+        match = _PYZOTERO_CODE_RE.search(str(exc))
+        if match:
+            return int(match.group(1))
+    return None
+
+
 def _is_retryable_upload_error(exc: BaseException) -> bool:
     """True for transient failures of the 3-step S3 attachment upload.
 
@@ -81,8 +154,9 @@ def _is_retryable_upload_error(exc: BaseException) -> bool:
     Zotero API accepted the request and explicitly reported the file in
     its `failure` bucket, which retrying reproduces verbatim.
     """
-    if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code in _RETRYABLE_UPLOAD_STATUSES
+    status = _http_status_of(exc)
+    if status is not None:
+        return status in _RETRYABLE_UPLOAD_STATUSES
     return isinstance(exc, httpx.TransportError)
 
 
@@ -311,6 +385,15 @@ class ZoteroClient:
         zot.attach_pdf(item_key, "/path/to/file.pdf")
     """
 
+    #: Class-level defaults for the two attributes that decide the write
+    #: surface. Several tests build a client with `__new__` to exercise
+    #: one method against a stub, bypassing `__init__` entirely; without
+    #: these, asking any of them where a write goes raises
+    #: AttributeError. The defaults are the conservative pair — cloud
+    #: writes, which is what a client assembled that way already used.
+    prefer_local: bool = True
+    local_api_key: str | None = None
+
     def __init__(
         self,
         api_key: str,
@@ -318,15 +401,35 @@ class ZoteroClient:
         *,
         library_type: str = "group",
         prefer_local: bool = True,
+        local_api_key: str | None = None,
     ):
         """api_key / group_id — standard Zotero credentials. For a user
-        library pass `library_type="user"` and `group_id=<user_id>`."""
+        library pass `library_type="user"` and `group_id=<user_id>`.
+
+        `local_api_key` is Zotero Desktop's own write key, granted by the
+        user through Zotero's consent dialog and unrelated to the
+        zotero.org `api_key`. Supplying one moves writes onto the local
+        API; leaving it None keeps every existing install on the cloud
+        write path it has always used. The alternate constructors read it
+        from config, so it is explicit here and unit tests that build a
+        client directly get the cloud default without touching config.
+        """
         self.api_key = api_key
         self.group_id = group_id
         self.library_type = library_type
         self.prefer_local = prefer_local
+        self.local_api_key = local_api_key or None
         self._local: zotero.Zotero | None = None
         self._cloud: zotero.Zotero | None = None
+
+    #: Zotero Desktop's own write key, granted once through Zotero's
+    #: consent dialog by `/setup` and stored in config. Unrelated to the
+    #: zotero.org API key. Absent, writes go to the Web API exactly as
+    #: they always have.
+    @staticmethod
+    def _configured_local_api_key() -> str:
+        from core.config_loader import get
+        return get("zotero", "local_api_key", env="ZOTERO_LOCAL_API_KEY")
 
     @classmethod
     def from_config(
@@ -370,6 +473,7 @@ class ZoteroClient:
             api_key=api_key,
             group_id=group_id,
             prefer_local=prefer_local,
+            local_api_key=cls._configured_local_api_key(),
         )
 
     @classmethod
@@ -393,6 +497,7 @@ class ZoteroClient:
             group_id=user_id,
             library_type="user",
             prefer_local=prefer_local,
+            local_api_key=cls._configured_local_api_key(),
         )
 
     @classmethod
@@ -452,6 +557,7 @@ class ZoteroClient:
             group_id=group,
             library_type="group",
             prefer_local=prefer_local,
+            local_api_key=cls._configured_local_api_key(),
         )
 
     # -----------------------------------------------------------------
@@ -466,8 +572,14 @@ class ZoteroClient:
             # only as `users/0` ("the logged-in user") — the cloud
             # user ID gets a 400 locally. Group IDs pass through.
             lib_id = "0" if self.library_type == "user" else self.group_id
+            kwargs: dict = {"local": True}
+            if self.local_api_key:
+                # pyzotero >= 1.15.1 sends this as the `Zotero-API-Key`
+                # header on local writes, and discovers the companion
+                # `Zotero-Server-ID` from a response header itself.
+                kwargs["local_api_key"] = self.local_api_key
             self._local = zotero.Zotero(
-                lib_id, self.library_type, self.api_key, local=True,
+                lib_id, self.library_type, self.api_key, **kwargs,
             )
         return self._local
 
@@ -481,6 +593,30 @@ class ZoteroClient:
 
     def _read_client(self) -> zotero.Zotero:
         return self.local if self.prefer_local else self.cloud
+
+    @property
+    def local_writes_enabled(self) -> bool:
+        """Whether writes go to Zotero Desktop rather than api.zotero.org.
+
+        Two conditions, both configuration — deliberately no network
+        probe. `--remote` (which clears `prefer_local`) is an explicit
+        statement that the desktop client cannot be trusted for this run,
+        and honouring it for reads while writing locally would split one
+        run across two surfaces.
+        """
+        return bool(self.prefer_local and self.local_api_key)
+
+    def _write_client(self) -> zotero.Zotero:
+        """The surface writes go to — and reads that feed them.
+
+        See the module docstring: a version read from one surface cannot
+        be sent to the other.
+        """
+        return self.local if self.local_writes_enabled else self.cloud
+
+    def _upload_client(self) -> zotero.Zotero:
+        """File uploads, which have no local implementation here."""
+        return self.cloud
 
     # -----------------------------------------------------------------
     # Reads
@@ -601,12 +737,12 @@ class ZoteroClient:
         Anything already shaped like a key is returned untouched, so the
         common path costs no extra request.
 
-        Resolution reads through `z` — the caller's read client — rather
-        than `self.cloud`. `find_collection` deliberately uses the cloud,
-        because it serves the write path and has to see a collection this
-        pipeline just created; this one only reads, and routing it through
-        the cloud would give a local run a credential requirement it did
-        not have before.
+        Resolution reads through `z` — the caller's read client —
+        rather than the write client. `find_collection` deliberately uses
+        the write client, because it serves the write path and has to see
+        a collection this pipeline just created; this one only reads, and
+        routing it through the write surface would give a local run a
+        credential requirement it did not have before.
         """
         wanted = (collection or "").strip()
         if not wanted:
@@ -735,7 +871,7 @@ class ZoteroClient:
 
     def get_item(self, item_key: str) -> dict:
         """Fetch a single item's current payload (used for version refresh)."""
-        return self.cloud.item(item_key)
+        return self._write_client().item(item_key)
 
     def api_base_url(self) -> str:
         """Zotero REST API prefix for this library.
@@ -834,7 +970,8 @@ class ZoteroClient:
         return (data or {}).get("data", {}).get("name")
 
     # -----------------------------------------------------------------
-    # Writes (cloud client; pyzotero handles the 3-step S3 upload and
+    # Writes (`_write_client()` — local when a local API key is
+    # configured, else cloud; pyzotero handles the 3-step S3 upload and
     # If-Unmodified-Since-Version headers).
     # -----------------------------------------------------------------
 
@@ -849,8 +986,9 @@ class ZoteroClient:
         re-fetching the item's latest version.
 
         Returns True on success. Raises on non-retryable errors —
-        pyzotero's `@backoff_check` decorator on `update_item` already
-        raises `httpx.HTTPStatusError` on any non-2xx.
+        pyzotero raises on any non-2xx, as `httpx.HTTPStatusError`
+        through 1.14 and as its own typed errors from 1.15; both are
+        read by `_http_status_of`.
         """
         current = self.get_item(item_key)
         payload = {
@@ -859,9 +997,12 @@ class ZoteroClient:
             "abstractNote": abstract,
         }
         try:
-            return bool(self.cloud.update_item(payload))
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 412:
+            return bool(self._write_client().update_item(payload))
+        except Exception as exc:
+            # pyzotero >= 1.15 raises its own typed errors, which are
+            # not httpx subclasses and carry no response; see
+            # `_http_status_of`.
+            if _http_status_of(exc) == 412:
                 raise VersionConflictError(
                     f"{item_key}: version {current['version']} was stale"
                 ) from exc
@@ -931,9 +1072,12 @@ class ZoteroClient:
             "tags": [{"tag": t} for t in sorted(target)],
         }
         try:
-            self.cloud.update_item(payload)
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 412:
+            self._write_client().update_item(payload)
+        except Exception as exc:
+            # pyzotero >= 1.15 raises its own typed errors, which are
+            # not httpx subclasses and carry no response; see
+            # `_http_status_of`.
+            if _http_status_of(exc) == 412:
                 raise VersionConflictError(
                     f"{item_key}: version {current['version']} was stale "
                     f"during tag update"
@@ -990,7 +1134,7 @@ class ZoteroClient:
             chunk = updates[i:i + batch_size]
             keys = [k for k, _ in chunk]
             # One bulk fetch per batch: `items` filtered by itemKey.
-            fetched = self.cloud.items(itemKey=",".join(keys))
+            fetched = self._write_client().items(itemKey=",".join(keys))
             fetched_by_key = {it.get("key"): it for it in fetched}
 
             payloads: list[dict] = []
@@ -1033,11 +1177,11 @@ class ZoteroClient:
             if not payloads:
                 continue
 
-            if not hasattr(self.cloud, "update_items"):
+            if not hasattr(self._write_client(), "update_items"):
                 # Fallback for older pyzotero without multi-item PATCH.
                 for p in payloads:
                     try:
-                        self.cloud.update_item(p)
+                        self._write_client().update_item(p)
                         stats["applied"] += 1
                     except Exception:  # noqa: BLE001
                         stats["failed"] += 1
@@ -1051,7 +1195,7 @@ class ZoteroClient:
             # on the actual runtime type rather than assuming one
             # shape — a bare `.get()` on a bool blows up with
             # AttributeError mid-batch.
-            resp = self.cloud.update_items(payloads)
+            resp = self._write_client().update_items(payloads)
             if isinstance(resp, dict):
                 stats["applied"] += len(resp.get("success") or {})
                 stats["unchanged"] += len(resp.get("unchanged") or {})
@@ -1129,7 +1273,7 @@ class ZoteroClient:
 
         # Find existing note with the marker.
         existing: dict | None = None
-        for child in self.cloud.children(parent_key):
+        for child in self._write_client().children(parent_key):
             data = child.get("data", {})
             if data.get("itemType") != "note":
                 continue
@@ -1147,7 +1291,7 @@ class ZoteroClient:
                 "collections": [],
                 "relations": {},
             }
-            resp = self.cloud.create_items([payload])
+            resp = self._write_client().create_items([payload])
             # pyzotero returns a dict with 'success' / 'failed' keys.
             success = resp.get("success") or resp.get("successful") or {}
             if isinstance(success, dict):
@@ -1173,9 +1317,12 @@ class ZoteroClient:
             "note": note_html,
         }
         try:
-            self.cloud.update_item(payload)
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 412:
+            self._write_client().update_item(payload)
+        except Exception as exc:
+            # pyzotero >= 1.15 raises its own typed errors, which are
+            # not httpx subclasses and carry no response; see
+            # `_http_status_of`.
+            if _http_status_of(exc) == 412:
                 raise VersionConflictError(
                     f"{note_key}: version {note_version} was stale during "
                     f"child-note upsert"
@@ -1262,7 +1409,7 @@ class ZoteroClient:
         template["title"] = path.name
         template["filename"] = path.name
         result = Zupload(
-            self.cloud, [template], item_key, basedir=path.parent,
+            self._upload_client(), [template], item_key, basedir=path.parent,
         ).upload()
 
         # `unchanged` is NOT a no-op, and reading it as one misreports the
@@ -1309,7 +1456,7 @@ class ZoteroClient:
         handles the If-Unmodified-Since-Version header and raises on
         non-2xx (via `@backoff_check`).
         """
-        return bool(self.cloud.update_item(payload))
+        return bool(self._write_client().update_item(payload))
 
     def create_collection(
         self, name: str, *, parent_collection: str = "",
@@ -1323,7 +1470,7 @@ class ZoteroClient:
         hand-created group.
         """
         payload = [{"name": name, "parentCollection": parent_collection}]
-        resp = self.cloud.create_collections(payload)
+        resp = self._write_client().create_collections(payload)
         success = resp.get("success") or resp.get("successful") or {}
         if isinstance(success, dict) and success:
             first = next(iter(success.values()))
@@ -1364,7 +1511,7 @@ class ZoteroClient:
         wanted = (name_or_key or "").strip()
         if not wanted:
             return "", ""
-        collections = self.cloud.everything(self.cloud.collections())
+        collections = self._write_client().everything(self._write_client().collections())
         by_key = {c.get("key", ""): c for c in collections}
         if self._COLLECTION_KEY_RE.match(wanted) and wanted in by_key:
             return wanted, "key"
@@ -1398,11 +1545,11 @@ class ZoteroClient:
         pattern for the If-Unmodified-Since-Version header.
         """
         try:
-            current = self.cloud.collection(collection_key)
+            current = self._write_client().collection(collection_key)
         except Exception:
             return False
         return bool(
-            self.cloud.delete_collection(
+            self._write_client().delete_collection(
                 current, last_modified=current["version"],
             )
         )
@@ -1418,7 +1565,7 @@ class ZoteroClient:
         except Exception:
             return False
         return bool(
-            self.cloud.delete_item(current, last_modified=current["version"])
+            self._write_client().delete_item(current, last_modified=current["version"])
         )
 
     # -----------------------------------------------------------------
@@ -1556,7 +1703,7 @@ class ZoteroClient:
     #: Connector-saved duplicate whose PDF the operator had opened.
     _UNWRITABLE_FIELDS = frozenset({"lastRead"})
 
-    def _safe_update_item(self, item: dict) -> None:
+    def _safe_update_item(self, item: dict, client=None) -> None:
         """`update_item` with server-only fields stripped.
 
         Two layers, because the denylist above is a snapshot and Zotero
@@ -1566,11 +1713,12 @@ class ZoteroClient:
         that do not exist yet without silently discarding anything the
         API would have accepted.
         """
+        client = client if client is not None else self._write_client()
         data = item.get("data", item)
         for field in self._UNWRITABLE_FIELDS:
             data.pop(field, None)
         try:
-            self.cloud.update_item(item)
+            client.update_item(item)
             return
         except Exception as e:
             if type(e).__name__ != "InvalidItemFieldsError":
@@ -1587,7 +1735,7 @@ class ZoteroClient:
             )
             for field in names:
                 data.pop(field, None)
-            self.cloud.update_item(item)
+            client.update_item(item)
 
     def merge_duplicate_item(
         self,
@@ -1620,9 +1768,25 @@ class ZoteroClient:
         Safety guard: refuses to merge when the two items carry
         different non-empty DOIs, since a mismatched merge permanently
         entangles two separate papers' metadata. Raises ValueError.
+
+        **Pinned to the cloud surface, unlike every other write here.**
+        Two reasons, and they reinforce each other. The trash step is a
+        hand-built PATCH rather than a pyzotero call, and its local form
+        needs the `Zotero-Server-ID` header that pyzotero only computes
+        behind a private method — so that one step could not follow the
+        others across, and a merge split over two surfaces would 412 on
+        the version it carries between them. Independently, the only
+        caller already waits for the Connector's freshly-saved item to
+        reach the cloud (`_wait_for_cloud_sync` in
+        `fetchers/browser/connector.py`) precisely because this runs
+        there. Reads inside therefore use `self.cloud` directly rather
+        than `get_item`, which now follows the write surface.
+
+        Once the trash step has a local form, this and that 30-second
+        sync wait can go local together — not before.
         """
-        target = self.get_item(target_key)
-        duplicate = self.get_item(duplicate_key)
+        target = self.cloud.item(target_key)
+        duplicate = self.cloud.item(duplicate_key)
 
         target_data = target.get("data", {})
         dup_data = duplicate.get("data", {})
@@ -1647,8 +1811,8 @@ class ZoteroClient:
             target_data["tags"] = [
                 {"tag": t} for t in sorted(existing_tags | new_tags)
             ]
-            self._safe_update_item(target)
-            target = self.get_item(target_key)          # refresh version
+            self._safe_update_item(target, self.cloud)
+            target = self.cloud.item(target_key)          # refresh version
 
         # Step 2: collection union.
         existing_collections = set(target.get("data", {}).get("collections", []))
@@ -1656,7 +1820,7 @@ class ZoteroClient:
         new_collections = dup_collections - existing_collections
         for coll_key in new_collections:
             self.cloud.addto_collection(coll_key, target)
-            target = self.get_item(target_key)          # refresh version
+            target = self.cloud.item(target_key)          # refresh version
 
         # Step 3: re-parent children, skipping duplicate attachments.
         keeper_sigs = {
@@ -1686,7 +1850,7 @@ class ZoteroClient:
                     skipped_dupes.append(child_key)
                     continue
             fd["parentItem"] = target_key
-            self._safe_update_item(fresh)
+            self._safe_update_item(fresh, self.cloud)
             moved.append(child_key)
 
         # Step 4: trash the duplicate with PATCH {"deleted": 1}.
@@ -1695,7 +1859,7 @@ class ZoteroClient:
         trashed: list[str] = []
         try:
             from pyzotero.zotero import build_url
-            latest = self.get_item(duplicate_key)
+            latest = self.cloud.item(duplicate_key)
             url = build_url(
                 self.cloud.endpoint,
                 f"/{self.cloud.library_type}/{self.cloud.library_id}"

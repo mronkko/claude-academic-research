@@ -2252,6 +2252,137 @@ def _print_zotero_local_help() -> None:
     print("  3. Leave Zotero running; re-run this wizard to confirm.")
 
 
+def _zotero_local_server_id(timeout: int = 5) -> str:
+    """The `Zotero-Server-ID` every local API write must carry.
+
+    Served as a response header on `/api/` — with the trailing slash;
+    the bare `/api` path 404s. Returns "" when the header is absent,
+    which is how a Zotero too old for local writes presents itself.
+    """
+    req = urllib.request.Request(ZOTERO_LOCAL_URL, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.headers.get("Zotero-Server-ID", "") or ""
+    except Exception:
+        return ""
+
+
+def _authorize_zotero_local(
+    app_name: str = "academic-research", timeout: int = 120,
+) -> tuple[str, str, str]:
+    """Ask Zotero for a local API write key. Returns (status, key, message).
+
+    Zotero shows a modal with Allow / Always Allow / Deny. Only "Always
+    Allow" comes back with `remember: true`, and only that kind of key
+    is worth storing: a one-time key is spent by the first write, after
+    which every later write fails. So a `remember: false` answer is
+    reported as declined rather than saved — storing it would leave the
+    user with a config entry that works exactly once.
+
+    The default timeout is generous because the dialog waits for a human.
+    Zotero rate-limits this endpoint, so it is never retried here.
+    """
+    server_id = _zotero_local_server_id()
+    if not server_id:
+        return (
+            "unsupported", "",
+            "this Zotero does not serve a Zotero-Server-ID header",
+        )
+    req = urllib.request.Request(
+        ZOTERO_LOCAL_URL + "local/authorize",
+        data=json.dumps({"appName": app_name}).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Zotero-Server-ID": server_id,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            return "denied", "", "you chose Deny in Zotero"
+        if e.code == 429:
+            return (
+                "rate_limited", "",
+                "Zotero rate-limited the request; try again in a minute",
+            )
+        return "error", "", f"HTTP {e.code}"
+    except Exception as e:
+        return "error", "", str(e)[:120]
+
+    key = (payload.get("key") or "").strip()
+    if not key:
+        return "error", "", "Zotero returned no key"
+    if not payload.get("remember"):
+        return (
+            "once_only", "",
+            "you chose Allow (one-time). A stored key must be 'Always Allow'",
+        )
+    return "ok", key, "granted"
+
+
+def _prompt_zotero_local_writes(interactive: bool, existing: dict) -> dict[str, object]:
+    """Return `{local_api_key: str}` to merge into `[zotero]`.
+
+    Zotero 10 accepts writes on its local API once the user grants a key
+    through Zotero's own consent dialog. With one stored, the pipeline
+    writes where it already reads, which closes the staleness gap that
+    has caused a run to write an item through the Web API, read it back
+    locally, see nothing because Desktop had not synced, and report it
+    as "already done".
+
+    Asked here and nowhere else. The grant is a modal dialog, and a
+    pipeline script running unattended in a background lane has no way
+    to answer one; Zotero also rate-limits the endpoint, so it must not
+    sit in anything that retries.
+    """
+    current = (existing.get("zotero", {}) or {}).get("local_api_key")
+    if not interactive:
+        # A non-interactive re-run must not drop a key the user granted.
+        return {"local_api_key": current} if current else {}
+    if current:
+        print("\n  Zotero local writes: already authorized (key on file).")
+        answer = input("    Request a new key? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            return {"local_api_key": current}
+
+    status, _ = _check_zotero_local()
+    if status != ZOTERO_LOCAL_STATUS_OK:
+        print("\n  Zotero local writes: skipped — local API not reachable.")
+        return {"local_api_key": current} if current else {}
+
+    print("\n  Zotero local writes (recommended):")
+    print(_wrap_body(
+        "The pipeline reads from Zotero on your own machine but writes "
+        "through zotero.org, and Zotero Desktop only learns about those "
+        "writes at its next sync. A script that writes and reads back can "
+        "therefore see nothing and report it as already done. Zotero 10 "
+        "can accept the writes directly, which removes that gap and the "
+        "rate limit with it.",
+        indent=4,
+    ))
+    print(
+        "    Zotero will show a permission dialog. Choose "
+        "'Always Allow' —\n"
+        "    'Allow' grants a key good for a single write, which cannot "
+        "be stored.",
+    )
+    answer = input("    Request local write access now? [Y/n] ").strip().lower()
+    if answer in ("n", "no"):
+        return {"local_api_key": current} if current else {}
+
+    print("    Waiting for you to answer the dialog in Zotero…", flush=True)
+    grant_status, key, message = _authorize_zotero_local()
+    if grant_status == "ok":
+        print("    ✓ Local writes authorized.")
+        return {"local_api_key": key}
+    print(f"    ○ Not authorized — {message}.")
+    print("      Writes will keep going through zotero.org, as before.")
+    return {"local_api_key": current} if current else {}
+
+
 def _check_zotero_bbt(timeout: int = 3) -> tuple[str, str]:
     """Probe the Better BibTeX JSON-RPC endpoint.
 
@@ -2759,6 +2890,12 @@ def main() -> int:
     )
     if paid_openalex_entry:
         values.setdefault("openalex", {}).update(paid_openalex_entry)
+
+    # Merge-not-assign: `[zotero]` already carries api_key / user_id
+    # from _collect_keys.
+    local_writes_entry = _prompt_zotero_local_writes(interactive, existing_cfg)
+    if local_writes_entry:
+        values.setdefault("zotero", {}).update(local_writes_entry)
 
     cluster_entry = _prompt_cluster_automation(interactive, existing_cfg)
     if cluster_entry:

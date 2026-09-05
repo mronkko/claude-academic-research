@@ -21,7 +21,7 @@ dev = [
     # These three arrive transitively via zotero-mcp-server today. Declared
     # explicitly so the suite does not silently depend on that package's
     # dependency choices.
-    "pyzotero>=1.6",
+    "pyzotero>=1.15.1",
     "httpx>=0.25",
     "requests>=2.31",
     # `core/llm_provider.py` imports openai lazily for the four

@@ -184,7 +184,8 @@ RULE in [skills/zotero-operations/SKILL.md](../zotero-operations/SKILL.md).
 takes it. Reads default to Zotero Desktop's local server because it is
 far faster, which is the wrong default in two situations: no Zotero
 Desktop is running (headless, CI, a container), or Desktop has not yet
-synced items this pipeline just wrote through the Web API. In either
+synced items this pipeline wrote through the Web API (which is what
+writes use when no `[zotero] local_api_key` is configured). In either
 case the local client answers "no items" without an error, which reads
 as "nothing to do". If Zotero Desktop is not open on this machine, pass
 `--remote` on **every** stage, not just the one that failed.

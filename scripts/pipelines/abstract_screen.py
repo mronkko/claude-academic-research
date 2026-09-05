@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "anthropic>=0.40",
-#     "pyzotero>=1.6",
+#     "pyzotero>=1.15.1",
 #     "tenacity>=8.0",
 #     "httpx>=0.25",
 #     "google-genai",
