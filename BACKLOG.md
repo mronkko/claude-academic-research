@@ -28,8 +28,11 @@ Filed by that project's user via its session after the 0.22.0 / 0.23.0
 local-write work. Each was checked against the code here before being
 recorded: three are confirmed against the code, the fourth is a
 plausible request not yet investigated, and a fifth was rejected as
-already fixed. **Verify before promoting** — this source has a track
-record of reports that a later release had already closed.
+already fixed. **Verify before promoting.** Reports reaching this repo
+have more than once described behaviour a later release had closed —
+not because the sender was careless, but because an item can travel
+between one project's todo lists without anyone re-checking it against
+the installed version on the way.
 
 1. **Zotero Connector cannot create an item, only merge into one — and
    its queue and cache are DOI-keyed.** `ZoteroConnectorHandler` saves
@@ -110,9 +113,14 @@ docstring recording the exact failure being described ("one real library
 had 229 duplicate-DOI groups, ~298 extra items"), and `_process_group`
 gives every copy its own write and its own log row — only the lookup is
 shared. The same downstream session had itself withdrawn this item a day
-earlier as already fixed, then re-filed it. If their user still sees it,
-they are running a pre-fix install; the answer is an upgrade, not a
-change here.
+earlier as already fixed, then re-filed it.
+
+*Cause, confirmed by the sender afterwards:* not a stale install. The
+line was moved out of a stale "blocked on human" section into their
+user's list on 2026-09-06 and was never re-checked against the running
+version on the way. Worth remembering when weighing any report from a
+project that curates lists by moving lines between them — the move
+looks like triage and carries none of it.
 
 ---
 
