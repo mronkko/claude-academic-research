@@ -22,6 +22,100 @@ directory — not checked in because it references machine-local paths).
 
 ---
 
+## Open — four reports from the AI-literature-review study (2026-09-06)
+
+Filed by that project's user via its session after the 0.22.0 / 0.23.0
+local-write work. Each was checked against the code here before being
+recorded: three are confirmed against the code, the fourth is a
+plausible request not yet investigated, and a fifth was rejected as
+already fixed. **Verify before promoting** — this source has a track
+record of reports that a later release had already closed.
+
+1. **Zotero Connector cannot create an item, only merge into one — and
+   its queue and cache are DOI-keyed.** `ZoteroConnectorHandler` saves
+   through the extension's translators, then calls
+   `merge_duplicate_item(item["item_key"], new_key)` to move children
+   into an incumbent and trash the new parent. A row with no existing
+   item has nothing to merge into, so the item we actually wanted is
+   what gets trashed. Separately, sibling handlers open with
+   `doi = item["doi"]` and `cache_path_for(cache_dir, doi)`, and
+   `retrieve_pdfs` builds work items from accepted-DOI rows, so a
+   DOI-less row never enters the browser queue at all.
+
+   *Status:* CONFIRMED against `fetchers/browser/connector.py`.
+   Blocks 61 analyzable coded rows downstream. Not urgent per the
+   filer. Note the measured Connector save rate is poor — their
+   `connector_save_failures.csv` records 959 distinct DOIs, of which
+   only 47 (4.9 %) were later attached by any source — so a create path
+   may not buy much; size it before building it.
+
+   *Files:* `scripts/pipelines/fetchers/browser/connector.py`,
+   `scripts/pipelines/zotero_io.py` (`merge_duplicate_item`).
+
+2. **`lookup_fulltext_target()` requires a DOI, so a DOI-less work gets
+   no resolver query.** The DOI is a required positional and the cache
+   keys off it. OpenURL 1.0 supports a metadata-only query
+   (`rft.atitle`, `rft.jtitle`, `rft.issn`, `rft.date`, `rft.volume`,
+   `rft.spage`) and both SFX and Alma accept it, so the capability is in
+   the standard and missing only from the caller. The signature already
+   takes `issn` / `pub_date` / `volume`, so the parameters are half
+   there.
+
+   *Status:* CONFIRMED against `fetchers/library_resolver.py:595`.
+   Affects 59 DOI-less rows with no direct OA `pdf_url` downstream.
+   Expect poor yield even so — that set is law reviews, repository
+   items and practitioner pieces, which link resolvers serve badly.
+
+   *Files:* `scripts/pipelines/fetchers/library_resolver.py`.
+
+3. **A list-valued `openurl_base` silently ignores
+   `LIBRARY_OPENURL_BASE`, and the resolver cache key is
+   position-derived.** Two real defects in one place.
+
+   `_config_from_toml` reads `load_config()` directly when the value is
+   a list and sets `override = ""`, so neither `LIBRARY_OPENURL_BASE`
+   nor `LIBRARY_RESOLVER` is consulted — the documented env override
+   just stops working, with nothing said. And `_query_targets` /
+   `cache_keys_for` derive `resolver_id = "" if index == 0 else
+   resolver.openurl_base`, so the FIRST resolver's entries are keyed
+   with an empty id. Re-order the list, or narrow it to a different
+   single institution, and the new first entry inherits the previous
+   one's cached targets — one institution's entitlements served as
+   another's, silently.
+
+   *Status:* CONFIRMED against `library_resolver.py:334-345` and
+   `:460, :785`. Worked around downstream with a per-library
+   `--resolver-cache-dir`. Fix shape: key every resolver by its own
+   `openurl_base` (accepting a one-time cache miss), and make the list
+   branch honour the env override or say why it cannot.
+
+   *Files:* `scripts/pipelines/fetchers/library_resolver.py`.
+
+4. **Fall back to Crossref's `link` field when a landing page 404s or
+   exposes no PDF anchor.** Feature request, from the Cambridge handler
+   case. Crossref often carries a direct full-text URL that the
+   landing-page scrape never sees. Cheap to try in the cascade before
+   giving up.
+
+   *Status:* Not yet investigated. Plausible and low-risk.
+
+   *Files:* `scripts/pipelines/fetchers/` (cascade order),
+   `scripts/pipelines/fetchers/crossref.py`.
+
+**Filed and rejected as already fixed:** *"`enrich_abstracts.py`
+de-duplicates by DOI and permanently skips duplicate items, leaving the
+second copy of each pair without an abstract."* Not true of any current
+version. `_already_done()` keys on the **item key**, not the DOI, with a
+docstring recording the exact failure being described ("one real library
+had 229 duplicate-DOI groups, ~298 extra items"), and `_process_group`
+gives every copy its own write and its own log row — only the lookup is
+shared. The same downstream session had itself withdrawn this item a day
+earlier as already fixed, then re-filed it. If their user still sees it,
+they are running a pre-fix install; the answer is an upgrade, not a
+change here.
+
+---
+
 ## Open — two upstream fixes for `mronkko/zotero-mcp` (2026-08-20)
 
 Both found by adopting `zotero_mcp.citation_import.csl_json_to_zotero`
