@@ -31,7 +31,20 @@ and no interactive step — EBSCO authenticates on institutional IP:
 
 The results page is a dead end for a plain HTTP client: no `pdf` string,
 no article link, `__NEXT_DATA__` only. That is why the API cascade cannot
-do this and a browser must. Once the viewer loads, two requests carry the
+do this and a browser must.
+
+That `openurl?...` hop has a second shape, and describing it only as a
+results page is what hid a whole failure class until 2026-09-11: when the
+OpenURL matches **more than one** record, EBSCO does not redirect at all.
+It serves a chooser — "Multiple items found / Select an item to continue"
+— listing each record as `/<recordId>/detailv2?…` with the OpenURL's own
+parameters, the DOI among them. Its path is `/openurl`, so
+`is_search_landing` never matched it and the identifier re-query never
+ran; the item failed as "never reached the viewer". `is_openurl_chooser`
+and `chooser_candidates` handle it by opening the records whose href
+carries the queried DOI. Measured on `10.5465/amj.2022.0253`, where two
+records (189318373 and 175563540) differ only in title casing and both
+redirect to the same viewer. Once the viewer loads, two requests carry the
 file:
 
     research.ebsco.com/api/researcher-edge-aggregator/v1/records/
@@ -55,7 +68,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-from urllib.parse import parse_qs, quote, urlparse, urlunparse
+from collections.abc import Sequence
+from urllib.parse import parse_qs, quote, urljoin, urlparse, urlunparse
+
+import doi_utils
 
 from fetchers import _pdf_validate
 from fetchers.doi_url import doi_path
@@ -137,6 +153,21 @@ VERDICT_UNKNOWN = ""
 #: own, so without this the book would have been fetched and attached to
 #: the article's Zotero item, with nothing downstream able to notice.
 VERDICT_WRONG_RECORD_TYPE = "wrong_record_type"
+#: The OpenURL matched several records, and the DOI in each candidate's own
+#: href established which of them are this article — so the choice was made
+#: on identity, not on rank. Distinct from `VERDICT_AMBIGUOUS`, which is the
+#: refusal when no href carries the queried DOI.
+VERDICT_CHOOSER_DISAMBIGUATED = "chooser_disambiguated"
+
+#: Path of EBSCO's OpenURL layer. The chooser lives here — and so does the
+#: ordinary case where the OpenURL matches one record and self-redirects to
+#: the viewer, which is why arriving here only means something once no PDF
+#: has been seen.
+_CHOOSER_PATH = "/openurl"
+
+#: A chooser entry. Each is `/<recordId>/detailv2?…` carrying the OpenURL's
+#: own parameters, the DOI among them — which is what makes choosing safe.
+_CANDIDATE_SELECTOR = "a[href*='/detailv2']"
 
 #: Text EBSCO puts on a record page to say the item is a book. Matched
 #: case-insensitively against the visible text. Kept narrow on purpose:
@@ -154,6 +185,48 @@ def is_search_landing(url: str) -> bool:
     """True when the page we stopped on is one the re-query starts from."""
     low = (url or "").lower()
     return any(m in low for m in _SEARCH_LANDING_MARKERS)
+
+
+def is_openurl_chooser(url: str) -> bool:
+    """True when we stopped on EBSCO's OpenURL layer rather than a search
+    page or the viewer.
+
+    Host *and* path are both checked. `/openurl` is a generic OpenURL
+    route that other resolvers serve too — `sfx.finna.fi/openurl` among
+    them — and the candidates this unlocks are only safe to open because
+    they are EBSCO's own records.
+    """
+    parsed = urlparse(url or "")
+    if "ebsco" not in (parsed.hostname or "").lower():
+        return False
+    return parsed.path.rstrip("/").lower().endswith(_CHOOSER_PATH)
+
+
+def chooser_candidates(hrefs: Sequence[str], doi: str) -> list[str]:
+    """Chooser entries whose own href carries `doi`, in page order.
+
+    This is the whole reason the chooser can be acted on at all. EBSCO
+    indexes the same article more than once — one live case had it
+    title-cased in one record and ALL-CAPS in another, both 67(1):126 of
+    the same journal — and a reader is asked to pick. Picking by *rank*
+    is the mistake `VERDICT_AMBIGUOUS` exists to prevent; picking by the
+    DOI already present in each href is not a guess at all.
+
+    Uses the **strict** `doi_utils` key on both sides: an unparseable DOI
+    yields `""`, which must never match another unparseable one, so a
+    malformed identifier returns no candidates rather than every one.
+    """
+    want = doi_utils.doi_key(doi)
+    if not want:
+        return []
+    out: list[str] = []
+    for href in hrefs:
+        if not href or "/detailv2" not in href:
+            continue
+        got = (parse_qs(urlparse(href).query).get("doi") or [""])[0]
+        if doi_utils.doi_key(got) == want and href not in out:
+            out.append(href)
+    return out
 
 
 def requery_url_for(landing_url: str, doi: str) -> str:
@@ -438,8 +511,13 @@ class EbscoHandler(PublisherHandler):
             )
         if self.last_verdict == VERDICT_AMBIGUOUS:
             return (
-                "DOI search returned more than one record — not guessing "
-                "which is the article"
+                "more than one record matched and none could be tied to "
+                "this DOI — not guessing which is the article"
+            )
+        if self.last_verdict == VERDICT_CHOOSER_DISAMBIGUATED:
+            return (
+                "the OpenURL chooser offered several records; opened the "
+                "one(s) carrying this DOI, but none served a PDF"
             )
         if self.last_verdict == VERDICT_UNIQUE:
             return (
@@ -540,6 +618,57 @@ class EbscoHandler(PublisherHandler):
             return VERDICT_AMBIGUOUS
         return VERDICT_UNIQUE
 
+    async def _candidate_hrefs(self, page) -> list[str]:
+        """Every chooser entry's href, in page order.
+
+        Read as attributes rather than resolved properties: the raw
+        root-relative form is what `chooser_candidates` parses, and it is
+        also what keeps the proxy host out of the comparison.
+        """
+        try:
+            hrefs = await page.eval_on_selector_all(
+                _CANDIDATE_SELECTOR,
+                "els => els.map(e => e.getAttribute('href'))",
+            )
+        except Exception as e:  # noqa: BLE001 — an unreadable page claims nothing
+            self.last_error = str(e)
+            return []
+        return [h for h in (hrefs or []) if h]
+
+    async def _resolve_chooser(self, page, doi: str, pdf_url: list[str]) -> str:
+        """Open the chooser's DOI-matching records until one serves a PDF.
+
+        Every candidate is tried rather than only the first. The records
+        are the same article — EBSCO indexes it more than once — but they
+        are not interchangeable: they can come from different databases,
+        and only one may carry full text. Trying each costs a navigation
+        and risks nothing, because identity was settled by the DOI before
+        any of them was opened.
+
+        `base` is captured **before** the loop. After the first
+        navigation `page.url` is the record, or the viewer on a different
+        host entirely (`research-ebsco-com...` where the chooser was
+        `openurl-ebsco-com...`), so resolving the second href against the
+        live URL would send it to the wrong host — and, through EZproxy,
+        to an unauthenticated one.
+        """
+        candidates = chooser_candidates(await self._candidate_hrefs(page), doi)
+        if not candidates:
+            return VERDICT_AMBIGUOUS
+        base = page.url or ""
+        for href in candidates:
+            try:
+                await page.goto(
+                    urljoin(base, href), wait_until="commit", timeout=30000,
+                )
+            except Exception as e:  # noqa: BLE001 — try the next record
+                self.last_error = str(e)
+                continue
+            await self._await_pdf_url(pdf_url, self.response_timeout_ms)
+            if pdf_url:
+                break
+        return VERDICT_CHOOSER_DISAMBIGUATED
+
     async def _open_only_result(self, page) -> bool:
         """Click the sole result of an identifier query.
 
@@ -620,6 +749,16 @@ class EbscoHandler(PublisherHandler):
                     if await self._open_only_result(page):
                         await self._await_pdf_url(
                             pdf_url, self.response_timeout_ms)
+
+            # EBSCO stopped on its OpenURL layer. When the OpenURL matched
+            # several records it asks the reader to choose, and that page is
+            # neither a search landing (so the re-query above never fires on
+            # it) nor something a URL template can get past — the records
+            # are only nameable by the ids in their own hrefs.
+            if not pdf_url and is_openurl_chooser(page.url or ""):
+                self.last_verdict = await self._resolve_chooser(
+                    page, doi, pdf_url,
+                )
         finally:
             with contextlib.suppress(Exception):
                 page.remove_listener("response", _on_response)
