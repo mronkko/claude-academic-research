@@ -20,6 +20,12 @@ from unittest.mock import MagicMock
 
 import apply_qa_adjudications as apply
 import pytest
+import tag_prefix
+
+#: This review's namespace. QA and adjudication tags are written under it,
+#: so an adjudication sweep here cannot clear a co-resident review's tags.
+NS = tag_prefix.namespace("test-review")
+
 
 # ---------------------------------------------------------------------------
 # load_decisions — validation
@@ -93,19 +99,19 @@ def test_load_decisions_rejects_missing_item_key(tmp_path: Path) -> None:
 def test_build_op_include_adds_adjudicated_include_and_strips_qa() -> None:
     op = apply._build_op({
         "item_key": "A", "verdict": "include", "flip_fulltext": False,
-    })
-    assert op["add"] == ["qa-adjudicated-include"]
-    assert op["remove_prefixed"] == ["qa-"]
+    }, NS)
+    assert op["add"] == [f"{NS}qa-adjudicated-include"]
+    assert op["remove_prefixed"] == [f"{NS}qa-"]
 
 
 def test_build_op_with_flip_fulltext_also_replaces_stage_tag() -> None:
     op = apply._build_op({
         "item_key": "A", "verdict": "include", "flip_fulltext": True,
-    })
-    assert "qa-adjudicated-include" in op["add"]
-    assert "fulltext:include" in op["add"]
-    assert "qa-" in op["remove_prefixed"]
-    assert "fulltext:" in op["remove_prefixed"]
+    }, NS)
+    assert f"{NS}qa-adjudicated-include" in op["add"]
+    assert f"{NS}fulltext:include" in op["add"]
+    assert f"{NS}qa-" in op["remove_prefixed"]
+    assert f"{NS}fulltext:" in op["remove_prefixed"]
 
 
 def test_build_op_borderline_does_not_flip_stage_tag() -> None:
@@ -113,17 +119,17 @@ def test_build_op_borderline_does_not_flip_stage_tag() -> None:
     Borderline doesn't choose a fulltext bucket."""
     op = apply._build_op({
         "item_key": "A", "verdict": "borderline", "flip_fulltext": True,
-    })
-    assert "qa-adjudicated-borderline" in op["add"]
-    assert not any(t.startswith("fulltext:") for t in op["add"])
+    }, NS)
+    assert f"{NS}qa-adjudicated-borderline" in op["add"]
+    assert not any(t.startswith(f"{NS}fulltext:") for t in op["add"])
 
 
 def test_build_op_exclude_with_flip_adds_fulltext_exclude() -> None:
     op = apply._build_op({
         "item_key": "A", "verdict": "exclude", "flip_fulltext": True,
-    })
-    assert "qa-adjudicated-exclude" in op["add"]
-    assert "fulltext:exclude" in op["add"]
+    }, NS)
+    assert f"{NS}qa-adjudicated-exclude" in op["add"]
+    assert f"{NS}fulltext:exclude" in op["add"]
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +156,7 @@ def test_main_dry_run_does_not_call_zotero(tmp_path: Path, monkeypatch, capsys) 
     monkeypatch.setattr(_sys, "argv", [
         "apply_qa_adjudications.py",
         "--user",
+        "--tag-prefix", NS.rstrip("/"),
         "--decisions", str(decisions_path),
         "--dry-run",
     ])
@@ -158,7 +165,7 @@ def test_main_dry_run_does_not_call_zotero(tmp_path: Path, monkeypatch, capsys) 
     captured = capsys.readouterr().out
     assert "[DRY RUN]" in captured
     assert "DRY1" in captured
-    assert "qa-adjudicated-include" in captured
+    assert f"{NS}qa-adjudicated-include" in captured
 
 
 def test_main_dispatches_decisions_via_batch_update_tags(
@@ -190,6 +197,7 @@ def test_main_dispatches_decisions_via_batch_update_tags(
     monkeypatch.setattr(_sys, "argv", [
         "apply_qa_adjudications.py",
         "--user",
+        "--tag-prefix", NS.rstrip("/"),
         "--decisions", str(decisions_path),
         "--log", str(log_path),
     ])
@@ -202,12 +210,12 @@ def test_main_dispatches_decisions_via_batch_update_tags(
     assert keys == ["INC1", "EXC1"]
     # Verify the include op carries the flip-fulltext additions.
     inc_op = updates[0][1]
-    assert "fulltext:include" in inc_op["add"]
-    assert "qa-adjudicated-include" in inc_op["add"]
+    assert f"{NS}fulltext:include" in inc_op["add"]
+    assert f"{NS}qa-adjudicated-include" in inc_op["add"]
     # The exclude op did NOT request flip_fulltext, so no fulltext: tags.
     exc_op = updates[1][1]
-    assert not any(t.startswith("fulltext:") for t in exc_op["add"])
-    assert "qa-adjudicated-exclude" in exc_op["add"]
+    assert not any(t.startswith(f"{NS}fulltext:") for t in exc_op["add"])
+    assert f"{NS}qa-adjudicated-exclude" in exc_op["add"]
     # Apply log was written.
     assert log_path.is_file()
     content = log_path.read_text(encoding="utf-8")
@@ -239,6 +247,7 @@ def test_main_returns_nonzero_when_any_failures(
     monkeypatch.setattr(_sys, "argv", [
         "apply_qa_adjudications.py",
         "--user",
+        "--tag-prefix", NS.rstrip("/"),
         "--decisions", str(decisions_path),
         "--log", str(log_path),
     ])
@@ -281,6 +290,7 @@ def test_main_uses_batch_update_tags_not_raw_pyzotero_add_tags(
     monkeypatch.setattr(_sys, "argv", [
         "apply_qa_adjudications.py",
         "--user",
+        "--tag-prefix", NS.rstrip("/"),
         "--decisions", str(decisions_path),
         "--log", str(log_path),
     ])

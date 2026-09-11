@@ -15,7 +15,15 @@ from unittest.mock import MagicMock
 
 import export_coded_includes as exp
 import pytest
+import tag_prefix
 import zotero_io
+
+#: This review's namespace. The export selects on its tag and reads only
+#: the coding note carrying its marker, so an item coded by another review
+#: in the same library is invisible here.
+NS = tag_prefix.namespace("test-review")
+INCLUDE_TAG = f"{tag_prefix.family(NS, 'fulltext')}include"
+
 
 # ---------------------------------------------------------------------------
 # Helpers — small pure functions.
@@ -122,7 +130,7 @@ def test_row_from_item_merges_bib_and_coding_fields() -> None:
 
 
 def _tagged_item(key: str, *, title: str, bbt: str, year: str,
-                 tag: str = "fulltext:include") -> dict:
+                 tag: str = INCLUDE_TAG) -> dict:
     return {
         "key": key,
         "data": {
@@ -152,7 +160,7 @@ def _slr_coding_note_child(fields: dict[str, str]) -> dict:
         "fields": fields,
     }
     body = (
-        '<h1>SLR Coding</h1>\n<p>…</p>\n'
+        f'{zotero_io.slr_coding_marker(NS)}\n<p>…</p>\n'
         '<!-- SLR_CODING_DATA: ' + json.dumps(payload) + ' -->'
     )
     return {
@@ -197,6 +205,7 @@ def test_main_writes_rows_for_tagged_items(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(sys, "argv", [
         "export_coded_includes.py",
         "--group", "12345",
+        "--tag-prefix", NS.rstrip("/"),
         "--collection", "COLL1",
         "--out", str(out),
     ])
@@ -241,13 +250,14 @@ def test_main_warns_on_missing_slr_coding_note(
     out = tmp_path / "coded.csv"
     monkeypatch.setattr(sys, "argv", [
         "export_coded_includes.py",
-        "--group", "12345", "--collection", "COLL1", "--out", str(out),
+        "--group", "12345", "--tag-prefix", NS.rstrip("/"),
+        "--collection", "COLL1", "--out", str(out),
     ])
 
     rc = exp.main()
     assert rc == 0
     captured = capsys.readouterr().out
-    assert "have no SLR Coding note" in captured
+    assert "note" in captured and "have no" in captured
     # Output still written but contains just the header (no rows).
     with out.open(newline="") as f:
         rows = list(csv.DictReader(f))
@@ -266,7 +276,8 @@ def test_dry_run_writes_nothing(monkeypatch, tmp_path) -> None:
     out = tmp_path / "coded.csv"
     monkeypatch.setattr(sys, "argv", [
         "export_coded_includes.py",
-        "--group", "12345", "--collection", "COLL1", "--out", str(out),
+        "--group", "12345", "--tag-prefix", NS.rstrip("/"),
+        "--collection", "COLL1", "--out", str(out),
         "--dry-run",
     ])
 
@@ -299,7 +310,7 @@ def test_missing_group_arg_exits() -> None:
 def test_parse_slr_coding_note_extracts_json_payload() -> None:
     payload = {"decision": "include", "fields": {"a": "1"}}
     html = (
-        '<h1>SLR Coding</h1>\n<p>…</p>\n'
+        f'{zotero_io.slr_coding_marker(NS)}\n<p>…</p>\n'
         '<!-- SLR_CODING_DATA: ' + json.dumps(payload) + ' -->'
     )
     parsed = zotero_io.parse_slr_coding_note(html)
@@ -307,7 +318,7 @@ def test_parse_slr_coding_note_extracts_json_payload() -> None:
 
 
 def test_parse_slr_coding_note_returns_none_when_absent() -> None:
-    assert zotero_io.parse_slr_coding_note("<h1>SLR Coding</h1>") is None
+    assert zotero_io.parse_slr_coding_note(zotero_io.slr_coding_marker(NS)) is None
 
 
 def test_parse_slr_coding_note_returns_none_when_malformed() -> None:

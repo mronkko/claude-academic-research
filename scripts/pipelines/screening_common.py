@@ -37,6 +37,8 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from types import ModuleType
 
+import tag_prefix
+
 # ---------------------------------------------------------------------------
 # Per-project config modules loaded by path
 # ---------------------------------------------------------------------------
@@ -69,6 +71,26 @@ def load_config_module(
         if not hasattr(mod, attr):
             sys.exit(f"ERROR: {path} is missing `{attr}`.")
     return mod
+
+
+def load_tag_namespace(override: str, config_path: str) -> str:
+    """The review's tag namespace, for a script that wants nothing else
+    from the project config.
+
+    `abstract_screen` / `fulltext_code` load the config anyway and pass the
+    module straight to `tag_prefix.resolve`. The scripts that only need the
+    namespace — importing, exporting, adjudicating, pruning — go through
+    here, so `TAG_PREFIX` has exactly one home rather than a second config
+    file or a mandatory flag on every command.
+
+    A missing config file is not an error when `--tag-prefix` was given:
+    these scripts are also usable outside an SLR project, where there is no
+    `screening_config.py` to read.
+    """
+    mod = None
+    if Path(config_path).is_file():
+        mod = load_config_module(config_path, "screening_config")
+    return tag_prefix.resolve(override, mod, config_path)
 
 
 # ---------------------------------------------------------------------------

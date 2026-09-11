@@ -12,6 +12,12 @@ from dataclasses import dataclass
 import import_to_zotero
 from sources import predatory
 
+#: Every review namespaces the tags it writes; the import stage stamps
+#: search provenance under it. A literal here rather than a fixture so the
+#: prefixed shape is visible in the assertions below.
+NS = "test-review/"
+
+
 
 @dataclass
 class _FakeResult:
@@ -35,10 +41,10 @@ def test_non_predatory_row_does_not_add_predatory_flag(monkeypatch) -> None:
         "query": "motivation",
         "abstract": "",
     }
-    item = import_to_zotero._row_to_zotero_item(row, collection_key="COLL1")
+    item = import_to_zotero._row_to_zotero_item(row, collection_key="COLL1", ns=NS)
 
     tag_values = {t["tag"] for t in item.get("tags", [])}
-    assert "search:motivation" in tag_values
+    assert f"{NS}search:motivation" in tag_values
     assert "predatory:flag" not in tag_values
 
 
@@ -64,12 +70,12 @@ def test_predatory_row_gets_predatory_flag_tag(monkeypatch) -> None:
         "query": "motivation",
         "abstract": "",
     }
-    item = import_to_zotero._row_to_zotero_item(row, collection_key="COLL1")
+    item = import_to_zotero._row_to_zotero_item(row, collection_key="COLL1", ns=NS)
 
     assert item["itemType"] == "journalArticle"
     tag_values = {t["tag"] for t in item.get("tags", [])}
     assert "predatory:flag" in tag_values
-    assert "search:motivation" in tag_values
+    assert f"{NS}search:motivation" in tag_values
 
 
 def test_predatory_check_handles_missing_source_and_issn(monkeypatch) -> None:
@@ -94,7 +100,7 @@ def test_predatory_check_handles_missing_source_and_issn(monkeypatch) -> None:
         "query": "",
         "abstract": "",
     }
-    item = import_to_zotero._row_to_zotero_item(row, collection_key=None)
+    item = import_to_zotero._row_to_zotero_item(row, collection_key=None, ns=NS)
 
     # check_predatory is called with None for both (per the dict.get(...) or None idiom).
     assert called == [(None, None)]

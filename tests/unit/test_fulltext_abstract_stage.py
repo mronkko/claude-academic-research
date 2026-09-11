@@ -28,6 +28,12 @@ bug in the opposite direction.
 from __future__ import annotations
 
 import fulltext_code
+import tag_prefix
+
+#: This review's namespace and the upstream stage prefix read under it.
+NS = tag_prefix.namespace("test-review")
+ABSTRACT = tag_prefix.family(NS, "abstract")
+
 
 
 def _item(key: str, *tags: str) -> dict:
@@ -41,24 +47,24 @@ def _item(key: str, *tags: str) -> dict:
 
 
 def test_abstract_includes_and_borderlines_are_kept() -> None:
-    items = [_item("A", "abstract:include"), _item("B", "abstract:borderline")]
-    kept, report = fulltext_code._abstract_stage_eligible(items)
+    items = [_item("A", f"{ABSTRACT}include"), _item("B", f"{ABSTRACT}borderline")]
+    kept, report = fulltext_code._abstract_stage_eligible(items, ABSTRACT)
     assert [i["key"] for i in kept] == ["A", "B"]
     assert report is not None
 
 
 def test_abstract_excludes_are_dropped() -> None:
     """The 176 items that cost a downstream review a manual workaround."""
-    items = [_item("A", "abstract:include"), _item("X", "abstract:exclude")]
-    kept, _ = fulltext_code._abstract_stage_eligible(items)
+    items = [_item("A", f"{ABSTRACT}include"), _item("X", f"{ABSTRACT}exclude")]
+    kept, _ = fulltext_code._abstract_stage_eligible(items, ABSTRACT)
     assert [i["key"] for i in kept] == ["A"]
 
 
 def test_an_untagged_item_is_dropped_when_the_collection_was_screened() -> None:
     """Screened collection, no abstract verdict on this item: it was never
     judged, so full-text coding is not the place to start."""
-    items = [_item("A", "abstract:include"), _item("U")]
-    kept, _ = fulltext_code._abstract_stage_eligible(items)
+    items = [_item("A", f"{ABSTRACT}include"), _item("U")]
+    kept, _ = fulltext_code._abstract_stage_eligible(items, ABSTRACT)
     assert [i["key"] for i in kept] == ["A"]
 
 
@@ -67,25 +73,27 @@ def test_an_unscreened_collection_is_passed_through_whole() -> None:
     Filtering here would return zero items and read as "nothing to do",
     which is this same bug pointing the other way."""
     items = [_item("A"), _item("B"), _item("C")]
-    kept, report = fulltext_code._abstract_stage_eligible(items)
+    kept, report = fulltext_code._abstract_stage_eligible(items, ABSTRACT)
     assert [i["key"] for i in kept] == ["A", "B", "C"]
     assert report is not None
-    assert "no abstract" in report.lower()
+    # The notice names this review's family, so a user with several
+    # reviews in one library can see which one was not screened.
+    assert f"no {ABSTRACT}*" in report.lower()
 
 
 def test_the_unscreened_notice_names_the_screening_script() -> None:
     """Someone who meant to screen first needs to be told what to run."""
-    _kept, report = fulltext_code._abstract_stage_eligible([_item("A")])
+    _kept, report = fulltext_code._abstract_stage_eligible([_item("A")], ABSTRACT)
     assert "abstract_screen.py" in report
 
 
 def test_the_report_accounts_for_every_item() -> None:
     """The count has to reconcile, because the operator is about to spend
     money against it."""
-    items = [_item("A", "abstract:include"), _item("B", "abstract:borderline"),
-             _item("X", "abstract:exclude"), _item("Y", "abstract:exclude"),
+    items = [_item("A", f"{ABSTRACT}include"), _item("B", f"{ABSTRACT}borderline"),
+             _item("X", f"{ABSTRACT}exclude"), _item("Y", f"{ABSTRACT}exclude"),
              _item("U")]
-    kept, report = fulltext_code._abstract_stage_eligible(items)
+    kept, report = fulltext_code._abstract_stage_eligible(items, ABSTRACT)
     assert len(kept) == 2
     assert "5" in report and "2" in report and "3" in report
 
@@ -94,13 +102,13 @@ def test_a_fulltext_tag_does_not_confer_eligibility() -> None:
     """Resume is a separate question, handled downstream. An item that
     was abstract-excluded and somehow carries a fulltext tag is exactly
     the contamination case — it must not be re-admitted here."""
-    items = [_item("X", "abstract:exclude", "fulltext:include")]
-    kept, _ = fulltext_code._abstract_stage_eligible(items)
+    items = [_item("X", f"{ABSTRACT}exclude", "fulltext:include")]
+    kept, _ = fulltext_code._abstract_stage_eligible(items, ABSTRACT)
     assert kept == []
 
 
 def test_an_empty_collection_reports_rather_than_crashing() -> None:
-    kept, report = fulltext_code._abstract_stage_eligible([])
+    kept, report = fulltext_code._abstract_stage_eligible([], ABSTRACT)
     assert kept == []
     assert report is not None
 
@@ -108,8 +116,8 @@ def test_an_empty_collection_reports_rather_than_crashing() -> None:
 def test_other_abstract_prefixed_tags_do_not_pass() -> None:
     """Only the two documented verdicts admit an item. A hand-added
     `abstract:maybe` is not one of them."""
-    items = [_item("M", "abstract:maybe")]
-    kept, _ = fulltext_code._abstract_stage_eligible(items)
+    items = [_item("M", f"{ABSTRACT}maybe")]
+    kept, _ = fulltext_code._abstract_stage_eligible(items, ABSTRACT)
     assert kept == []
 
 
@@ -117,7 +125,8 @@ def test_the_documented_verdicts_are_the_ones_implemented() -> None:
     """Guard on the constant itself: the skill's tag table names exactly
     these two as proceeding to full text."""
     assert fulltext_code.ABSTRACT_PASS_VALUES == ("include", "borderline")
-    assert fulltext_code.ABSTRACT_TAG_PREFIX == "abstract:"
+    assert fulltext_code.ABSTRACT_TAG_SUFFIX == "abstract:"
+    assert fulltext_code.ABSTRACT_TAG_FAMILY == "abstract"
 
 
 # ---------------------------------------------------------------------------

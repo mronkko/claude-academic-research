@@ -1,5 +1,10 @@
 """Unit tests for fulltext_code._merge_fields_into_payload."""
+import tag_prefix
 from fulltext_code import _items_for_update_mode, _merge_fields_into_payload
+
+NS = tag_prefix.namespace("test-review")
+FULLTEXT = tag_prefix.family(NS, "fulltext")
+
 
 
 def _make_payload(fields: dict, decision: str = "include") -> dict:
@@ -70,21 +75,21 @@ def _make_item(key: str, tags: list) -> dict:
 
 def test_update_mode_selects_fulltext_include():
     items = [
-        _make_item("A", ["fulltext:include"]),
-        _make_item("B", ["fulltext:exclude"]),
+        _make_item("A", [f"{FULLTEXT}include"]),
+        _make_item("B", [f"{FULLTEXT}exclude"]),
         _make_item("C", []),
-        _make_item("D", ["fulltext:include", "abstract:include"]),
+        _make_item("D", [f"{FULLTEXT}include", f"{NS}abstract:include"]),
     ]
-    result = _items_for_update_mode(items, only_keys=None)
+    result = _items_for_update_mode(items, None, FULLTEXT)
     assert {it["key"] for it in result} == {"A", "D"}
 
 
 def test_update_mode_respects_only_keys():
     items = [
-        _make_item("A", ["fulltext:include"]),
-        _make_item("B", ["fulltext:include"]),
+        _make_item("A", [f"{FULLTEXT}include"]),
+        _make_item("B", [f"{FULLTEXT}include"]),
     ]
-    result = _items_for_update_mode(items, only_keys={"A"})
+    result = _items_for_update_mode(items, {"A"}, FULLTEXT)
     assert [it["key"] for it in result] == ["A"]
 
 

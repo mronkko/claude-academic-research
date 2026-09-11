@@ -70,22 +70,28 @@ SCRIPTS_ROOT = SCRIPT_DIR.parent
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
+import screening_common  # noqa: E402
+import tag_prefix  # noqa: E402
 import zotero_io  # noqa: E402
 
 VALID_VERDICTS = ("include", "exclude", "borderline")
 
-# Tag prefix used for the permanent adjudication record tags. Mirrors
-# the `qa-adjudicated-*` convention documented in
+# Family suffixes for the tags this script writes. Each is prepended with
+# the review's namespace at runtime (`agentic-ai/` + `qa-adjudicated-`), so
+# an adjudication lands only on this review's tags and leaves a co-resident
+# review's alone. Mirrors the conventions documented in
 # skills/systematic-review/SKILL.md (QA and adjudication tags table).
-ADJUDICATION_PREFIX = "qa-adjudicated-"
+
+# The permanent adjudication record.
+ADJUDICATION_SUFFIX = "qa-adjudicated-"
 
 # Severity tags removed once a verdict is recorded. Items the screener
 # left fine (no qa-* tags at all) skip this removal step.
-QA_SEVERITY_PREFIX = "qa-"
+QA_SEVERITY_SUFFIX = "qa-"
 
-# Stage tag prefix for screener decisions. Flipping fulltext membership
-# under adjudication uses this prefix.
-FULLTEXT_PREFIX = "fulltext:"
+# Stage tag family for screener decisions. Flipping fulltext membership
+# under adjudication uses this.
+FULLTEXT_FAMILY = "fulltext"
 
 LOG_FIELDS = [
     "timestamp", "item_key", "verdict", "reason", "flip_fulltext",
@@ -93,32 +99,36 @@ LOG_FIELDS = [
 ]
 
 
-def _build_op(decision: dict) -> dict:
+def _build_op(decision: dict, ns: str) -> dict:
     """Build a tag-operation dict for `zotero_io.batch_update_tags`.
 
     The op encodes:
-      - add: the new permanent qa-adjudicated-<verdict> tag, plus the
-        opposite-stage fulltext tag when flip_fulltext is set.
-      - remove_prefixed: every `qa-*` severity tag (qa-flag, qa-hard,
-        qa-soft-*, qa-wrong-code) AND, when flipping, every
-        `fulltext:*` tag (so the new one cleanly replaces the old).
+      - add: the new permanent `<prefix>/qa-adjudicated-<verdict>` tag,
+        plus the opposite-stage fulltext tag when flip_fulltext is set.
+      - remove_prefixed: every `<prefix>/qa-*` severity tag (qa-flag,
+        qa-hard, qa-soft-*, qa-wrong-code) AND, when flipping, every
+        `<prefix>/fulltext:*` tag (so the new one cleanly replaces the old).
 
     Note: qa-adjudicated-* tags also start with `qa-` and would be
     swept by the prefix removal — but the same write also re-adds
     the new qa-adjudicated-<verdict>, so the net effect is "replace
     any earlier adjudication tag with the current one". That's the
     intended idempotent behaviour for re-runs.
+
+    Every prefix is namespaced, which is what stops a sweep here from
+    clearing a co-resident review's QA or stage tags on the same item.
     """
     verdict = decision["verdict"].lower()
-    add: list[str] = [f"{ADJUDICATION_PREFIX}{verdict}"]
-    remove_prefixed: list[str] = [QA_SEVERITY_PREFIX]
+    add: list[str] = [f"{ns}{ADJUDICATION_SUFFIX}{verdict}"]
+    remove_prefixed: list[str] = [f"{ns}{QA_SEVERITY_SUFFIX}"]
 
     if decision.get("flip_fulltext"):
         # The flip only makes sense for include / exclude — borderline
         # adjudication doesn't choose a fulltext bucket.
         if verdict in ("include", "exclude"):
-            add.append(f"{FULLTEXT_PREFIX}{verdict}")
-            remove_prefixed.append(FULLTEXT_PREFIX)
+            fulltext_prefix = tag_prefix.family(ns, FULLTEXT_FAMILY)
+            add.append(f"{fulltext_prefix}{verdict}")
+            remove_prefixed.append(fulltext_prefix)
 
     return {"add": add, "remove_prefixed": remove_prefixed}
 
@@ -175,6 +185,12 @@ def load_decisions(path: Path) -> list[dict]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     zotero_io.add_library_args(parser)
+    tag_prefix.add_argument(parser)
+    parser.add_argument(
+        "--config", default="./screening_config.py",
+        help="Project screening config, read for TAG_PREFIX "
+             "(default: ./screening_config.py).",
+    )
     parser.add_argument(
         "--decisions", default=".claude/qa/decisions.json",
         help="Path to decisions.json (default: .claude/qa/decisions.json).",
@@ -189,6 +205,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    ns = screening_common.load_tag_namespace(args.tag_prefix, args.config)
     decisions = load_decisions(Path(args.decisions))
     print(f"Loaded {len(decisions)} decision(s) from {args.decisions}", flush=True)
 
@@ -199,7 +216,7 @@ def main() -> int:
     if args.dry_run:
         print("\n[DRY RUN] tag operations that would be applied:", flush=True)
         for d in decisions:
-            op = _build_op(d)
+            op = _build_op(d, ns)
             flip = " (flip fulltext)" if d.get("flip_fulltext") else ""
             print(
                 f"  {d['item_key']}: verdict={d['verdict']}{flip}\n"
@@ -212,7 +229,7 @@ def main() -> int:
     zot = zotero_io.ZoteroClient.from_args(args)
     print(f"Applying to {zot.describe_library()}...", flush=True)
 
-    updates = [(d["item_key"], _build_op(d)) for d in decisions]
+    updates = [(d["item_key"], _build_op(d, ns)) for d in decisions]
     stats = zot.batch_update_tags(updates)
     print(
         f"\nDone. applied={stats['applied']} "

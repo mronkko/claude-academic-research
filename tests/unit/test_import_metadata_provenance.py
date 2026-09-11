@@ -25,6 +25,12 @@ import import_to_zotero as imp
 import pytest
 from zotero_mcp.citation_import import CSL_TYPE_MAP
 
+#: Every review namespaces the tags it writes; the import stage stamps
+#: search provenance under it. A literal here rather than a fixture so the
+#: prefixed shape is visible in the assertions below.
+NS = "test-review/"
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -132,6 +138,7 @@ def test_complete_row_is_built_offline() -> None:
     """The normal path: Scopus and WoS already said everything needed."""
     item, how = imp.build_item(
         COMPLETE_ROW, None, session=_ExplodingSession(), csl_cache={},
+        ns=NS,
     )
     assert how == imp.BUILD_SOURCE
     assert item["itemType"] == "journalArticle"
@@ -147,6 +154,7 @@ def test_display_order_row_is_filled_from_the_doi(crossref) -> None:
     asked = crossref({ARTICLE_CSL["DOI"]: ARTICLE_CSL})
     item, how = imp.build_item(
         DISPLAY_ORDER_ROW, None, session=object(), csl_cache={},
+        ns=NS,
     )
     assert how == imp.BUILD_AUTHORITY
     assert asked == [ARTICLE_CSL["DOI"]]
@@ -165,7 +173,7 @@ def test_a_row_without_a_type_is_filled_even_with_good_creators(crossref) -> Non
     crossref({CHAPTER_CSL["DOI"]: CHAPTER_CSL})
     row = {**COMPLETE_ROW, "doi": CHAPTER_CSL["DOI"], "type": "",
            "authors": "Chicone, Sarah J."}
-    item, how = imp.build_item(row, None, session=object(), csl_cache={})
+    item, how = imp.build_item(row, None, session=object(), csl_cache={}, ns=NS)
     assert how == imp.BUILD_AUTHORITY
     assert item["itemType"] == "bookSection"
     assert item["bookTitle"] == "The Archaeology of Class War"
@@ -177,7 +185,7 @@ def test_one_fetch_per_distinct_doi(crossref) -> None:
     cache: dict = {}
     for _ in range(4):
         imp.build_item(DISPLAY_ORDER_ROW, None, session=object(),
-                       csl_cache=cache)
+                       csl_cache=cache, ns=NS)
     assert len(asked) == 1, "Crossref was asked more than once for one DOI"
 
 
@@ -186,7 +194,7 @@ def test_a_dead_doi_is_not_retried_per_row(crossref) -> None:
     cache: dict = {}
     for _ in range(3):
         imp.build_item(DISPLAY_ORDER_ROW, None, session=object(),
-                       csl_cache=cache)
+                       csl_cache=cache, ns=NS)
     assert len(asked) == 1
 
 
@@ -199,6 +207,7 @@ def test_unreachable_crossref_falls_back_to_the_row(crossref) -> None:
     crossref({}, fail=True)
     item, how = imp.build_item(
         DISPLAY_ORDER_ROW, None, session=object(), csl_cache={},
+        ns=NS,
     )
     assert how == imp.BUILD_FALLBACK
     assert item["itemType"] == "journalArticle"
@@ -219,6 +228,7 @@ def test_a_conversion_failure_warns_and_falls_back(monkeypatch, capsys) -> None:
     monkeypatch.setattr(imp, "csl_json_to_zotero", boom)
     item, how = imp.build_item(
         DISPLAY_ORDER_ROW, None, session=object(), csl_cache={},
+        ns=NS,
     )
     assert how == imp.BUILD_FALLBACK
     assert item["title"] == DISPLAY_ORDER_ROW["title"]
@@ -229,7 +239,7 @@ def test_a_row_without_a_doi_uses_the_row(crossref) -> None:
     """Nothing to look the record up by — by definition the row path."""
     asked = crossref({ARTICLE_CSL["DOI"]: ARTICLE_CSL})
     row = {**DISPLAY_ORDER_ROW, "doi": ""}
-    item, how = imp.build_item(row, None, session=object(), csl_cache={})
+    item, how = imp.build_item(row, None, session=object(), csl_cache={}, ns=NS)
     assert how == imp.BUILD_FALLBACK
     assert asked == []
     assert item["title"] == row["title"]
@@ -238,7 +248,7 @@ def test_a_row_without_a_doi_uses_the_row(crossref) -> None:
 def test_no_session_means_no_fetch() -> None:
     """`build_item` without a session (a caller that must stay offline)
     degrades to the row rather than raising."""
-    item, how = imp.build_item(DISPLAY_ORDER_ROW, None, session=None)
+    item, how = imp.build_item(DISPLAY_ORDER_ROW, None, session=None, ns=NS)
     assert how == imp.BUILD_FALLBACK
     assert item["title"] == DISPLAY_ORDER_ROW["title"]
 
@@ -251,9 +261,10 @@ def test_no_session_means_no_fetch() -> None:
 def test_source_built_item_carries_the_plugin_layers() -> None:
     item, _ = imp.build_item(
         COMPLETE_ROW, "COLL1234", session=_ExplodingSession(), csl_cache={},
+        ns=NS,
     )
     assert item["collections"] == ["COLL1234"]
-    assert {t["tag"] for t in item["tags"]} == {"search:block_a"}
+    assert {t["tag"] for t in item["tags"]} == {f"{NS}search:block_a"}
     assert item["ISSN"] == "0883-9026"          # canonicalized from 08839026
     assert item["abstractNote"] == "The search database's abstract."
 
@@ -262,10 +273,11 @@ def test_authority_filled_item_carries_the_same_layers(crossref) -> None:
     crossref({ARTICLE_CSL["DOI"]: ARTICLE_CSL})
     item, how = imp.build_item(
         DISPLAY_ORDER_ROW, "COLL1234", session=object(), csl_cache={},
+        ns=NS,
     )
     assert how == imp.BUILD_AUTHORITY
     assert item["collections"] == ["COLL1234"]
-    assert {t["tag"] for t in item["tags"]} == {"search:block_a"}
+    assert {t["tag"] for t in item["tags"]} == {f"{NS}search:block_a"}
     assert item["ISSN"] == "0883-9026"
     assert item["abstractNote"] == "The search database's abstract."
 
@@ -277,6 +289,7 @@ def test_the_search_abstract_beats_crossrefs(crossref) -> None:
     crossref({ARTICLE_CSL["DOI"]: ARTICLE_CSL})
     item, _ = imp.build_item(
         DISPLAY_ORDER_ROW, None, session=object(), csl_cache={},
+        ns=NS,
     )
     assert item["abstractNote"] == "The search database's abstract."
     assert "jats" not in item.get("extra", "").lower()
@@ -287,7 +300,7 @@ def test_an_empty_row_abstract_does_not_import_crossref_markup(crossref) -> None
     sources to try first."""
     crossref({ARTICLE_CSL["DOI"]: ARTICLE_CSL})
     row = {**DISPLAY_ORDER_ROW, "abstract": ""}
-    item, _ = imp.build_item(row, None, session=object(), csl_cache={})
+    item, _ = imp.build_item(row, None, session=object(), csl_cache={}, ns=NS)
     assert item.get("abstractNote", "") == ""
 
 
@@ -295,6 +308,7 @@ def test_journal_name_is_canonicalized_on_the_source_path() -> None:
     row = {**COMPLETE_ROW, "source": "Strat Manag J", "issn": "0143-2095"}
     item, _ = imp.build_item(
         row, None, session=_ExplodingSession(), csl_cache={},
+        ns=NS,
     )
     assert item["publicationTitle"] == "Strategic Management Journal"
 
@@ -308,6 +322,7 @@ def test_a_book_title_is_not_rewritten_by_an_issn_match() -> None:
            "source": "Some Edited Volume", "issn": "0143-2095"}
     item, how = imp.build_item(
         row, None, session=_ExplodingSession(), csl_cache={},
+        ns=NS,
     )
     assert how == imp.BUILD_SOURCE
     assert item["bookTitle"] == "Some Edited Volume"
@@ -319,7 +334,7 @@ def test_journal_name_is_canonicalized_on_the_authority_path(crossref) -> None:
                                 "ISSN": ["0143-2095"]}})
     row = {**DISPLAY_ORDER_ROW, "doi": "10.1002/smj.1",
            "source": "Strat Manag J", "issn": "0143-2095"}
-    item, how = imp.build_item(row, None, session=object(), csl_cache={})
+    item, how = imp.build_item(row, None, session=object(), csl_cache={}, ns=NS)
     assert how == imp.BUILD_AUTHORITY
     assert item["publicationTitle"] == "Strategic Management Journal"
 
@@ -354,6 +369,7 @@ def test_extra_stays_clean_through_the_whole_conversion(crossref) -> None:
     crossref({ARTICLE_CSL["DOI"]: ARTICLE_CSL})
     item, _ = imp.build_item(
         DISPLAY_ORDER_ROW, None, session=object(), csl_cache={},
+        ns=NS,
     )
     assert item.get("extra", "") == ""
 
@@ -401,6 +417,7 @@ def test_dry_run_preview_shows_the_creators(capsys) -> None:
     creator and a split one are both "1 item to create"."""
     item, _ = imp.build_item(
         COMPLETE_ROW, None, session=_ExplodingSession(), csl_cache={},
+        ns=NS,
     )
     imp._print_dry_run_preview({imp.BUILD_SOURCE: item})
     out = capsys.readouterr().out
@@ -415,6 +432,7 @@ def test_dry_run_preview_marks_a_single_field_creator(capsys) -> None:
     item, _ = imp.build_item(
         {**COMPLETE_ROW, "authors": "OECD"}, None,
         session=_ExplodingSession(), csl_cache={},
+        ns=NS,
     )
     imp._print_dry_run_preview({imp.BUILD_SOURCE: item})
     assert "single field" in capsys.readouterr().out
@@ -423,6 +441,7 @@ def test_dry_run_preview_marks_a_single_field_creator(capsys) -> None:
 def test_dry_run_preview_labels_each_build_path(capsys) -> None:
     item, _ = imp.build_item(
         COMPLETE_ROW, None, session=_ExplodingSession(), csl_cache={},
+        ns=NS,
     )
     imp._print_dry_run_preview({
         imp.BUILD_SOURCE: item, imp.BUILD_AUTHORITY: item,

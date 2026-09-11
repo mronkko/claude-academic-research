@@ -8,6 +8,12 @@ without a live Zotero — the flusher takes any object exposing
 from __future__ import annotations
 
 import abstract_screen
+import tag_prefix
+
+#: This review's namespace, and the stage prefix derived from it.
+NS = tag_prefix.namespace("test-review")
+ABSTRACT = tag_prefix.family(NS, "abstract")
+
 
 
 class _FakeZot:
@@ -25,10 +31,10 @@ class _FakeZot:
 
 
 def test_stage_tag_op_adds_decision_and_clears_prefix() -> None:
-    op = abstract_screen._stage_tag_op("include")
+    op = abstract_screen._stage_tag_op(ABSTRACT, "include")
     assert op == {
-        "add": ["abstract:include"],
-        "remove_prefixed": ["abstract:"],
+        "add": [f"{ABSTRACT}include"],
+        "remove_prefixed": [ABSTRACT],
     }
 
 
@@ -42,8 +48,8 @@ def test_flush_empty_buffer_is_a_noop() -> None:
 def test_flush_sends_buffer_and_clears_it() -> None:
     zot = _FakeZot()
     buffer = [
-        ("KEY1", abstract_screen._stage_tag_op("include")),
-        ("KEY2", abstract_screen._stage_tag_op("exclude")),
+        ("KEY1", abstract_screen._stage_tag_op(ABSTRACT, "include")),
+        ("KEY2", abstract_screen._stage_tag_op(ABSTRACT, "exclude")),
     ]
     stats = abstract_screen._flush_tag_buffer(zot, buffer)
 
@@ -55,7 +61,7 @@ def test_flush_sends_buffer_and_clears_it() -> None:
 
 def test_flush_warns_but_clears_on_failures(capsys) -> None:
     zot = _FakeZot(failed=1)
-    buffer = [("KEY1", abstract_screen._stage_tag_op("include"))]
+    buffer = [("KEY1", abstract_screen._stage_tag_op(ABSTRACT, "include"))]
     abstract_screen._flush_tag_buffer(zot, buffer)
     out = capsys.readouterr().out
     assert "tag write(s) failed" in out
@@ -70,7 +76,7 @@ def test_batching_threshold_flushes_in_chunks() -> None:
     buffer: list[tuple[str, dict]] = []
 
     for i in range(5):
-        buffer.append((f"KEY{i}", abstract_screen._stage_tag_op("include")))
+        buffer.append((f"KEY{i}", abstract_screen._stage_tag_op(ABSTRACT, "include")))
         if len(buffer) >= batch_size:
             abstract_screen._flush_tag_buffer(zot, buffer)
     abstract_screen._flush_tag_buffer(zot, buffer)  # final flush

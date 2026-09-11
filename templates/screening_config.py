@@ -1,9 +1,11 @@
 """Per-project screening configuration for a systematic review.
 
-Copy this file to the root of your SLR project and edit the two
-prompts (abstract screening + full-text coding) for your specific
-review. `abstract_screen.py` and `fulltext_code.py` read this module
-by path (via `--config`).
+Copy this file to the root of your SLR project and edit the tag
+prefix and the two prompts (abstract screening + full-text coding) for
+your specific review. `abstract_screen.py` and `fulltext_code.py` read
+this module by path (via `--config`); `import_to_zotero.py`,
+`export_coded_includes.py`, `apply_qa_adjudications.py` and
+`manage_tags.py` read `TAG_PREFIX` from it.
 
 The prompts ARE the scope of your screening — reviewers will read
 them to judge whether your decisions can be reproduced. Keep this
@@ -14,6 +16,38 @@ Usage:
     uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/abstract_screen.py \\
         --config ./screening_config.py --group <id> --collection <key>
 """
+
+# =============================================================================
+# Tag prefix — the namespace for every Zotero tag this review writes
+# =============================================================================
+
+# MANDATORY. Every tag recording *this review's* judgement is written as
+# `<TAG_PREFIX>/<family>:<value>` — `agentic-ai/abstract:include`,
+# `agentic-ai/fulltext:exclude`, `agentic-ai/qa-adjudicated-include`.
+#
+# Two reasons it exists, both of which bite on a library you actually use:
+#
+#   1. Filtering. A library with hundreds of personal tags gives Zotero's tag
+#      selector no way to show just this review's. `abstract:` and `fulltext:`
+#      are the plugin's vocabulary, not yours, so they distinguish nothing.
+#      Typing your prefix into the selector isolates exactly one review.
+#   2. Collisions. One library commonly holds several reviews. Without a
+#      namespace they share the `abstract:*` family, and a Zotero duplicate
+#      merge unions tag sets — leaving one item carrying two reviews'
+#      contradictory decisions, with no way to tell which said what.
+#
+# Rules: 1-32 characters, lowercase letters, digits and interior hyphens.
+# No spaces, no `/`, no `:`, and it may not start or end with a hyphen.
+# Pick something short and recognisable — you will read it on every tag.
+#
+# Set it with the helper (which validates and shows you the resulting tags):
+#     python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/set_tag_prefix.py \
+#         --prefix <your-prefix>
+#
+# Changing it mid-review orphans every tag already written under the old
+# value; the scripts will treat already-screened items as unscreened.
+TAG_PREFIX = ""
+
 
 # =============================================================================
 # Abstract screening (stage 1) — the fast tier, on title + abstract

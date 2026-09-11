@@ -30,7 +30,13 @@ from pathlib import Path
 import abstract_screen
 import batch_manifest as bm
 import pytest
+import tag_prefix
 from log_schemas import ABSTRACT_SCREENING_FIELDS
+
+#: This review's namespace and the stage prefix the applier writes under.
+NS = tag_prefix.namespace("test-review")
+ABSTRACT = tag_prefix.family(NS, "abstract")
+
 
 REPO = Path(__file__).resolve().parents[2]
 RUNNER_PATH = REPO / "scripts" / "cluster" / "run_batch.py"
@@ -281,6 +287,7 @@ def test_emit_execute_apply(tmp_path, monkeypatch) -> None:
         tag_batch_size=50,
         force=False,
         skip_already_tagged=False,
+        stage_prefix=ABSTRACT,
     ) == 0
 
     logged = _read_csv(output)
@@ -290,9 +297,9 @@ def test_emit_execute_apply(tmp_path, monkeypatch) -> None:
         "CCCC3333": "borderline",
     }
     assert zot.tags_by_key == {
-        "AAAA1111": {"add": ["abstract:include"], "remove_prefixed": ["abstract:"]},
-        "BBBB2222": {"add": ["abstract:exclude"], "remove_prefixed": ["abstract:"]},
-        "CCCC3333": {"add": ["abstract:borderline"], "remove_prefixed": ["abstract:"]},
+        "AAAA1111": {"add": [f"{ABSTRACT}include"], "remove_prefixed": [ABSTRACT]},
+        "BBBB2222": {"add": [f"{ABSTRACT}exclude"], "remove_prefixed": [ABSTRACT]},
+        "CCCC3333": {"add": [f"{ABSTRACT}borderline"], "remove_prefixed": [ABSTRACT]},
     }
 
 
@@ -319,6 +326,7 @@ def test_the_csv_records_the_model_that_actually_ran(tmp_path, monkeypatch) -> N
         zot, manifest_path=manifest, responses_path=responses_path,
         output_path=output, tag_batch_size=50, force=False,
         skip_already_tagged=False,
+        stage_prefix=ABSTRACT,
     )
     assert _read_csv(output)[0]["model"] == "org/actually-ran"
 
@@ -341,6 +349,7 @@ def test_the_timestamp_is_when_the_model_answered(tmp_path, monkeypatch) -> None
         zot, manifest_path=manifest, responses_path=responses_path,
         output_path=output, tag_batch_size=50, force=False,
         skip_already_tagged=False,
+        stage_prefix=ABSTRACT,
     )
     assert _read_csv(output)[0]["timestamp"] == responses[0]["generated_at"]
 
@@ -367,6 +376,7 @@ def test_the_batch_path_writes_what_the_synchronous_path_writes(
         zot, manifest_path=manifest, responses_path=responses_path,
         output_path=output, tag_batch_size=50, force=False,
         skip_already_tagged=False,
+        stage_prefix=ABSTRACT,
     )
     via_cluster = _read_csv(output)[0]
 
@@ -412,6 +422,7 @@ def test_a_degenerate_run_is_flagged_by_the_runner_and_refused_by_the_applier(
             zot, manifest_path=manifest, responses_path=responses_path,
             output_path=output, tag_batch_size=50, force=False,
             skip_already_tagged=False,
+            stage_prefix=ABSTRACT,
         )
     assert not output.exists()
     assert zot.tag_calls == []
@@ -460,6 +471,7 @@ def test_a_truncated_answer_becomes_an_error_not_a_decision(
         zot, manifest_path=manifest, responses_path=responses_path,
         output_path=output, tag_batch_size=50, force=False,
         skip_already_tagged=False,
+        stage_prefix=ABSTRACT,
     )
     rows = {r["item_key"]: r for r in _read_csv(output)}
     assert rows["BBBB2222"]["decision"] == "error"
@@ -495,6 +507,7 @@ def test_a_run_where_every_answer_was_cut_off_is_refused(
             zot, manifest_path=manifest, responses_path=responses_path,
             output_path=tmp_path / "log.csv", tag_batch_size=50, force=False,
             skip_already_tagged=False,
+            stage_prefix=ABSTRACT,
         )
 
 
@@ -528,6 +541,7 @@ def test_a_request_too_long_for_the_context_is_recorded_not_sent(
         zot, manifest_path=manifest, responses_path=responses_path,
         output_path=output, tag_batch_size=50, force=False,
         skip_already_tagged=False,
+        stage_prefix=ABSTRACT,
     )
     rows = {r["item_key"]: r for r in _read_csv(output)}
     assert rows["AAAA1111"]["decision"] == "include"
@@ -588,6 +602,7 @@ def test_the_sidecar_still_owes_the_log_a_row(tmp_path, monkeypatch) -> None:
         zot, manifest_path=manifest, responses_path=responses_path,
         output_path=output, tag_batch_size=50, force=False,
         skip_already_tagged=False,
+        stage_prefix=ABSTRACT,
     )
     # `too_long_for_context` is not one of the skip reasons that owes a
     # CSV row — the item was never attempted — but the sidecar records it.
@@ -616,6 +631,7 @@ def test_a_partial_run_leaves_the_rest_re_runnable(tmp_path, monkeypatch) -> Non
         zot, manifest_path=manifest, responses_path=responses_path,
         output_path=output, tag_batch_size=50, force=False,
         skip_already_tagged=False,
+        stage_prefix=ABSTRACT,
     )
     assert len(zot.tags_by_key) == 1
 
@@ -636,6 +652,7 @@ def test_responses_from_another_run_are_refused(tmp_path, monkeypatch) -> None:
             _FakeZot(), manifest_path=first, responses_path=other_responses,
             output_path=tmp_path / "log.csv", tag_batch_size=50, force=False,
             skip_already_tagged=False,
+            stage_prefix=ABSTRACT,
         )
 
 

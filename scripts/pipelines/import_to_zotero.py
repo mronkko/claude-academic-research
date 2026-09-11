@@ -90,6 +90,8 @@ except ImportError:
 
 import doi_utils  # noqa: E402
 import http_client  # noqa: E402
+import screening_common  # noqa: E402
+import tag_prefix  # noqa: E402
 import zotero_io  # noqa: E402
 from zotero_mcp.citation_import import csl_json_to_zotero  # noqa: E402
 from zotero_mcp.schema import valid_fields  # noqa: E402
@@ -341,7 +343,7 @@ def _container_field_of(item: dict) -> str | None:
 
 
 def _apply_plugin_layers(
-    item: dict, row: dict, collection_key: str | None,
+    item: dict, row: dict, collection_key: str | None, *, ns: str,
 ) -> dict:
     """Layer this plugin's concerns onto an item, whoever built it.
 
@@ -396,7 +398,10 @@ def _apply_plugin_layers(
         if isinstance(t, dict) and t.get("tag")
     ]
     if row.get("query"):
-        tags.append({"tag": f"search:{row['query']}", "type": 1})
+        # Namespaced: this records which of *this review's* queries found
+        # the item. Unprefixed, two reviews importing the same paper into a
+        # shared library leave provenance tags nothing can tell apart.
+        tags.append({"tag": f"{ns}search:{row['query']}", "type": 1})
 
     # Predatory-journal preflight: check the name / ISSN against the
     # Beall's-list snapshot in `sources/predatory.py`. Flag (don't
@@ -415,6 +420,10 @@ def _apply_plugin_layers(
             issn=canonical_issn or None,
         )
         if result.is_predatory:
+            # Deliberately NOT namespaced. Whether a journal is on Beall's
+            # list is a fact about the journal, true for every review that
+            # touches the paper — so reviews sharing a library share the
+            # flag rather than each stamping a private copy.
             tags.append({"tag": "predatory:flag", "type": 1})
 
     if tags:
@@ -425,6 +434,7 @@ def _apply_plugin_layers(
 def _row_to_zotero_item(
     row: dict, collection_key: str | None,
     item_type: str = _DEFAULT_ITEM_TYPE,
+    *, ns: str,
 ) -> dict:
     """Build an item from the search row alone — no network."""
     item: dict = {
@@ -443,7 +453,7 @@ def _row_to_zotero_item(
     container = _CONTAINER_FIELD.get(item_type)
     if container:
         item[container] = row.get("source", "")
-    return _apply_plugin_layers(item, row, collection_key)
+    return _apply_plugin_layers(item, row, collection_key, ns=ns)
 
 
 def _item_template(item_type: str) -> dict:
@@ -591,6 +601,7 @@ def build_item(
     row: dict,
     collection_key: str | None,
     *,
+    ns: str,
     session=None,
     csl_cache: dict | None = None,
 ) -> tuple[dict, str]:
@@ -602,7 +613,10 @@ def build_item(
     """
     item_type = row_item_type(row)
     if item_type and _has_split_creators(row.get("authors", "")):
-        return _row_to_zotero_item(row, collection_key, item_type), BUILD_SOURCE
+        return (
+            _row_to_zotero_item(row, collection_key, item_type, ns=ns),
+            BUILD_SOURCE,
+        )
 
     csl = (
         _fetch_csl(row.get("doi", ""), session=session, cache=csl_cache)
@@ -620,13 +634,13 @@ def build_item(
             )
         else:
             return (
-                _apply_plugin_layers(item, row, collection_key),
+                _apply_plugin_layers(item, row, collection_key, ns=ns),
                 BUILD_AUTHORITY,
             )
 
     return (
         _row_to_zotero_item(
-            row, collection_key, item_type or _DEFAULT_ITEM_TYPE,
+            row, collection_key, item_type or _DEFAULT_ITEM_TYPE, ns=ns,
         ),
         BUILD_FALLBACK,
     )
@@ -986,6 +1000,10 @@ def main() -> int:
                              "does not exist, instead of creating it.")
     parser.add_argument("--input", required=True,
                         help="Path to deduplicated search-results CSV.")
+    tag_prefix.add_argument(parser)
+    parser.add_argument("--config", default="./screening_config.py",
+                        help="Project screening config, read for TAG_PREFIX "
+                             "(default: ./screening_config.py).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Parse and report without writing to Zotero.")
     parser.add_argument(
@@ -997,6 +1015,10 @@ def main() -> int:
              "merely touched.",
     )
     args = parser.parse_args()
+
+    # Resolve the namespace before anything reads or writes: a missing
+    # prefix should stop the run at the first line, not after the import.
+    ns = screening_common.load_tag_namespace(args.tag_prefix, args.config)
 
     api_key = "" if args.dry_run else require("zotero", "api_key",
                                               env="ZOTERO_API_KEY")
@@ -1063,7 +1085,7 @@ def main() -> int:
 
         item, how = build_item(
             row, collection_key or None,
-            session=csl_session, csl_cache=csl_cache,
+            ns=ns, session=csl_session, csl_cache=csl_cache,
         )
         build_counts[how] += 1
         preview_samples.setdefault(how, item)

@@ -160,6 +160,22 @@ def _is_retryable_upload_error(exc: BaseException) -> bool:
     return isinstance(exc, httpx.TransportError)
 
 
+def slr_coding_marker(ns: str) -> str:
+    """The `<h1>` that identifies one review's SLR Coding note.
+
+    Namespaced, because `upsert_child_note` finds the plugin's own note by
+    this marker and overwrites it. With a single fixed marker, two reviews
+    coding the same paper in a shared library silently overwrote each
+    other's coding — the second review's note replaced the first's, with no
+    warning and no way to tell afterwards.
+
+    `ns` is a namespace with its trailing separator (`"agentic-ai/"`), as
+    returned by `tag_prefix.namespace`. The separator is stripped here so
+    the heading reads as a title rather than a path.
+    """
+    return f"<h1>SLR Coding: {ns.rstrip('/')}</h1>"
+
+
 def parse_slr_coding_note(note_html: str) -> dict | None:
     """Extract the machine-readable JSON payload from an SLR Coding
     note written by `fulltext_code._build_slr_coding_note_html`.

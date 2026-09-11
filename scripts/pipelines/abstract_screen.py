@@ -16,9 +16,12 @@ Reads items from a Zotero collection, screens each title+abstract via
 Claude Haiku (configurable; temperature=0), and writes the decision in
 two places:
 
-1. As an `abstract:include` / `abstract:exclude` / `abstract:borderline`
+1. As an `<prefix>/abstract:include` / `…:exclude` / `…:borderline`
    Zotero tag on the item — this is the authoritative state per the
-   `systematic-review` skill's Zotero-as-ground-truth principle.
+   `systematic-review` skill's Zotero-as-ground-truth principle. The
+   `<prefix>/` namespace comes from `TAG_PREFIX` in the project config
+   (or `--tag-prefix`) and keeps this review's tags apart from every
+   other review sharing the library.
    Downstream stages (`fulltext_code.py`, `export_coded_includes.py`)
    filter by this tag.
 2. As an append-only row in `screening/abstract_screening.csv` — this
@@ -26,7 +29,7 @@ two places:
    which model and prompt version).
 
 Resumable: re-running reads the collection's items, skips any that
-already carry an `abstract:*` tag, and processes the rest. The CSV log
+already carry an `<prefix>/abstract:*` tag, and processes the rest. The CSV log
 is not consulted for resume decisions.
 
 Reads the screening prompt from a per-project `screening_config.py`
@@ -67,6 +70,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
 import batch_manifest  # noqa: E402
 import csv_io  # noqa: E402
 import screening_common  # noqa: E402
+import tag_prefix  # noqa: E402
 import zotero_io  # noqa: E402
 from core import llm_provider  # noqa: E402
 from core.config_loader import require  # noqa: E402
@@ -87,6 +91,12 @@ VALID_DECISIONS = ("include", "borderline", "exclude")
 
 
 def _load_screening_config(path: str):
+    """Returns `(prompt, model, prompt_version, module)`.
+
+    The module comes back so `main` can resolve `TAG_PREFIX` off it without
+    loading the file twice; `--tag-prefix` may override it, so it is not in
+    `required` — `tag_prefix.resolve` produces the better message either way.
+    """
     mod = screening_common.load_config_module(
         path, "screening_config", required=("ABSTRACT_SCREENING_SYSTEM_PROMPT",),
     )
@@ -94,6 +104,7 @@ def _load_screening_config(path: str):
         mod.ABSTRACT_SCREENING_SYSTEM_PROMPT,
         getattr(mod, "ABSTRACT_SCREENING_MODEL", "") or default_for_stage("abstract_screening"),
         getattr(mod, "ABSTRACT_SCREENING_PROMPT_VERSION", ""),
+        mod,
     )
 
 
@@ -108,7 +119,11 @@ def _format_user_message(title: str, abstract: str, source: str,
     return "\n\n".join(parts)
 
 
-STAGE_TAG_PREFIX = "abstract:"
+#: The family half of this stage's tags. The review's namespace is
+#: prepended at runtime (`agentic-ai/` + `abstract:`), so this is a suffix,
+#: not the whole prefix — see `tag_prefix.family`.
+STAGE_TAG_FAMILY = "abstract"
+STAGE_TAG_SUFFIX = f"{STAGE_TAG_FAMILY}:"
 
 
 def parse_decision(text: str) -> tuple[str, str]:
@@ -260,13 +275,14 @@ def build_manifest_rows(
     return rows, skipped
 
 
-def _already_tagged(items: list[dict]) -> set[str]:
-    """Items that already have any `abstract:*` tag in Zotero — these are
-    'done' for resume purposes. Canonical source of truth.
+def _already_tagged(items: list[dict], stage_prefix: str) -> set[str]:
+    """Items that already have any `<prefix>/abstract:*` tag in Zotero — these
+    are 'done' for resume purposes. Canonical source of truth.
 
     Prefix match, not an exact-value match: `abstract:borderline` counts as
-    decided, so a re-run does not re-screen it."""
-    return screening_common.items_with_stage_tag(items, prefix=STAGE_TAG_PREFIX)
+    decided, so a re-run does not re-screen it. The match is namespaced, so
+    another review's decision on the same item does not count as ours."""
+    return screening_common.items_with_stage_tag(items, prefix=stage_prefix)
 
 
 def _csv_decisions(path: Path) -> dict[str, str]:
@@ -283,16 +299,17 @@ def _run_csv_backfill(
     zot: zotero_io.ZoteroClient,
     coll_items: list[dict],
     output_path: Path,
+    stage_prefix: str,
 ) -> int:
-    """One-time migration: apply abstract:* tags from CSV decisions for
-    items that have a CSV decision but no Zotero tag yet. No LLM calls.
+    """One-time migration: apply `<prefix>/abstract:*` tags from CSV decisions
+    for items that have a CSV decision but no Zotero tag yet. No LLM calls.
     Exits with 0 on success, 1 on partial failure."""
     return screening_common.run_csv_backfill(
         zot,
         coll_items,
         _csv_decisions(output_path),
-        prefix=STAGE_TAG_PREFIX,
-        label="abstract:*",
+        prefix=stage_prefix,
+        label=f"{stage_prefix}*",
     )
 
 
@@ -305,6 +322,7 @@ def apply_responses(
     tag_batch_size: int,
     force: bool,
     skip_already_tagged: bool,
+    stage_prefix: str,
 ) -> int:
     """Apply an executed manifest: CSV rows, then Zotero stage tags.
 
@@ -344,7 +362,8 @@ def apply_responses(
     tagged_since = _already_tagged(
         zot.collection_items(
             requests[0].get("collection", ""), item_type="journalArticle",
-        )
+        ),
+        stage_prefix,
     ) if requests[0].get("collection") else set()
     clashes = [r for r, _ in paired if r["item_key"] in tagged_since]
     if clashes:
@@ -394,7 +413,7 @@ def apply_responses(
         csv_io.upsert_by_item_key(output_path, row, ABSTRACT_SCREENING_FIELDS)
         counts[decision] = counts.get(decision, 0) + 1
         if decision in VALID_DECISIONS:
-            tag_buffer.append((req["item_key"], _stage_tag_op(decision)))
+            tag_buffer.append((req["item_key"], _stage_tag_op(stage_prefix, decision)))
             if len(tag_buffer) >= max(1, tag_batch_size):
                 _flush_tag_buffer(zot, tag_buffer)
     _flush_tag_buffer(zot, tag_buffer)
@@ -431,10 +450,12 @@ def apply_responses(
     return 0
 
 
-def _stage_tag_op(decision: str) -> dict:
+def _stage_tag_op(stage_prefix: str, decision: str) -> dict:
     """The `batch_update_tags` / `update_tags` op that records a stage
-    decision: add `abstract:<decision>`, clearing any prior `abstract:*`."""
-    return screening_common.stage_tag_op(STAGE_TAG_PREFIX, decision)
+    decision: add `<prefix>/abstract:<decision>`, clearing any prior
+    `<prefix>/abstract:*` in the same PATCH. Another review's tags in its own
+    namespace are untouched."""
+    return screening_common.stage_tag_op(stage_prefix, decision)
 
 
 def _flush_tag_buffer(zot, buffer: list[tuple[str, dict]]) -> dict[str, int]:
@@ -473,6 +494,7 @@ def _load_doi_to_query(search_csv: Path | None) -> dict[str, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    tag_prefix.add_argument(parser)
     parser.add_argument("--config", default="./screening_config.py",
                         help="Path to screening_config.py (default: "
                              "./screening_config.py).")
@@ -539,11 +561,18 @@ def main() -> int:
     parser.add_argument("--csv-backfill", action="store_true",
                         help="One-time migration from pre-Zotero-as-truth "
                              "deployments: read CSV decisions and apply "
-                             "matching abstract:* tags for items that don't "
-                             "have one yet. Makes no LLM calls; exits after.")
+                             "matching <prefix>/abstract:* tags for items that "
+                             "don't have one yet. Makes no LLM calls; exits "
+                             "after.")
     args = parser.parse_args()
 
-    system_prompt, config_model, prompt_version = _load_screening_config(args.config)
+    system_prompt, config_model, prompt_version, config_mod = (
+        _load_screening_config(args.config)
+    )
+    # Namespace every tag this review writes. Resolved before any Zotero
+    # read so a missing prefix fails now rather than after the spend.
+    ns = tag_prefix.resolve(args.tag_prefix, config_mod, args.config)
+    stage_prefix = tag_prefix.family(ns, STAGE_TAG_FAMILY)
     # Resolve before the provider pre-flight below — that branches on the
     # model name to decide which API key to require.
     model = effective_model(
@@ -583,7 +612,7 @@ def main() -> int:
     print(f"  {len(coll_items)} items in collection", flush=True)
 
     if args.csv_backfill:
-        return _run_csv_backfill(zot, coll_items, output_path)
+        return _run_csv_backfill(zot, coll_items, output_path, stage_prefix)
 
     if args.apply_responses:
         if not args.manifest:
@@ -600,11 +629,12 @@ def main() -> int:
             tag_batch_size=args.tag_batch_size,
             force=args.force_apply,
             skip_already_tagged=args.skip_already_tagged,
+            stage_prefix=stage_prefix,
         )
 
-    tagged = _already_tagged(coll_items)
+    tagged = _already_tagged(coll_items, stage_prefix)
     to_screen = [it for it in coll_items if it["key"] not in tagged]
-    print(f"  Already tagged (abstract:*): {len(tagged)}, remaining: "
+    print(f"  Already tagged ({stage_prefix}*): {len(tagged)}, remaining: "
           f"{len(to_screen)}", flush=True)
 
     # Warn on tag/CSV drift: items with CSV decisions but no matching tag.
@@ -613,7 +643,7 @@ def main() -> int:
     if drift:
         print(
             f"  WARNING: {len(drift)} item(s) in CSV log lack "
-            f"abstract:* tags in Zotero. Run with --csv-backfill to "
+            f"{stage_prefix}* tags in Zotero. Run with --csv-backfill to "
             f"apply tags from CSV decisions.",
             flush=True,
         )
@@ -775,7 +805,7 @@ def main() -> int:
                         output_path, row, ABSTRACT_SCREENING_FIELDS)
 
                 if decision in VALID_DECISIONS:
-                    tag_buffer.append((key, _stage_tag_op(decision)))
+                    tag_buffer.append((key, _stage_tag_op(stage_prefix, decision)))
                     if len(tag_buffer) >= tag_batch_size:
                         _flush_tag_buffer(zot, tag_buffer)
 

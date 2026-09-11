@@ -31,7 +31,13 @@ from pathlib import Path
 import batch_manifest as bm
 import fulltext_code as fc
 import pytest
+import tag_prefix
 from log_schemas import fulltext_screening_fields
+
+#: This review's namespace; stage tags and the coding note live under it.
+NS = tag_prefix.namespace("test-review")
+FULLTEXT_TAG = tag_prefix.family(NS, "fulltext")
+
 
 RUN = "fulltext_coding-20260816T000000Z"
 MODEL = "org/model-1"
@@ -189,7 +195,7 @@ def test_the_batch_path_writes_what_the_live_path_writes(tmp_path) -> None:
     )
     live_row.update(fc.parse_coding_response(COMPLETION, FIELDS))
     fc.apply_coded_row(
-        live_zot, live_row, fields=FIELDS, prompt_version=PV,
+        live_zot, live_row, ns=NS, fields=FIELDS, prompt_version=PV,
         output_path=live_csv, csv_columns=COLS, log_lock=lock, timestamp=TS,
     )
 
@@ -206,7 +212,7 @@ def test_the_batch_path_writes_what_the_live_path_writes(tmp_path) -> None:
     )
     batch_row.update(fc.parse_coding_response(answer, FIELDS))
     fc.apply_coded_row(
-        batch_zot, batch_row, fields=FIELDS, prompt_version=PV,
+        batch_zot, batch_row, ns=NS, fields=FIELDS, prompt_version=PV,
         output_path=batch_csv, csv_columns=COLS, log_lock=lock,
         timestamp=resp["generated_at"],
     )
@@ -351,7 +357,7 @@ def test_a_skipped_no_pdf_comes_back_as_the_row_the_live_path_writes(
         zot, manifest_path=manifest, manifest_rows=rows,
         responses_path=responses, output_path=out, items=[have, lack],
         fields=FIELDS, csv_columns=COLS, force=False,
-        skip_already_tagged=False,
+        skip_already_tagged=False, ns=NS,
     ) == 0
 
     by_key = {r["item_key"]: r for r in _read_csv(out)}
@@ -395,7 +401,7 @@ def test_output_truncation_is_an_error_and_leaves_the_input_column_alone(
         zot, manifest_path=manifest, manifest_rows=rows,
         responses_path=responses, output_path=out, items=[item],
         fields=FIELDS, csv_columns=COLS, force=False,
-        skip_already_tagged=False,
+        skip_already_tagged=False, ns=NS,
     )
     row = _read_csv(out)[0]
     assert row["decision"] == "error"
@@ -430,7 +436,7 @@ def test_a_degenerate_run_is_refused_before_anything_is_written(
             zot, manifest_path=manifest, manifest_rows=rows,
             responses_path=responses, output_path=out, items=[item],
             fields=FIELDS, csv_columns=COLS, force=False,
-            skip_already_tagged=False,
+            skip_already_tagged=False, ns=NS,
         )
     assert not out.exists()
     assert zot.tags == []
@@ -441,7 +447,7 @@ def test_items_coded_since_the_manifest_was_emitted_can_be_left_alone(
 ) -> None:
     """Emit and apply can be days apart. Something else may have decided
     the item in between, and overwriting that silently loses it."""
-    item = _item(tags=[{"tag": "fulltext:exclude"}])
+    item = _item(tags=[{"tag": f"{FULLTEXT_TAG}exclude"}])
     rows, _ = _emit([item], tmp_path)
     manifest = tmp_path / "m.jsonl"
     bm.write_manifest(manifest, rows)
@@ -454,9 +460,9 @@ def test_items_coded_since_the_manifest_was_emitted_can_be_left_alone(
         zot, manifest_path=manifest, manifest_rows=rows,
         responses_path=responses, output_path=out, items=[item],
         fields=FIELDS, csv_columns=COLS, force=False,
-        skip_already_tagged=True,
+        skip_already_tagged=True, ns=NS,
     )
-    assert "tagged fulltext:* since this manifest was emitted" in \
+    assert f"tagged {FULLTEXT_TAG}* since this manifest was emitted" in \
         capsys.readouterr().out
     assert zot.tags == []
     assert not out.exists()
@@ -490,6 +496,7 @@ def test_update_mode_survives_the_round_trip_with_its_decision_intact(
     }
     zot = FakeZot({"AAAA1111": fc._build_slr_coding_note_html(
         existing_row, FIELDS, "v0-old",
+        NS,
     )})
 
     manifest = tmp_path / "m.jsonl"
@@ -506,7 +513,7 @@ def test_update_mode_survives_the_round_trip_with_its_decision_intact(
         zot, manifest_path=manifest, manifest_rows=rows,
         responses_path=responses, output_path=out, items=[item],
         fields=FIELDS, csv_columns=COLS, force=False,
-        skip_already_tagged=False,
+        skip_already_tagged=False, ns=NS,
     )
     row = _read_csv(out)[0]
     assert row["decision"] == "include"          # adjudication survives
@@ -532,6 +539,7 @@ def test_update_mode_leaves_the_note_alone_when_the_answer_failed(
         {"item_key": "AAAA1111", "decision": "include", "reason": "keep",
          "sample": "keep sample", "method": "keep method"},
         FIELDS, "v0-old",
+        NS,
     )
     zot = FakeZot({"AAAA1111": original})
 
@@ -545,7 +553,7 @@ def test_update_mode_leaves_the_note_alone_when_the_answer_failed(
         zot, manifest_path=manifest, manifest_rows=rows,
         responses_path=responses, output_path=out, items=[item],
         fields=FIELDS, csv_columns=COLS, force=False,
-        skip_already_tagged=False,
+        skip_already_tagged=False, ns=NS,
     )
     assert _read_csv(out)[0]["decision"] == "error"
     assert zot.notes["AAAA1111"] == original

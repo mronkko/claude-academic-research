@@ -20,6 +20,12 @@ from __future__ import annotations
 import import_to_zotero as imp
 import pytest
 
+#: Every review namespaces the tags it writes; the import stage stamps
+#: search provenance under it. A literal here rather than a fixture so the
+#: prefixed shape is visible in the assertions below.
+NS = "test-review/"
+
+
 # Real DOIs, with the type Crossref returns for each — which is also
 # the value a searcher now writes into the row's `type` column.
 LIVE_CASES = [
@@ -81,32 +87,32 @@ class TestContainerField:
     }
 
     def test_chapter_source_becomes_book_title(self) -> None:
-        item = imp._row_to_zotero_item(self.ROW, None, "bookSection")
+        item = imp._row_to_zotero_item(self.ROW, None, "bookSection", ns=NS)
         assert item["bookTitle"] == "Some Edited Volume"
         assert "publicationTitle" not in item
 
     def test_article_source_stays_publication_title(self) -> None:
-        item = imp._row_to_zotero_item(self.ROW, None, "journalArticle")
+        item = imp._row_to_zotero_item(self.ROW, None, "journalArticle", ns=NS)
         assert item["publicationTitle"] == "Some Edited Volume"
 
     def test_conference_source_becomes_proceedings_title(self) -> None:
-        item = imp._row_to_zotero_item(self.ROW, None, "conferencePaper")
+        item = imp._row_to_zotero_item(self.ROW, None, "conferencePaper", ns=NS)
         assert item["proceedingsTitle"] == "Some Edited Volume"
 
     def test_a_book_gets_no_container_field(self) -> None:
         """A book's source is the book — already in `title`."""
-        item = imp._row_to_zotero_item(self.ROW, None, "book")
+        item = imp._row_to_zotero_item(self.ROW, None, "book", ns=NS)
         assert not any(f in item for f in imp._CONTAINER_FIELD.values())
         assert item["title"] == "A chapter"
 
     def test_container_survives_the_valid_field_filter(self) -> None:
         """The end-to-end shape: type set, container kept, no loss."""
-        item = imp._row_to_zotero_item(self.ROW, None, "bookSection")
+        item = imp._row_to_zotero_item(self.ROW, None, "bookSection", ns=NS)
         filtered, rejected = imp._filter_valid_fields(item)
         assert filtered["itemType"] == "bookSection"
         assert filtered.get("bookTitle") == "Some Edited Volume"
         assert "bookTitle" not in rejected
 
     def test_default_is_still_a_journal_article(self) -> None:
-        item = imp._row_to_zotero_item(self.ROW, None)
+        item = imp._row_to_zotero_item(self.ROW, None, ns=NS)
         assert item["itemType"] == "journalArticle"

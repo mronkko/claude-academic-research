@@ -11,8 +11,9 @@
 Zotero as the authoritative source (per the `systematic-review` skill's
 Zotero-as-ground-truth principle).
 
-Queries the project's Zotero collection for items tagged with
-`fulltext:include`, fetches each item's `SLR Coding` child note, parses
+Queries the project's Zotero collection for items tagged with this
+review's `<prefix>/fulltext:include`, fetches the matching `SLR Coding:
+<prefix>` child note, parses
 the machine-readable JSON payload embedded in the note, and joins that
 with the item's bibliographic metadata (title, authors, year, journal,
 DOI, Better BibTeX key). Emits a single CSV suitable for downstream
@@ -28,9 +29,14 @@ Usage:
         --group 6015547 --collection ABCDE1234 \\
         --out analysis/results/coded_papers.csv
 
+The namespace comes from `TAG_PREFIX` in `screening_config.py` (or
+`--tag-prefix`). It is what keeps the export to one review: an item coded
+by a different review in the same library carries that review's tag and
+its own coding note, and neither is read here.
+
 Common flags: --columns (restrict output to a named column set),
---drop-columns (omit specific columns), --tag (override the filter tag;
-default fulltext:include), --dry-run (count, don't write).
+--drop-columns (omit specific columns), --tag (override the filter tag
+outright), --dry-run (count, don't write).
 
 For pre-Zotero-as-truth projects that still have a CSV log but no
 tags, run `fulltext_code.py --csv-backfill` first to apply the
@@ -50,6 +56,8 @@ SCRIPTS_ROOT = SCRIPT_DIR.parent
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
+import screening_common  # noqa: E402
+import tag_prefix  # noqa: E402
 import zotero_io  # noqa: E402
 
 # Default column order — bibliographic fields first, then provenance,
@@ -153,8 +161,14 @@ def main() -> int:
                         help="Zotero collection key.")
     parser.add_argument("--out", required=True,
                         help="Output CSV path.")
-    parser.add_argument("--tag", default="fulltext:include",
-                        help="Filter tag (default: fulltext:include).")
+    tag_prefix.add_argument(parser)
+    parser.add_argument("--config", default="./screening_config.py",
+                        help="Project screening config, read for TAG_PREFIX "
+                             "(default: ./screening_config.py).")
+    parser.add_argument("--tag", default="",
+                        help="Filter tag, overriding the namespaced default "
+                             "of `<prefix>/fulltext:include`. Pass a full tag, "
+                             "prefix included.")
     parser.add_argument("--columns", default="",
                         help="Comma-separated output-column restriction "
                              "(default: all bibliographic + provenance + "
@@ -170,11 +184,15 @@ def main() -> int:
     # "API key missing" RuntimeError when both are unset (e.g. in CI
     # or a fresh checkout). from_args() reads the api_key internally
     # via require() when api_key=None.
+    ns = screening_common.load_tag_namespace(args.tag_prefix, args.config)
+    filter_tag = args.tag or f"{tag_prefix.family(ns, 'fulltext')}include"
+    note_marker = zotero_io.slr_coding_marker(ns)
+
     zot = zotero_io.ZoteroClient.from_args(args)
     print(f"Querying Zotero ({zot.describe_library()}, "
-          f"collection={args.collection}, tag={args.tag})...", flush=True)
-    items = zot.items_with_tag(args.collection, args.tag)
-    print(f"  {len(items)} item(s) carry tag {args.tag!r}", flush=True)
+          f"collection={args.collection}, tag={filter_tag})...", flush=True)
+    items = zot.items_with_tag(args.collection, filter_tag)
+    print(f"  {len(items)} item(s) carry tag {filter_tag!r}", flush=True)
 
     # For each included item, fetch its children and find the SLR Coding note.
     rows: list[dict] = []
@@ -192,7 +210,10 @@ def main() -> int:
             if cdata.get("itemType") != "note":
                 continue
             body = cdata.get("note", "") or ""
-            if "SLR_CODING_DATA" not in body:
+            # Match this review's marker, not merely "a coding note": on a
+            # shared library an item can carry one note per review, and
+            # taking the first would export another review's coding.
+            if note_marker not in body or "SLR_CODING_DATA" not in body:
                 continue
             parsed = zotero_io.parse_slr_coding_note(body)
             if parsed is None:
@@ -218,7 +239,7 @@ def main() -> int:
     print(f"  Rows built: {len(rows)}", flush=True)
     if missing_note:
         print(f"  WARNING: {len(missing_note)} item(s) tagged "
-              f"{args.tag!r} have no SLR Coding note: "
+              f"{filter_tag!r} have no `{note_marker}` note: "
               f"{missing_note[:5]}{'…' if len(missing_note) > 5 else ''}",
               flush=True)
     if malformed_note:

@@ -17,6 +17,12 @@ from __future__ import annotations
 
 import import_to_zotero as imp
 
+#: Every review namespaces the tags it writes; the import stage stamps
+#: search provenance under it. A literal here rather than a fixture so the
+#: prefixed shape is visible in the assertions below.
+NS = "test-review/"
+
+
 # ---------------------------------------------------------------------------
 # _canonicalize_issn
 # ---------------------------------------------------------------------------
@@ -125,7 +131,7 @@ def test_row_to_zotero_item_writes_canonical_issn_and_source(monkeypatch) -> Non
         "abstract": "",
         "query": "",
     }
-    item = imp._row_to_zotero_item(scopus_row, collection_key=None)
+    item = imp._row_to_zotero_item(scopus_row, collection_key=None, ns=NS)
     assert item["publicationTitle"] == "Strategic Management Journal"
     assert item["ISSN"] == "0143-2095"
 
@@ -143,7 +149,7 @@ def test_row_to_zotero_item_handles_missing_issn(monkeypatch) -> None:
         "abstract": "",
         "query": "",
     }
-    item = imp._row_to_zotero_item(row, collection_key=None)
+    item = imp._row_to_zotero_item(row, collection_key=None, ns=NS)
     assert item["ISSN"] == ""
     # Unknown name with no ISSN: passthrough as-is.
     assert item["publicationTitle"] == "Some Random Journal"

@@ -90,6 +90,7 @@ import batch_manifest  # noqa: E402
 import csv_io  # noqa: E402
 import pdf_text_cache  # noqa: E402
 import screening_common  # noqa: E402
+import tag_prefix  # noqa: E402
 import zotero_io  # noqa: E402
 from core import llm_provider  # noqa: E402
 from core.config_loader import require  # noqa: E402
@@ -111,16 +112,18 @@ from log_schemas import fulltext_screening_fields  # noqa: E402
 SOFT_FULLTEXT_CHAR_CAP = 720_000
 PLACEHOLDER = "{coding_fields_json_placeholder}"
 
-# Marker at the top of the SLR Coding child note — used to find and
-# overwrite our own note among an item's children without touching
-# any user-authored notes.
-SLR_CODING_NOTE_MARKER = "<h1>SLR Coding</h1>"
+# The marker at the top of the SLR Coding child note is built per review
+# by `zotero_io.slr_coding_marker(ns)` — it is how `upsert_child_note`
+# finds and overwrites our own note among an item's children without
+# touching user-authored ones, and it carries the review's namespace so two
+# reviews coding the same paper get a note each instead of overwriting.
 
 
 def _build_slr_coding_note_html(
     row: dict,
     fields: list[dict],
     prompt_version: str,
+    ns: str,
 ) -> str:
     """Render a coded row as an HTML note body for Zotero.
 
@@ -136,7 +139,7 @@ def _build_slr_coding_note_html(
     """
     from html import escape
 
-    parts = [SLR_CODING_NOTE_MARKER]
+    parts = [zotero_io.slr_coding_marker(ns)]
     decision = row.get("decision", "")
     reason = row.get("reason", "")
     exclusion_code = row.get("exclusion_code", "")
@@ -182,6 +185,9 @@ def _build_slr_coding_note_html(
         "model": row.get("model", ""),
         "prompt_version": prompt_version,
         "timestamp": row.get("timestamp", ""),
+        # Which review wrote this. A note found on a shared item can then be
+        # attributed without reparsing the heading.
+        "tag_prefix": ns.rstrip("/"),
         "fields": {f["name"]: row.get(f["name"], "")
                    for f in fields if f.get("name")},
     }
@@ -218,13 +224,19 @@ def _merge_fields_into_payload(
 def _items_for_update_mode(
     items: list[dict],
     only_keys: set[str] | None,
+    stage_prefix: str,
 ) -> list[dict]:
     """Return items eligible for --update-fields: those already tagged
-    `fulltext:include`. Optional `only_keys` narrows further."""
+    `<prefix>/fulltext:include`. Optional `only_keys` narrows further.
+
+    The tag is built from `stage_prefix` rather than written out: this
+    selector used to carry its own copy of the literal, which meant it
+    silently ignored the stage constant it was supposed to track."""
+    include_tag = f"{stage_prefix}include"
     eligible = [
         it for it in items
         if any(
-            t.get("tag", "") == "fulltext:include"
+            t.get("tag", "") == include_tag
             for t in it.get("data", {}).get("tags", [])
         )
     ]
@@ -236,16 +248,22 @@ def _items_for_update_mode(
 def _fetch_existing_payload(
     zot: zotero_io.ZoteroClient,
     item_key: str,
+    ns: str,
 ) -> dict | None:
-    """Fetch the SLR Coding child note for item_key and return its parsed
-    JSON payload, or None if the item has no SLR Coding note yet."""
+    """Fetch *this review's* SLR Coding child note for item_key and return
+    its parsed JSON payload, or None if this review has not coded it yet.
+
+    Matched on the namespaced marker rather than on "has a coding payload":
+    an item in a shared library can carry one note per review, and merging
+    an update into another review's note would corrupt it."""
+    marker = zotero_io.slr_coding_marker(ns)
     children = zot.cloud.children(item_key)
     for child in children:
         cdata = child.get("data", {})
         if cdata.get("itemType") != "note":
             continue
         body = (cdata.get("note") or "").lstrip()
-        if "SLR_CODING_DATA" not in body:
+        if marker not in body or "SLR_CODING_DATA" not in body:
             continue
         payload = zotero_io.parse_slr_coding_note(body)
         if payload is not None:
@@ -261,8 +279,9 @@ def merge_update_into_note(
     fields: list[dict],
     prompt_version: str,
     timestamp: str,
+    ns: str,
 ) -> dict:
-    """Fold an update-mode row into the item's existing SLR Coding note.
+    """Fold an update-mode row into this review's existing SLR Coding note.
 
     Returns the row as it should be logged: the *existing* decision,
     exclusion code and reason, with only the targeted field values
@@ -277,11 +296,12 @@ def merge_update_into_note(
     """
     item_key = row.get("item_key", "")
     try:
-        existing = _fetch_existing_payload(zot, item_key)
+        existing = _fetch_existing_payload(zot, item_key, ns)
     except Exception as e:  # noqa: BLE001
         row["decision"] = "error"
         row["reason"] = f"fetch_children failed: {e}"[:300]
         return row
+    note_marker = zotero_io.slr_coding_marker(ns)
     if existing is not None:
         merged_payload = _merge_fields_into_payload(
             existing, row, target_fields,
@@ -298,12 +318,12 @@ def merge_update_into_note(
         merged_row["reason"] = (prefix + cleaned_reason)[:500]
         merged_row["timestamp"] = timestamp
         note_html = _build_slr_coding_note_html(
-            merged_row, fields, prompt_version,
+            merged_row, fields, prompt_version, ns,
         )
         try:
             zot.upsert_child_note(
                 item_key,
-                marker=SLR_CODING_NOTE_MARKER,
+                marker=note_marker,
                 note_html=note_html,
             )
         except Exception as e:  # noqa: BLE001
@@ -313,11 +333,11 @@ def merge_update_into_note(
         return merged_row
     # No existing note: create fresh (same as the normal include path).
     row["timestamp"] = timestamp
-    note_html = _build_slr_coding_note_html(row, fields, prompt_version)
+    note_html = _build_slr_coding_note_html(row, fields, prompt_version, ns)
     try:
         zot.upsert_child_note(
             item_key,
-            marker=SLR_CODING_NOTE_MARKER,
+            marker=note_marker,
             note_html=note_html,
         )
     except Exception as e:  # noqa: BLE001
@@ -343,6 +363,7 @@ def _load_screening_config(path: str):
         mod.FULLTEXT_CODING_FIELDS,
         getattr(mod, "FULLTEXT_CODING_MODEL", "") or default_for_stage("fulltext_coding"),
         getattr(mod, "FULLTEXT_CODING_PROMPT_VERSION", ""),
+        mod,
     )
 
 
@@ -381,13 +402,20 @@ def _csv_columns(coding_fields: list[dict]) -> list[str]:
     return fulltext_screening_fields([f["name"] for f in coding_fields])
 
 
-STAGE_TAG_PREFIX = "fulltext:"
+#: The family half of this stage's tags. The review's namespace is
+#: prepended at runtime (`agentic-ai/` + `fulltext:`), so these are
+#: suffixes, not whole prefixes — see `tag_prefix.family`.
+STAGE_TAG_FAMILY = "fulltext"
+STAGE_TAG_SUFFIX = f"{STAGE_TAG_FAMILY}:"
 STAGE_TAG_VALUES = ("include", "exclude")
 
 #: The upstream stage this one consumes. Only these two verdicts proceed
 #: to full text — the skill's tag table is the source of that rule, and
 #: `abstract:exclude` is a decision already made, not a starting point.
-ABSTRACT_TAG_PREFIX = "abstract:"
+#: Read within this review's namespace: another review's abstract verdict
+#: on the same item says nothing about what this one should code.
+ABSTRACT_TAG_FAMILY = "abstract"
+ABSTRACT_TAG_SUFFIX = f"{ABSTRACT_TAG_FAMILY}:"
 ABSTRACT_PASS_VALUES = ("include", "borderline")
 
 # "No PDF to read" is not the same failure as "coding blew up", and the
@@ -467,6 +495,7 @@ def _select_to_code(
 
 def _abstract_stage_eligible(
     items: list[dict],
+    abstract_prefix: str,
 ) -> tuple[list[dict], str | None]:
     """Narrow a collection to what the abstract stage passed forward.
 
@@ -492,17 +521,17 @@ def _abstract_stage_eligible(
     passes through whole, and says so.
     """
     screened = screening_common.items_with_stage_tag(
-        items, prefix=ABSTRACT_TAG_PREFIX,
+        items, prefix=abstract_prefix,
     )
     if not screened:
         return list(items), (
-            f"  No abstract:* tags in this collection — it does not look "
+            f"  No {abstract_prefix}* tags in this collection — it does not look "
             f"abstract-screened, so all {len(items)} item(s) are eligible. "
             f"If you meant to screen first, run abstract_screen.py; if this "
             f"collection is already the screened subset, nothing is wrong."
         )
     eligible_keys = screening_common.items_with_stage_tag(
-        items, prefix=ABSTRACT_TAG_PREFIX, values=ABSTRACT_PASS_VALUES,
+        items, prefix=abstract_prefix, values=ABSTRACT_PASS_VALUES,
     )
     eligible = [it for it in items if it["key"] in eligible_keys]
     return eligible, (
@@ -513,14 +542,14 @@ def _abstract_stage_eligible(
     )
 
 
-def _already_tagged(items: list[dict]) -> set[str]:
-    """Items that already have `fulltext:include` or `fulltext:exclude`
+def _already_tagged(items: list[dict], stage_prefix: str) -> set[str]:
+    """Items that already have `<prefix>/fulltext:include` or `…:exclude`
     in Zotero — these are 'done' for resume purposes. Canonical source.
 
     Exact-value match, unlike abstract screening's prefix match: any other
     `fulltext:*` tag a user has added by hand does not count as coded."""
     return screening_common.items_with_stage_tag(
-        items, prefix=STAGE_TAG_PREFIX, values=STAGE_TAG_VALUES,
+        items, prefix=stage_prefix, values=STAGE_TAG_VALUES,
     )
 
 
@@ -584,9 +613,10 @@ def _run_csv_backfill(
     zot: zotero_io.ZoteroClient,
     coll_items: list[dict],
     output_path: Path,
+    stage_prefix: str,
 ) -> int:
-    """One-time migration: apply fulltext:* tags from CSV decisions for
-    items that have a CSV decision but no Zotero tag yet. No LLM calls."""
+    """One-time migration: apply `<prefix>/fulltext:*` tags from CSV decisions
+    for items that have a CSV decision but no Zotero tag yet. No LLM calls."""
     csv_decisions = {
         k: d for k, d in _load_last_decisions(output_path).items()
         if d in STAGE_TAG_VALUES
@@ -595,9 +625,9 @@ def _run_csv_backfill(
         zot,
         coll_items,
         csv_decisions,
-        prefix=STAGE_TAG_PREFIX,
+        prefix=stage_prefix,
         values=STAGE_TAG_VALUES,
-        label="fulltext:*",
+        label=f"{stage_prefix}*",
     )
 
 
@@ -797,6 +827,7 @@ def apply_coded_row(
     output_path: Path,
     csv_columns: list[str],
     log_lock,
+    ns: str,
     timestamp: str = "",
 ) -> str:
     """Write one coded row's consequences: tag, coding note, CSV row.
@@ -814,14 +845,15 @@ def apply_coded_row(
     decision = row.get("decision", "error")
     row["timestamp"] = timestamp or datetime.now(UTC).isoformat()
     row["prompt_version"] = prompt_version
+    stage_prefix = tag_prefix.family(ns, STAGE_TAG_FAMILY)
     if decision in STAGE_TAG_VALUES:
         item_key = row.get("item_key", "")
         if item_key:
             try:
                 zot.update_tags(
                     item_key,
-                    add=[f"{STAGE_TAG_PREFIX}{decision}"],
-                    remove_prefixed=[STAGE_TAG_PREFIX],
+                    add=[f"{stage_prefix}{decision}"],
+                    remove_prefixed=[stage_prefix],
                 )
             except Exception as tag_exc:  # noqa: BLE001
                 existing_reason = row.get("reason", "")
@@ -836,11 +868,11 @@ def apply_coded_row(
             if decision == "include":
                 try:
                     note_html = _build_slr_coding_note_html(
-                        row, fields, prompt_version,
+                        row, fields, prompt_version, ns,
                     )
                     zot.upsert_child_note(
                         item_key,
-                        marker=SLR_CODING_NOTE_MARKER,
+                        marker=zotero_io.slr_coding_marker(ns),
                         note_html=note_html,
                     )
                 except Exception as note_exc:  # noqa: BLE001
@@ -1134,8 +1166,9 @@ def apply_responses(
     csv_columns: list[str],
     force: bool,
     skip_already_tagged: bool,
+    ns: str,
 ) -> int:
-    """Apply an executed manifest: CSV rows, fulltext:* tags, coding notes.
+    """Apply an executed manifest: CSV rows, stage tags, coding notes.
 
     No LLM is called. Everything written here is derived from the two
     files, which is what lets the generation step happen on a machine
@@ -1179,13 +1212,17 @@ def apply_responses(
     # in between was decided by something else, and overwriting it
     # silently would lose that decision. Update mode is exempt: it
     # targets already-tagged items by definition.
-    tagged_since = set() if mode == "update_fields" else _already_tagged(items)
+    stage_prefix = tag_prefix.family(ns, STAGE_TAG_FAMILY)
+    tagged_since = (
+        set() if mode == "update_fields"
+        else _already_tagged(items, stage_prefix)
+    )
     clashes = [r for r, _ in paired if r["item_key"] in tagged_since]
     if clashes:
         verb = "skipping" if skip_already_tagged else "overwriting"
         print(
             f"  WARNING: {len(clashes)} of {len(paired)} item(s) have been "
-            f"tagged fulltext:* since this manifest was emitted; {verb} "
+            f"tagged {stage_prefix}* since this manifest was emitted; {verb} "
             f"them.",
             flush=True,
         )
@@ -1232,6 +1269,7 @@ def apply_responses(
                     fields=fields,
                     prompt_version=prompt_version,
                     timestamp=timestamp or datetime.now(UTC).isoformat(),
+                    ns=ns,
                 )
             row["timestamp"] = timestamp or datetime.now(UTC).isoformat()
             row["prompt_version"] = prompt_version
@@ -1242,6 +1280,7 @@ def apply_responses(
         else:
             outcome = apply_coded_row(
                 zot, row,
+                ns=ns,
                 fields=fields,
                 prompt_version=prompt_version,
                 output_path=output_path,
@@ -1263,6 +1302,7 @@ def apply_responses(
         row = _row_for_skipped_unit(skip, model=run_model, fields=fields)
         apply_coded_row(
             zot, row,
+            ns=ns,
             fields=fields,
             prompt_version=prompt_version,
             output_path=output_path,
@@ -1376,6 +1416,7 @@ def main() -> int:
         except Exception:
             pass
     parser = argparse.ArgumentParser(description=__doc__)
+    tag_prefix.add_argument(parser)
     parser.add_argument("--config", default="./screening_config.py",
                         help="Path to screening_config.py (default: "
                              "./screening_config.py).")
@@ -1477,12 +1518,17 @@ def main() -> int:
         parser.error(
             "--rerun and --full-recode are mutually exclusive: --rerun "
             "retries only the rows whose last decision was `error`, while "
-            "--full-recode clears every fulltext:* tag and codes the whole "
+            "--full-recode clears this review's fulltext:* tags and codes "
+            "the whole "
             "eligible set. Pick one."
         )
 
-    prompt_template, fields, config_model, prompt_version = _load_screening_config(
-        args.config)
+    prompt_template, fields, config_model, prompt_version, config_mod = (
+        _load_screening_config(args.config)
+    )
+    # Namespace every tag and coding note this review writes. Resolved before
+    # the provider pre-flight so a missing prefix fails ahead of any spend.
+    ns = tag_prefix.resolve(args.tag_prefix, config_mod, args.config)
     # Resolve before the provider pre-flight below — that branches on the
     # model name to decide which API key to require.
     model = effective_model(
@@ -1605,8 +1651,11 @@ def main() -> int:
           f"collection={args.collection})...", flush=True)
     items = zot.collection_items(args.collection, item_type="journalArticle")
 
+    stage_prefix = tag_prefix.family(ns, STAGE_TAG_FAMILY)
+    abstract_prefix = tag_prefix.family(ns, ABSTRACT_TAG_FAMILY)
+
     if args.csv_backfill:
-        return _run_csv_backfill(zot, items, output_path)
+        return _run_csv_backfill(zot, items, output_path, stage_prefix)
 
     if args.apply_responses:
         return apply_responses(
@@ -1620,6 +1669,7 @@ def main() -> int:
             csv_columns=csv_columns,
             force=args.force_apply,
             skip_already_tagged=args.skip_already_tagged,
+            ns=ns,
         )
 
     # Narrow to what the abstract stage passed forward, before anything
@@ -1627,7 +1677,7 @@ def main() -> int:
     # and --apply-responses returns above: those apply decisions that
     # already exist rather than choosing what to decide, and their
     # populations are defined by the CSV and the manifest.
-    items, _stage_report = _abstract_stage_eligible(items)
+    items, _stage_report = _abstract_stage_eligible(items, abstract_prefix)
     print(_stage_report, flush=True)
 
     attachments = zot.all_attachments()
@@ -1642,14 +1692,14 @@ def main() -> int:
         wanted = {k.strip() for k in args.only_keys.split(",") if k.strip()}
         items = [it for it in items if it["key"] in wanted]
 
-    # --full-recode removes the fulltext:* tag from every targeted item,
+    # --full-recode removes this review's fulltext:* tag from every item,
     # forcing re-processing. The CSV backup already happened above.
     if args.full_recode:
-        print("--full-recode: clearing fulltext:* tags on all targeted items",
-              flush=True)
+        print(f"--full-recode: clearing {stage_prefix}* tags on all targeted "
+              f"items", flush=True)
         for it in items:
             try:
-                zot.update_tags(it["key"], remove_prefixed=[STAGE_TAG_PREFIX])
+                zot.update_tags(it["key"], remove_prefixed=[stage_prefix])
             except Exception as e:  # noqa: BLE001
                 print(f"  WARN: could not clear tag on {it['key']}: {e}",
                       flush=True)
@@ -1660,14 +1710,15 @@ def main() -> int:
         items = zot.collection_items(
             args.collection, item_type="journalArticle",
         )
-        items, _ = _abstract_stage_eligible(items)
+        items, _ = _abstract_stage_eligible(items, abstract_prefix)
         if args.only_keys:
             wanted = {k.strip() for k in args.only_keys.split(",") if k.strip()}
             items = [it for it in items if it["key"] in wanted]
 
     if not args.update_fields:
-        # Resume: skip items already carrying fulltext:include / fulltext:exclude.
-        tagged = _already_tagged(items)
+        # Resume: skip items already carrying this review's
+        # fulltext:include / fulltext:exclude.
+        tagged = _already_tagged(items, stage_prefix)
         last = _load_last_decisions(output_path)
         to_code = _select_to_code(
             items, tagged=tagged, last_decisions=last, rerun=args.rerun,
@@ -1766,7 +1817,7 @@ def main() -> int:
         only_keys: set[str] | None = None
         if args.only_keys:
             only_keys = {k.strip() for k in args.only_keys.split(",") if k.strip()}
-        to_update = _items_for_update_mode(items, only_keys)
+        to_update = _items_for_update_mode(items, only_keys, stage_prefix)
         if args.limit and args.limit < len(to_update):
             to_update = to_update[:args.limit]
         print(
@@ -1878,6 +1929,7 @@ def main() -> int:
                 fields=fields,
                 prompt_version=prompt_version,
                 timestamp=datetime.now(UTC).isoformat(),
+                ns=ns,
             )
 
         with concurrent.futures.ThreadPoolExecutor(
@@ -1971,6 +2023,7 @@ def main() -> int:
 
             apply_coded_row(
                 zot, row,
+                ns=ns,
                 fields=fields,
                 prompt_version=prompt_version,
                 output_path=output_path,
