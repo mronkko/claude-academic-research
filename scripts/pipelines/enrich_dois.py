@@ -6,6 +6,7 @@
 #     "requests>=2.31",
 #     "habanero>=1.2",
 #     "tenacity>=8.0",
+#     "httpx>=0.25",
 # ]
 # ///
 """Find and validate DOIs in a Zotero library (v0.5.0).

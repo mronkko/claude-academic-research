@@ -6,6 +6,7 @@
 #     "requests>=2.31",
 #     "urllib3>=2.0",
 #     "tenacity>=8.0",
+#     "httpx>=0.25",
 #     "habanero>=1.2",
 #     "pyalex>=0.15",
 #     "pybliometrics>=3.6",
