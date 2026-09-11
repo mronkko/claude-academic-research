@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.2] — 2026-09-11
+
+### Fixed
+
+- **`uv run enrich_dois.py` died on `import zotero_io`.** A script with a
+  PEP 723 block gets an isolated environment built from that block alone,
+  so anything it omits is absent at runtime. `zotero_io` imports `httpx`
+  at module scope, and `enrich_dois.py`, `enrich_pdfs.py` and
+  `enrich_abstracts.py` never declared it — `ModuleNotFoundError: No
+  module named 'httpx'` before argparse ever ran. This broke the
+  malformed-DOI repair path 0.23.1 had just started recommending.
+
+  Two things hid it. The unit suite runs against the dev `.venv`, where
+  `httpx` arrives via `zotero-mcp-server`, so every test passed. And uv
+  caches one environment per script and does not prune extraneous
+  packages from it, so the `enrich_pdfs` cache still held an `httpx`
+  installed back when pyzotero depended on one — that script kept
+  working on machines that had run it before while failing for anyone
+  starting fresh. pyzotero 1.15.1 depends on `httpx2`, which does not
+  provide the `httpx` import name, so nothing supplies it any more.
+
+  All three blocks now declare `httpx>=0.25`, matching the seven scripts
+  that already did. `tests/unit/test_pep723_script_deps.py` guards the
+  rule, deriving the required set from `zotero_io`'s own imports via AST
+  so it follows the module rather than becoming a second list to keep in
+  sync. Reported by a peer session.
+
 ## [0.23.1] — 2026-09-11
 
 ### Fixed
