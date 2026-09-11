@@ -76,6 +76,7 @@ for _p in (str(SCRIPT_DIR), str(SCRIPTS_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+import doi_utils  # noqa: E402
 import fetchers  # noqa: E402
 import http_client  # noqa: E402
 import pdf_fetch_log  # noqa: E402
@@ -2371,7 +2372,9 @@ def _run_browser_in_process(
     # what *could* be asked, and the wording below says "up to".
     preflight_dois = [
         doi for doi in (
-            (zi.get("data", {}).get("DOI") or "").strip().lower()
+            doi_utils.strip_doi_prefixes(
+                (zi.get("data", {}).get("DOI") or "").strip()
+            )[0].lower()
             for zi in to_process
         ) if doi
     ]
@@ -2426,7 +2429,13 @@ def _run_browser_in_process(
 
     for zot_item in to_process:
         item_data = zot_item.get("data", {})
-        doi = (item_data.get("DOI") or "").strip().lower()
+        # Strips a `https://doi.org/` (or `doi:`) wrapper before this DOI
+        # is used for host/prefix routing and handed to the Pass 2 API
+        # retry below (`fetch_pdf(doi, ..., bypass_prefix_filter=True)`,
+        # which interpolates it straight into the request URL).
+        doi = doi_utils.strip_doi_prefixes(
+            (item_data.get("DOI") or "").strip()
+        )[0].lower()
         if not doi:
             continue
         # issn/pub_date/volume feed the Alma ISSN-fallback query in
@@ -3009,8 +3018,12 @@ def _try_cascade(
     # which normalises before building its cache filename. Without this
     # the same mixed-case DOI cached by one path is invisible to the
     # other, and a PDF already on disk gets re-fetched or declared
-    # missing.
-    doi = (d.get("DOI") or "").strip().lower()
+    # missing. Also strips a `https://doi.org/` (or `doi:`) wrapper —
+    # Zotero items imported via native EBSCO-export import carry the DOI
+    # in that form, which every prefix-filtering fetcher's own
+    # `doi.startswith(prefix)` check silently fails, and which becomes a
+    # malformed request URL if handed to a fetcher unstripped.
+    doi = doi_utils.strip_doi_prefixes((d.get("DOI") or "").strip())[0].lower()
     if not doi:
         return None
     item_type = d.get("itemType", "") or ""
@@ -3125,7 +3138,9 @@ def _run_api_cascade(
     # and having nothing.
     eligible, unhandled = [], []
     for it in to_process:
-        doi = (it.get("data", {}).get("DOI") or "").strip()
+        doi = doi_utils.strip_doi_prefixes(
+            (it.get("data", {}).get("DOI") or "").strip()
+        )[0]
         if any(src.handles_doi(doi) for src in sources):
             eligible.append(it)
         else:
@@ -3282,7 +3297,10 @@ def _attach_from_cache(
         (it, path)
         for it in to_process
         if (path := _cached_pdf_for(
-            it.get("data", {}).get("DOI") or "", args.cache_dir,
+            doi_utils.strip_doi_prefixes(
+                (it.get("data", {}).get("DOI") or "").strip()
+            )[0],
+            args.cache_dir,
         )) is not None
     ]
     if not hits:

@@ -146,3 +146,38 @@ def test_classify_missing_doi_ignores_non_journal_articles() -> None:
     r = mod._classify(items, {})
     assert r["missing_doi_count"] == 1          # only the journalArticle
     assert r["missing_doi"][0]["key"] == "A1"
+
+
+# ---------------------------------------------------------------------------
+# malformed_doi classification — URL-wrapped DOIs
+# ---------------------------------------------------------------------------
+
+
+def test_classify_flags_url_wrapped_doi_as_malformed() -> None:
+    """A DOI stored as `https://doi.org/10.xxxx/...` reads as present —
+    it must not count as missing_doi — but every prefix-filtering PDF
+    fetcher matches on a bare `10.xxxx/` prefix, so it needs its own
+    category to avoid silently masquerading as 'no route available'."""
+    mod = _load()
+    items = [_item("A1", title="EBSCO import", doi="https://doi.org/10.1016/j.example.2020.01.001")]
+    r = mod._classify(items, {})
+    assert r["missing_doi_count"] == 0
+    assert r["malformed_doi_count"] == 1
+    assert r["malformed_doi"][0]["key"] == "A1"
+
+
+def test_classify_does_not_flag_bare_doi_as_malformed() -> None:
+    mod = _load()
+    items = [_item("A1", title="Clean DOI", doi="10.1016/j.example.2020.01.001")]
+    r = mod._classify(items, {})
+    assert r["malformed_doi_count"] == 0
+
+
+def test_classify_malformed_doi_does_not_double_count_missing() -> None:
+    """A journalArticle with no DOI at all is missing_doi, not
+    malformed_doi — the two categories are mutually exclusive."""
+    mod = _load()
+    items = [_item("A1", title="No DOI", doi="")]
+    r = mod._classify(items, {})
+    assert r["missing_doi_count"] == 1
+    assert r["malformed_doi_count"] == 0

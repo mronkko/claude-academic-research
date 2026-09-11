@@ -61,9 +61,12 @@ PREPRINT_VERSION_TAG = "pdf:preprint-version"
 
 
 def _classify(items: list[dict], attachments_by_parent: dict[str, list[dict]]) -> dict:
+    import doi_utils
+
     missing_abstract: list[dict] = []
     missing_pdf: list[dict] = []
     missing_doi: list[dict] = []
+    malformed_doi: list[dict] = []
     empty_stubs: list[dict] = []
     tdm_recovered: list[dict] = []
     preprint_version: list[dict] = []
@@ -98,6 +101,22 @@ def _classify(items: list[dict], attachments_by_parent: dict[str, list[dict]]) -
         # types often legitimately lack DOIs.
         if item_type == "journalArticle" and not doi.strip():
             missing_doi.append(identifier)
+        elif doi_utils.strip_doi_prefixes(doi)[1]:
+            # A DOI wrapped in a `https://doi.org/` URL (or `doi:`
+            # prefix) reads as present, so it never trips the
+            # missing-DOI check above — but every prefix-filtering PDF
+            # fetcher (sciencedirect / wiley / springer) matches on
+            # `doi.startswith(<registrant prefix>)`, which a wrapped DOI
+            # never satisfies. enrich_pdfs.py's own cascade normalises
+            # before that comparison (see its `doi_utils` import), so
+            # this no longer silently strands the item there — but it
+            # would otherwise masquerade as "no route available" rather
+            # than as the storage-format problem it actually is. Seen in
+            # practice from native Zotero EBSCO-export imports, which
+            # bypass import_to_zotero.py's Crossref-based DOI handling.
+            # Feeds enrich_dois.py --validate --fix-malformed via
+            # audit.malformed_doi.keys.
+            malformed_doi.append(identifier)
 
         atts = attachments_by_parent.get(key, [])
         pdfs = [a for a in atts if a.get("data", {}).get("contentType") == "application/pdf"]
@@ -122,11 +141,13 @@ def _classify(items: list[dict], attachments_by_parent: dict[str, list[dict]]) -
         "empty_stub_count": len(empty_stubs),
         "missing_abstract_count": len(missing_abstract),
         "missing_doi_count": len(missing_doi),
+        "malformed_doi_count": len(malformed_doi),
         "tdm_recovered_count": len(tdm_recovered),
         "preprint_version_count": len(preprint_version),
         "missing_abstract": missing_abstract,
         "missing_pdf": missing_pdf,
         "missing_doi": missing_doi,
+        "malformed_doi": malformed_doi,
         "empty_stubs": empty_stubs,
         "tdm_recovered": tdm_recovered,
         "preprint_version": preprint_version,
@@ -563,7 +584,8 @@ def main() -> int:
     # stages can consume them via --filter-keys-file without any jq step.
     stem = out_path.with_suffix("")  # strip .json
     keys_files: dict[str, Path] = {}
-    for category in ("missing_abstract", "missing_pdf", "missing_doi", "empty_stubs",
+    for category in ("missing_abstract", "missing_pdf", "missing_doi",
+                     "malformed_doi", "empty_stubs",
                      "tdm_recovered", "preprint_version"):
         keys_path = Path(f"{stem}.{category}.keys")
         keys_path.write_text(
@@ -581,17 +603,21 @@ def main() -> int:
     print(f"  Empty PDF stubs:            {report['empty_stub_count']}")
     print(f"  Missing abstract:           {report['missing_abstract_count']}")
     print(f"  Missing DOI:                {report['missing_doi_count']}")
+    print(f"  Malformed DOI (URL-wrapped):{report['malformed_doi_count']:>4}")
     print(f"  TDM-recovered PDFs:         {report['tdm_recovered_count']}")
     print(f"  Preprint-version PDFs:      {report['preprint_version_count']}")
     print(f"  Details written to:         {out_path}")
     print(f"  Keys files written to:      "
-          f"{stem}.{{missing_abstract,missing_pdf,missing_doi,empty_stubs,"
-          f"tdm_recovered,preprint_version}}.keys")
+          f"{stem}.{{missing_abstract,missing_pdf,missing_doi,malformed_doi,"
+          f"empty_stubs,tdm_recovered,preprint_version}}.keys")
     print()
     print("Next steps — feed the .keys files directly into pipeline stages:")
     if report["missing_doi_count"]:
         print(f"  uv run {SCRIPT_DIR}/enrich_dois.py "
               f"--find-missing --filter-keys-file {keys_files['missing_doi']}")
+    if report["malformed_doi_count"]:
+        print(f"  uv run {SCRIPT_DIR}/enrich_dois.py --validate --fix-malformed "
+              f"--filter-keys-file {keys_files['malformed_doi']}")
     if report["missing_abstract_count"]:
         print(f"  uv run {SCRIPT_DIR}/enrich_abstracts.py "
               f"--filter-keys-file {keys_files['missing_abstract']}")
