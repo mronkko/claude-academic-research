@@ -345,7 +345,12 @@ hierarchy is:
    lock and crash Zotero Desktop's local server — this is exactly what
    happened before this sentence existed. A handful of DOIs is fine;
    anything screening-scale goes through `import_to_zotero.py`
-   (tier 3) instead. (A fix that batches creates, narrows the lock,
+   (tier 3) instead. That script tags each item with the query that
+   found it, so it needs a tag namespace: run it from a project whose
+   `screening_config.py` declares `TAG_PREFIX`, or pass
+   `--tag-prefix <name>` for a standalone import. It refuses to run
+   without one rather than writing provenance tags that belong to no
+   review. (A fix that batches creates, narrows the lock,
    and makes `attach_mode="none"` actually skip the PDF step is in
    progress upstream — once it ships and the wizard's version floor
    moves past it, revisit these numbers.)
