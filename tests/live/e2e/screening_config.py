@@ -14,6 +14,11 @@ caps full-text coding at FULLTEXT_LIMIT items regardless of how many pass
 abstract screening.
 """
 
+# The harness's own tag namespace. Distinct from anything a real review
+# would pick, so a mini_slr run against a shared library is trivially
+# identifiable — and its teardown can never reach another review's tags.
+TAG_PREFIX = "mini-slr"
+
 ABSTRACT_SCREENING_MODEL = "claude-haiku-4-5-20251001"
 ABSTRACT_SCREENING_PROMPT_VERSION = "e2e-v1"
 

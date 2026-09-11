@@ -1480,6 +1480,53 @@ S10's `csl_json_to_zotero` reasoning) — but it surfaced two live defects.
 
 ## Tier 3 — high effort, higher risk; only when touching the area
 
+- **S24 — multi-select coded-value tags.** `FULLTEXT_CODING_FIELDS`
+  entries can declare a closed `values` vocabulary and set
+  `"tag": True`, which writes one `<prefix>/<field>:<value>` tag per
+  include. Single-valued only: `coding_value_tag_ops`
+  ([scripts/pipelines/fulltext_code.py](scripts/pipelines/fulltext_code.py))
+  takes the field's string value and emits at most one tag, and the
+  family goes into `remove_prefixed` so a re-code replaces rather than
+  accumulates. A genuinely multi-select dimension — "which of these six
+  methods does the paper use" — cannot be expressed. Doing it means a
+  `"multi": True` key, a list-valued answer in the prompt schema, a
+  parse that splits it, and a flip semantics decision: `remove_prefixed`
+  on the family plus N adds still works, but only if the whole set is
+  rewritten every time, which is fine and worth stating in the docstring
+  rather than discovering. Deferred because the single-valued case
+  covers the designs this plugin's SLRs actually code for, and because
+  `parse_coding_response` currently JSON-dumps a list answer into the
+  CSV cell — that needs settling first.
+
+- **S25 — migrating a review that predates tag prefixes.** Namespacing
+  shipped with no migration path, deliberately: the user's other reviews
+  were finished and `TAG_PREFIX` is a hard requirement with no
+  empty-string opt-out. A downstream user with a half-screened review
+  under bare `abstract:*` tags has no route forward but to re-screen.
+  What it would take: a `manage_tags.py --adopt-unprefixed <family>...`
+  that finds bare tags in the configured families, adds the namespaced
+  equivalent and removes the bare one in a single PATCH per item, with
+  the usual dry-run. The hazard to think through first is that a bare
+  tag in a shared library may belong to *any* of several reviews, and
+  nothing records which — so adoption is only safe scoped to a
+  collection the user asserts is one review's. Not worth building until
+  someone reports needing it.
+
+- **S26 — `merge_duplicate_item` unions tag sets across reviews.**
+  [zotero_io.py](scripts/pipelines/zotero_io.py)'s "Step 1: tag union"
+  means merging two Zotero duplicates produces an item carrying both
+  items' tags. Prefixes narrow this — two *reviews* can no longer
+  produce contradictory `abstract:*` tags, since each writes its own
+  namespace — but they do not fix it *within* one review: merging an
+  item tagged `<prefix>/abstract:include` with one tagged
+  `<prefix>/abstract:exclude` still yields an item holding both, and
+  `items_with_stage_tag` in exact mode counts it as decided without
+  saying which way. The fix is to detect a post-merge collision within a
+  single namespaced family and refuse, or to prefer the newer decision
+  and log the discard. Needs a decision about which, and that decision
+  wants a real collision to look at.
+
+
 - **P2** — decompose `enrich_pdfs.py` (1369 LOC) into
   `BrowserOrchestrator` + per-publisher handlers. The `_drive_handler`
   signature takes 8 parameters + callback — that's a class wearing a

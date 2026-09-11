@@ -213,12 +213,24 @@ manifest carries what was asked. Apply writes the CSV log rows, the
 stage tags and (for coding) the child notes — the same artefacts a
 synchronous run produces, from the same code.
 
+Both land under the project's `TAG_PREFIX` namespace, and the manifest
+records which prefix it was emitted under. **Apply refuses a manifest
+whose prefix no longer matches the config**, naming both. That is not
+pedantry: emit and apply can be days apart, `TAG_PREFIX` lives in a file
+the user edits, and applying regardless would file a whole run's verdicts
+into some other review's namespace with nothing to say it happened. The
+fix is to restore the prefix, pass `--tag-prefix <the-emitted-one>`, or
+re-emit — the error message says which.
+
 **Apply is a write path with no LLM in it, often run days later.** That
 is what makes it worth slowing down for:
 
 - `--skip-already-tagged` skips items tagged since the manifest was
   emitted. Without it, apply overwrites decisions made in between. The
   applier warns when it finds any; **relay the count before writing.**
+- A manifest emitted before tag prefixes existed carries no prefix at
+  all, so nothing can say which review it belongs to. Apply refuses it;
+  re-emit.
 - A coding manifest freezes `coding_fields`. If `screening_config.py`
   has since gained or lost a field, apply refuses and names the
   difference. The fix is normally to re-emit, not to force. Do not reach

@@ -128,10 +128,21 @@ canonical longer entry.
   and Meta-Analyses*. The reporting standard the systematic-review
   skill follows. Defines the search → screen → code → extract flow
   the pipeline orchestrates.
-- **Stage tag** — Zotero tag with a `stage:value` shape that records
-  pipeline position: `abstract:include`, `fulltext:exclude`,
-  `qa-adjudicated-include`, etc. Tags are the authoritative state;
-  CSV logs are run-history.
+- **Tag prefix** — the per-review namespace every Zotero tag the
+  pipeline writes is filed under, declared as `TAG_PREFIX` in the
+  project's `screening_config.py` and mandatory. A review with
+  `TAG_PREFIX = "agentic-ai"` writes `agentic-ai/abstract:include`.
+  It exists because one Zotero library usually holds several reviews:
+  the prefix is what lets the tag selector show one review's tags, and
+  what stops two reviews writing contradictory decisions into the same
+  `abstract:*` family. Tags stating a fact about the *paper* rather than
+  this review's opinion of it — `predatory:flag`, `retracted:flag`,
+  `pdf:*` — stay unprefixed on purpose, so reviews sharing a library
+  share them.
+- **Stage tag** — Zotero tag with a `<prefix>/stage:value` shape that
+  records pipeline position: `agentic-ai/abstract:include`,
+  `agentic-ai/fulltext:exclude`, `agentic-ai/qa-adjudicated-include`,
+  etc. Tags are the authoritative state; CSV logs are run-history.
 - **FE-code** — *Full-text exclusion code*. Reasons for excluding
   at full-text screening: FE2 (book chapter), FE3 (other
   non-journal), FE6 (no fulltext available), and project-specific

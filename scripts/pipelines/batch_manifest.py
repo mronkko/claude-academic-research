@@ -208,7 +208,7 @@ def read_manifest(path: Path) -> tuple[dict, list[dict]]:
             f"current version rather than applying a format it may "
             f"misread."
         )
-    for field in ("run_id", "stage"):
+    for field in ("run_id", "stage", "tag_prefix"):
         seen = {r.get(field) for r in rows}
         if len(seen) != 1:
             raise ManifestError(
@@ -222,10 +222,40 @@ def read_manifest(path: Path) -> tuple[dict, list[dict]]:
     return {
         "run_id": rows[0]["run_id"],
         "stage": rows[0]["stage"],
+        # The review the decisions belong to. Carried on the rows so apply
+        # can refuse a manifest emitted under a different `TAG_PREFIX` —
+        # otherwise a config edit between emit and apply files a whole
+        # run's verdicts into some other review's namespace, silently.
+        "tag_prefix": rows[0].get("tag_prefix", ""),
         "schema_version": SCHEMA_VERSION,
         "n_requests": len(rows),
         "sha256": file_sha256(path),
     }, rows
+
+
+def check_tag_prefix(header: dict, ns: str, path: Path) -> None:
+    """Refuse to apply a manifest emitted under a different namespace.
+
+    Emit and apply can be days apart, and `TAG_PREFIX` lives in a file the
+    user edits. Applying regardless would write a run's decisions into the
+    wrong review — recoverable only by knowing it happened, which nothing
+    would tell you.
+    """
+    emitted = (header.get("tag_prefix") or "").strip()
+    current = ns.rstrip("/")
+    if not emitted:
+        raise ManifestError(
+            f"{path}: emitted before tag prefixes existed, so there is no "
+            f"record of which review it belongs to. Re-emit it."
+        )
+    if emitted != current:
+        raise ManifestError(
+            f"{path}: emitted under tag prefix `{emitted}`, but this project "
+            f"now declares `{current}`.\n"
+            f"Applying it would file this run's decisions into the wrong "
+            f"review. Either restore TAG_PREFIX to `{emitted}`, or pass "
+            f"`--tag-prefix {emitted}`, or re-emit the manifest."
+        )
 
 
 def file_sha256(path: Path) -> str:

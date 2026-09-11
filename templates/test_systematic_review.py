@@ -72,6 +72,26 @@ CODED_PAPERS     = os.path.join(PROJECT_ROOT, "analysis/results/coded_papers.csv
 # `getattr(...)`). Test 9 verifies the screening logs match the config.
 SCREENING_CONFIG = os.path.join(PROJECT_ROOT, "screening_config.py")
 
+def _tag_prefix() -> str:
+    """This review's tag namespace, read from `screening_config.py`.
+
+    Every tag the pipeline writes for this review is namespaced
+    (`agentic-ai/fulltext:include`), so these checks have to know the
+    prefix to find them. Read by regex rather than import, like the model
+    pins above — the config is a user-authored file and this test suite
+    runs without the plugin's `sys.path` set up.
+
+    Returns `""` when the config or the constant is absent, which makes the
+    tag checks below skip rather than fail: a project that has not reached
+    screening yet has nothing to check.
+    """
+    if not os.path.exists(SCREENING_CONFIG):
+        return ""
+    with open(SCREENING_CONFIG, encoding="utf-8") as f:
+        m = re.search(r'^TAG_PREFIX\s*=\s*"([^"]+)"', f.read(), re.M)
+    return f"{m.group(1)}/" if m else ""
+
+
 # Legacy-layout scripts kept for projects that copied the screening
 # scripts into `scripts/` alongside the plugin invocation. Test 8
 # silently passes when neither copy exists.
@@ -300,12 +320,15 @@ def test_fulltext_tags_consistent_with_csv_log() -> None:
     items = _live_zotero_items()
     if items is None:
         return
+    ns = _tag_prefix()
+    if not ns:
+        return
     tag_decision: dict[str, str] = {}
     for it in items:
         tags = _tags_of(it)
-        if "fulltext:include" in tags:
+        if f"{ns}fulltext:include" in tags:
             tag_decision[it["key"]] = "include"
-        elif "fulltext:exclude" in tags:
+        elif f"{ns}fulltext:exclude" in tags:
             tag_decision[it["key"]] = "exclude"
 
     if not os.path.exists(FULLTEXT_LOG):
@@ -347,13 +370,21 @@ def test_fulltext_tags_consistent_with_csv_log() -> None:
 
 
 def test_fulltext_include_items_have_slr_coding_note() -> None:
-    """Every item tagged `fulltext:include` must carry a parseable
-    `SLR Coding` child note. Without it, `export_coded_includes.py`
-    cannot extract the coded fields and the manuscript has nothing
-    to read. Skipped when Zotero is unreachable."""
+    """Every item tagged `<prefix>/fulltext:include` must carry a parseable
+    `SLR Coding: <prefix>` child note. Without it,
+    `export_coded_includes.py` cannot extract the coded fields and the
+    manuscript has nothing to read. Skipped when Zotero is unreachable.
+
+    Both the tag and the note marker are namespaced, so an item this
+    review included is not excused by a *different* review's coding note
+    sitting on the same item."""
     items = _live_zotero_items()
     if items is None:
         return
+    ns = _tag_prefix()
+    if not ns:
+        return
+    marker = f"<h1>SLR Coding: {ns.rstrip('/')}</h1>"
     try:
         from pyzotero import zotero  # type: ignore[import-not-found]
     except ImportError:
@@ -366,7 +397,7 @@ def test_fulltext_include_items_have_slr_coding_note() -> None:
 
     missing: list[str] = []
     for it in items:
-        if "fulltext:include" not in _tags_of(it):
+        if f"{ns}fulltext:include" not in _tags_of(it):
             continue
         key = it["key"]
         try:
@@ -375,6 +406,7 @@ def test_fulltext_include_items_have_slr_coding_note() -> None:
             continue
         has_note = any(
             (c.get("data", {}).get("itemType") == "note"
+             and marker in (c.get("data", {}).get("note") or "")
              and "SLR_CODING_DATA" in (c.get("data", {}).get("note") or ""))
             for c in children
         )
@@ -382,8 +414,8 @@ def test_fulltext_include_items_have_slr_coding_note() -> None:
             missing.append(key)
 
     assert not missing, (
-        f"{len(missing)} item(s) tagged fulltext:include lack an SLR "
-        f"Coding child note: {missing[:5]}. Re-run `fulltext_code.py "
+        f"{len(missing)} item(s) tagged {ns}fulltext:include lack a "
+        f"`{marker}` child note: {missing[:5]}. Re-run `fulltext_code.py "
         f"--full-recode --only-keys <...>` for the affected items."
     )
 

@@ -206,6 +206,7 @@ def emit(tmp_path: Path, items=None, max_input_chars: int = 0, run_id: str = "")
         library=LIBRARY,
         collection=COLLECTION,
         max_input_chars=max_input_chars,
+        ns=NS,
     )
     manifest = tmp_path / "requests.jsonl"
     bm.write_manifest(manifest, rows)
@@ -287,7 +288,7 @@ def test_emit_execute_apply(tmp_path, monkeypatch) -> None:
         tag_batch_size=50,
         force=False,
         skip_already_tagged=False,
-        stage_prefix=ABSTRACT,
+        ns=NS,
     ) == 0
 
     logged = _read_csv(output)
@@ -326,7 +327,7 @@ def test_the_csv_records_the_model_that_actually_ran(tmp_path, monkeypatch) -> N
         zot, manifest_path=manifest, responses_path=responses_path,
         output_path=output, tag_batch_size=50, force=False,
         skip_already_tagged=False,
-        stage_prefix=ABSTRACT,
+        ns=NS,
     )
     assert _read_csv(output)[0]["model"] == "org/actually-ran"
 
@@ -349,7 +350,7 @@ def test_the_timestamp_is_when_the_model_answered(tmp_path, monkeypatch) -> None
         zot, manifest_path=manifest, responses_path=responses_path,
         output_path=output, tag_batch_size=50, force=False,
         skip_already_tagged=False,
-        stage_prefix=ABSTRACT,
+        ns=NS,
     )
     assert _read_csv(output)[0]["timestamp"] == responses[0]["generated_at"]
 
@@ -376,7 +377,7 @@ def test_the_batch_path_writes_what_the_synchronous_path_writes(
         zot, manifest_path=manifest, responses_path=responses_path,
         output_path=output, tag_batch_size=50, force=False,
         skip_already_tagged=False,
-        stage_prefix=ABSTRACT,
+        ns=NS,
     )
     via_cluster = _read_csv(output)[0]
 
@@ -422,7 +423,7 @@ def test_a_degenerate_run_is_flagged_by_the_runner_and_refused_by_the_applier(
             zot, manifest_path=manifest, responses_path=responses_path,
             output_path=output, tag_batch_size=50, force=False,
             skip_already_tagged=False,
-            stage_prefix=ABSTRACT,
+            ns=NS,
         )
     assert not output.exists()
     assert zot.tag_calls == []
@@ -471,7 +472,7 @@ def test_a_truncated_answer_becomes_an_error_not_a_decision(
         zot, manifest_path=manifest, responses_path=responses_path,
         output_path=output, tag_batch_size=50, force=False,
         skip_already_tagged=False,
-        stage_prefix=ABSTRACT,
+        ns=NS,
     )
     rows = {r["item_key"]: r for r in _read_csv(output)}
     assert rows["BBBB2222"]["decision"] == "error"
@@ -507,7 +508,7 @@ def test_a_run_where_every_answer_was_cut_off_is_refused(
             zot, manifest_path=manifest, responses_path=responses_path,
             output_path=tmp_path / "log.csv", tag_batch_size=50, force=False,
             skip_already_tagged=False,
-            stage_prefix=ABSTRACT,
+            ns=NS,
         )
 
 
@@ -541,7 +542,7 @@ def test_a_request_too_long_for_the_context_is_recorded_not_sent(
         zot, manifest_path=manifest, responses_path=responses_path,
         output_path=output, tag_batch_size=50, force=False,
         skip_already_tagged=False,
-        stage_prefix=ABSTRACT,
+        ns=NS,
     )
     rows = {r["item_key"]: r for r in _read_csv(output)}
     assert rows["AAAA1111"]["decision"] == "include"
@@ -602,7 +603,7 @@ def test_the_sidecar_still_owes_the_log_a_row(tmp_path, monkeypatch) -> None:
         zot, manifest_path=manifest, responses_path=responses_path,
         output_path=output, tag_batch_size=50, force=False,
         skip_already_tagged=False,
-        stage_prefix=ABSTRACT,
+        ns=NS,
     )
     # `too_long_for_context` is not one of the skip reasons that owes a
     # CSV row — the item was never attempted — but the sidecar records it.
@@ -631,7 +632,7 @@ def test_a_partial_run_leaves_the_rest_re_runnable(tmp_path, monkeypatch) -> Non
         zot, manifest_path=manifest, responses_path=responses_path,
         output_path=output, tag_batch_size=50, force=False,
         skip_already_tagged=False,
-        stage_prefix=ABSTRACT,
+        ns=NS,
     )
     assert len(zot.tags_by_key) == 1
 
@@ -652,7 +653,7 @@ def test_responses_from_another_run_are_refused(tmp_path, monkeypatch) -> None:
             _FakeZot(), manifest_path=first, responses_path=other_responses,
             output_path=tmp_path / "log.csv", tag_batch_size=50, force=False,
             skip_already_tagged=False,
-            stage_prefix=ABSTRACT,
+            ns=NS,
         )
 
 

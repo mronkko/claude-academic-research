@@ -215,6 +215,7 @@ def build_manifest_rows(
     doi_to_query: dict[str, str],
     library: dict,
     collection: str,
+    ns: str,
     max_input_chars: int = 0,
 ) -> tuple[list[dict], list[dict]]:
     """`(manifest_rows, skipped)` for a set of items to screen.
@@ -254,6 +255,9 @@ def build_manifest_rows(
             "ordinal": 0,
             "item_key": item["key"],
             "stage": batch_manifest.STAGE_ABSTRACT,
+            # Which review these decisions belong to. Apply refuses a
+            # manifest whose prefix no longer matches the config.
+            "tag_prefix": ns.rstrip("/"),
             "mode": "screen",
             "library": library,
             "collection": collection,
@@ -322,7 +326,7 @@ def apply_responses(
     tag_batch_size: int,
     force: bool,
     skip_already_tagged: bool,
-    stage_prefix: str,
+    ns: str,
 ) -> int:
     """Apply an executed manifest: CSV rows, then Zotero stage tags.
 
@@ -330,7 +334,9 @@ def apply_responses(
     files, which is what lets the generation step happen on a machine
     this one never talks to.
     """
-    _, requests = batch_manifest.read_manifest(manifest_path)
+    header, requests = batch_manifest.read_manifest(manifest_path)
+    batch_manifest.check_tag_prefix(header, ns, manifest_path)
+    stage_prefix = tag_prefix.family(ns, STAGE_TAG_FAMILY)
     _, responses = batch_manifest.read_responses(responses_path)
     paired, unanswered, orphaned = batch_manifest.join_responses(
         requests, responses,
@@ -629,7 +635,7 @@ def main() -> int:
             tag_batch_size=args.tag_batch_size,
             force=args.force_apply,
             skip_already_tagged=args.skip_already_tagged,
-            stage_prefix=stage_prefix,
+            ns=ns,
         )
 
     tagged = _already_tagged(coll_items, stage_prefix)
@@ -668,6 +674,7 @@ def main() -> int:
             doi_to_query=doi_to_query,
             library=zot.library_ref(),
             collection=args.collection,
+            ns=ns,
             max_input_chars=args.max_input_chars,
         )
         if not rows:

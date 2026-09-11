@@ -381,6 +381,78 @@ between scope.md and search_config.py.
 
 ---
 
+## Tag prefix (required before any Zotero write)
+
+Run this straight after scope lock-in. It needs the scope brief (the
+default is proposed from the focal construct) and it must happen before
+`import_to_zotero.py`, which is the first thing that writes a tag.
+
+Every Zotero tag recording *this review's* judgement is namespaced:
+`agentic-ai/abstract:include`, not a bare `abstract:include`. The prefix
+is mandatory — the pipeline scripts exit with an error if
+`screening_config.py` has no `TAG_PREFIX`.
+
+### Explain why, briefly
+
+Two reasons, both worth one sentence to the user:
+
+1. **Filtering.** In a library with hundreds of personal tags there is no
+   way to make Zotero's tag selector show just this review's tags.
+   `abstract:` and `fulltext:` are the plugin's vocabulary, so they
+   distinguish nothing. Typing the prefix into the selector isolates one
+   review.
+2. **Collisions.** One library usually ends up holding several reviews.
+   Without a namespace they share the `abstract:*` family, and a Zotero
+   duplicate merge unions tag sets — leaving one item carrying two
+   reviews' contradictory decisions with no way to tell which said what.
+
+### Propose a default
+
+Derive it from the scope brief's focal construct and keep it short —
+the user reads it on every tag. `ai-agents-teams` for a review of AI
+agents in team decision-making; `growth-aspirations` for one on
+entrepreneurial growth aspirations. Offer it as a proposal, not a
+prescription.
+
+Rules: 1-32 characters, lowercase letters, digits and interior hyphens.
+No spaces, no `/`, no `:`, and it may not start or end with a hyphen.
+
+### Show what they are choosing
+
+Run the helper with `--dry-run` and show the user its output — it prints
+the actual tags the review will produce under the proposed prefix, plus
+the tags that deliberately stay global:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/set_tag_prefix.py" \
+    --prefix <proposed-prefix> --dry-run
+```
+
+Once the user confirms, write it:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/set_tag_prefix.py" \
+    --prefix <confirmed-prefix>
+```
+
+Do not hand-edit `TAG_PREFIX`. The helper validates before the value can
+reach Zotero, and an invalid prefix is otherwise discovered only after it
+has been written onto hundreds of items.
+
+### Record it
+
+Add the prefix to `.claude/systematic-review/scope.md` and to the project
+`CLAUDE.md`, next to the `## Zotero library` block. A later session
+opening the project needs to know which namespace is this review's
+without inferring it from tags.
+
+**Changing it mid-review orphans every tag already written.** Resume is
+tag-driven, so already-screened items look unscreened and get re-screened
+at full cost. If the user wants to change it after screening has started,
+say this plainly first.
+
+---
+
 ## Choosing the screening model
 
 Model choice has three layers. **The provider** is a machine-wide
@@ -665,7 +737,7 @@ criterion after seeing real decisions: bump
 `ABSTRACT_SCREENING_PROMPT_VERSION` and have the user re-approve.
 
 To re-screen items already decided under the old version, **remove
-their `abstract:*` tags first** — resume is tag-driven, so
+their `<prefix>/abstract:*` tags first** — resume is tag-driven, so
 `abstract_screen.py` skips anything already tagged and a plain re-run
 does nothing. `abstract_screen.py` has no `--rerun` or `--full-recode`
 flag; this instruction previously named `--rerun`, which that script
@@ -697,19 +769,49 @@ fixed before coding starts.
    each field needs a `name`, a `description` written for an LLM
    reader, and ideally an `example`.
 
-2. Fill in `FULLTEXT_CODING_SYSTEM_PROMPT` placeholders: research
+2. **Ask which categorical fields should become Zotero tags.** A field
+   that declares a closed `values` list can also set `"tag": True`, and
+   each include then gets one `<prefix>/<field>:<value>` tag — which
+   turns Zotero's tag selector into a way to browse the corpus by that
+   dimension. Walk the categorical fields with the user and ask which
+   ones they would actually want to filter by.
+
+   Two things to tell them:
+
+   - **Only a closed vocabulary can be tagged.** Free text would produce
+     one tag per paper. `"tag": True` without `values` is a config error
+     the script refuses at load time.
+   - **Count the categories first.** Five values is useful in a tag
+     selector; forty is noise. If a field's vocabulary is long, or the
+     user is unsure it will be interesting to sort by, leave it untagged
+     — it still lands in the note and the export CSV, which is where the
+     analysis reads it from anyway.
+
+   Say that the choice is reversible in both directions: add `"tag": True`
+   and re-code to gain a family, or drop one they regret with
+
+   ```bash
+   uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/manage_tags.py \
+       --group <id> --collection <key> --prune <field> --apply
+   ```
+
+   `manage_tags.py --list` first shows how many distinct values each
+   family actually produced, which is usually what settles it.
+
+3. Fill in `FULLTEXT_CODING_SYSTEM_PROMPT` placeholders: research
    question (same as stage 1), stage-2 criteria (what the full
    text must show that the abstract could not), and exclusion
    codes `FE1…FE5`.
 
-3. Show the user the full schema (every field) and the prompt.
+4. Show the user the full schema (every field) and the prompt.
    Ask them to approve field-by-field — adding a field mid-run
    costs a re-code of every already-coded paper.
 
-4. Bump `FULLTEXT_CODING_PROMPT_VERSION` to a fresh string.
+5. Bump `FULLTEXT_CODING_PROMPT_VERSION` to a fresh string.
 
-5. Write the revised file. Append a one-line summary to
-   `.claude/systematic-review/scope.md`.
+6. Write the revised file. Append a one-line summary to
+   `.claude/systematic-review/scope.md`, including which fields are
+   tagged.
 
 **Self-check before every `fulltext_code.py` call:** does
 `FULLTEXT_CODING_SYSTEM_PROMPT` contain any `<INSERT` /
@@ -723,9 +825,9 @@ on scope:
 
 - **Add or revise specific fields (`--update-fields`)** — preferred for
   additive schema changes (new field) or guideline rewrites for 1–3 fields.
-  This mode selects items already tagged `fulltext:include`, calls the LLM for
+  This mode selects items already tagged `<prefix>/fulltext:include`, calls the LLM for
   all fields (using the updated config), then merges only the named fields into
-  the existing `SLR Coding` note without touching any other field values or the
+  the existing `SLR Coding: <prefix>` note without touching any other field values or the
   screening decision. Adjudicator edits to the *targeted* fields are
   overwritten (warn the user); adjudicator edits to all other fields are
   preserved. Bump `FULLTEXT_CODING_PROMPT_VERSION` before invoking so the log
@@ -741,8 +843,9 @@ on scope:
 
 - **Full schema overhaul (`--full-recode`)** — for major version changes
   where every field needs a fresh extraction under the new prompt. This
-  removes all `fulltext:*` tags, backs up the CSV log, and re-codes from
-  scratch. `SLR Coding` notes for items that re-include are overwritten unconditionally; adjudicator edits to those notes are lost. Notes on items that re-exclude are left untouched. Treat as a `v1 → v2` bump and ask the user to confirm they accept
+  removes this review's `<prefix>/fulltext:*` tags **and every coded-value
+  family it writes**, backs up the CSV log, and re-codes from
+  scratch. `SLR Coding: <prefix>` notes for items that re-include are overwritten unconditionally; adjudicator edits to those notes are lost. Notes on items that re-exclude are left untouched. Treat as a `v1 → v2` bump and ask the user to confirm they accept
   the re-coding cost. Bump `FULLTEXT_CODING_PROMPT_VERSION` before invoking.
 
 Field **reordering** in `FULLTEXT_CODING_FIELDS` is free (it only affects
@@ -844,10 +947,11 @@ Principles:
   the user confirms the data is genuinely unfixable.
 - **Resumable stages.** Every stage is Ctrl+C-safe and resume-idempotent.
   On start, scripts read the project's Zotero collection, build a "done"
-  set from the stage tags (`abstract:include` / `abstract:exclude` /
-  `abstract:borderline` for abstract screening; `fulltext:include` /
-  `fulltext:exclude` for full-text coding), and skip items already
-  tagged. The CSV log is written in parallel for provenance but is not
+  set from the stage tags (`<prefix>/abstract:include` /
+  `<prefix>/abstract:exclude` / `<prefix>/abstract:borderline` for
+  abstract screening; `<prefix>/fulltext:include` /
+  `<prefix>/fulltext:exclude` for full-text coding), and skip items
+  already tagged. The CSV log is written in parallel for provenance but is not
   consulted for resume decisions.
 - **Progress the user can follow.** Pipeline scripts use `flush=True` on
   every print; emit `[N/total]` counters; invoke via `| tee` to a log
@@ -900,20 +1004,69 @@ This section is the canonical catalogue of every tag and child note
 the pipeline reads or writes. Scripts and skills reference these
 conventions; the table below is the single source of truth.
 
+### Namespacing: `<prefix>/` on everything this review decides
+
+`<prefix>` below stands for the project's `TAG_PREFIX` (see *Tag prefix*
+above). A review with `TAG_PREFIX = "agentic-ai"` writes
+`agentic-ai/abstract:include`, never a bare `abstract:include`.
+
+The split is between a **judgement this review made** and a **fact about
+the paper**:
+
+- **Namespaced** — stage tags, QA and adjudication tags, search
+  provenance, coded-value tags. These are this review's opinions. Two
+  reviews may legitimately disagree about the same paper, and each needs
+  its own answer recorded.
+- **Global, deliberately unprefixed** — `predatory:flag`,
+  `retracted:flag`, `pdf:tdm-recovered`, `pdf:preprint-version`,
+  `pdf:repository-copy`. Whether a journal is on Beall's list, or a paper
+  retracted, or an attachment reconstructed from XML, is true regardless
+  of who is reviewing it. Reviews sharing a library share these rather
+  than each stamping a private copy — which is also why the library-wide
+  `enrich_*` scripts need no prefix and take no `--config`.
+
+**Never write a bare stage tag by hand via MCP.** An unprefixed
+`fulltext:unavailable` belongs to no review, so no script will ever see
+it and the item stays in the pending set forever.
+
 ### Stage tags (set by screening scripts)
 
 Tell you where each item is in the pipeline. Mutually exclusive within
-each stage — an item has at most one `abstract:*` tag and at most one
-`fulltext:*` tag at any given time. Scripts apply these at decision
-time via the Zotero API and remove prior stage tags on flip.
+each stage — an item has at most one `<prefix>/abstract:*` tag and at
+most one `<prefix>/fulltext:*` tag at any given time. Scripts apply these
+at decision time via the Zotero API and remove prior stage tags **in the
+same namespace** on flip; a co-resident review's tags are untouched.
 
 | Tag | Applied by | Meaning |
 |---|---|---|
-| `abstract:include` | `abstract_screen.py` | Passes title-abstract screening — proceeds to full-text |
-| `abstract:exclude` | `abstract_screen.py` | Excluded at title-abstract stage |
-| `abstract:borderline` | `abstract_screen.py` | Kept for full-text review (missing abstract, or LLM uncertain) |
-| `fulltext:include` | `fulltext_code.py` | Passes full-text screening; has `SLR Coding` child note |
-| `fulltext:exclude` | `fulltext_code.py` | Excluded at full-text stage |
+| `<prefix>/abstract:include` | `abstract_screen.py` | Passes title-abstract screening — proceeds to full-text |
+| `<prefix>/abstract:exclude` | `abstract_screen.py` | Excluded at title-abstract stage |
+| `<prefix>/abstract:borderline` | `abstract_screen.py` | Kept for full-text review (missing abstract, or LLM uncertain) |
+| `<prefix>/fulltext:include` | `fulltext_code.py` | Passes full-text screening; has `SLR Coding: <prefix>` child note |
+| `<prefix>/fulltext:exclude` | `fulltext_code.py` | Excluded at full-text stage |
+
+### Search-provenance tags
+
+| Tag | Applied by | Meaning |
+|---|---|---|
+| `<prefix>/search:<query-label>` | `import_to_zotero.py` | Which of this review's queries found the item. One per query that hit it. |
+
+### Coded-value tags (optional, opt-in per field)
+
+A `FULLTEXT_CODING_FIELDS` entry that declares a closed `values` list and
+sets `"tag": True` also writes its coded value as a tag — see *Coding
+protocol* above.
+
+| Tag | Applied by | Meaning |
+|---|---|---|
+| `<prefix>/<coded-field>:<value>` | `fulltext_code.py`, for includes only | The value coded for that field, e.g. `agentic-ai/research-design:panel`. Mutually exclusive within the field; a re-code replaces it. |
+
+Field and value names are slugged (`research_design` → `research-design`,
+`Case Study` → `case-study`). A coded value outside the declared
+vocabulary is recorded in the note and CSV but **not** tagged, and the run
+warns — an invented category must not gain a tag that reads as
+authoritative as a real one. Prune a family you regret with
+`manage_tags.py --prune <field>`.
 
 ### Pre-screening and quality-flag tags
 
@@ -923,34 +1076,42 @@ adjudicator sees in Zotero, not automatic exclusions.
 
 | Tag | Applied by | Meaning |
 |---|---|---|
+These are the global ones — **not** namespaced, for the reason given
+under *Namespacing* above.
+
 | `predatory:flag` | Preflight journal check against Beall's list (`import_to_zotero.py`) | **Warning, not exclusion.** Author decides during full-text review whether to keep each flagged paper. |
 | `retracted:flag` | Post-coding retraction check via `mcp__zotero__scite_check_retractions` (see *Retraction check* in *Key methodological rules*) | **Warning, not exclusion.** Cited paper has been retracted per Scite's retraction-watch data. Adjudicator decides whether to keep (with a discussion note), replace the citation, or drop the paper. |
 | `pdf:tdm-recovered` | `enrich_pdfs.py`, when Elsevier's TDM API returns only a 1-page preview and the fetcher falls back to the XML endpoint | **Warning, not exclusion.** The attached "PDF" is text reconstructed from XML, not the publisher's native PDF — may be less complete or lose figures/tables. `audit_zotero_library.py` lists these under `tdm_recovered`; review before/during full-text coding. |
 | `pdf:preprint-version` | `enrich_pdfs.py --allow-preprints`, when the only copy found is on arXiv / SSRN / RePEc | **Warning, not exclusion — and the most consequential of these.** The attached PDF is the manuscript *before* peer review. Hypotheses, samples and findings all move between a working paper and the published article, and nothing downstream can tell the difference: the coding note and the CSV row read identically either way. `fulltext_code.py` names these items before it codes them and `audit_zotero_library.py` lists them under `preprint_version`. Verify each coded finding against the published article, or fetch the real one, before the numbers reach a manuscript. Do **not** confuse this with `OUT_OF_SCOPE`, which is about the *item's* type being a preprint; this is a journal article with a preprint file attached. |
-| `fulltext:unavailable` | Applied by the agent **only** after `audit_zotero_library.py` reports the item's cause as `UNAVAILABLE` | The full text could not be obtained by any route the plugin has. Note this is a `fulltext:*` tag, so it is mutually exclusive with `fulltext:include` / `fulltext:exclude`. **Do not invent a spelling for this** — there is exactly one, and it is this one. **Do not apply it on a failed enrichment run alone:** a `BROWSER_REQUIRED` or `ACCESS_BLOCKED` item is reachable and this tag would be false. See *Phase 4 — diagnose before you exclude*. |
+| `<prefix>/fulltext:unavailable` | Applied by the agent **only** after `audit_zotero_library.py` reports the item's cause as `UNAVAILABLE` | The full text could not be obtained by any route the plugin has. This one **is** namespaced — it is a `fulltext:*` tag, mutually exclusive with `<prefix>/fulltext:include` / `…:exclude`, and it records a decision about this review rather than a fact about the paper. **Do not invent a spelling for this, and do not omit the prefix** — an unprefixed one belongs to no review and no script will see it. **Do not apply it on a failed enrichment run alone:** a `BROWSER_REQUIRED` or `ACCESS_BLOCKED` item is reachable and this tag would be false. See *Phase 4 — diagnose before you exclude*. |
 
 ### QA and adjudication tags
 
 Applied during the post-screening QA evaluator pass and the human
 adjudication loop (see *Post-screening QA* below).
 
+All namespaced. `apply_qa_adjudications.py` sweeps `<prefix>/qa-` when
+recording a verdict, so the sweep cannot reach a co-resident review's QA
+tags.
+
 | Tag | Applied by | Meaning | Removed when |
 |---|---|---|---|
-| `qa-flag` | Main agent after any evaluator flags an item | Sentinel for filtering in Zotero | After human adjudication (replaced by `qa-adjudicated-*`) |
-| `qa-hard` | Main agent from a HARD evaluator flag | Clear violation of a named inclusion / exclusion criterion | After adjudication |
-| `qa-soft-include` | Main agent from an inclusion-validator SOFT flag | Borderline inclusion | After adjudication |
-| `qa-soft-exclude` | Main agent from an exclusion-validator SOFT flag | Borderline exclusion | After adjudication |
-| `qa-wrong-code` | Main agent from an exclusion-validator `WRONG_CODE` flag | Exclusion stands but the code is wrong | After the exclusion code is corrected on the item |
-| `qa-adjudicated-include` | Human after reviewing flag | Final decision: INCLUDE | Never (permanent adjudication record) |
-| `qa-adjudicated-exclude` | Human after reviewing flag | Final decision: EXCLUDE | Never |
+| `<prefix>/qa-flag` | Main agent after any evaluator flags an item | Sentinel for filtering in Zotero | After human adjudication (replaced by `<prefix>/qa-adjudicated-*`) |
+| `<prefix>/qa-hard` | Main agent from a HARD evaluator flag | Clear violation of a named inclusion / exclusion criterion | After adjudication |
+| `<prefix>/qa-soft-include` | Main agent from an inclusion-validator SOFT flag | Borderline inclusion | After adjudication |
+| `<prefix>/qa-soft-exclude` | Main agent from an exclusion-validator SOFT flag | Borderline exclusion | After adjudication |
+| `<prefix>/qa-wrong-code` | Main agent from an exclusion-validator `WRONG_CODE` flag | Exclusion stands but the code is wrong | After the exclusion code is corrected on the item |
+| `<prefix>/qa-adjudicated-include` | Human after reviewing flag | Final decision: INCLUDE | Never (permanent adjudication record) |
+| `<prefix>/qa-adjudicated-exclude` | Human after reviewing flag | Final decision: EXCLUDE | Never |
 
 ### Flip semantics under adjudication
 
 If the human adjudicator flips an automated decision, the Zotero tag
 set is updated atomically:
 
-- Remove the screener's `fulltext:*` tag → add the opposite one.
-- Remove the `qa-*` severity tag → add the matching `qa-adjudicated-*`.
+- Remove the screener's `<prefix>/fulltext:*` tag → add the opposite one.
+- Remove the `<prefix>/qa-*` severity tag → add the matching
+  `<prefix>/qa-adjudicated-*`.
 - Optionally append a row to `screening/fulltext_screening.csv` for
   provenance (who flipped, when, why). The CSV is run-history; the
   tag is the current state.
@@ -959,38 +1120,57 @@ set is updated atomically:
 
 | Note title | Attached to | Written by | Purpose |
 |---|---|---|---|
-| `SLR Coding` | Every item with `fulltext:include` | `fulltext_code.py` after each coding decision | Structured coding fields (constructs, method, findings — see `screening_config.py:FULLTEXT_CODING_FIELDS`). The adjudicator reads this note directly in Zotero; the CSV row is parallel provenance. Overwritten on `--full-recode`; selectively updated on `--update-fields`. |
+| `SLR Coding: <prefix>` | Every item with `<prefix>/fulltext:include` | `fulltext_code.py` after each coding decision | Structured coding fields (constructs, method, findings — see `screening_config.py:FULLTEXT_CODING_FIELDS`). The adjudicator reads this note directly in Zotero; the CSV row is parallel provenance. Overwritten on `--full-recode`; selectively updated on `--update-fields`. |
 
-A `SLR Coding` note is **created on first code**, **overwritten on
-re-code** (via `--full-recode`), and **never deleted automatically**.
+**The note title is namespaced too**, and for the same reason as the
+tags: `upsert_child_note` finds the plugin's own note by this marker and
+overwrites what it finds. With one fixed marker, a second review coding
+the same paper silently replaced the first review's coding. Each review
+now gets its own note on a shared item, and the note's JSON payload
+records which review wrote it.
+
+A `SLR Coding: <prefix>` note is **created on first code**, **overwritten
+on re-code** (via `--full-recode`), and **never deleted automatically**.
 If the adjudicator edits a field inline in Zotero, the edit is
 authoritative — subsequent `fulltext_code.py` runs skip that item
 unless `--full-recode` is passed.
 
 ### How scripts use these conventions
 
-- **Resume is tag-driven.** Each script queries Zotero for items
-  already carrying the stage tag it writes, and skips them. The CSV
+- **Resume is tag-driven, and namespaced.** Each script queries Zotero
+  for items already carrying the stage tag **it** writes — in this
+  review's namespace — and skips them. A co-resident review's verdict on
+  the same item does not count as ours, in either direction. The CSV
   log is not consulted for resume decisions. `--only-keys` / `--rerun`
   / `--full-recode` flags are the escape hatches for re-processing
   specific items.
 - **Filtering downstream stages.** `fulltext_code.py` processes items
-  tagged `abstract:include` OR `abstract:borderline`, and prints the
+  tagged `<prefix>/abstract:include` OR `<prefix>/abstract:borderline`, and prints the
   split it applied (`N in collection, M eligible, K not carried
-  forward`) before spending anything. A collection with no `abstract:*`
+  forward`) before spending anything. A collection with no
+  `<prefix>/abstract:*`
   tags at all is treated as unscreened and processed whole, with a
   notice — so running full-text coding on a collection you screened
   elsewhere still works.
-  `export_coded_includes.py` reads items tagged `fulltext:include`
+  `export_coded_includes.py` reads items tagged
+  `<prefix>/fulltext:include` and the `SLR Coding: <prefix>` note
   (adjudication flips propagate automatically because tags are
   authoritative). **It does not re-check the abstract stage**, so a
-  `fulltext:include` on an abstract-excluded item would enter the final
-  corpus indistinguishably. `abstract:exclude` plus any `fulltext:*` tag
-  is a contradiction worth querying for after a coding run; it should
-  always be empty.
+  `<prefix>/fulltext:include` on an abstract-excluded item would enter
+  the final corpus indistinguishably. `<prefix>/abstract:exclude` plus
+  any `<prefix>/fulltext:*` tag is a contradiction worth querying for
+  after a coding run; it should always be empty.
 - **Never hand-craft tags in a manuscript chunk or stats script.**
-  Tags come from Zotero; if a stat needs a count of `fulltext:include`
-  items, `manuscript_stats.py` queries Zotero, not the CSV.
+  Tags come from Zotero; if a stat needs a count of
+  `<prefix>/fulltext:include` items, `manuscript_stats.py` queries
+  Zotero, not the CSV. Read the prefix from `screening_config.py` rather
+  than retyping it — a stats script with a stale prefix silently counts
+  zero.
+- **Reviewing what this review has written.** `manage_tags.py --list`
+  enumerates every tag in the namespace with item counts, grouped by
+  family. It is the fastest way to see what the review has actually
+  produced, and the input to any decision about pruning a coded-value
+  family that turned out too granular to browse.
 
 ## Pipeline scripts
 
@@ -1024,6 +1204,7 @@ single-item debugging).
 | Attach Cloudflare-gated PDFs (Sage, APA, T&F, Emerald, …) | `enrich_pdfs.py --sources browser` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --sources browser --filter-keys-file <keys>` |
 | Audit library (missing abstracts / PDFs / stubs) | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/audit_zotero_library.py --group <id> [--remote]` |
 | Export includes-only coded view | `export_coded_includes.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/export_coded_includes.py --log-csv <screening.csv> --out <coded.csv>` |
+| List / prune this review's Zotero tags | `manage_tags.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/manage_tags.py --group <id> --collection <key> --list` · add `--prune <field> --apply` to drop a coded-value family |
 | Generate `references.bib` from manuscript keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/generate_bib.py <project_dir>` |
 
 Additional templates shipped with the plugin:
@@ -1031,9 +1212,10 @@ Additional templates shipped with the plugin:
 - **`${CLAUDE_PLUGIN_ROOT:-.}/templates/search_config.py`** — journal
   list, query definitions, year window. Read by `search.py` and
   `search_openalex.py`.
-- **`${CLAUDE_PLUGIN_ROOT:-.}/templates/screening_config.py`** — system
-  prompts for abstract screening and full-text coding, plus the
-  `FULLTEXT_CODING_FIELDS` list that drives the coding schema.
+- **`${CLAUDE_PLUGIN_ROOT:-.}/templates/screening_config.py`** — the
+  mandatory `TAG_PREFIX`, system prompts for abstract screening and
+  full-text coding, plus the `FULLTEXT_CODING_FIELDS` list that drives
+  the coding schema (and which fields become tags).
 - **Test templates** (copy all three plus `test_common.py` into your
   project's `scripts/` directory). One file per skill so failures map
   back cleanly to the rule-book the regression violated:
@@ -1493,7 +1675,7 @@ published article before it reaches a manuscript. A preprint copy is
 better than a hole in the review only if the review says which rows rest
 on one.
 
-**The hard rule: an item may not be tagged `fulltext:unavailable` until
+**The hard rule: an item may not be tagged `<prefix>/fulltext:unavailable` until
 its cause in the retrieval report is `UNAVAILABLE`.** If you have not run
 the audit, you do not know the cause, and you may not tag. The audit
 writes the retry sets for you as key files
@@ -1614,7 +1796,7 @@ lives in `zotero-operations` — see its *Optional: retraction check*
 section. The SR-specific twist is **scope** and **timing**:
 
 - **Scope.** Narrow the check to items already tagged
-  `fulltext:include` so it runs against papers that matter for the
+  `<prefix>/fulltext:include` so it runs against papers that matter for the
   synthesis, not the full library.
 - **Timing.** Run before `export_coded_includes.py`; the
   adjudicator decides whether to keep retracted items (with a
@@ -1668,15 +1850,16 @@ audit built in.
 
 Evaluators run as `Agent` calls in the main session — they cannot
 write to Zotero themselves. The main agent takes each flag the
-evaluators return and applies the appropriate `qa-*` tag via
+evaluators return and applies the appropriate `<prefix>/qa-*` tag via
 `mcp__zotero__zotero_update_item` (with an `add_tags` parameter) or
 `mcp__zotero__zotero_batch_update` (with `item_keys` + `add_tags`) for
 the bulk case.
 
 See *Zotero tag and note conventions* above for the full tag
-vocabulary — `qa-flag`, `qa-hard`, `qa-soft-include`,
-`qa-soft-exclude`, `qa-wrong-code`, and the two post-adjudication
-`qa-adjudicated-*` tags.
+vocabulary — `<prefix>/qa-flag`, `<prefix>/qa-hard`,
+`<prefix>/qa-soft-include`, `<prefix>/qa-soft-exclude`,
+`<prefix>/qa-wrong-code`, and the two post-adjudication
+`<prefix>/qa-adjudicated-*` tags.
 
 **Required: each evaluator emits a `decisions.json` alongside the
 markdown report.** The markdown is for human review; the JSON is the
@@ -1696,28 +1879,30 @@ evaluator's calls. Schema:
 ```
 
 `flip_fulltext` is `true` only when the adjudication **overrides**
-the screener's `fulltext:*` tag — leave `false` for confirmations of
+the screener's `<prefix>/fulltext:*` tag — leave `false` for confirmations of
 the original decision. The evaluator subagent prompt must instruct
 the model to emit one JSON entry per flagged item.
 
 #### Human adjudication loop
 
-The human opens Zotero, filters the collection by `qa-flag`, and for
+The human opens Zotero, filters the collection by `<prefix>/qa-flag`, and for
 each flagged item:
 
 1. Reads the attached PDF and the `SLR Coding` child note.
 2. Decides: **keep** the automated decision, or **flip** it.
 3. Updates the Zotero tag set atomically:
-   - Removes the severity tag (`qa-hard` / `qa-soft-*` /
-     `qa-wrong-code`) and `qa-flag`; adds `qa-adjudicated-include` or
-     `qa-adjudicated-exclude`.
+   - Removes the severity tag (`<prefix>/qa-hard` /
+     `<prefix>/qa-soft-*` / `<prefix>/qa-wrong-code`) and
+     `<prefix>/qa-flag`; adds `<prefix>/qa-adjudicated-include` or
+     `<prefix>/qa-adjudicated-exclude`.
    - **If flipping the decision**, also removes the screener's
-     `fulltext:*` tag and adds the opposite one. Tags are the
-     authoritative state — a flip that doesn't update the `fulltext:*`
+     `<prefix>/fulltext:*` tag and adds the opposite one. Tags are the
+     authoritative state — a flip that doesn't update the
+     `<prefix>/fulltext:*`
      tag leaves Zotero inconsistent with the adjudication.
    - **If correcting an exclusion code without flipping**, updates
-     the coding field in the `SLR Coding` child note and removes
-     `qa-wrong-code`.
+     the coding field in the `SLR Coding: <prefix>` child note and
+     removes `<prefix>/qa-wrong-code`.
 4. Optionally appends a provenance row to
    `screening/fulltext_screening.csv` (who flipped, when, why). The
    CSV is run-history; the Zotero tag is the current state. Downstream
@@ -1775,7 +1960,7 @@ QA paragraph. Without it, the adjudication is not reproducible.
 
 #### Red flag
 
-You are about to **silently drop a `qa-flag`ed item** — remove the
+You are about to **silently drop a `<prefix>/qa-flag`ged item** — remove the
 flag without recording a disposition in the adjudication log. Never.
 Every flagged item gets one line in `qa_review.md`, even if the
 decision is "kept without change". Silent drops break the
@@ -1829,7 +2014,7 @@ the project's `scripts/`). The file ships 14 active tests:
 | No `decision=error` left in fulltext log | Unresolved screening errors |
 | No ghost keys (fulltext log ⊆ Zotero) | Items removed or renamed outside the pipeline |
 | **Fulltext tags consistent with CSV log** | Zotero tag state diverges from CSV decisions — tag write-back failed, or an out-of-band CSV edit wasn't mirrored in Zotero |
-| **Every `fulltext:include` item has an SLR Coding note** | Include-tag set without a coded note — export script has nothing to read for that paper |
+| **Every `<prefix>/fulltext:include` item has an SLR Coding note** | Include-tag set without a coded note — export script has nothing to read for that paper |
 
 BBT-key uniqueness and `coded_papers.csv` → `references.bib` resolution
 live in `test_citations.py` (citation concerns). Manuscript-prose

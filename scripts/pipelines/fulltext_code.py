@@ -358,6 +358,7 @@ def _load_screening_config(path: str):
     for field in mod.FULLTEXT_CODING_FIELDS:
         if "name" not in field:
             sys.exit("ERROR: every FULLTEXT_CODING_FIELDS entry needs `name`.")
+        _validate_coding_field(field)
     return (
         mod.FULLTEXT_CODING_SYSTEM_PROMPT,
         mod.FULLTEXT_CODING_FIELDS,
@@ -367,18 +368,112 @@ def _load_screening_config(path: str):
     )
 
 
+def _validate_coding_field(field: dict) -> None:
+    """Reject a coding field whose `values` / `tag` keys are incoherent.
+
+    Caught at load time rather than at write time: a bad `tag` declaration
+    would otherwise surface only after the LLM has answered, once the run
+    has already been paid for.
+    """
+    name = field.get("name", "?")
+    values = field.get("values")
+    if values is not None:
+        if not isinstance(values, (list, tuple)) or not values:
+            sys.exit(
+                f"ERROR: FULLTEXT_CODING_FIELDS[{name!r}].values must be a "
+                f"non-empty list of allowed values."
+            )
+        if any(not isinstance(v, str) or not v.strip() for v in values):
+            sys.exit(
+                f"ERROR: FULLTEXT_CODING_FIELDS[{name!r}].values must be "
+                f"non-empty strings."
+            )
+        slugs = [tag_prefix.slug(v) for v in values]
+        if "" in slugs:
+            sys.exit(
+                f"ERROR: FULLTEXT_CODING_FIELDS[{name!r}].values contains a "
+                f"value with no letters or digits, which cannot become a tag."
+            )
+        dupes = {s for s in slugs if slugs.count(s) > 1}
+        if dupes:
+            sys.exit(
+                f"ERROR: FULLTEXT_CODING_FIELDS[{name!r}].values collide once "
+                f"slugged for tags: {sorted(dupes)}. Two values that differ "
+                f"only in case or punctuation would share one tag."
+            )
+    if field.get("tag") and values is None:
+        sys.exit(
+            f"ERROR: FULLTEXT_CODING_FIELDS[{name!r}] sets `tag` but declares "
+            f"no `values`. Only a closed vocabulary can become tags — free "
+            f"text would produce one tag per paper."
+        )
+
+
+def taggable_fields(fields: list[dict]) -> list[dict]:
+    """The coding fields that opted in to becoming Zotero tags."""
+    return [f for f in fields if f.get("tag") and f.get("values")]
+
+
+def coding_value_tag_ops(
+    row: dict, fields: list[dict], ns: str,
+) -> tuple[list[str], list[str], list[str]]:
+    """Tag writes for a coded row's categorical values.
+
+    Returns `(add, remove_prefixed, rejected)`. Each opted-in field
+    contributes one tag, `<ns><field>:<value>`, and its whole family to
+    `remove_prefixed` so a re-code replaces the old value in the same PATCH
+    rather than accumulating both.
+
+    A value outside the declared vocabulary is reported in `rejected` and
+    **not** tagged: the note and the CSV still record verbatim what the
+    model said, but a typo or an invented category must not quietly become
+    a tag that looks as authoritative as the real ones. The family is still
+    cleared, so a re-code that goes bad does not leave the previous run's
+    tag standing next to a contradicting note.
+    """
+    add: list[str] = []
+    remove_prefixed: list[str] = []
+    rejected: list[str] = []
+    for field in taggable_fields(fields):
+        name = field["name"]
+        family = tag_prefix.coding_family(ns, name)
+        remove_prefixed.append(family)
+        raw = (row.get(name) or "").strip()
+        if not raw:
+            continue
+        allowed = {tag_prefix.slug(v): v for v in field["values"]}
+        slug = tag_prefix.slug(raw)
+        if slug in allowed:
+            add.append(f"{family}{slug}")
+        else:
+            rejected.append(f"{name}={raw!r}")
+    return add, remove_prefixed, rejected
+
+
 def _render_prompt(template: str, fields: list[dict]) -> str:
     """Substitute the coding-fields JSON placeholder into the prompt template."""
     if PLACEHOLDER not in template:
         return template
-    # Build the JSON-schema fragment Claude should return
-    lines = [f'  "{f["name"]}": "<...>"' + ("," if i + 1 < len(fields) else "")
-             for i, f in enumerate(fields)]
+    # Build the JSON-schema fragment Claude should return. A field with a
+    # closed vocabulary shows it inline, so the model sees the permitted
+    # answers in the schema rather than only in the prose guide below.
+    lines = []
+    for i, f in enumerate(fields):
+        values = f.get("values")
+        slot = " | ".join(f'"{v}"' for v in values) if values else '"<...>"'
+        lines.append(f'  "{f["name"]}": {slot}'
+                     + ("," if i + 1 < len(fields) else ""))
     json_block = "\n".join(lines)
     # Also render a brief "fields with descriptions" guide at the end
     guide_lines = []
     for f in fields:
         desc = f.get("description", "").strip().replace("\n", " ")
+        values = f.get("values")
+        if values:
+            desc = (
+                f"{desc} Answer with exactly one of: "
+                f"{', '.join(values)}. Use no other wording."
+            ).strip()
         guide_lines.append(f"- **{f['name']}**: {desc}")
     guide = "\n".join(guide_lines)
     return template.replace(PLACEHOLDER, json_block) + (
@@ -830,13 +925,17 @@ def apply_coded_row(
     ns: str,
     timestamp: str = "",
 ) -> str:
-    """Write one coded row's consequences: tag, coding note, CSV row.
+    """Write one coded row's consequences: tags, coding note, CSV row.
 
     Returns the decision. Only `include` / `exclude` get tagged; `error`
     and `no_pdf` stay untagged so a re-run picks them up. A failed tag or
     note write is appended to the row's reason rather than raised — the
     CSV row is still worth having, and the missing tag is what makes the
     item come back next run.
+
+    Coding fields that opted in via `tag: True` add one tag each in the
+    same PATCH as the stage tag, so an item is never briefly tagged
+    `include` with a stale value from the previous code.
 
     `timestamp` defaults to now; the batch applier passes the response's
     own `generated_at`, because the log records when a decision was
@@ -849,11 +948,32 @@ def apply_coded_row(
     if decision in STAGE_TAG_VALUES:
         item_key = row.get("item_key", "")
         if item_key:
+            add = [f"{stage_prefix}{decision}"]
+            remove_prefixed = [stage_prefix]
+            # Coding-value tags only for includes: an exclude's coding
+            # fields are empty or placeholder, and tagging them would put
+            # excluded papers into the categories the tags exist to browse.
+            if decision == "include":
+                value_add, value_remove, rejected = coding_value_tag_ops(
+                    row, fields, ns,
+                )
+                add += value_add
+                remove_prefixed += value_remove
+                if rejected:
+                    # Recorded, not tagged. The note and CSV keep what the
+                    # model actually said; an invented category must not
+                    # gain a tag that reads as authoritative as a real one.
+                    print(
+                        f"  WARNING: {item_key}: coded value(s) outside the "
+                        f"declared vocabulary, left untagged: "
+                        f"{'; '.join(rejected)}",
+                        flush=True,
+                    )
             try:
                 zot.update_tags(
                     item_key,
-                    add=[f"{stage_prefix}{decision}"],
-                    remove_prefixed=[stage_prefix],
+                    add=add,
+                    remove_prefixed=remove_prefixed,
                 )
             except Exception as tag_exc:  # noqa: BLE001
                 existing_reason = row.get("reason", "")
@@ -927,6 +1047,7 @@ def build_manifest_rows(
     fields: list[dict],
     library: dict,
     collection: str,
+    ns: str,
     attachments_by_parent: dict[str, list[dict]],
     pdf_dir: Path | None = None,
     zotero_storage: Path | None = None,
@@ -1021,6 +1142,9 @@ def build_manifest_rows(
             ),
             "ordinal": 0,
             "stage": batch_manifest.STAGE_FULLTEXT,
+            # Which review these decisions belong to. Apply refuses a
+            # manifest whose prefix no longer matches the config.
+            "tag_prefix": ns.rstrip("/"),
             "mode": mode,
             "target_fields": sorted(target_fields or []),
             "library": library,
@@ -1174,6 +1298,8 @@ def apply_responses(
     files, which is what lets the generation step happen on a machine
     this one never talks to.
     """
+    header, _ = batch_manifest.read_manifest(manifest_path)
+    batch_manifest.check_tag_prefix(header, ns, manifest_path)
     _, responses = batch_manifest.read_responses(responses_path)
     paired, unanswered, orphaned = batch_manifest.join_responses(
         manifest_rows, responses,
@@ -1337,6 +1463,7 @@ def emit_manifest(
     fields: list[dict],
     library: dict,
     collection: str,
+    ns: str,
     attachments_by_parent: dict[str, list[dict]],
     pdf_dir: Path | None,
     zotero_storage: Path | None,
@@ -1361,6 +1488,7 @@ def emit_manifest(
         fields=fields,
         library=library,
         collection=collection,
+        ns=ns,
         attachments_by_parent=attachments_by_parent,
         pdf_dir=pdf_dir,
         zotero_storage=zotero_storage,
@@ -1695,11 +1823,19 @@ def main() -> int:
     # --full-recode removes this review's fulltext:* tag from every item,
     # forcing re-processing. The CSV backup already happened above.
     if args.full_recode:
-        print(f"--full-recode: clearing {stage_prefix}* tags on all targeted "
-              f"items", flush=True)
+        # Coding-value families go too. Clearing only the stage tag would
+        # leave last run's `research-design:panel` standing on an item
+        # about to be re-coded, and if the re-code errors or the new value
+        # is rejected, that stale tag outlives the note it came from.
+        recode_prefixes = [stage_prefix] + [
+            tag_prefix.coding_family(ns, f["name"])
+            for f in taggable_fields(fields)
+        ]
+        print(f"--full-recode: clearing {', '.join(p + '*' for p in recode_prefixes)} "
+              f"tags on all targeted items", flush=True)
         for it in items:
             try:
-                zot.update_tags(it["key"], remove_prefixed=[stage_prefix])
+                zot.update_tags(it["key"], remove_prefixed=recode_prefixes)
             except Exception as e:  # noqa: BLE001
                 print(f"  WARN: could not clear tag on {it['key']}: {e}",
                       flush=True)
@@ -1775,6 +1911,7 @@ def main() -> int:
                 fields=fields,
                 library=zot.library_ref(),
                 collection=args.collection,
+                ns=ns,
                 attachments_by_parent=atts_by_parent,
                 pdf_dir=pdf_dir,
                 zotero_storage=zotero_storage,
@@ -1872,6 +2009,7 @@ def main() -> int:
                 fields=fields,
                 library=zot.library_ref(),
                 collection=args.collection,
+                ns=ns,
                 attachments_by_parent=atts_by_parent,
                 pdf_dir=pdf_dir,
                 zotero_storage=zotero_storage,

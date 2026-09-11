@@ -74,6 +74,12 @@ SCRIPTS_ROOT = REPO_ROOT / "scripts"
 PIPELINES_DIR = SCRIPTS_ROOT / "pipelines"
 TEMPLATES_DIR = REPO_ROOT / "templates"
 E2E_FIXTURES_DIR = REPO_ROOT / "tests" / "live" / "e2e"
+
+#: The harness's tag namespace. Must equal `TAG_PREFIX` in
+#: `tests/live/e2e/screening_config.py` — the pipeline scripts read it
+#: from there, this driver reads tags back, and a mismatch would make
+#: every sync wait time out on tags that were written correctly.
+TAG_NS = "mini-slr/"
 OUTPUT_E2E_ROOT = REPO_ROOT / "output" / "e2e"
 
 for _p in (str(SCRIPTS_ROOT), str(PIPELINES_DIR)):
@@ -540,22 +546,23 @@ def stage_code(ctx: Ctx) -> None:
             items = []
         tagged = [
             it for it in items
-            if any(t.get("tag", "").startswith("abstract:")
+            if any(t.get("tag", "").startswith(f"{TAG_NS}abstract:")
                    for t in it.get("data", {}).get("tags", []))
         ]
         if len(tagged) >= total_expected:
             only_keys = [
                 it["key"] for it in tagged
-                if any(t.get("tag") in ("abstract:include", "abstract:borderline")
+                if any(t.get("tag") in (f"{TAG_NS}abstract:include",
+                                        f"{TAG_NS}abstract:borderline")
                        for t in it["data"]["tags"])
             ]
             break
         if time.monotonic() > deadline:
             sys.exit(
-                f"ERROR: local sync of abstract:* tags timed out after "
+                f"ERROR: local sync of {TAG_NS}abstract:* tags timed out after "
                 f"{SYNC_TIMEOUT_S}s ({len(tagged)}/{total_expected})."
             )
-        print(f"  waiting for local sync of abstract:* tags... "
+        print(f"  waiting for local sync of {TAG_NS}abstract:* tags... "
               f"({len(tagged)}/{total_expected})", flush=True)
         time.sleep(SYNC_INTERVAL_S)
 
@@ -638,17 +645,18 @@ def stage_export(ctx: Ctx) -> None:
                 items = []
             tagged = [
                 it for it in items
-                if any(t.get("tag", "").startswith("fulltext:")
+                if any(t.get("tag", "").startswith(f"{TAG_NS}fulltext:")
                        for t in it.get("data", {}).get("tags", []))
             ]
             if len(tagged) >= total_expected:
                 break
             if time.monotonic() > deadline:
                 sys.exit(
-                    f"ERROR: local sync of fulltext:* tags timed out after "
+                    f"ERROR: local sync of {TAG_NS}fulltext:* tags timed out "
+                    f"after "
                     f"{SYNC_TIMEOUT_S}s ({len(tagged)}/{total_expected})."
                 )
-            print(f"  waiting for local sync of fulltext:* tags... "
+            print(f"  waiting for local sync of {TAG_NS}fulltext:* tags... "
                   f"({len(tagged)}/{total_expected})", flush=True)
             time.sleep(SYNC_INTERVAL_S)
 
@@ -787,7 +795,7 @@ STAGE_ORDER = list(STAGE_FUNCS)
 # ---------------------------------------------------------------------------
 
 
-STAGE_TAG_PREFIXES = ("abstract:", "fulltext:")
+STAGE_TAG_PREFIXES = (f"{TAG_NS}abstract:", f"{TAG_NS}fulltext:")
 
 
 def _runs_owning(item_keys: set[str]) -> list[str]:
@@ -876,7 +884,8 @@ def _preflight_clean_group(ctx: Ctx) -> None:
 
     sys.exit(
         f"ERROR: group {ctx.group_id} already holds {len(dirty)} item(s) "
-        f"tagged abstract:*/fulltext:* from an earlier run.\n"
+        f"tagged {TAG_NS}abstract:*/{TAG_NS}fulltext:* from an earlier "
+        f"run.\n"
         f"import_to_zotero.py deduplicates by DOI, so this run would "
         f"re-use those items along with their stale tags, screen nothing, "
         f"and fail verify for reasons that point away from the cause.\n"

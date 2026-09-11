@@ -23,6 +23,11 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+#: The harness's own tag namespace. Must match `mini_slr.TAG_NS` — the
+#: wait loop under test matches on it, so an unprefixed fake tag makes the
+#: loop spin until its (long) timeout instead of failing fast.
+NS = "mini-slr/"
+
 
 @pytest.fixture(scope="module")
 def mini_slr():
@@ -70,7 +75,7 @@ class _FakeClient:
         idx = min(self.calls, len(self.snapshots) - 1)
         self.calls += 1
         return [
-            {"key": k, "data": {"tags": [{"tag": "fulltext:include"}]}}
+            {"key": k, "data": {"tags": [{"tag": f"{NS}fulltext:include"}]}}
             for k in self.snapshots[idx]
         ]
 
@@ -152,4 +157,4 @@ def test_export_fails_loudly_when_sync_never_lands(mini_slr, tmp_path,
     with pytest.raises(SystemExit) as exc:
         mini_slr.stage_export(_ctx(mini_slr, tmp_path))
 
-    assert "fulltext:* tags timed out" in str(exc.value)
+    assert f"{NS}fulltext:* tags timed out" in str(exc.value)

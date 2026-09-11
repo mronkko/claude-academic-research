@@ -650,6 +650,7 @@ def test_a_manifest_written_by_the_plugin_reads_here(tmp_path) -> None:
         doi_to_query={},
         library={"kind": "group", "id": "1"},
         collection="COLL0001",
+        ns="test-review/",
     )
     path = tmp_path / "requests.jsonl"
     bm.write_manifest(path, rows)

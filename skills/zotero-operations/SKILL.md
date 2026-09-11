@@ -50,9 +50,9 @@ context differs.** The decision is simple:
 
 - **Use `systematic-review`** when enrichment is part of a PRISMA-style
   pipeline that will flow into abstract screening and full-text coding.
-  Stage tags (`abstract:*`, `fulltext:*`), the screening-config
-  round-trip, QA evaluator agents, and export to `coded_papers.csv`
-  are all in scope. The audit report drives which items need
+  Stage tags (`<prefix>/abstract:*`, `<prefix>/fulltext:*`, namespaced
+  under the project's `TAG_PREFIX`), the screening-config round-trip, QA
+  evaluator agents, and export to `coded_papers.csv` are all in scope. The audit report drives which items need
   enrichment *before screening can start*.
 - **Use this skill** when the work is **standalone library
   housekeeping** — the user has a Zotero collection (SLR or not) and
@@ -537,10 +537,16 @@ When a pipeline writes decisions or structured extractions back to
 Zotero (e.g. LLM screening decisions, coded fields), make them
 reviewable in Zotero itself:
 
-- **Tag** every processed item with the decision (e.g.
-  `fulltext:include` / `fulltext:exclude`).
-- **Child note** with structured fields as HTML on includes (e.g.
-  `SLR Coding`). The local Zotero client reads item version + existing
+- **Tag** every processed item with the decision, namespaced under the
+  project's `TAG_PREFIX` (e.g. `<prefix>/fulltext:include` /
+  `<prefix>/fulltext:exclude`). Never write a bare `fulltext:include`:
+  one library commonly holds several reviews, and an unprefixed tag
+  belongs to none of them, so no pipeline script will ever see it.
+- **Child note** with structured fields as HTML on includes, titled
+  `SLR Coding: <prefix>`. The title carries the namespace for the same
+  reason — the writer finds and overwrites its own note by that marker,
+  so a shared marker means one review silently replaces another's
+  coding. The local Zotero client reads item version + existing
   tags; the remote API writes PATCH and the child note.
 - On `--full-recode`, delete prior named child notes before re-writing
   so re-runs don't accumulate stale notes.

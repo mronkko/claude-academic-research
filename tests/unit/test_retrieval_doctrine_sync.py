@@ -81,8 +81,8 @@ def test_recoverable_causes_are_marked_as_non_exclusions() -> None:
 def test_only_unavailable_justifies_the_unavailable_tag() -> None:
     text = _sr()
     assert (
-        "may not be tagged `fulltext:unavailable` until\nits cause in the "
-        "retrieval report is `UNAVAILABLE`" in text
+        "may not be tagged `<prefix>/fulltext:unavailable` until\nits cause "
+        "in the retrieval report is `UNAVAILABLE`" in text
     ), "the hard rule gating the unavailable tag has been weakened or moved"
 
 
@@ -90,9 +90,34 @@ def test_only_unavailable_justifies_the_unavailable_tag() -> None:
 # Tag vocabulary
 # ---------------------------------------------------------------------------
 
-_TAG = re.compile(r"`(fulltext:[a-z-]+|abstract:[a-z-]+|pdf:[a-z-]+)`")
+#: A tag as it appears in skill prose, with its `<prefix>/` namespace
+#: captured separately. The optional group is what lets this guard check
+#: *both* directions: a review-scoped tag written bare, and a global tag
+#: written with a namespace it must not have.
+_TAG = re.compile(
+    r"`(<prefix>/)?"
+    r"(fulltext:[a-z*-]+|abstract:[a-z*-]+|pdf:[a-z*-]+|qa-[a-z*-]+"
+    r"|predatory:flag|retracted:flag)`"
+)
 
-#: Every retrieval/stage tag the plugin defines. A skill naming anything
+#: Families whose tags record *this review's* judgement. Every mention in
+#: skill prose must carry `<prefix>/`: an unprefixed one belongs to no
+#: review, so no pipeline script ever reads it and the item it sits on is
+#: pending forever. This is the same class of failure as the invented
+#: `fulltext-unavailable` spelling, one level up.
+NAMESPACED_FAMILIES = ("abstract:", "fulltext:", "qa-")
+
+#: Tags stating a fact about the *paper*, shared by every review that
+#: touches it. These must stay bare — namespacing one would give two
+#: reviews two private copies of a single fact, and would also require a
+#: prefix in the library-wide `enrich_*` scripts, which load no config.
+GLOBAL_TAGS = {
+    "predatory:flag", "retracted:flag",
+    "pdf:tdm-recovered", "pdf:preprint-version", "pdf:repository-copy",
+}
+
+#: Every retrieval/stage tag the plugin defines, in bare form (the
+#: `<prefix>/` is stripped before the check). A skill naming anything
 #: outside this set is inventing vocabulary, which is exactly what
 #: produced `fulltext-unavailable`.
 #:
@@ -106,15 +131,90 @@ _TAG = re.compile(r"`(fulltext:[a-z-]+|abstract:[a-z-]+|pdf:[a-z-]+)`")
 KNOWN_TAGS = {
     "abstract:include", "abstract:exclude", "abstract:borderline",
     "fulltext:include", "fulltext:exclude", "fulltext:unavailable",
-    "pdf:tdm-recovered", "pdf:preprint-version", "pdf:repository-copy",
-}
+    "qa-flag", "qa-hard", "qa-soft-include", "qa-soft-exclude",
+    "qa-wrong-code", "qa-adjudicated-include", "qa-adjudicated-exclude",
+} | GLOBAL_TAGS
+
+#: Wildcards like `<prefix>/abstract:*` name a family, not a tag.
+_FAMILY_WILDCARD = "*"
+
+#: Phrases that license showing a bare review-scoped tag: the docs have
+#: to be able to name the wrong form in order to warn against it. Checked
+#: per paragraph rather than per line, because the prose wraps and the
+#: warning is often a sentence above the example. Requiring the paragraph
+#: to actually say "bare" / "unprefixed" is what keeps this from becoming
+#: a blanket exemption — a forgotten prefix in ordinary prose still fails.
+_COUNTEREXAMPLE_MARKERS = ("bare", "unprefixed", "without a namespace")
+
+
+def _paragraphs(path) -> list[str]:
+    return path.read_text(encoding="utf-8").split("\n\n")
+
+
+def _tags_in(path) -> list[tuple[str, str]]:
+    """`(namespace, bare_tag)` for every tag named in a skill file."""
+    return [
+        (ns or "", tag)
+        for ns, tag in _TAG.findall(path.read_text(encoding="utf-8"))
+    ]
 
 
 def test_skills_invent_no_tags() -> None:
     for path in (SR_SKILL, ZOT_SKILL):
-        found = set(_TAG.findall(path.read_text(encoding="utf-8")))
+        found = {
+            tag for _, tag in _tags_in(path)
+            if _FAMILY_WILDCARD not in tag
+        }
         unknown = found - KNOWN_TAGS
         assert not unknown, f"{path.name} names undefined tag(s): {unknown}"
+
+
+def test_review_scoped_tags_are_namespaced_in_skill_prose() -> None:
+    """A bare `fulltext:include` in the docs teaches the agent to write
+    one, and a bare tag belongs to no review — no script will see it."""
+    offenders = []
+    for path in (SR_SKILL, ZOT_SKILL):
+        for para in _paragraphs(path):
+            lowered = para.lower()
+            if any(m in lowered for m in _COUNTEREXAMPLE_MARKERS):
+                continue
+            for ns, tag in _TAG.findall(para):
+                if not ns and tag.startswith(NAMESPACED_FAMILIES):
+                    offenders.append(f"{path.name}: `{tag}`")
+    assert not offenders, (
+        "review-scoped tags must be written `<prefix>/…` in skill prose "
+        "(or, to show the wrong form deliberately, in a paragraph that says "
+        "`bare` / `unprefixed`): "
+        + ", ".join(sorted(set(offenders)))
+    )
+
+
+def test_global_tags_are_never_namespaced_in_skill_prose() -> None:
+    """The mirror image. `predatory:flag` is a fact about the journal;
+    giving each review its own copy is both wrong and impossible — the
+    library-wide `enrich_*` scripts have no config to read a prefix
+    from."""
+    offenders = []
+    for path in (SR_SKILL, ZOT_SKILL):
+        for ns, tag in _tags_in(path):
+            if ns and tag in GLOBAL_TAGS:
+                offenders.append(f"{path.name}: `{ns}{tag}`")
+    assert not offenders, (
+        "these state a fact about the paper and must stay unprefixed: "
+        + ", ".join(sorted(set(offenders)))
+    )
+
+
+def test_the_namespaced_families_are_the_ones_the_code_namespaces() -> None:
+    """Keeps this file's notion of "review-scoped" equal to the scripts'."""
+    import abstract_screen
+    import apply_qa_adjudications
+    import fulltext_code
+
+    assert abstract_screen.STAGE_TAG_SUFFIX in NAMESPACED_FAMILIES
+    assert fulltext_code.STAGE_TAG_SUFFIX in NAMESPACED_FAMILIES
+    assert fulltext_code.ABSTRACT_TAG_SUFFIX in NAMESPACED_FAMILIES
+    assert apply_qa_adjudications.QA_SEVERITY_SUFFIX in NAMESPACED_FAMILIES
 
 
 def test_known_tags_covers_every_pdf_tag_in_code() -> None:

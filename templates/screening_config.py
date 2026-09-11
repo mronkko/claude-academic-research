@@ -127,6 +127,21 @@ FULLTEXT_CODING_PROMPT_VERSION = "v1-2026-04-21"
 #   name         — snake_case column name (goes into CSV + manuscript)
 #   description  — free-text guidance given to the LLM
 #   example      — optional one-sentence example of what a good value looks like
+#   values       — optional closed vocabulary. The permitted answers appear
+#                  in the prompt's JSON schema, and anything else the model
+#                  returns is still recorded but flagged.
+#   tag          — optional, requires `values`. Also write the coded value as
+#                  a Zotero tag, `<TAG_PREFIX>/<field>:<value>`, so you can
+#                  filter and browse the corpus by it in Zotero. Re-coding
+#                  replaces the tag; `--full-recode` clears it.
+#
+# Only a categorical field can be tagged — free text would produce one tag
+# per paper. Think about how many categories a field really has before
+# tagging it: five is useful in the tag selector, forty is noise. You can
+# change your mind either way — add `tag: True` and re-code, or drop a
+# family you regret with
+#     uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/manage_tags.py \
+#         --collection <KEY> --prune <field> --apply
 #
 # The script serialises these into the JSON schema section of the prompt.
 # Add, remove, or reorder fields freely — the CSV schema follows this list.
@@ -150,12 +165,33 @@ FULLTEXT_CODING_FIELDS = [
                        "qualitative / case / meta-analysis), estimation "
                        "technique, and any causal-identification strategy.",
     },
+    # A categorical field, tagged. Every include gets exactly one
+    # `<TAG_PREFIX>/research-design:<value>` tag, so the Zotero tag
+    # selector becomes a way to browse the corpus by design. Delete this
+    # entry, or drop `"tag": True`, if it is not how you want to slice
+    # your papers.
+    {
+        "name": "research_design",
+        "description": "The paper's primary empirical design.",
+        "values": [
+            "experiment",
+            "survey",
+            "panel",
+            "case-study",
+            "simulation",
+            "meta-analysis",
+            "conceptual",
+        ],
+        "tag": True,
+    },
     # Add as many fields as your coding schema demands. 5–15 is typical.
     # Suggested additions for entrepreneurship SLRs:
     #   theories_and_references  — theoretical lenses used
-    #   direction_of_relationship — sign of the main effect
+    #   direction_of_relationship — sign of the main effect (categorical;
+    #                               a good `values` + `tag` candidate)
     #   moderators_boundary_conditions — specified boundary conditions
     #   causal_inference_strength — RCT / quasi-experiment / observational
+    #                               (categorical; another good one to tag)
     #   future_research          — explicit gaps the authors call out
 ]
 

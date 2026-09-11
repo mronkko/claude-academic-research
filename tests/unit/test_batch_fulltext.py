@@ -146,6 +146,7 @@ def _emit(
         "run_id": RUN, "system_prompt": SYS, "model": MODEL,
         "prompt_version": PV, "fields": fields,
         "library": {"kind": "group", "id": "123"}, "collection": "COLL0001",
+        "ns": NS,
         "attachments_by_parent": atts,
     }
     kwargs.update(over)

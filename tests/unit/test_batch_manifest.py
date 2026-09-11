@@ -25,7 +25,12 @@ import json
 import abstract_screen
 import batch_manifest as bm
 import pytest
+import tag_prefix
 from log_schemas import ABSTRACT_SCREENING_FIELDS
+
+NS = tag_prefix.namespace("test-review")
+ABSTRACT = tag_prefix.family(NS, "abstract")
+
 
 RUN = "abstract_screening-20260816T000000Z"
 
@@ -53,6 +58,7 @@ def _manifest_row(item: dict, **over) -> dict:
         doi_to_query={"10.1234/example": "TS=(entrepreneur*)"},
         library={"kind": "group", "id": "123"},
         collection="COLL0001",
+        ns=NS,
     )
     rows[0].update(over)
     return rows[0]
@@ -227,6 +233,7 @@ def test_over_long_items_go_to_the_sidecar_not_the_manifest() -> None:
         run_id=RUN, system_prompt="S", model="m", prompt_version="v",
         doi_to_query={}, library={"kind": "group", "id": "1"},
         collection="C", max_input_chars=500,
+        ns=NS,
     )
     assert rows == []
     assert skipped[0]["skip_reason"] == "too_long_for_context"
@@ -363,3 +370,77 @@ def test_a_manifest_row_carries_its_whole_prompt() -> None:
     assert "Entrepreneurial self-efficacy" in req["user"]
     assert req["system_sha256"] == bm.sha256("SYSTEM PROMPT")
     assert json.loads(json.dumps(req)) == req  # plain JSON, no surprises
+
+
+# ---------------------------------------------------------------------------
+# The manifest remembers which review it belongs to
+#
+# Emit and apply can be days apart, and `TAG_PREFIX` lives in a file the
+# user edits. Applying a manifest under a prefix it was not emitted under
+# files a whole run's verdicts into the wrong review, and nothing
+# downstream would say so.
+# ---------------------------------------------------------------------------
+
+
+def test_a_manifest_row_records_the_review_it_belongs_to(tmp_path) -> None:
+    rows, _ = abstract_screen.build_manifest_rows(
+        [_item()],
+        run_id=RUN,
+        system_prompt="sys",
+        model="m",
+        prompt_version="v1",
+        doi_to_query={},
+        library={"kind": "group", "id": "1"},
+        collection="C",
+        ns=NS,
+    )
+    assert rows[0]["tag_prefix"] == "test-review"
+
+
+def test_the_header_surfaces_the_prefix(tmp_path) -> None:
+    path = tmp_path / "m.jsonl"
+    rows, _ = abstract_screen.build_manifest_rows(
+        [_item()], run_id=RUN, system_prompt="sys", model="m",
+        prompt_version="v1", doi_to_query={},
+        library={"kind": "group", "id": "1"}, collection="C", ns=NS,
+    )
+    bm.write_manifest(path, rows)
+    header, _ = bm.read_manifest(path)
+    assert header["tag_prefix"] == "test-review"
+
+
+def test_applying_under_the_same_prefix_is_allowed(tmp_path) -> None:
+    bm.check_tag_prefix({"tag_prefix": "test-review"}, NS, tmp_path / "m")
+
+
+def test_applying_under_a_different_prefix_is_refused(tmp_path) -> None:
+    with pytest.raises(bm.ManifestError) as exc:
+        bm.check_tag_prefix(
+            {"tag_prefix": "other-review"}, NS, tmp_path / "m",
+        )
+    msg = str(exc.value)
+    assert "other-review" in msg and "test-review" in msg
+    # The message has to say how to proceed, not just that it stopped.
+    assert "--tag-prefix other-review" in msg
+
+
+def test_a_manifest_with_no_prefix_at_all_is_refused(tmp_path) -> None:
+    """Emitted before prefixes existed: there is no way to know whose it is."""
+    with pytest.raises(bm.ManifestError) as exc:
+        bm.check_tag_prefix({}, NS, tmp_path / "m")
+    assert "Re-emit" in str(exc.value)
+
+
+def test_rows_disagreeing_on_the_prefix_are_refused(tmp_path) -> None:
+    """Two reviews' rows concatenated into one file."""
+    path = tmp_path / "m.jsonl"
+    rows, _ = abstract_screen.build_manifest_rows(
+        [_item("AAAA1111"), _item("BBBB2222")], run_id=RUN, system_prompt="sys", model="m",
+        prompt_version="v1", doi_to_query={},
+        library={"kind": "group", "id": "1"}, collection="C", ns=NS,
+    )
+    rows[1]["tag_prefix"] = "other-review"
+    bm._write_jsonl(path, rows)
+    with pytest.raises(bm.ManifestError) as exc:
+        bm.read_manifest(path)
+    assert "tag_prefix" in str(exc.value)

@@ -120,6 +120,28 @@ DOI/ISBN/URL, `zotero-cli add doi`). Typing out a citation, even to
 repair one bad record, is a defect signal — say what is missing
 instead.
 
+## Tag prefix
+
+*Populate during the systematic-review bootstrap — the agent proposes
+one from the scope brief and writes it with `set_tag_prefix.py`.*
+
+- **`TAG_PREFIX`:** `<this-review's-prefix>` (also in
+  `screening_config.py`, which is the source of truth)
+
+Every Zotero tag recording this review's judgement is namespaced under
+it: `<prefix>/abstract:include`, `<prefix>/fulltext:exclude`,
+`<prefix>/qa-adjudicated-include`, and the `SLR Coding: <prefix>` child
+note. Filter Zotero's tag selector on the prefix to see exactly this
+review's tags and nothing else.
+
+Tags stating a fact about the *paper* rather than this review's opinion
+of it — `predatory:flag`, `retracted:flag`, `pdf:*` — stay unprefixed,
+so a paper shared with another review carries one copy of each.
+
+**Do not change it once screening has started.** Resume is tag-driven:
+already-screened items would look unscreened and be re-screened at full
+cost. `manage_tags.py --list` shows what this review has written.
+
 For Zotero housekeeping on a *different* library or group than the
 one above — adding abstracts, attaching PDFs, fixing BBT keys, finding
 duplicates, etc. — use the `zotero-operations` skill. It runs the same
@@ -138,6 +160,9 @@ that file from Claude Code or Antigravity.
 - Haiku for abstract screening, Sonnet for full-text coding.
 - Temperature=0 pinned in both; the test suite asserts it.
 - Append-only screening logs; last-row-wins on `item_key`.
+- Coded categorical fields can opt in to becoming tags (`values` +
+  `"tag": True` in `FULLTEXT_CODING_FIELDS`). Only closed vocabularies;
+  prune a family you regret with `manage_tags.py --prune <field>`.
 
 ## House style
 

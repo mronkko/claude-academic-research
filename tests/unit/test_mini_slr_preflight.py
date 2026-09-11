@@ -22,6 +22,13 @@ from pathlib import Path
 
 import pytest
 
+#: The harness's own tag namespace, mirroring `mini_slr.TAG_NS` and the
+#: `TAG_PREFIX` in `tests/live/e2e/screening_config.py`. Stale-state
+#: detection only sees the harness's own tags, so a real review's items in
+#: the same group are not mistaken for leftovers to tear down.
+NS = "mini-slr/"
+
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -107,8 +114,8 @@ def test_dirty_group_names_the_run_to_tear_down(mini_slr, tmp_path,
     """The whole point: turn five misleading verify failures into one
     message carrying the command that fixes it."""
     _install_library(mini_slr, monkeypatch, [
-        _item("UVTAUBKF", "abstract:include", "fulltext:include"),
-        _item("X9EBB68U", "abstract:exclude"),
+        _item("UVTAUBKF", f"{NS}abstract:include", f"{NS}fulltext:include"),
+        _item("X9EBB68U", f"{NS}abstract:exclude"),
         _item("CLEAN001"),
     ])
     monkeypatch.setattr(mini_slr, "OUTPUT_E2E_ROOT", tmp_path / "e2e")
@@ -130,7 +137,7 @@ def test_torn_down_runs_are_not_offered(mini_slr, tmp_path,
     """A run already torn down cannot be torn down again; suggesting it
     would send the operator in a circle."""
     _install_library(mini_slr, monkeypatch,
-                     [_item("UVTAUBKF", "abstract:include")])
+                     [_item("UVTAUBKF", f"{NS}abstract:include")])
     monkeypatch.setattr(mini_slr, "OUTPUT_E2E_ROOT", tmp_path / "e2e")
     _write_run(tmp_path / "e2e", "20260813T182322Z",
                created=["UVTAUBKF"], torn_down=True)
@@ -149,7 +156,7 @@ def test_torn_down_runs_are_not_offered(mini_slr, tmp_path,
 def test_unclaimed_items_say_teardown_will_not_help(mini_slr, tmp_path,
                                                     monkeypatch) -> None:
     _install_library(mini_slr, monkeypatch,
-                     [_item("MYSTERY1", "fulltext:include")])
+                     [_item("MYSTERY1", f"{NS}fulltext:include")])
     monkeypatch.setattr(mini_slr, "OUTPUT_E2E_ROOT", tmp_path / "e2e")
     (tmp_path / "e2e").mkdir()
 
