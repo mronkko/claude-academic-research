@@ -124,6 +124,143 @@ looks like triage and carries none of it.
 
 ---
 
+## Open — six findings from the EBSCO chooser investigation (2026-09-11)
+
+Found while fixing `10.5465/amj.2022.0253`, which failed on EBSCO even
+though the reader had access. Root cause was the handler not recognising
+EBSCO's "Multiple items found" chooser; the loose ends are below, each
+confirmed against the code as it was read.
+
+**Branch state:** the chooser fix is committed on
+`fix/ebsco-openurl-chooser`, **unpushed and unmerged**, one commit off
+`main` at 0.23.2. Unit suite green (2404 passed, 18 of them new); `ruff
+check scripts tests` clean; `.claude-plugin/plugin.json` deliberately
+**not** bumped, per the merge-time rule. The branch carries code and
+tests only — this backlog section lives on `main` instead, so a merge has
+nothing to conflict over. Its two live tests have **never been observed
+green**; item 4 is why, and it is not a defect in the fix.
+
+1. **`sort_key` has no term for `needs_interactive_login`, so a
+   login-walled route can outrank a freely-authenticating one.** Ranking
+   is `(coverage_bucket, rank_key)`. A reader with two affiliations gets
+   both institutions' routes merged, and when coverage is unknown on both
+   — SFX never states coverage — or when the item carries no `pub_date`,
+   every target lands in bucket 1 and list order decides. Measured live:
+   with JYU primary and Aalto second, `lookup_fulltext_target` picked
+   Aalto's no-login Business Source *Ultimate* route **with** a
+   `pub_date` and JYU's SSO-walled *Elite* route **without** one. A
+   no-login preference as the last tiebreaker would make a misordered
+   `openurl_base` degrade instead of fail.
+
+   *Status:* CONFIRMED against `fetchers/resolvers/base.py:433`. Low
+   effort. Careful: it must stay *below* coverage, since a reachable
+   route that does not hold the year is worse than a login for one that
+   does.
+
+   *Files:* `scripts/pipelines/fetchers/resolvers/base.py` (`sort_key`),
+   `scripts/pipelines/fetchers/library_resolver.py`
+   (`lookup_fulltext_target`).
+
+2. **`LIBRARY_OPENURL_BASE` is silently ignored when `openurl_base` is a
+   list.** `load_from_config` reads the env var only in the scalar
+   branch; the list branch takes the file's value and sets
+   `override = ""`. So a multi-affiliation reader — exactly the
+   configuration the list exists for — cannot point a run at one
+   institution without editing `config.toml`, and CLAUDE.md's "env takes
+   precedence" is not true here. It also makes the resolver the one
+   setting a live test cannot parameterise.
+
+   *Status:* CONFIRMED against `fetchers/library_resolver.py:334-343`.
+   Decide deliberately whether the env var should *replace* the list or
+   *reorder* it; replacing is simpler and matches every other key.
+
+   *Files:* `scripts/pipelines/fetchers/library_resolver.py`
+   (`load_from_config`), `CLAUDE.md` (the precedence sentence).
+
+3. **`test_ebsco_handler_downloads_a_real_pdf` fails rather than skips on
+   a login-walled route.** The newer chooser tests in the same file route
+   through `_chooser_route()`, which skips with an actionable message
+   when `needs_interactive_login` is true. The original pre-1997 test
+   predates that and will open a browser onto a SAML prompt and burn its
+   45 s budget. Same treatment, or share the helper.
+
+   *Status:* CONFIRMED by reading; not reproduced (reproducing it costs
+   the live browser lane).
+
+   *Files:* `tests/live/test_ebsco_handler_live.py`.
+
+4. **The new EBSCO live tests cannot pass on this machine's
+   configuration, so the fix has unit evidence only.**
+   `[library] openurl_base` currently holds one endpoint,
+   `https://sfx.finna.fi/nelli09` (JYU SFX). Its only route for the test
+   DOI is EBSCOhost Business Source *Elite* behind
+   `ezproxy.jyu.fi/login`, which `needs_interactive_login` reports True —
+   and no unattended pytest run can answer a Shibboleth prompt. The
+   `config.toml.bak-20260823` backup shows the Aalto Alma endpoint
+   (`eu03.alma.exlibrisgroup.com/view/uresolver/358AALTO_INST/openurl`)
+   was position 0 until some time before 2026-09-06; restoring it gives a
+   route with `login_wall=False` and coverage "from 01.03.1963"
+   (`covers_2024=True`), on which both live tests should run unattended
+   from the institutional network.
+
+   Restoring it must put Aalto back at **position 0**, which
+   `append_to_list` cannot do (the incumbent keeps position 0): the
+   sequence is `remove_from_list` JYU, `append` Aalto, `append` JYU.
+   Position matters because of item 1 — without a `pub_date` the
+   SSO-walled route wins on list order alone. No code in this repo can
+   remove an endpoint (`remove_from_list` has zero callers), so that
+   config change was made by hand and can be undone by hand again.
+
+   *Status:* CONFIRMED by live query of both resolvers on 2026-09-11.
+   User configuration, not a repo defect — but it is the reason the live
+   tests are unverified, so it belongs with them.
+
+   *Files:* `tests/live/test_ebsco_handler_live.py` (`_chooser_route`),
+   `scripts/core/config_writer.py`.
+
+5. **A run whose every resolver route needs an interactive login degrades
+   silently.** That is exactly the state above, and nothing in the
+   pipeline says so. `needs_solve_for` prompts per queue once a browser
+   pass starts, but there is no earlier signal — at the point where
+   `enrich_pdfs` prints its resolver banner the information is already in
+   hand, since each target's URL is known. A line like "every EBSCO route
+   in this queue needs a sign-in; if your library also authenticates on
+   IP, check `[library] openurl_base`" would have turned this session's
+   investigation into a one-line read.
+
+   *Status:* Design proposal, not a confirmed defect. Cheap. Best done
+   with item 1, since both touch how a login-walled route is weighed.
+
+   *Files:* `scripts/pipelines/enrich_pdfs.py` (the resolver banner and
+   the queue split around the `needs_solve` branch).
+
+6. **`EBSCO_LIVE_CACHE_DIR` does not rescue an SSO route, and an attended
+   live test is the alternative not taken.** Measured 2026-09-11: a
+   profile that had completed a Shibboleth login minutes earlier no
+   longer held the session once its Chromium exited — and it must exit,
+   because it holds the profile lock. One run reached
+   `openurl-ebsco-com.ezproxy.jyu.fi/linksvc/linking.aspx` and the next
+   landed back on `login.jyu.fi/idp`. The env var is still right for
+   tenants whose auth persists in cookies, and its comment now says so.
+
+   The untaken option: have the live test call the handler's own
+   `setup()` so a human signs in mid-test. It would work on an SSO
+   tenant, needs `pytest -s` for the prompt, and can never run
+   unattended — a worse default than fixing the route, but the only way
+   to cover an SSO-only library.
+
+   Also unresolved from the same run: whether stopping at
+   `linksvc/linking.aspx` was purely the unanswered login, or also a
+   mid-chain stall worth handling. Re-check once a no-login route exists,
+   and do not build for it before then.
+
+   *Status:* Measured; no fix attempted.
+
+   *Files:* `tests/live/test_ebsco_handler_live.py` (`_PROFILE_ENV`),
+   `scripts/pipelines/fetchers/browser/ebsco.py` (`setup`).
+
+---
+
 ## Open — two upstream fixes for `mronkko/zotero-mcp` (2026-08-20)
 
 Both found by adopting `zotero_mcp.citation_import.csl_json_to_zotero`
