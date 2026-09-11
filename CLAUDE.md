@@ -42,11 +42,11 @@ CI (`.github/workflows/ci.yml`) runs `ruff check scripts tests` then `pytest tes
 
 ## Parallel sessions
 
-Multiple agent instances work this repo concurrently. Start any non-trivial task in a **git worktree**, never in a working tree another instance is already editing — two agents in one checkout clobber each other's edits and run tests against half-applied changes. Git enforces the useful half of this itself: the same branch cannot be checked out in two worktrees.
+**Do not create git worktrees in this repo.** Work in the primary checkout, on a branch. This reverses the earlier guidance here, which told every session to start non-trivial work in a worktree; the user asked for it on 2026-09-11 after a clear-out of stale ones. The isolation was not paying for itself: each worktree needed its own `uv sync --group dev` (`uv.lock` and `.venv/` are gitignored, so a fresh one has no environment and every test fails until synced), `.claude/` is gitignored too so project-local permission settings did not follow, and the leftovers accumulated — several hundred MB of `.venv` in checkouts whose branches had already merged, plus five whose git admin dirs had been pruned out from under them.
 
-After creating a worktree, run `uv sync --group dev` before anything else. `uv.lock` and `.venv/` are both gitignored, so a fresh worktree has no environment and every test fails until you sync. `.claude/` is gitignored too, which means project-local permission settings do not follow a worktree either — symlink `.claude/settings.local.json` from the primary checkout rather than copying it, so approvals stay in one place.
+Multiple agent instances still work this repo concurrently. Before editing, check that another instance is not already working the same files, and branch rather than having two sessions commit to `main`.
 
-The default test run is hermetic — `addopts` in `pyproject.toml` deselects the `live` and `live_browser` markers — so `pytest tests/ -q` and `ruff check scripts tests` are safe to run from any number of worktrees at once.
+The default test run is hermetic — `addopts` in `pyproject.toml` deselects the `live` and `live_browser` markers — so `pytest tests/ -q` and `ruff check scripts tests` are safe to run from any number of checkouts at once.
 
 **Live work is single-lane.** `pytest -m live`, `pytest -m live_browser`, anything under `scripts/pipelines/`, and the `/setup` wizard all contend for resources that exist exactly once on the machine: one Zotero desktop holding `localhost:23119` and one Web API library (concurrent writers interleave badly, and the HTTP 412 retry in `zotero_io.py` masks rather than resolves it), one shared API quota per publisher key, one Playwright Chromium profile, and one `~/.config/academic-research/config.toml`. Confirm no other instance holds that lane before starting.
 
