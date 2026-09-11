@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.1] — 2026-09-11
+
+### Fixed
+
+- **A Zotero DOI stored as a `https://doi.org/...` URL silently defeated
+  every prefix-filtering PDF fetcher.** `enrich_pdfs.py` read the raw
+  `DOI` field at several points and passed it straight through;
+  `ScienceDirectSource` / `WileySource` / `SpringerSource` each match on
+  `doi.startswith(<registrant prefix>)`, which a URL-wrapped DOI never
+  satisfies. Affected items were bucketed as "no route available" and
+  never attempted, or — where the prefix check was bypassed by the Pass
+  2 host-routed retry — the un-normalized DOI was interpolated straight
+  into the API request URL and 404'd regardless of entitlement. Seen in
+  practice from a native Zotero EBSCO-export import, which bypasses
+  `import_to_zotero.py`'s Crossref-based DOI handling. Every read site
+  now normalizes through the existing `doi_utils.strip_doi_prefixes`.
+  `audit_zotero_library.py` also gained a `malformed_doi` category,
+  distinct from `missing_doi`, so a URL-wrapped DOI is flagged for
+  repair (`enrich_dois.py --validate --fix-malformed`) instead of
+  reading as a routing gap. Reported by a peer session working the same
+  Zotero library.
+
 ## [0.23.0] — 2026-09-06
 
 ### Changed
