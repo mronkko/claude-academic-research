@@ -31,7 +31,6 @@ from xml.sax.saxutils import escape
 
 import pytest
 from fetchers.library_resolver import (
-    select_libraries,
     LibraryResolverConfig,
     ResolverCache,
     cached_answer_count,
@@ -40,6 +39,7 @@ from fetchers.library_resolver import (
     load_from_config,
     lookup_dual,
     lookup_fulltext_target,
+    select_libraries,
     targets_match_domains,
 )
 from fetchers.resolvers import AlmaResolver, FulltextTarget, SfxResolver, resolver_for
