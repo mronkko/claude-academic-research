@@ -542,10 +542,12 @@ def _pass3_target(item: dict, resolver_cfg, *, ignore_coverage: bool = False):
     Fail-open semantics are the caller's to apply, and are unchanged:
     `query_ok=False` means "could not ask", never "no access".
     """
+    from fetchers.library_resolver import TargetLookup
+
     if resolver_cfg is None:
-        return None, False, None
+        return TargetLookup(None, False)
     if ignore_coverage:
-        return None, True, None
+        return TargetLookup(None, True)
     # Imported here rather than at module scope, matching how every
     # other resolver symbol in this file is reached: the browser/resolver
     # stack is heavy and most entry points never touch it.
@@ -566,6 +568,7 @@ DIRECT_ROUTE_CASES: dict[str, bool] = {
     "2-out-of-coverage": False,  # resolver: right platform, wrong year
     "1b-no-entitlement": False,  # resolver answered; no route via this platform
     "1a-unknown": True,          # resolver named nothing at all — fail open
+    "4-other-library": False,    # in coverage, but only at a library this run is not following
 }
 
 
@@ -604,11 +607,56 @@ def classify_direct_route(
     never Case 2: 1b is a claim about *entitlement*, which a private
     credential contradicts, whereas Case 2 is a claim about a platform's
     *holdings*, which no credential changes.
+
+    With several libraries configured and `--library` choosing some,
+    the active libraries' routes decide, and a publisher in coverage only
+    at an inactive one is **4** — deferred to the run on that network.
+    Routes from inactive libraries still count as 1b/2 evidence when the
+    active ones named nothing: the question there is entitlement, and
+    they answered it.
     """
-    from fetchers.library_resolver import targets_match_domains
+    from dataclasses import replace
 
     if not domains:
         return "1a-unknown"
+    full = _classify_routes(dual, domains, resolver_cfg, pub_date,
+                            handler_name, direct_access)
+    if resolver_cfg is None or resolver_cfg.active_ids is None:
+        return full
+    active = replace(
+        dual,
+        in_range=[t for t in dual.in_range if resolver_cfg.is_active(t)],
+        any_range=[t for t in dual.any_range if resolver_cfg.is_active(t)],
+    )
+    here = _classify_routes(active, domains, resolver_cfg, pub_date,
+                            handler_name, direct_access)
+    if here == "3-in-coverage":
+        return here
+    if full == "3-in-coverage":
+        return "4-other-library"
+    return full if here == "1a-unknown" else here
+
+
+def _deferred_note(count: int, resolver_cfg) -> str:
+    """The line telling the user which network the deferred items need."""
+    others = " / ".join(
+        r.label for r in resolver_cfg.resolvers
+        if r.resolver_id not in (resolver_cfg.active_ids or ())
+    )
+    return (
+        f"  Deferred to another library: {count} item"
+        f"{'' if count == 1 else 's'} with routes only at {others} — "
+        f"not attempted, not logged. Re-run with --library <name> on "
+        f"that library's network."
+    )
+
+
+def _classify_routes(
+    dual, domains, resolver_cfg, pub_date, handler_name, direct_access,
+) -> str:
+    """Cases 1a-3 for one set of routes; see `classify_direct_route`."""
+    from fetchers.library_resolver import targets_match_domains
+
     if targets_match_domains(
         dual.in_range, domains, resolver_cfg, pub_date=pub_date,
     ):
@@ -2423,6 +2471,9 @@ def _run_browser_in_process(
     # one case where that is wrong (private access the resolver cannot
     # see) is fixed by a config key they need to be told about.
     no_entitlement: dict[str, int] = {}
+    # Items in coverage only at a library this run is not following
+    # (`--library`). Counted so the user is told to run the other network.
+    deferred_other = 0
 
     # Upper bound on the sweep, and the basis for its cost estimate. Not
     # every queued item reaches the resolver — no-DOI and no-handler
@@ -2670,6 +2721,11 @@ def _run_browser_in_process(
                 handler_name=direct.name,
                 direct_access=direct_access,
             )
+            if case == "4-other-library":
+                # Neither queued nor logged: the run on that library's
+                # network must still find it unattempted.
+                deferred_other += 1
+                continue
             if not DIRECT_ROUTE_CASES[case]:
                 if case == "1b-no-entitlement":
                     label = direct.display_name or direct.name
@@ -2687,6 +2743,8 @@ def _run_browser_in_process(
             f"block skips these.",
             flush=True,
         )
+    if deferred_other:
+        print(_deferred_note(deferred_other, resolver_cfg), flush=True)
     if pass2_attached:
         print(
             f"  Pass 2 API retry attached {pass2_attached} PDF"
@@ -2732,12 +2790,15 @@ def _run_browser_in_process(
                     f"items to split unattended from manual...)",
                     flush=True,
                 )
-                unattended = manual = no_route = 0
+                unattended = manual = no_route = deferred_preview = 0
                 for it in connector_upfront:
-                    tgt, ok, chosen = _pass3_target(
+                    lookup = _pass3_target(
                         it, resolver_cfg, ignore_coverage=ignore_coverage,
                     )
-                    if tgt and is_ebsco_target(chosen):
+                    tgt, ok, chosen = lookup.url, lookup.query_ok, lookup.target
+                    if lookup.deferred:
+                        deferred_preview += 1
+                    elif tgt and is_ebsco_target(chosen):
                         unattended += 1
                     elif tgt or not ok or ignore_coverage:
                         manual += 1
@@ -2757,6 +2818,9 @@ def _run_browser_in_process(
                         f"  [needs Zotero desktop + a human]",
                         flush=True,
                     )
+                if deferred_preview:
+                    print(_deferred_note(deferred_preview, resolver_cfg),
+                          flush=True)
                 if no_route:
                     print(
                         f"  • No licensed route: {no_route} "
@@ -2867,6 +2931,7 @@ def _run_browser_in_process(
         + [(it, "retry") for it in connector_retry]
     )
     failed_open = 0
+    deferred_pass3 = 0
     for it, origin in origins:
         # Query B only (date-filtered). When Query B is empty, we do NOT
         # fall back to Query A. The cache data against JYU's SFX (see
@@ -2885,9 +2950,20 @@ def _run_browser_in_process(
         # attempt — which is precisely what used to happen: it made the
         # entire Connector fallback unreachable while logging "no
         # library coverage".
-        target, query_ok, chosen = _pass3_target(
+        lookup = _pass3_target(
             it, resolver_cfg, ignore_coverage=ignore_coverage,
         )
+        target, query_ok, chosen = lookup.url, lookup.query_ok, lookup.target
+
+        if lookup.deferred:
+            # Every route is at a library this run is not following
+            # (`--library`). Checked first because its shape — no URL,
+            # query answered — is otherwise the "no licensed route"
+            # branch below, which logs an ILL candidate. And no doi.org
+            # fail-open: on the wrong network that is the 2026-09-05
+            # incident, another institution's login page.
+            deferred_pass3 += 1
+            continue
 
         if target or not query_ok or ignore_coverage:
             # Fail open. With no resolver answer, hand the Connector the
@@ -2942,6 +3018,8 @@ def _run_browser_in_process(
             f"Connector anyway rather than assuming no access.",
             flush=True,
         )
+    if deferred_pass3:
+        print(_deferred_note(deferred_pass3, resolver_cfg), flush=True)
 
     # ------------------------------------------------------------------
     # Pass 4a — EBSCOhost items, driven directly from their resolver

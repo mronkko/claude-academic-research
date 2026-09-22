@@ -727,6 +727,11 @@ class TargetLookup(NamedTuple):
     url: str | None
     query_ok: bool
     target: FulltextTarget | None = None
+    #: True when routes exist but every one is at a library this run is
+    #: not following (`LibraryResolverConfig.active_ids`). Not a verdict:
+    #: the caller must neither attempt nor log the item, so a run on the
+    #: other institution's network picks it up.
+    deferred: bool = False
 
 
 def lookup_fulltext_target(
@@ -764,6 +769,10 @@ def lookup_fulltext_target(
         return TargetLookup(None, False)
     if not targets:
         return TargetLookup(None, True)
+    usable = [t for t in targets if cfg.is_active(t)]
+    if not usable:
+        return TargetLookup(None, True, None, deferred=True)
+    targets = usable
 
     if required_domains:
         targets = [
