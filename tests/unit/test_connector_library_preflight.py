@@ -347,3 +347,32 @@ def test_explicit_override_still_wins_without_asking(monkeypatch) -> None:
     monkeypatch.setattr(interaction, "get_channel", lambda: Chan())
     assert enrich_pdfs._prompt_on_first_failure(
         _Handler(), 3, _Args(on_first_failure="keep")) == "keep"
+
+
+# ---------------------------------------------------------------------------
+# Booleans must round-trip through config.toml
+# ---------------------------------------------------------------------------
+
+
+def test_the_wizard_writes_booleans_as_toml_booleans() -> None:
+    """They were written as the strings "True"/"False", which then read
+    back as a non-empty string — truthy either way."""
+    import tomllib
+
+    w = _wizard()
+    assert w._render_toml_value(False) == "false"
+    assert w._render_toml_value(True) == "true"
+    assert tomllib.loads(f"x = {w._render_toml_value(False)}")["x"] is False
+
+
+@pytest.mark.parametrize("stored", ["False", "false", "0", "no", False])
+def test_a_stored_no_stays_no_on_a_rerun(stored) -> None:
+    """A declined opt-in written by an older wizard as "False" must not
+    come back as consent: bool("False") is True."""
+    w = _wizard()
+    assert w._prompt_elsevier_xml_pdf(
+        False, {"elsevier": {"render_xml_to_pdf": stored}},
+    ) == {"render_xml_to_pdf": False}
+    assert w._prompt_openalex_paid_content(
+        False, {"openalex": {"api_key": "k", "use_paid_content_api": stored}}, {},
+    ) == {"use_paid_content_api": False}

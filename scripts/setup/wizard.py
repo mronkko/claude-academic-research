@@ -1131,9 +1131,9 @@ def _prompt_elsevier_xml_pdf(interactive: bool, existing: dict) -> dict[str, obj
     current = (existing.get("elsevier", {}) or {}).get("render_xml_to_pdf")
     if not interactive:
         # Non-interactive re-runs must not silently flip a user's choice.
-        return {"render_xml_to_pdf": bool(current)} if current is not None else {}
+        return {"render_xml_to_pdf": _stored_bool(current)} if current is not None else {}
 
-    default_yes = bool(current)
+    default_yes = _stored_bool(current)
     print("\n  Elsevier full-text recovery (optional):")
     print(
         "    Elsevier sometimes returns only the first page of an article.\n"
@@ -1185,12 +1185,12 @@ def _prompt_openalex_paid_content(
     if not has_key:
         # Preserve an earlier answer; never invent one for a tier that
         # has no credential to run on.
-        return {"use_paid_content_api": bool(current)} if current is not None else {}
+        return {"use_paid_content_api": _stored_bool(current)} if current is not None else {}
     if not interactive:
         # A non-interactive re-run must not flip a deliberate choice.
-        return {"use_paid_content_api": bool(current)} if current is not None else {}
+        return {"use_paid_content_api": _stored_bool(current)} if current is not None else {}
 
-    default_yes = True if current is None else bool(current)
+    default_yes = True if current is None else _stored_bool(current)
     print("\n  OpenAlex paid Content API (optional):")
     print(_wrap_body(
         "Retrieving PDFs through APIs is the recommended route. It is much "
@@ -1218,7 +1218,7 @@ def _prompt_openalex_paid_content(
         ).strip().lower()
     except (EOFError, KeyboardInterrupt):
         print("\n    Skipped.")
-        return {"use_paid_content_api": bool(current)} if current is not None else {}
+        return {"use_paid_content_api": _stored_bool(current)} if current is not None else {}
     enabled = default_yes if not answer else answer in ("y", "yes")
     return {"use_paid_content_api": enabled}
 
@@ -1706,14 +1706,28 @@ def _collect_keys(
 # ---------------------------------------------------------------------------
 
 
+def _stored_bool(val: object) -> bool:
+    """A yes/no read back from config.toml, including the "True"/"False"
+    strings older wizards wrote (see `_render_toml_value`)."""
+    if isinstance(val, str):
+        return val.strip().lower() in ("1", "true", "yes", "on")
+    return bool(val)
+
+
 def _escape_toml(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _render_toml_value(val: object) -> str:
-    """Render one TOML value. Strings and lists-of-strings only — the
-    two shapes the plugin writes. Added for v0.4.0's
-    `[library] no_access` list support."""
+    """Render one TOML value: a string, a list of strings, or a boolean.
+
+    Booleans used to go through `str()` and come out as the strings
+    "True"/"False". Read back, "False" is a non-empty string, so every
+    `_stored_bool(current)` below turned a stored *no* into *yes*: a declined
+    opt-in (Elsevier PDF synthesis, the paid OpenAlex API) re-enabled
+    itself on the next wizard run."""
+    if isinstance(val, bool):
+        return "true" if val else "false"
     if isinstance(val, list):
         inner = ", ".join(f'"{_escape_toml(str(v))}"' for v in val)
         return f"[{inner}]"
