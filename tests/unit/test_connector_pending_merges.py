@@ -28,7 +28,9 @@ def test_the_queue_survives_a_restart(tmp_path) -> None:
     assert PendingMerges(tmp_path).keepers() == {"K2"}
 
 
-def test_settle_merges_what_has_synced_and_keeps_the_rest(tmp_path) -> None:
+def test_settle_merges_what_has_synced_and_keeps_the_rest(tmp_path, monkeypatch) -> None:
+    from fetchers.browser import connector
+    monkeypatch.setattr(connector, "_pdf_child_settled", lambda zot, key: key == "SYNCED")
     q = PendingMerges(tmp_path)
     q.add(keeper="K1", new_key="SYNCED", doi="10.1/a")
     q.add(keeper="K2", new_key="LAGGING", doi="10.1/b")
@@ -95,18 +97,22 @@ def test_the_waits_are_flags() -> None:
 
 
 def _pdf_child(key="P1"):
-    return {"key": key, "data": {"itemType": "attachment",
-                                 "contentType": "application/pdf"}}
+    return {"key": key, "version": 1,
+            "data": {"itemType": "attachment", "contentType": "application/pdf",
+                     "md5": "aa"}}
 
 
 def _html_child():
     return {"key": "H1", "data": {"itemType": "attachment", "contentType": "text/html"}}
 
 
-def test_the_child_wait_wants_a_pdf_not_any_attachment() -> None:
+def test_the_child_wait_wants_a_pdf_not_any_attachment(monkeypatch) -> None:
+    from fetchers.browser import connector
     from fetchers.browser.connector import _wait_for_child_attachment
 
+    monkeypatch.setattr(connector.time, "sleep", lambda s: None)
     zot = MagicMock()
+    zot.cloud.item.return_value = _pdf_child()
     zot.cloud.children.return_value = [_html_child()]
     assert _wait_for_child_attachment(zot, "N", 0.1) is False
     zot.cloud.children.return_value = [_html_child(), _pdf_child()]
@@ -154,3 +160,74 @@ def test_a_merge_that_raises_is_queued_not_failed() -> None:
     handler = src[src.index("self.merge_saved_item"):]
     handler = handler[:handler.index("moved = stats.get(")]
     assert "self.pending.add(" in handler
+
+
+# ---------------------------------------------------------------------------
+# Desktop's in-flight upload overwrote the re-parent
+# ---------------------------------------------------------------------------
+
+
+def _pdf(key, parent, version, md5="aa"):
+    return {"key": key, "version": version,
+            "data": {"itemType": "attachment", "contentType": "application/pdf",
+                     "md5": md5, "parentItem": parent}}
+
+
+def test_a_pdf_is_settled_only_with_md5_and_a_steady_version(monkeypatch) -> None:
+    from fetchers.browser import connector
+
+    monkeypatch.setattr(connector.time, "sleep", lambda s: None)
+    zot = MagicMock()
+    zot.cloud.children.return_value = [_pdf("P", "N", 5)]
+    zot.cloud.item.side_effect = [_pdf("P", "N", 5)]
+    assert connector._pdf_child_settled(zot, "N") is True
+    zot.cloud.item.side_effect = [_pdf("P", "N", 6)]          # still moving
+    assert connector._pdf_child_settled(zot, "N") is False
+    zot.cloud.children.return_value = [_pdf("P", "N", 5, md5="")]
+    assert connector._pdf_child_settled(zot, "N") is False
+
+
+def test_a_merge_counts_only_if_the_pdf_stays_under_the_keeper(monkeypatch) -> None:
+    import pytest
+    from fetchers.browser import connector
+
+    monkeypatch.setattr(connector.time, "sleep", lambda s: None)
+    handler = connector.ZoteroConnectorHandler.__new__(connector.ZoteroConnectorHandler)
+    handler.keep_extras = False
+    zot = MagicMock()
+    zot.merge_duplicate_item.return_value = {"moved": 1, "moved_pdf_keys": ["P"]}
+    zot.cloud.item.side_effect = [_pdf("P", "KEEPER", 7), _pdf("P", "KEEPER", 7)]
+    assert handler.merge_saved_item(zot, "KEEPER", "N")["moved_pdf_keys"] == ["P"]
+
+    zot.cloud.item.side_effect = [_pdf("P", "KEEPER", 7), _pdf("P", "N", 8)]  # overwritten
+    with pytest.raises(connector.MergeNotVerified):
+        handler.merge_saved_item(zot, "KEEPER", "N")
+
+
+def test_settle_uses_the_settled_check(tmp_path, monkeypatch) -> None:
+    from fetchers.browser import connector
+
+    q = PendingMerges(tmp_path)
+    q.add(keeper="K1", new_key="N1", doi="10.1/a")
+    zot = MagicMock()
+    zot.cloud.item.return_value = {"key": "N1"}
+    monkeypatch.setattr(connector, "_pdf_child_settled", lambda zot, key: False)
+    merge = MagicMock()
+    settle_pending_merges(zot, q, merge=merge, wait_s=0, on_merged=lambda *a: None)
+    merge.assert_not_called()
+
+
+def test_restore_from_trash_patches_deleted_zero(monkeypatch) -> None:
+    import zotero_io
+
+    zc = zotero_io.ZoteroClient.__new__(zotero_io.ZoteroClient)
+    cloud = MagicMock()
+    cloud.endpoint, cloud.library_type, cloud.library_id = "https://api.zotero.org", "users", "5591"
+    cloud.item.return_value = {"key": "G2FY5SZZ", "version": 41, "data": {"deleted": 1}}
+    cloud.client.patch.return_value = MagicMock(status_code=204)
+    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+    zc.api_key = "k"
+    assert zc.restore_from_trash("G2FY5SZZ") is True
+    kwargs = cloud.client.patch.call_args.kwargs
+    assert kwargs["content"] == '{"deleted": 0}'
+    assert kwargs["headers"]["If-Unmodified-Since-Version"] == "41"

@@ -276,10 +276,7 @@ def settle_pending_merges(
                 visible = False
             if not visible:
                 continue
-            try:
-                has_pdf = _has_pdf_child(zot.cloud.children(row["new_key"]))
-            except Exception:  # noqa: BLE001
-                has_pdf = False
+            has_pdf = _pdf_child_settled(zot, row["new_key"])
             if not has_pdf:
                 if _age_s(row) > PENDING_GRACE_S:
                     pending.remove(row["new_key"])
@@ -387,7 +384,9 @@ class ZoteroConnectorHandler(PublisherHandler):
     # user can solve any institutional challenge before the first save.
     # ------------------------------------------------------------------
 
-    def merge_saved_item(self, zot, keeper: str, new_key: str) -> dict:
+    def merge_saved_item(
+        self, zot, keeper: str, new_key: str, *, verify_s: float = 5.0,
+    ) -> dict:
         """Merge the Connector's saved item into `keeper`.
 
         By default only the PDF moves: the keeper's metadata came from
@@ -395,11 +394,24 @@ class ZoteroConnectorHandler(PublisherHandler):
         are not wanted there (`--connector-keep-extras` restores the old
         everything-moves behaviour).
         """
-        return zot.merge_duplicate_item(
+        stats = zot.merge_duplicate_item(
             keeper, new_key,
             union_tags=self.keep_extras,
             child_content_types=None if self.keep_extras else ("application/pdf",),
         )
+        # Read the moved PDFs back, twice, a few seconds apart. A merge
+        # counts, and --replace may delete the old copy, only if they are
+        # still under the keeper: Zotero Desktop overwrote two re-parents
+        # that had looked successful.
+        for _ in range(2):
+            time.sleep(verify_s)
+            for key in stats.get("moved_pdf_keys") or []:
+                parent = (zot.cloud.item(key).get("data", {}) or {}).get("parentItem")
+                if parent != keeper:
+                    raise MergeNotVerified(
+                        f"{key} is under {parent}, not {keeper}, after the merge",
+                    )
+        return stats
 
     async def setup(self, page: Page, first_doi: str) -> str:
         del page, first_doi   # URL/DOI aren't needed for the intro banner
@@ -1209,10 +1221,42 @@ def _wait_for_child_attachment(
             children = zot.cloud.children(item_key) or []
         except Exception:
             children = []
-        if _has_pdf_child(children):
+        if _has_pdf_child(children) and _pdf_child_settled(zot, item_key):
             return True
         time.sleep(1.0)
     return False
+
+
+class MergeNotVerified(Exception):
+    """The moved PDF was not under the keeper when read back."""
+
+
+def _pdf_child_settled(zot, item_key: str, *, stable_s: float = 3.0) -> bool:
+    """A PDF child of `item_key` whose upload has finished: md5 set, and
+    its version the same across two reads `stable_s` apart.
+
+    Merging earlier is how two keepers lost their PDF on 2026-09-23. The
+    attachment was visible with no md5 while Zotero Desktop was still
+    uploading it; our re-parent landed, and Desktop's later push of that
+    attachment put the old parent back — under the temporary item we had
+    just trashed — after --replace had deleted the keeper's old copy.
+    """
+    try:
+        pdfs = [
+            c for c in zot.cloud.children(item_key) or []
+            if _has_pdf_child([c]) and (c.get("data", {}) or {}).get("md5")
+        ]
+        if not pdfs:
+            return False
+        time.sleep(stable_s)
+        for c in pdfs:
+            again = zot.cloud.item(c.get("key"))
+            if (again.get("version") != c.get("version")
+                    or not (again.get("data", {}) or {}).get("md5")):
+                return False
+        return True
+    except Exception:  # noqa: BLE001 — unknown is not settled
+        return False
 
 
 def _has_pdf_child(children) -> bool:
@@ -1229,6 +1273,7 @@ def _has_pdf_child(children) -> bool:
 __all__ = [
     "ZoteroConnectorHandler",
     "ping_zotero_desktop",
+    "MergeNotVerified",
     "PendingMerges",
     "connector_extension_problem",
     "settle_pending_merges",

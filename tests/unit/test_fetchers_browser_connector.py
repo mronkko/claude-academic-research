@@ -305,29 +305,32 @@ def test_wait_for_cloud_sync_recovers_after_transient_404() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_wait_for_child_attachment_returns_true_when_pdf_has_md5() -> None:
-    """Real attached PDF: attachment with non-empty md5."""
+def test_wait_for_child_attachment_returns_true_when_pdf_has_md5(monkeypatch) -> None:
+    """Real attached PDF: md5 set and the version steady on re-read."""
+    from fetchers.browser import connector
+    monkeypatch.setattr(connector.time, "sleep", lambda s: None)
+    pdf = {"key": "PDF1", "version": 3,
+           "data": {"itemType": "attachment", "md5": "deadbeef",
+                    "contentType": "application/pdf"}}
     zot = MagicMock()
-    zot.cloud.children.return_value = [
-        {"key": "PDF1",
-         "data": {"itemType": "attachment", "md5": "deadbeef",
-                  "contentType": "application/pdf"}},
-    ]
+    zot.cloud.children.return_value = [pdf]
+    zot.cloud.item.return_value = pdf
     assert _wait_for_child_attachment(zot, "NEW", timeout_s=0.2) is True
 
 
-def test_wait_for_child_attachment_accepts_shell_without_md5() -> None:
-    """Attachment record exists but md5 is still empty — that's fine.
-    The merge PATCHes parentItem regardless of upload state; the
-    stub-deletion race is handled at pdf_map() via the dateAdded
-    grace window instead of gating the merge on md5 here."""
+def test_wait_for_child_attachment_refuses_a_shell_without_md5() -> None:
+    """Reversed on 2026-09-23. An attachment with no md5 is one whose
+    upload Zotero Desktop has not finished, and Desktop's later push of
+    that attachment overwrote our re-parent: two keepers logged ATTACHED
+    ended with no PDF (RPW9D2U6, FZZT98PT), their new PDFs back under the
+    trashed temporary item. The merge now waits for the upload to finish."""
     zot = MagicMock()
     zot.cloud.children.return_value = [
         {"key": "PDF1",
          "data": {"itemType": "attachment", "md5": "",
                   "contentType": "application/pdf"}},
     ]
-    assert _wait_for_child_attachment(zot, "NEW", timeout_s=0.2) is True
+    assert _wait_for_child_attachment(zot, "NEW", timeout_s=0.2) is False
 
 
 def test_wait_for_child_attachment_ignores_non_attachment_children() -> None:
@@ -349,7 +352,7 @@ def test_wait_for_child_attachment_times_out_on_empty() -> None:
     assert _wait_for_child_attachment(zot, "NEW", timeout_s=0.3) is False
 
 
-def test_wait_for_child_attachment_recovers_after_transient_error() -> None:
+def test_wait_for_child_attachment_recovers_after_transient_error(monkeypatch) -> None:
     """First poll raises; second returns the attachment with md5 —
     simulates the narrow window where the PDF is mid-upload."""
     zot = MagicMock()
@@ -359,12 +362,14 @@ def test_wait_for_child_attachment_recovers_after_transient_error() -> None:
         attempts["n"] += 1
         if attempts["n"] < 2:
             raise Exception("transient")
-        return [
-            {"key": "PDF1",
-             "data": {"itemType": "attachment", "md5": "abc123",
-                      "contentType": "application/pdf"}},
-        ]
+        return [pdf]
 
+    from fetchers.browser import connector
+    monkeypatch.setattr(connector.time, "sleep", lambda s: None)
+    pdf = {"key": "PDF1", "version": 2,
+           "data": {"itemType": "attachment", "md5": "abc123",
+                    "contentType": "application/pdf"}}
+    zot.cloud.item.return_value = pdf
     zot.cloud.children.side_effect = fake_children
     assert _wait_for_child_attachment(zot, "NEW", timeout_s=5) is True
     assert attempts["n"] >= 2

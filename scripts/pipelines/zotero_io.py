@@ -1801,6 +1801,37 @@ class ZoteroClient:
                 data.pop(field, None)
             client.update_item(item)
 
+    def _set_deleted(self, item_key: str, deleted: int) -> int:
+        """PATCH `{"deleted": 0|1}` on the cloud item; returns the HTTP
+        status. Hand-built because pyzotero rejects `deleted` as an
+        invalid field; see `merge_duplicate_item`'s docstring."""
+        from pyzotero.zotero import build_url
+        latest = self.cloud.item(item_key)
+        url = build_url(
+            self.cloud.endpoint,
+            f"/{self.cloud.library_type}/{self.cloud.library_id}/items/{item_key}",
+        )
+        http = self.cloud.client
+        if http is None:
+            raise RuntimeError("pyzotero client is not initialised")
+        resp = http.patch(
+            url=url,
+            headers={
+                "If-Unmodified-Since-Version": str(latest["version"]),
+                "Zotero-API-Key": self.api_key,
+                "Zotero-API-Version": "3",
+                "Content-Type": "application/json",
+            },
+            content=json.dumps({"deleted": deleted}),
+        )
+        return resp.status_code
+
+    def restore_from_trash(self, item_key: str) -> bool:
+        """Take `item_key` back out of Zotero's trash (cloud). True on
+        success. For recovering a Connector save a merge trashed while
+        its PDF was still under it."""
+        return self._set_deleted(item_key, 0) in (200, 204)
+
     def _reparent_child(
         self, child_key: str, target_key: str, keeper_sigs: set,
         child_content_types: tuple[str, ...] | None, *, attempts: int = 4,
