@@ -42,9 +42,55 @@ def test_known_leading_shapes_with_a_space(notice) -> None:
 
 def test_an_unrecognised_leading_notice_is_left_alone() -> None:
     """Better a notice kept than a first sentence cut: with no clear end
-    to the notice, nothing is removed."""
-    text = "© 2019 Elsevier B.V. We study the market. Next we test it."
+    to the notice, nothing is removed. ("IEEERacial…" is a real one.)"""
+    for text in ("© 2019 The editors. We study the market. Next we test it.",
+                 "© 2020 IEEERacial equality is an important theme."):
+        assert clean_abstract(text) == text
+
+
+# Real shapes the first version missed, from a 22,074-abstract library.
+@pytest.mark.parametrize("raw", [
+    "© 2023 Elsevier LtdCOVID-19 pandemic has brought challenges.",
+    "© 2013 Elsevier B.V.This paper analyzes the characteristics.",
+    "© 2019 Elsevier B.V. We study the market. Next we test it.",
+])
+def test_fused_and_spaced_publisher_endings(raw) -> None:
+    assert not clean_abstract(raw).startswith("©")
+    assert clean_abstract(raw)[0].isupper()
+
+
+@pytest.mark.parametrize("tail", [
+    "Copyright (C) 2001 John Wiley & Sons, Ltd.",
+    "Copyright ? 2006 John Wiley & Sons, Ltd.",
+    "Crown Copyright (C) 2008 Published by Elsevier B.V.",
+    "© 2013 © 2013 City University of Hong Kong.",
+    "Copyright of the Academy of Management, all rights reserved.",
+    "ABSTRACT FROM AUTHOR Copyright of Academy of Management Journal is the "
+    "property of Academy of Management and its content may not be copied or "
+    "emailed to multiple sites or posted to a listserv without the copyright "
+    "holder's express written permission. However, users may print, "
+    "download, or email articles for individual use. This abstract may be "
+    "abridged. No warranty is given about the accuracy of the copy. Users "
+    "should refer to the original published version of the material for the "
+    "full abstract. (Copyright applies to all Abstracts.)",
+])
+def test_trailing_notice_shapes(tail) -> None:
+    assert clean_abstract(f"{BODY} {tail}") == BODY
+
+
+def test_copyright_as_an_ordinary_word_is_kept() -> None:
+    text = "Firms litigate often. Copyright infringement is the main cause."
     assert clean_abstract(text) == text
+
+
+@pytest.mark.parametrize("raw", [
+    "abstractScholars share the assumption.",
+    "abstract:Scholars share the assumption.",
+    "abstract Scholars share the assumption.",
+    "Abstracts Scholars share the assumption.",
+])
+def test_lowercase_and_plural_headings(raw) -> None:
+    assert clean_abstract(raw) == "Scholars share the assumption."
 
 
 def test_the_copyright_hint_is_used_even_mid_shape() -> None:
@@ -194,3 +240,43 @@ def test_exclusions_come_from_flag_env_and_config(monkeypatch) -> None:
     monkeypatch.setenv("ABSTRACT_EXCLUDE_SOURCES", "openalex, crossref")
     assert enrich_abstracts._excluded_sources("") == {"openalex", "crossref"}
     assert enrich_abstracts._excluded_sources("wos") == {"openalex", "crossref", "wos"}
+
+
+@pytest.mark.parametrize("raw", [
+    "© Academy of Management Annals.As research has accumulated, we test it.",
+    "© 2023 The AuthorsCorporate social responsibility is widely adopted.",
+    "© 2018A variable and person-centered approach was applied.",
+    "© 2014.If entrepreneurs are constrained, how?",
+    "© Academy of Management Learning & Education,2017.Using a framework, we review.",
+    "© The authors severally 2020. All rights reserved.This monograph responds.",
+])
+def test_more_leading_shapes(raw) -> None:
+    got = clean_abstract(raw)
+    assert "©" not in got and got[0].isupper()
+
+
+@pytest.mark.parametrize("tail", [
+    "Copyright � 2007 John Wiley & Sons, Ltd.",
+    "Copyright r 2019 by Emerald Publishing Limited All rights of reproduction in any form reserved.",
+    "(Copyright applies to all Abstracts)",
+])
+def test_more_trailing_shapes(tail) -> None:
+    assert clean_abstract(f"{BODY} {tail}") == BODY
+
+
+def test_markup_revealed_by_unescaping_is_removed() -> None:
+    raw = "&lt;p&gt;&lt;span&gt;American labor scholarship emphasizes unions.&lt;/span&gt;&lt;/p&gt;"
+    assert clean_abstract(raw) == "American labor scholarship emphasizes unions."
+    word = ("<!--[if gte mso 9]><xml> <o:OfficeDocumentSettings> </o:OfficeDocumentSettings>"
+            "</xml><![endif]-->We study firms.")
+    assert clean_abstract(word) == "We study firms."
+    assert clean_abstract("Firms with &lt;50 employees &gt; others.") == "Firms with <50 employees > others."
+
+
+@pytest.mark.parametrize("tail", [
+    "COPYRIGHT © 2005 BLACKWELL PUBLISHING, INC.",
+    "© 2014 American Psychological Association.",
+])
+def test_trailing_notice_without_a_sentence_end(tail) -> None:
+    body = "We study smartphone use outside of work hours"
+    assert clean_abstract(f"{body} {tail}") == body

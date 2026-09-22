@@ -86,6 +86,7 @@ exact invocation.
 |---|---|---|
 | Audit a library for items missing abstracts / PDFs / empty stubs | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/audit_zotero_library.py --group <id>` |
 | Add missing abstracts to items | `enrich_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_abstracts.py --filter-keys-file .claude/audit/audit.missing_abstract.keys` |
+| Repair stored abstracts (copyright notices, HTML entities, "Abstract" headings) | `clean_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/clean_abstracts.py` (dry run; read the CSV it writes, then add `--write` with the user's OK) |
 | Attach missing PDFs (fast HTTP cascade) | `enrich_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
 | Attach PDFs from Wiley journals (TDM token route) | `enrich_pdfs.py --sources wiley` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --sources wiley --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
 | Attach PDFs from Cloudflare-gated publishers (Sage, APA, T&F, Emerald, …) | `enrich_pdfs.py --sources browser` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --sources browser --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
