@@ -1021,6 +1021,13 @@ def _pdf_has_text(pdf_path, item_key: str) -> bool | None:
 #: immediately after a successful attach.
 _REPLACE_TARGETS: dict[str, list[str]] = {}
 
+#: item key -> MD5s of the PDFs it already holds, under `--replace`. A
+#: fetched file with one of these hashes is the same file: attaching it
+#: would only delete and re-upload identical bytes. A re-run over a fixed
+#: key list did exactly that for every item an earlier run had repaired,
+#: because the cascade found the new PDF in the cache.
+_REPLACE_MD5: dict[str, set[str]] = {}
+
 
 def _drop_replaced_attachments(zot, item_key: str, *, keep: str | None) -> None:
     """Delete the attachments `item_key`'s new PDF replaces.
@@ -1045,6 +1052,16 @@ def _drop_replaced_attachments(zot, item_key: str, *, keep: str | None) -> None:
                 f"{attachment_key} failed: {_failure_detail(exc)}",
                 flush=True,
             )
+
+
+def _attachment_summary(*, to_process: int, to_replace: int, stubs_deleted: int) -> str:
+    """The "N items without real PDF" line. Re-admitted `--replace`
+    items are in `to_process` too, and used to be counted as missing."""
+    return (
+        f"{to_process - to_replace} items without real PDF"
+        + (f", {to_replace} to replace" if to_replace else "")
+        + (f" ({stubs_deleted} stubs deleted)" if stubs_deleted else "") + "."
+    )
 
 
 def _partition_by_attachment(
@@ -1112,6 +1129,21 @@ def _attach_and_log(
     folding a tag PATCH into the same try-block records a fully
     successful attachment as `upload_failed`.
     """
+    if item_key in _REPLACE_MD5:
+        import hashlib
+        try:
+            digest = hashlib.md5(Path(pdf_path).read_bytes()).hexdigest()
+        except OSError:
+            digest = ""
+        if digest in _REPLACE_MD5[item_key]:
+            print("→ unchanged (identical to the attached PDF)", flush=True)
+            log_writer.writerow({
+                "run_date": run_date, "item_key": item_key, "doi": doi,
+                "title": title, "status": "unchanged", "source": source,
+                "detail": "fetched file is byte-identical to the attached one",
+            })
+            return True
+
     # Structural check before upload. Attaching a corrupt PDF is worse
     # than attaching nothing: `pdf_map()` then reports the item as
     # having a real PDF, so every later run skips it and the damage is
@@ -4052,12 +4084,18 @@ def main() -> int:
 
     print("Checking for existing PDF attachments...", end=" ", flush=True)
     pdf_map = zot.pdf_map()
-    real_map = zot.real_pdf_map() if args.replace else {}
+    md5_map = zot.real_pdf_md5_map() if args.replace else {}
+    real_map = {parent: list(atts) for parent, atts in md5_map.items()}
     to_process, stub_keys, replace_targets = _partition_by_attachment(
         candidates, pdf_map, real_map, replace=args.replace,
     )
     _REPLACE_TARGETS.clear()
     _REPLACE_TARGETS.update(replace_targets)
+    _REPLACE_MD5.clear()
+    _REPLACE_MD5.update({
+        key: {md5 for md5 in md5_map.get(key, {}).values() if md5}
+        for key in replace_targets
+    })
     stubs_deleted = 0
     for stub_key in stub_keys:
         try:
@@ -4065,12 +4103,10 @@ def main() -> int:
             stubs_deleted += 1
         except Exception as e:
             print(f"  stub delete {stub_key} failed: {e}", flush=True)
-    print(
-        f"{len(to_process)} items without real PDF"
-        + (f", {len(replace_targets)} to replace" if replace_targets else "")
-        + (f" ({stubs_deleted} stubs deleted)" if stubs_deleted else "") + ".",
-        flush=True,
-    )
+    print(_attachment_summary(
+        to_process=len(to_process), to_replace=len(replace_targets),
+        stubs_deleted=stubs_deleted,
+    ), flush=True)
     if not to_process:
         _print_run_report(args, zot, scope_keys)
         return 0

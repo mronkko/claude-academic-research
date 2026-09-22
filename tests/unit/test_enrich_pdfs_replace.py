@@ -199,3 +199,50 @@ def test_replace_flag_appears_in_help() -> None:
         capture_output=True, text=True, check=True,
     )
     assert "--replace" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Re-runs: the same bytes are not swapped for themselves
+# ---------------------------------------------------------------------------
+#
+# A --replace run over a fixed key list re-admits every item, including
+# ones an earlier run already repaired; the cascade then found the same
+# PDF in the cache and deleted and re-uploaded it, on every re-run.
+
+
+def test_identical_bytes_are_neither_uploaded_nor_swapped(tmp_path, monkeypatch) -> None:
+    import hashlib
+
+    zot, pdf, log_writer = _attach_env(tmp_path)
+    md5 = hashlib.md5(pdf.read_bytes()).hexdigest()
+    monkeypatch.setitem(enrich_pdfs._REPLACE_TARGETS, "A", ["OLDATT01"])
+    monkeypatch.setitem(enrich_pdfs._REPLACE_MD5, "A", {md5})
+
+    ok = enrich_pdfs._attach_and_log(
+        zot, log_writer, run_date="2026-09-22", item_key="A",
+        doi="10.1/A", title="A", source="cache", pdf_path=pdf,
+        check_text=False,
+    )
+    assert ok
+    zot.attach_pdf.assert_not_called()
+    zot.delete_item.assert_not_called()
+    assert log_writer.writerow.call_args.args[0]["status"] == "unchanged"
+
+
+def test_different_bytes_still_replace(tmp_path, monkeypatch) -> None:
+    zot, pdf, log_writer = _attach_env(tmp_path)
+    monkeypatch.setitem(enrich_pdfs._REPLACE_TARGETS, "A", ["OLDATT01"])
+    monkeypatch.setitem(enrich_pdfs._REPLACE_MD5, "A", {"0" * 32})
+    assert enrich_pdfs._attach_and_log(
+        zot, log_writer, run_date="2026-09-22", item_key="A",
+        doi="10.1/A", title="A", source="t", pdf_path=pdf, check_text=False,
+    )
+    zot.delete_item.assert_called_once_with("OLDATT01")
+
+
+def test_the_summary_counts_items_without_a_pdf_separately() -> None:
+    line = enrich_pdfs._attachment_summary(
+        to_process=323, to_replace=323, stubs_deleted=0,
+    )
+    assert line == "0 items without real PDF, 323 to replace."
+    assert "unchanged" in enrich_pdfs.pdf_run_report.STATUS_INFO

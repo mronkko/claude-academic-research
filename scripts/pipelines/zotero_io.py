@@ -837,6 +837,23 @@ class ZoteroClient:
             for parent, (real, _stubs) in by_parent.items() if real
         }
 
+    def real_pdf_md5_map(
+        self, *, stub_grace_seconds: int = 3600,
+    ) -> dict[str, dict[str, str]]:
+        """{parent_key: {attachment_key: md5}} for PDFs holding bytes.
+
+        `real_pdf_map` plus each file's hash, from the same single walk:
+        `--replace` needs both, the keys to delete and the hashes to tell
+        a fetched copy of the same file from a real replacement.
+        """
+        by_parent = self._pdf_attachments_by_parent(
+            stub_grace_seconds=stub_grace_seconds,
+        )
+        return {
+            parent: {a["key"]: a["data"].get("md5") or "" for a in real}
+            for parent, (real, _stubs) in by_parent.items() if real
+        }
+
     def pdf_map(
         self, *, stub_grace_seconds: int = 3600,
     ) -> dict[str, tuple[bool, list[str]]]:

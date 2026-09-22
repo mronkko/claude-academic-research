@@ -42,13 +42,17 @@ from log_schemas import PDF_FETCH_FIELDS
 # but never itemised. `lever` is the concrete next action — the thing an
 # agent reading this report should tell the user to do, or do itself.
 
-SUCCESS_STATUSES = frozenset({"attached", "attached_via_connector", "dry_run"})
+SUCCESS_STATUSES = frozenset({"attached", "attached_via_connector", "dry_run", "unchanged"})
 
 STATUS_INFO: dict[str, tuple[str, str]] = {
     # status: (one-line meaning, next lever)
     "attached": ("PDF attached", ""),
     "attached_via_connector": ("PDF attached via the Zotero Connector", ""),
     "dry_run": ("PDF downloaded, upload skipped (--dry-run)", ""),
+    "unchanged": (
+        "--replace fetched the same file the item already holds; nothing changed",
+        "",
+    ),
     "attached_no_text": (
         "PDF attached and structurally intact, but no text can be extracted",
         "Most likely a bad copy, NOT a scan. Every textless file in the "
