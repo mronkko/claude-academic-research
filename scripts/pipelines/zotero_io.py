@@ -63,6 +63,7 @@ import json
 import logging
 import re
 import sys
+import time
 import warnings
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
@@ -1800,6 +1801,47 @@ class ZoteroClient:
                 data.pop(field, None)
             client.update_item(item)
 
+    def _reparent_child(
+        self, child_key: str, target_key: str, keeper_sigs: set,
+        child_content_types: tuple[str, ...] | None, *, attempts: int = 4,
+    ) -> str | None:
+        """Move one child to `target_key`. Returns None when the child is
+        filtered out, "dupe" when the keeper already has the same file,
+        "pdf" or "other" when moved.
+
+        Retries a 412, re-reading the child each time. Zotero Desktop can
+        still be finishing a PDF upload when the Connector pass merges,
+        and the md5/mtime update it writes bumps the attachment's version
+        between our read and our PATCH; seen twice in one night.
+        """
+        for attempt in range(attempts):
+            fresh = self.cloud.item(child_key)
+            fd = fresh.get("data", {})
+            if child_content_types is not None and (
+                fd.get("itemType") != "attachment"
+                or fd.get("contentType", "") not in child_content_types
+            ):
+                return None
+            if fd.get("itemType") == "attachment":
+                sig = (
+                    fd.get("contentType", ""),
+                    fd.get("filename", ""),
+                    fd.get("md5", ""),
+                    fd.get("url", ""),
+                )
+                if sig in keeper_sigs:
+                    return "dupe"
+            fd["parentItem"] = target_key
+            try:
+                self._safe_update_item(fresh, self.cloud)
+            except Exception as exc:
+                if _http_status_of(exc) != 412 or attempt == attempts - 1:
+                    raise
+                time.sleep(2 ** attempt)
+                continue
+            return "pdf" if fd.get("contentType") == "application/pdf" else "other"
+        return None  # unreachable: the last attempt raises
+
     def merge_duplicate_item(
         self,
         target_key: str,
@@ -1911,27 +1953,16 @@ class ZoteroClient:
         skipped_dupes: list[str] = []
         for child in dup_children:
             child_key = child.get("key", "")
-            fresh = self.cloud.item(child_key)
-            fd = fresh.get("data", {})
-            if child_content_types is not None and (
-                fd.get("itemType") != "attachment"
-                or fd.get("contentType", "") not in child_content_types
-            ):
+            moved_one = self._reparent_child(
+                child_key, target_key, keeper_sigs, child_content_types,
+            )
+            if moved_one is None:
                 continue
-            if fd.get("itemType") == "attachment":
-                sig = (
-                    fd.get("contentType", ""),
-                    fd.get("filename", ""),
-                    fd.get("md5", ""),
-                    fd.get("url", ""),
-                )
-                if sig in keeper_sigs:
-                    skipped_dupes.append(child_key)
-                    continue
-            fd["parentItem"] = target_key
-            self._safe_update_item(fresh, self.cloud)
+            if moved_one == "dupe":
+                skipped_dupes.append(child_key)
+                continue
             moved.append(child_key)
-            if fd.get("contentType") == "application/pdf":
+            if moved_one == "pdf":
                 moved_pdfs.append(child_key)
 
         # Step 4: trash the duplicate with PATCH {"deleted": 1}.

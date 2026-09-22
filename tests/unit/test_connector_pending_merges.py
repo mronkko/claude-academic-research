@@ -142,3 +142,15 @@ def test_a_pdfless_save_is_given_up_after_its_grace_period(tmp_path) -> None:
     )
     assert [r["new_key"] for r in gave_up] == ["N1"]
     assert PendingMerges(tmp_path).keepers() == set()
+
+
+def test_a_merge_that_raises_is_queued_not_failed() -> None:
+    """A still-live temporary item holds the PDF, so a failed merge is a
+    retry, not a verdict."""
+    import inspect
+
+    from fetchers.browser import connector
+    src = inspect.getsource(connector.ZoteroConnectorHandler.download_and_attach)
+    handler = src[src.index("self.merge_saved_item"):]
+    handler = handler[:handler.index("moved = stats.get(")]
+    assert "self.pending.add(" in handler

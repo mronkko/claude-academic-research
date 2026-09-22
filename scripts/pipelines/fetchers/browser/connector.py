@@ -870,6 +870,16 @@ class ZoteroConnectorHandler(PublisherHandler):
             )
             self.last_merge = stats
         except Exception as e:
+            if self.pending is not None:
+                # The temporary item is still live and holds the PDF, so
+                # a failed merge (a 412 that outlasted the retries, a
+                # transient API error) is a retry, not a verdict.
+                self.pending.add(keeper=item["item_key"], new_key=new_key, doi=doi)
+                self.last_outcome = "merge_pending"
+                counter.queued += 1
+                print(f"  └─ QUEUED: merge errored ({str(e)[:80]}); queued to "
+                      f"retry into {item['item_key']}.", flush=True)
+                return False
             print(f"  └─ FAIL: merge errored: {str(e)[:100]}", flush=True)
             counter.failed += 1
             return False

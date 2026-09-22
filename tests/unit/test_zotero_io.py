@@ -1440,3 +1440,38 @@ def test_merge_never_trashes_an_item_still_holding_an_unmoved_pdf(monkeypatch) -
     assert stats["trashed"] == []
     assert stats["kept_unmoved_pdf"] is True
     cloud.client.patch.assert_not_called()
+
+
+def test_merge_retries_a_child_whose_version_moved(monkeypatch) -> None:
+    """Zotero Desktop was still finishing the PDF upload, which bumped the
+    attachment's version between the merge's read and its PATCH: 412,
+    twice in one night (8TLAMCAM, REMFU76G). Re-read and retry."""
+    zc = _client()
+    cloud = _mock_cloud()
+    pdf_v1 = _fake_attachment("PDF", parent="DUPE", filename="a.pdf", md5="")
+    pdf_v2 = _fake_attachment("PDF", parent="DUPE", filename="a.pdf", md5="bb")
+    cloud.item.side_effect = [
+        _fake_item("KEEPER", doi="10.1/x"), _fake_item("DUPE", doi="10.1/x"),
+        pdf_v1, pdf_v2,                      # read, then re-read after the 412
+        _fake_item("DUPE", doi="10.1/x"),
+    ]
+    cloud.children.side_effect = [[], [pdf_v1], []]
+    calls = []
+
+    def update(item):
+        calls.append(item["data"].get("md5"))
+        if len(calls) == 1:
+            import zotero_io as zio
+            raise zio._pyzotero_errors.ERROR_CODES[412](
+                "Code: 412 URL: .../items/PDF Method: PATCH Response: "
+                "Item has been modified since specified version")
+        return True
+
+    cloud.update_item.side_effect = update
+    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    stats = zc.merge_duplicate_item("KEEPER", "DUPE", union_tags=False,
+                                    child_content_types=("application/pdf",))
+    assert stats["moved_pdf_keys"] == ["PDF"]
+    assert calls == ["", "bb"]
+    assert pdf_v2["data"]["parentItem"] == "KEEPER"
