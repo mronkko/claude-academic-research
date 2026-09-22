@@ -1826,6 +1826,14 @@ class ZoteroClient:
         )
         return resp.status_code
 
+    def trash_item(self, item_key: str) -> None:
+        """Move `item_key` to Zotero's trash (cloud), recoverable from the
+        Trash in the UI, unlike pyzotero's permanent `delete_item`.
+        Raises on failure."""
+        status = self._set_deleted(item_key, 1)
+        if status not in (200, 204):
+            raise RuntimeError(f"trash PATCH returned HTTP {status} for {item_key}")
+
     def restore_from_trash(self, item_key: str) -> bool:
         """Take `item_key` back out of Zotero's trash (cloud). True on
         success. For recovering a Connector save a merge trashed while

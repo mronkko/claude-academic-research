@@ -1065,7 +1065,10 @@ def _finish_replacement(zot, item_key: str, *, keep: set[str], provenance: list[
         if attachment_key in keep:
             continue
         try:
-            zot.delete_item(attachment_key)
+            # The trash, not `delete_item`: that is permanent, and on
+            # 2026-09-23 two merges that looked done were undone after
+            # the old copies were gone.
+            zot.trash_item(attachment_key)
         except Exception as exc:
             print(
                 f"  WARN: attached, but removing the replaced attachment "

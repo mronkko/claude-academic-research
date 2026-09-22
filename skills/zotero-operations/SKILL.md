@@ -98,7 +98,7 @@ usually right — it is what stops every run re-downloading a whole
 library — but it also meant the only route to a *better* copy was to
 delete the one you have and hope a replacement arrives. `--replace`
 re-admits those items and swaps on success only: the new file is fetched
-and attached first, and the old attachment is deleted after that. A
+and attached first, and the old attachment goes to Zotero's trash after that (recoverable, never deleted outright). A
 retry that finds nothing leaves the library exactly as it was, so the
 flag is safe to run across a whole corpus rather than one cautious item
 at a time. Use it when an attached file is textless, truncated, or was

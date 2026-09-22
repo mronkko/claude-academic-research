@@ -231,3 +231,17 @@ def test_restore_from_trash_patches_deleted_zero(monkeypatch) -> None:
     kwargs = cloud.client.patch.call_args.kwargs
     assert kwargs["content"] == '{"deleted": 0}'
     assert kwargs["headers"]["If-Unmodified-Since-Version"] == "41"
+
+
+def test_trash_item_patches_deleted_one(monkeypatch) -> None:
+    import zotero_io
+
+    zc = zotero_io.ZoteroClient.__new__(zotero_io.ZoteroClient)
+    cloud = MagicMock()
+    cloud.endpoint, cloud.library_type, cloud.library_id = "https://api.zotero.org", "users", "5591"
+    cloud.item.return_value = {"key": "OLD", "version": 9, "data": {}}
+    cloud.client.patch.return_value = MagicMock(status_code=204)
+    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+    zc.api_key = "k"
+    zc.trash_item("OLD")
+    assert cloud.client.patch.call_args.kwargs["content"] == '{"deleted": 1}'

@@ -109,7 +109,7 @@ def test_old_attachment_is_deleted_after_a_successful_attach(
         check_text=False,
     )
     assert ok
-    zot.delete_item.assert_called_once_with("OLDATT01")
+    zot.trash_item.assert_called_once_with("OLDATT01")
 
 
 def test_nothing_is_deleted_when_the_attach_fails(tmp_path, monkeypatch) -> None:
@@ -124,7 +124,7 @@ def test_nothing_is_deleted_when_the_attach_fails(tmp_path, monkeypatch) -> None
         check_text=False,
     )
     assert not ok
-    zot.delete_item.assert_not_called()
+    zot.trash_item.assert_not_called()
 
 
 def test_nothing_is_deleted_when_the_pdf_is_rejected_as_corrupt(
@@ -141,7 +141,7 @@ def test_nothing_is_deleted_when_the_pdf_is_rejected_as_corrupt(
         check_text=False,
     )
     assert not ok
-    zot.delete_item.assert_not_called()
+    zot.trash_item.assert_not_called()
 
 
 def test_the_newly_attached_file_is_never_the_one_deleted(
@@ -159,7 +159,7 @@ def test_the_newly_attached_file_is_never_the_one_deleted(
         doi="10.1/A", title="A", source="test", pdf_path=pdf,
         check_text=False,
     )
-    deleted = [c.args[0] for c in zot.delete_item.call_args_list]
+    deleted = [c.args[0] for c in zot.trash_item.call_args_list]
     assert deleted == ["OLDATT01"]
 
 
@@ -170,7 +170,7 @@ def test_an_item_with_no_replacement_target_deletes_nothing(tmp_path) -> None:
         doi="10.1/U", title="U", source="test", pdf_path=pdf,
         check_text=False,
     )
-    zot.delete_item.assert_not_called()
+    zot.trash_item.assert_not_called()
 
 
 def test_a_failed_delete_does_not_fail_the_attach(tmp_path, monkeypatch) -> None:
@@ -178,7 +178,7 @@ def test_a_failed_delete_does_not_fail_the_attach(tmp_path, monkeypatch) -> None
     not a lost fetch. Reporting failure here would send the item back
     into the retry population and attach a third copy."""
     zot, pdf, log_writer = _attach_env(tmp_path)
-    zot.delete_item.side_effect = RuntimeError("403")
+    zot.trash_item.side_effect = RuntimeError("403")
     monkeypatch.setitem(enrich_pdfs._REPLACE_TARGETS, "A", ["OLDATT01"])
 
     assert enrich_pdfs._attach_and_log(
@@ -225,7 +225,7 @@ def test_identical_bytes_are_neither_uploaded_nor_swapped(tmp_path, monkeypatch)
     )
     assert ok
     zot.attach_pdf.assert_not_called()
-    zot.delete_item.assert_not_called()
+    zot.trash_item.assert_not_called()
     assert log_writer.writerow.call_args.args[0]["status"] == "unchanged"
 
 
@@ -237,7 +237,7 @@ def test_different_bytes_still_replace(tmp_path, monkeypatch) -> None:
         zot, log_writer, run_date="2026-09-22", item_key="A",
         doi="10.1/A", title="A", source="t", pdf_path=pdf, check_text=False,
     )
-    zot.delete_item.assert_called_once_with("OLDATT01")
+    zot.trash_item.assert_called_once_with("OLDATT01")
 
 
 def test_the_summary_counts_items_without_a_pdf_separately() -> None:
@@ -271,14 +271,14 @@ def test_the_connector_route_finishes_the_swap(monkeypatch) -> None:
     zot = MagicMock()
     monkeypatch.setitem(enrich_pdfs._REPLACE_TARGETS, "K", ["OLD1"])
     enrich_pdfs._finish_replacement(zot, "K", keep={"NEWPDF"}, provenance=[])
-    zot.delete_item.assert_called_once_with("OLD1")
+    zot.trash_item.assert_called_once_with("OLD1")
     assert "pdf:tdm-recovered" in set(zot.update_tags.call_args.kwargs["remove"])
 
 
 def test_no_swap_means_no_tag_changes(monkeypatch) -> None:
     zot = MagicMock()
     enrich_pdfs._finish_replacement(zot, "NOTREPLACING", keep=set(), provenance=[])
-    zot.delete_item.assert_not_called()
+    zot.trash_item.assert_not_called()
     zot.update_tags.assert_not_called()
 
 
@@ -287,3 +287,12 @@ def test_the_connector_success_path_calls_finish_replacement() -> None:
     src = inspect.getsource(enrich_pdfs._drive_connector)
     assert "_finish_replacement(" in src
     assert src.index("_finish_replacement(") < src.index("log_writer.writerow({", src.index("if ok:"))
+
+
+def test_the_replaced_attachment_goes_to_the_trash_not_away() -> None:
+    """`delete_item` is permanent. On 2026-09-23 two merges that looked
+    done were undone by Zotero Desktop after --replace had deleted the
+    old copies, leaving the keepers with nothing recoverable."""
+    import inspect
+    src = inspect.getsource(enrich_pdfs._finish_replacement)
+    assert "zot.trash_item(" in src and "zot.delete_item(" not in src
