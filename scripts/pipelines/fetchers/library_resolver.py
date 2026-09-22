@@ -199,6 +199,37 @@ class ResolverCache:
         self._data[key] = {"targets": [], "miss_at": time.time()}
         self._write(key)
 
+    def legacy_key_count(self) -> int:
+        """Entries written before every key named its library. They are
+        never read; see `adopt_legacy`."""
+        return sum(1 for key in self._data if "@@" not in key)
+
+    def adopt_legacy(self, resolver_id: str) -> int:
+        """Attribute every bare key to `resolver_id`; returns how many
+        were adopted. Bare keys are removed either way, and an entry
+        already tagged for that library wins over its bare twin.
+
+        Explicit, because no rule can do it. A bare key was written by
+        whichever library was first in `openurl_base` at the time, and in
+        one real project that was Aalto in one cache file and JYU in
+        another, while targets on doi.org or jstor.org name no
+        institution at all. The person who ran the pass knows.
+        """
+        adopted = 0
+        for key in [k for k in self._data if "@@" not in k]:
+            entry = self._data.pop(key)
+            tagged = f"{key}@@{resolver_id}"
+            if tagged not in self._data:
+                self._data[tagged] = entry
+                adopted += 1
+        # A whole-file rewrite, not `_write`: its merge-from-disk would
+        # put the bare keys straight back.
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(f".json.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(self._data, indent=1))
+        tmp.replace(self.path)
+        return adopted
+
     def _write(self, fresh_key: str | None = None) -> None:
         # Best-effort write — don't crash the pipeline on a filesystem
         # hiccup. Losing a cache entry costs one repeated query.

@@ -713,3 +713,42 @@ def test_real_sfx_response_with_fulltext_parses() -> None:
 
 def test_real_sfx_response_without_fulltext_parses_as_empty() -> None:
     assert SfxResolver(SFX_BASE).parse(_load_fixture("no_fulltext.xml")) == []
+
+
+# ---------------------------------------------------------------------------
+# Entries written before keys named their library
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_bare_keys_are_not_read(tmp_path) -> None:
+    """A bare key's library is unknowable: in one real project they were
+    Aalto's in one cache file and JYU's in another. Reading one as the
+    current library's answer is the 2026-09-05 incident."""
+    import json
+    (tmp_path / "resolver_cache.json").write_text(json.dumps(
+        {DOI: {"targets": [{"url": "https://aalto.alma.exlibrisgroup.com/x"}]}}))
+    cache = ResolverCache(tmp_path)
+    assert cache.legacy_key_count() == 1
+    assert cache.get(_key(SFX_BASE)) is None
+
+
+def test_adopt_legacy_renames_bare_keys_and_keeps_tagged_ones(tmp_path) -> None:
+    import json
+    rid = resolver_for(SFX_BASE).resolver_id
+    (tmp_path / "resolver_cache.json").write_text(json.dumps({
+        DOI: {"targets": [{"url": "https://old"}]},
+        f"{DOI}::any": {"targets": [{"url": "https://any"}]},
+        _key(SFX_BASE): {"targets": [{"url": "https://new"}]},
+        "10.9/y@@https://other": {"targets": [{"url": "https://o"}]},
+    }))
+    cache = ResolverCache(tmp_path)
+    assert cache.adopt_legacy(rid) == 1
+    data = json.loads((tmp_path / "resolver_cache.json").read_text())
+    assert data[_key(SFX_BASE)]["targets"][0]["url"] == "https://new"
+    assert data[_key(SFX_BASE, True)]["targets"][0]["url"] == "https://any"
+    assert "10.9/y@@https://other" in data
+    assert not [k for k in data if "@@" not in k]
+    # And a reload does not resurrect them through the merge-on-write.
+    reloaded = ResolverCache(tmp_path)
+    reloaded.put("10.1/z@@x", [FulltextTarget(url="https://z")])
+    assert reloaded.legacy_key_count() == 0
