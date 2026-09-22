@@ -128,15 +128,20 @@ class WosSource(AbstractFetcher):
         data = resp.json() or {}
         if data.get("QueryResult", {}).get("RecordsFound", 0) == 0:
             return []
-        rec = (
-            data.get("Data", {})
-            .get("Records", {})
-            .get("records", {})
-            .get("REC")
-        )
+        # `RecordsFound` can be positive while `records` is an empty
+        # *string*: the record exists but is outside this subscription's
+        # entitlement. Seen live for 10.18311/sdmimd/2019/y on both the
+        # DOI and the title query; unguarded, `.get` on that string raised
+        # AttributeError and every run logged lookup_failed for an
+        # answered question. Any non-dict level means "nothing viewable".
+        node = data
+        for level in ("Data", "Records", "records"):
+            node = node.get(level) if isinstance(node, dict) else None
+        rec = node.get("REC") if isinstance(node, dict) else None
         if rec is None:
             return []
-        return rec if isinstance(rec, list) else [rec]
+        recs = rec if isinstance(rec, list) else [rec]
+        return [r for r in recs if isinstance(r, dict)]
 
     @staticmethod
     def _expanded_title(rec: dict) -> str:
