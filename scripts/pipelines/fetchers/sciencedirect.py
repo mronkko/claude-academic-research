@@ -915,7 +915,11 @@ class ScienceDirectSource(AbstractFetcher, PdfFetcher):
         # reports success, which is indistinguishable from the real thing
         # in the return value.
         recovered_path = _cache_pdf_path(cache_dir, doi, recovered=True)
-        if recovered_path.exists():
+        # Recovery is opt-in (`[elsevier] render_xml_to_pdf`), and that
+        # covers serving as well as making: a file cached while the option
+        # was on used to be attached on every later run regardless.
+        recovery_on = bool(getattr(self.config, "elsevier_render_xml_to_pdf", False))
+        if recovery_on and recovered_path.exists():
             _defect = _pdf_validate.file_defect(recovered_path)
             _stale = None if _defect else _stale_recovery_reason(recovered_path)
             if _defect is not None:

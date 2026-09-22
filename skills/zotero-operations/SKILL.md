@@ -109,9 +109,11 @@ tables or figure captions**: Elsevier keeps those outside the article
 body, and the XML transformation never rendered them. The prose still
 cites "Table 2", so the gap is easy to miss. Tell the user before anyone
 codes data from those tables. The repair is `--replace --filter-keys-file
-<audit-stem>.tdm_recovered.keys`, which re-fetches each one (one Elsevier
-API call per item); older cached recoveries count as stale and are not
-reused.
+<audit-stem>.tdm_recovered.keys`. Recovery itself is off by default
+(`[elsevier] render_xml_to_pdf`), and while it is off that run swaps in a
+real PDF wherever another source has one, and leaves the rest untouched.
+Only with the option on does it re-render them (one Elsevier API call per
+item; older cached recoveries count as stale and are not reused).
 
 The browser route (`--sources browser`) needs a one-time Playwright
 browser install before first use: `uvx playwright install chromium`

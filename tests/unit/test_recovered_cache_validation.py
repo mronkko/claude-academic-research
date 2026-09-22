@@ -328,3 +328,19 @@ def test_fetch_pdf_reports_the_stale_version_in_the_log(
     with caplog.at_level("WARNING"):
         src.fetch_pdf(DOI, cache_dir=tmp_path)
     assert any("0.14.9" in r.getMessage() for r in caplog.records)
+
+
+def test_a_cached_recovery_is_not_served_when_recovery_is_off(
+    tmp_path: Path,
+) -> None:
+    """Opting out must stop generated PDFs reaching the library, not just
+    stop new ones being made: a recovery cached while the option was on
+    used to be attached anyway on every later run."""
+    src = _make_source()
+    src.config.elsevier_render_xml_to_pdf = False
+    cached = tmp_path / CACHE_NAME
+    _render_recovered(cached)
+    src.http.get.return_value = MagicMock(status_code=404, content=b"", headers={})
+
+    assert src.fetch_pdf(DOI, cache_dir=tmp_path) is None
+    assert cached.exists(), "the file is the user's; leave it on disk"
