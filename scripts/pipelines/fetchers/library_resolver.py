@@ -577,6 +577,15 @@ def _query_targets(
     resolvers = cfg.resolvers if only is None else only
     if not resolvers:
         return None
+    # Active libraries first, stably. `_dedupe_targets` keeps the first
+    # copy of a URL two libraries both name (an open-access route, say);
+    # were that the inactive library's copy, the active-library filter
+    # would drop it and defer an item this network can fetch.
+    resolvers = sorted(
+        resolvers, key=lambda r: not (
+            cfg.active_ids is None or r.resolver_id in cfg.active_ids
+        ),
+    )
 
     req = ResolverRequest(
         doi=doi, ignore_date_threshold=ignore_date_threshold,

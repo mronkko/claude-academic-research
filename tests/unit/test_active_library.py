@@ -88,7 +88,9 @@ def _case(targets, cfg, domains=WILEY_DOMAINS):
 
 
 def test_publisher_licensed_only_at_the_inactive_library_is_deferred() -> None:
-    assert _case([AALTO_WILEY, JYU_EBSCO], _cfg({SFX.resolver_id})) == "4-other-library"
+    """The active library has nothing in range; the other has the
+    publisher. Deferred to the run on the other network."""
+    assert _case([AALTO_WILEY], _cfg({SFX.resolver_id})) == "4-other-library"
     assert enrich_pdfs.DIRECT_ROUTE_CASES["4-other-library"] is False
 
 
@@ -126,3 +128,44 @@ def test_preflight_drops_deferred_items_from_every_queue() -> None:
     block = block[:block.index("items_by_pub[direct.name].append(entry)")]
     deferral = block[block.index('if case == "4-other-library":'):]
     assert deferral.index("continue") < deferral.index("connector_upfront.append")
+
+
+# ---------------------------------------------------------------------------
+# Final-review fixes
+# ---------------------------------------------------------------------------
+
+
+def test_a_route_both_libraries_name_survives_for_the_active_one(monkeypatch) -> None:
+    """Identical URLs from two libraries collapse to one copy; that copy
+    must be the active library's, or list order decides deferral again."""
+    shared = FulltextTarget(url="https://www.example-oa.org/article/1")
+
+    def fake(url, cfg, doi, resolver=None):
+        return [shared]
+
+    monkeypatch.setattr(LR, "_fetch_and_parse", fake)
+    got = LR.lookup_fulltext_target("10.1/x", _cfg({SFX.resolver_id}))
+    assert got.url == shared.url and not got.deferred
+
+
+def test_another_active_route_is_tried_rather_than_deferring() -> None:
+    """JYU active with EBSCOhost in range; Aalto has the publisher. The
+    item must go the EBSCO way on this network, not wait for Aalto's."""
+    case = _case([AALTO_WILEY, JYU_EBSCO], _cfg({SFX.resolver_id}))
+    assert case == "1b-no-entitlement"
+
+
+def test_library_selection_is_checked_before_any_work(monkeypatch, capsys) -> None:
+    import core.config_loader as cl
+
+    monkeypatch.setattr(cl, "load_config", lambda: {"library": {
+        "openurl_base": [ALMA.openurl_base, SFX.openurl_base]}})
+    for var in ("LIBRARY_OPENURL_BASE", "LIBRARY_ACTIVE", "LIBRARY_RESOLVER"):
+        monkeypatch.delenv(var, raising=False)
+    args = enrich_pdfs._build_parser().parse_args(["--library", "helsinki"])
+    assert enrich_pdfs._check_library_selection(args) == 2
+    assert "helsinki" in capsys.readouterr().err
+    ok = enrich_pdfs._build_parser().parse_args(["--library", "aalto"])
+    assert enrich_pdfs._check_library_selection(ok) == 0
+    src = inspect.getsource(enrich_pdfs.main)
+    assert src.index("_check_library_selection(args)") < src.index("if args.report:")

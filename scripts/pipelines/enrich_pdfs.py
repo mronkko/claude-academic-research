@@ -632,7 +632,11 @@ def classify_direct_route(
                             handler_name, direct_access)
     if here == "3-in-coverage":
         return here
-    if full == "3-in-coverage":
+    if full == "3-in-coverage" and not active.in_range:
+        # Defer only when this network has nothing else to try. With
+        # another in-range route at the active library, the item goes
+        # that way now (1b → Pass 3) rather than waiting for a run that
+        # would ignore this library's route in turn.
         return "4-other-library"
     return full if here == "1a-unknown" else here
 
@@ -2214,6 +2218,34 @@ def _exit_no_interactive_surface(args: argparse.Namespace) -> None:
         "  • For unattended runs (no prompts; auto-skip on first "
         "publisher failure), add `--no-prompt`.\n"
     )
+
+
+def _check_library_selection(args) -> int:
+    """Validate `--library` / `LIBRARY_ACTIVE` before any work: 0 when
+    fine or unset, 2 after printing why not.
+
+    The browser pass checks again when it builds its resolver config, but
+    that is after the Zotero read and, with `--all`, after the whole API
+    cascade. A mistyped name must cost seconds, not hours. Network-free:
+    `load_from_config` only stores the session.
+    """
+    import os as _os
+
+    from fetchers.library_resolver import load_from_config
+
+    if not (getattr(args, "library", None)
+            or _os.environ.get("LIBRARY_ACTIVE", "").strip()):
+        return 0
+    try:
+        cfg = load_from_config(None, None, active=getattr(args, "library", None))
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    if cfg is None:
+        print("ERROR: --library / LIBRARY_ACTIVE given, but no [library] "
+              "openurl_base is configured.", file=sys.stderr)
+        return 2
+    return 0
 
 
 def _adopt_legacy_resolver_cache(args) -> int:
@@ -3811,6 +3843,10 @@ def main() -> int:
 
     if args.adopt_legacy_resolver_cache:
         return _adopt_legacy_resolver_cache(args)
+
+    rc = _check_library_selection(args)
+    if rc:
+        return rc
 
     if args.report:
         rows = pdf_run_report.read_log(args.log_csv)
