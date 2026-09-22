@@ -49,6 +49,11 @@ STATUS_INFO: dict[str, tuple[str, str]] = {
     "attached": ("PDF attached", ""),
     "attached_via_connector": ("PDF attached via the Zotero Connector", ""),
     "dry_run": ("PDF downloaded, upload skipped (--dry-run)", ""),
+    "connector_desktop_stalled": (
+        "Zotero Desktop stopped taking Connector saves mid-run; not attempted properly",
+        "Check Zotero Desktop for an open dialog (or restart it) and re-run; "
+        "nothing about access was learned for these items.",
+    ),
     "connector_merge_pending": (
         "Saved by the Zotero Connector; merge queued until it reaches the cloud",
         "Nothing to do: it is merged at the end of the pass or at the start "

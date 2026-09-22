@@ -286,7 +286,10 @@ def test_the_connector_success_path_calls_finish_replacement() -> None:
     import inspect
     src = inspect.getsource(enrich_pdfs._drive_connector)
     assert "_finish_replacement(" in src
-    assert src.index("_finish_replacement(") < src.index("log_writer.writerow({", src.index("if ok:"))
+    ok_at = src.index("if ok:")
+    assert src.index("_finish_replacement(", ok_at) < src.index(
+        "_log_connector_row(item, status)", ok_at,
+    )
 
 
 def test_the_replaced_attachment_goes_to_the_trash_not_away() -> None:

@@ -1892,6 +1892,44 @@ def _log_connector_bailout(
         })
 
 
+class _EmptySaveStreak:
+    """Tells "Zotero Desktop stopped taking saves" from "no access".
+
+    After at least one save this run, an item whose translator saved
+    nothing is held rather than logged. A later success releases held
+    items as ordinary failures; `limit` of them in a row is a stall, and
+    they are logged `connector_desktop_stalled`: absence not
+    established, and not ACCESS_BLOCKED. Run 7 attached 54 items, then
+    logged four ScienceDirect pages ACCESS_BLOCKED, 240 s each, while
+    Desktop answered reads but received nothing.
+    """
+
+    def __init__(self, limit: int = 3) -> None:
+        self.limit = limit
+        self.held: list = []
+        self.stalled = False
+
+    def observe(self, item, outcome: str, *, saved_before: int) -> list[tuple]:
+        """What to log now, as `(item, status)`; the caller logs every
+        other outcome itself."""
+        if outcome == "saved_nothing":
+            if not saved_before:
+                return [(item, "connector_save_failed")]
+            self.held.append(item)
+            if len(self.held) >= self.limit:
+                self.stalled = True
+                out = [(h, "connector_desktop_stalled") for h in self.held]
+                self.held = []
+                return out
+            return []
+        return self.flush()
+
+    def flush(self) -> list[tuple]:
+        out = [(h, "connector_save_failed") for h in self.held]
+        self.held = []
+        return out
+
+
 async def _drive_connector(
     handler,
     items: list[dict],
@@ -2089,6 +2127,40 @@ async def _drive_connector(
             key=lambda it: effective_host(it.get("resolver_target_url", "")),
         )
 
+        streak = _EmptySaveStreak()
+
+        def _log_connector_row(item: dict, status: str) -> None:
+            log_writer.writerow({
+                "run_date": run_date, "item_key": item["item_key"],
+                "doi": item["doi"], "title": (item.get("title") or "")[:70],
+                "status": status, "source": handler.name,
+            })
+            if status == "connector_save_failed":
+                # Last rung of the ladder: the library's own route was
+                # opened in a real browser and still produced nothing.
+                # So this is where an item finally earns UNAVAILABLE —
+                # which is exactly why a dead network must not be allowed
+                # to arrive here wearing that label. Same reasoning as the
+                # publisher handlers above, and it matters more here,
+                # because nothing downstream re-examines this verdict.
+                from fetchers.browser.base import is_transport_error
+                _log_browser_failure(
+                    args, item, source="connector",
+                    cause=(
+                        pdf_fetch_log.FailureCause.NETWORK_ERROR
+                        if is_transport_error(getattr(handler, "last_error", ""))
+                        # Was None, which the shared classifier turns into
+                        # UNAVAILABLE. The Connector being the last rung
+                        # makes it the last thing to *fail*, not evidence
+                        # that no full text exists: the usual reason the
+                        # translator saves nothing is that the page it was
+                        # given is a paywall. Reported live — "the real
+                        # reason is that I do not have access to these
+                        # items" — against rows filed as UNAVAILABLE.
+                        else pdf_fetch_log.FailureCause.ACCESS_BLOCKED
+                    ),
+                )
+
         current_host = None
         for item in items_sorted:
             host = effective_host(item.get("resolver_target_url", ""))
@@ -2113,8 +2185,6 @@ async def _drive_connector(
                 page, ctx, service_worker, item, zot,
                 counter=counter, total=total, t_start=t_start,
             )
-            doi = item["doi"]
-            title = (item.get("title") or "")[:70]
             # Host-scoped skips (user pressed 's' at the first-item
             # prompt on this host) are a distinct status from "the
             # Connector tried to save but failed".
@@ -2143,36 +2213,29 @@ async def _drive_connector(
                 status = "skipped_by_user"
             else:
                 status = "connector_save_failed"
-            log_writer.writerow({
-                "run_date": run_date, "item_key": item["item_key"],
-                "doi": doi, "title": title,
-                "status": status, "source": handler.name,
-            })
-            if status == "connector_save_failed":
-                # Last rung of the ladder: the library's own route was
-                # opened in a real browser and still produced nothing.
-                # So this is where an item finally earns UNAVAILABLE —
-                # which is exactly why a dead network must not be allowed
-                # to arrive here wearing that label. Same reasoning as the
-                # publisher handlers above, and it matters more here,
-                # because nothing downstream re-examines this verdict.
-                from fetchers.browser.base import is_transport_error
-                _log_browser_failure(
-                    args, item, source="connector",
-                    cause=(
-                        pdf_fetch_log.FailureCause.NETWORK_ERROR
-                        if is_transport_error(getattr(handler, "last_error", ""))
-                        # Was None, which the shared classifier turns into
-                        # UNAVAILABLE. The Connector being the last rung
-                        # makes it the last thing to *fail*, not evidence
-                        # that no full text exists: the usual reason the
-                        # translator saves nothing is that the page it was
-                        # given is a paywall. Reported live — "the real
-                        # reason is that I do not have access to these
-                        # items" — against rows filed as UNAVAILABLE.
-                        else pdf_fetch_log.FailureCause.ACCESS_BLOCKED
-                    ),
+            outcome = getattr(handler, "last_outcome", "") if not ok else "attached"
+            # Items the streak holds or releases are logged through it;
+            # everything else is logged here, in order.
+            for held_item, held_status in streak.observe(
+                item, outcome if status == "connector_save_failed" else status,
+                saved_before=counter.ok + counter.queued,
+            ):
+                _log_connector_row(held_item, held_status)
+            if not (status == "connector_save_failed" and outcome == "saved_nothing"):
+                _log_connector_row(item, status)
+            if streak.stalled:
+                print(
+                    f"\n  STOPPED: {streak.limit} saves in a row produced nothing,\n"
+                    f"  after {counter.ok + counter.queued} earlier saves worked. Zotero\n"
+                    f"  Desktop has most likely stopped taking saves — check it for\n"
+                    f"  an open dialog, or restart it — then re-run. Those items are\n"
+                    f"  logged connector_desktop_stalled (not \"no access\"), and the\n"
+                    f"  rest were not attempted, so the re-run picks them all up.",
+                    flush=True,
                 )
+                break
+        for held_item, held_status in streak.flush():
+            _log_connector_row(held_item, held_status)
 
         print(
             f"\n  Total: {counter.ok} new, {counter.queued} queued for merge, "

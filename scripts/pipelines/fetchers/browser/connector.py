@@ -764,6 +764,7 @@ class ZoteroConnectorHandler(PublisherHandler):
             ),
         )
         if new_key is None:
+            self.last_outcome = "saved_nothing"
             # What to blame depends on something we already know. Once
             # anything has saved in this run, the library selection is
             # demonstrably correct, and leading with "check the left
