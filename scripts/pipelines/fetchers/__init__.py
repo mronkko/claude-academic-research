@@ -46,6 +46,9 @@ def abstract_sources(
     Cascade order:
         Crossref → Semantic Scholar → Scopus → WoS → ScienceDirect
         → OpenAlex GROBID
+
+    Every source is returned; `enrich_abstracts` drops WoS unless asked
+    for by name (its `OPT_IN_SOURCES` says why).
     """
     if http is None:
         return []

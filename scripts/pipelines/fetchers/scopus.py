@@ -34,4 +34,11 @@ class ScopusSource(AbstractFetcher):
         text = a.abstract
         if not text:
             return None
-        return str(text).strip() or None
+        # pybliometrics puts the publisher's copyright notice inside
+        # `.abstract` and also exposes it alone as `.copyright`; 65 of 82
+        # Scopus abstracts in one run carried it. Handing the exact
+        # string over removes it wherever it sits, without guessing.
+        from abstract_clean import clean_abstract
+        return clean_abstract(
+            str(text), copyright=str(getattr(a, "copyright", "") or ""),
+        )

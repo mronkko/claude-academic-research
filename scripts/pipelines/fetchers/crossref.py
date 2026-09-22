@@ -31,8 +31,22 @@ def _cache_pdf_path(cache_dir: str | Path, doi: str) -> Path:
 
 
 def _strip_jats(abstract_html: str) -> str | None:
-    """Crossref abstracts arrive with JATS XML tags. Strip to plain text."""
-    text = re.sub(r"<[^>]+>", " ", abstract_html)
+    """Crossref abstracts arrive with JATS XML tags. Strip to plain text.
+
+    Three steps, in this order. The leading `<jats:title>` goes first:
+    it is JATS's own "Abstract" heading, and left in it opened 1,716
+    abstracts in one library with "Abstract We study…". Then the tags.
+    Entities are unescaped last, because `&lt;50 firms` unescaped first
+    becomes `<50 firms …>`, which the tag pattern would then delete.
+    """
+    import html
+
+    text = re.sub(
+        r"^\s*<(?:jats:)?title\b[^>]*>.*?</(?:jats:)?title>", " ",
+        abstract_html, count=1, flags=re.DOTALL,
+    )
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
     text = re.sub(r"\s+", " ", text).strip()
     return text if len(text) > 50 else None
 

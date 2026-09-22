@@ -21,10 +21,13 @@ patch the Zotero item via `ZoteroClient.update_abstract` (pyzotero's
 `update_item`).
 
 The fetcher priority matches `fetchers.abstract_sources`:
-    Crossref → Semantic Scholar → Scopus → WoS → ScienceDirect
+    Crossref → Semantic Scholar → Scopus → [WoS, opt-in] → ScienceDirect
     → OpenAlex GROBID
 
---sources filters to a subset, same as enrich_pdfs.py.
+--sources filters to a subset, same as enrich_pdfs.py, and is the only
+way to include WoS (see `OPT_IN_SOURCES`). --exclude-sources,
+ABSTRACT_EXCLUDE_SOURCES or `[abstracts] exclude_sources` rule a source
+out even when it is named.
 
 Log statuses (`output/abstract_fetch_log.csv`):
     updated        abstract fetched and written to Zotero
@@ -63,6 +66,7 @@ import fetchers  # noqa: E402
 import http_client  # noqa: E402
 import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
+from abstract_clean import clean_abstract  # noqa: E402
 from core.config_loader import get, require  # noqa: E402
 from log_schemas import ABSTRACT_FETCH_FIELDS  # noqa: E402
 
@@ -200,11 +204,60 @@ def _try_cascade(
             result.errors.append((src.name, f"{type(e).__name__}: {e}"))
             continue
         result.asked.append(src.name)
+        # Every source's text is normalised the same way — entities, a
+        # fused "Abstract" heading, a copyright notice (see
+        # abstract_clean). Text that is nothing *but* those has not
+        # answered the question, so the cascade moves on.
+        text = clean_abstract(text)
         if text:
             result.abstract = text
             result.source = src.name
             return result
     return result
+
+
+#: Sources left out of the default cascade: naming one in `--sources` is
+#: the opt-in. Web of Science is here because Clarivate's API terms
+#: (Product/Service Terms v3.8, 17 July 2024, "Web of Science APIs"
+#: 4(a)) bar using its data "in a manner which includes or involves
+#: your application of artificial intelligence, such as … language
+#: models" without an AI Addendum, and these abstracts feed LLM
+#: screening. Not a legal ruling, just a default that cannot breach it
+#: by accident.
+OPT_IN_SOURCES = frozenset({"wos"})
+
+
+def _excluded_sources(flag: str) -> set[str]:
+    """Sources this run must not ask: `--exclude-sources`, plus
+    `ABSTRACT_EXCLUDE_SOURCES` or else `[abstracts] exclude_sources`.
+
+    The env var replaces the config value rather than adding to it, as
+    env beats config.toml everywhere else; setting it per project (e.g.
+    with direnv) is how one project excludes a source that others use.
+    """
+    from core.config_loader import load_config
+
+    env = os.environ.get("ABSTRACT_EXCLUDE_SOURCES", "")
+    if env.strip():
+        base = [s for s in env.split(",")]
+    else:
+        raw = load_config().get("abstracts", {}).get("exclude_sources", [])
+        base = raw.split(",") if isinstance(raw, str) else [str(s) for s in raw]
+    return {s.strip() for s in [*base, *flag.split(",")] if s.strip()}
+
+
+def _choose_sources(all_sources: list, requested: list[str], excluded) -> list:
+    """The cascade for this run, in priority order.
+
+    No `--sources`: everything except `OPT_IN_SOURCES`. With it: exactly
+    those named. An exclusion wins over both, since it is the one that
+    records a decision made about the project rather than the run.
+    """
+    if requested:
+        chosen = [s for s in all_sources if s.name in requested]
+    else:
+        chosen = [s for s in all_sources if s.name not in OPT_IN_SOURCES]
+    return [s for s in chosen if s.name not in excluded]
 
 
 def group_by_doi(items: list[dict]) -> dict[str, list[dict]]:
@@ -274,9 +327,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--sources", default="",
-        help="Comma-separated fetcher names. Default: full cascade "
-             "(crossref,semantic_scholar,scopus,wos,sciencedirect,"
-             "openalex).",
+        help="Comma-separated fetcher names. Default: crossref,"
+             "semantic_scholar,scopus,sciencedirect,openalex. wos is "
+             "opt-in — name it here to use it: Clarivate's API terms bar "
+             "using Web of Science data with language models without an "
+             "AI Addendum, and these abstracts feed LLM screening.",
+    )
+    parser.add_argument(
+        "--exclude-sources", default="",
+        help="Comma-separated fetchers never to ask, even if named in "
+             "--sources. Adds to ABSTRACT_EXCLUDE_SOURCES, or else to "
+             "[abstracts] exclude_sources in config.toml.",
     )
     parser.add_argument("--dry-run", action="store_true",
                         help="Fetch abstracts, do not patch Zotero.")
@@ -345,9 +406,15 @@ def main() -> int:
             flush=True,
         )
 
-    sources = fetchers.abstract_sources(session, config)
-    if source_names:
-        sources = [s for s in sources if s.name in source_names]
+    excluded = _excluded_sources(args.exclude_sources)
+    blocked = sorted(set(source_names) & excluded)
+    if blocked:
+        print(f"  Not asking {', '.join(blocked)}: excluded by "
+              f"--exclude-sources / ABSTRACT_EXCLUDE_SOURCES / "
+              f"[abstracts] exclude_sources.", flush=True)
+    sources = _choose_sources(
+        fetchers.abstract_sources(session, config), source_names, excluded,
+    )
     if not sources:
         print(f"ERROR: no abstract fetchers matched --sources={args.sources!r}",
               file=sys.stderr)
