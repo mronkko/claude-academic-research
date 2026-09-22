@@ -311,6 +311,17 @@ class LibraryResolverConfig:
     #: so every existing construction site and cache key is untouched and
     #: adding a second library cannot invalidate the first one's cache.
     additional_resolvers: tuple[LibraryResolver, ...] = ()
+    #: `resolver_id`s whose routes this run may open; None means all.
+    #: Every configured library is still *consulted*, so "no coverage"
+    #: keeps meaning that every institution answered — only which links
+    #: get followed narrows. A reader with two affiliations is usually on
+    #: one institution's network at a time, and another institution's
+    #: link opens its login page instead of a PDF.
+    active_ids: frozenset[str] | None = None
+
+    def is_active(self, target: FulltextTarget) -> bool:
+        """Whether this run may open `target`."""
+        return self.active_ids is None or target.resolver_id in self.active_ids
 
     @property
     def resolvers(self) -> tuple[LibraryResolver, ...]:
@@ -328,12 +339,56 @@ class LibraryResolverConfig:
 
     def describe(self) -> str:
         """One line naming every endpoint, for the run's opening banner."""
-        bases = [r.openurl_base for r in self.resolvers]
-        if not bases:
+        resolvers = self.resolvers
+        if not resolvers:
             return "(no link resolver configured)"
-        if len(bases) == 1:
-            return bases[0]
-        return f"{bases[0]} (+{len(bases) - 1} more)"
+        if len(resolvers) == 1:
+            return resolvers[0].openurl_base
+        if self.active_ids is None:
+            names = " + ".join(r.label for r in resolvers)
+            return (
+                f"{names} — following every library's routes; pass "
+                f"--library <name> to follow only the one whose network "
+                f"you are on"
+            )
+        return ", ".join(
+            f"{r.label} (following routes)" if r.resolver_id in self.active_ids
+            else f"{r.label} (consulted only)"
+            for r in resolvers
+        )
+
+
+def select_libraries(
+    resolvers: Iterable[LibraryResolver], selectors: Iterable[str],
+) -> frozenset[str]:
+    """`resolver_id`s named by `selectors`, each a label or an endpoint.
+
+    Loud on a selector that names nothing or more than one library: the
+    caller is choosing which institution's links to open, and guessing —
+    or silently falling back to "all" — is how a pass on one VPN ends up
+    on another institution's login page.
+    """
+    resolvers = tuple(resolvers)
+    known = ", ".join(f"{r.label} ({r.openurl_base})" for r in resolvers)
+    chosen: set[str] = set()
+    for raw in selectors:
+        wanted = raw.strip().rstrip("/")
+        hits = [
+            r for r in resolvers
+            if r.resolver_id == wanted or r.label.lower() == wanted.lower()
+        ]
+        if not hits:
+            raise ValueError(
+                f"--library {raw!r} matches no configured library. "
+                f"Configured: {known}."
+            )
+        if len(hits) > 1:
+            raise ValueError(
+                f"--library {raw!r} matches more than one library; pass the "
+                f"endpoint URL instead. Configured: {known}."
+            )
+        chosen.add(hits[0].resolver_id)
+    return frozenset(chosen)
 
 
 def load_from_config(
@@ -341,6 +396,7 @@ def load_from_config(
     cache_dir: str | Path | None = None,
     *,
     miss_ttl_s: float | None = None,
+    active: Iterable[str] | None = None,
 ) -> LibraryResolverConfig | None:
     """Build a config from `[library]` in config.toml.
 
@@ -359,11 +415,29 @@ def load_from_config(
     is deliberately ignored for a list: each entry is autodetected from
     its own URL shape, since forcing one dialect onto endpoints of two
     different products is never right.
+
+    `active` names the libraries whose routes this run may follow (labels
+    or endpoints; see `select_libraries`), falling back to
+    `LIBRARY_ACTIVE` (comma-separated). This is how an agent switches
+    institution between runs without editing config.toml. Raises
+    ValueError on a name that matches nothing, or more than one library.
+
+    `LIBRARY_OPENURL_BASE` (comma-separated for several) replaces the
+    configured endpoints outright, a list included.
     """
     from core.config_loader import get, load_config
 
     raw_base = load_config().get("library", {}).get("openurl_base", "")
-    if isinstance(raw_base, list):
+    env_base = os.environ.get("LIBRARY_OPENURL_BASE", "").strip()
+    if env_base:
+        # Env beats toml everywhere else in this plugin; a list in toml
+        # used to be the one place it was silently ignored.
+        bases = [b.strip() for b in env_base.split(",") if b.strip()]
+        override = (
+            get("library", "resolver", env="LIBRARY_RESOLVER").strip()
+            if len(bases) == 1 else ""
+        )
+    elif isinstance(raw_base, list):
         bases = [str(b).strip() for b in raw_base if str(b).strip()]
         override = ""
     else:
@@ -380,6 +454,13 @@ def load_from_config(
         return None
     resolver, additional = built[0], tuple(built[1:])
 
+    selectors = (
+        [str(a) for a in active] if active is not None
+        else os.environ.get("LIBRARY_ACTIVE", "").split(",")
+    )
+    selectors = [s.strip() for s in selectors if s.strip()]
+    active_ids = select_libraries(built, selectors) if selectors else None
+
     raw_priority = load_config().get("library", {}).get("platform_priority", "")
     if isinstance(raw_priority, str):
         keys = tuple(k.strip() for k in raw_priority.split(",") if k.strip())
@@ -392,6 +473,7 @@ def load_from_config(
     return LibraryResolverConfig(
         resolver=resolver,
         additional_resolvers=additional,
+        active_ids=active_ids,
         session=session,
         cache=ResolverCache(cache_dir, miss_ttl_s) if cache_dir else None,
         priority=priority,
@@ -926,6 +1008,8 @@ __all__ = [
     "has_fulltext_access",
     "host_matches_domains",
     "load_from_config",
+    "resolver_label",
+    "select_libraries",
     "lookup_dual",
     "lookup_fulltext_target",
     "targets_match_domains",

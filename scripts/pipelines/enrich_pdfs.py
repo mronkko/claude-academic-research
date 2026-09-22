@@ -2168,6 +2168,55 @@ def _exit_no_interactive_surface(args: argparse.Namespace) -> None:
     )
 
 
+def _adopt_legacy_resolver_cache(args) -> int:
+    """`--adopt-legacy-resolver-cache LIBRARY`: attribute the resolver
+    cache's pre-per-library entries to LIBRARY, then exit.
+
+    A one-off, and deliberately manual; `ResolverCache.adopt_legacy` says
+    why no rule can make the attribution.
+    """
+    import requests as _requests
+    from fetchers.library_resolver import load_from_config, select_libraries
+
+    cache_dir = getattr(args, "resolver_cache_dir", None) or args.cache_dir
+    try:
+        cfg = load_from_config(_requests.Session(), cache_dir)
+        if cfg is None or cfg.cache is None:
+            raise ValueError("no [library] openurl_base is configured")
+        (resolver_id,) = select_libraries(
+            cfg.resolvers, [args.adopt_legacy_resolver_cache],
+        )
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    adopted = cfg.cache.adopt_legacy(resolver_id)
+    print(
+        f"Adopted {adopted} cached resolver answer"
+        f"{'' if adopted == 1 else 's'} for {resolver_id} in {cfg.cache.path}.",
+        flush=True,
+    )
+    return 0
+
+
+def _warn_legacy_resolver_cache(resolver_cfg) -> None:
+    """Say, once per run, that pre-per-library cache entries are being
+    re-queried and how to keep them instead."""
+    cache = resolver_cfg.cache if resolver_cfg is not None else None
+    count = cache.legacy_key_count() if cache is not None else 0
+    if not count:
+        return
+    print(
+        f"NOTE: {count} link-resolver cache entr"
+        f"{'y predates' if count == 1 else 'ies predate'} per-library keys "
+        f"and will be re-queried.\n"
+        f"  To keep them, run once with --adopt-legacy-resolver-cache "
+        f"<library>,\n"
+        f"  naming the library that was FIRST in [library] openurl_base "
+        f"when {cache.path} was built.",
+        file=sys.stderr, flush=True,
+    )
+
+
 def _run_browser_in_process(
     to_process: list[dict],
     zot,
@@ -2284,12 +2333,21 @@ def _run_browser_in_process(
     # everything else per-pass. Defaulting to `--cache-dir` keeps the
     # documented "delete that directory and this goes too" property for
     # anyone who does not set it.
-    resolver_cfg = load_from_config(
-        resolver_session,
-        getattr(args, "resolver_cache_dir", None) or args.cache_dir,
-        miss_ttl_s=0 if getattr(args, "refresh_resolver_cache", False)
-        else None,
-    )
+    #
+    # `--library` chooses whose links this run opens; every configured
+    # library is still consulted. See `LibraryResolverConfig.active_ids`.
+    try:
+        resolver_cfg = load_from_config(
+            resolver_session,
+            getattr(args, "resolver_cache_dir", None) or args.cache_dir,
+            miss_ttl_s=0 if getattr(args, "refresh_resolver_cache", False)
+            else None,
+            active=getattr(args, "library", None),
+        )
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    _warn_legacy_resolver_cache(resolver_cfg)
 
     # [library] no_access → short-circuit these direct handlers
     # unconditionally. Populated at runtime by the failure prompt's
@@ -3611,6 +3669,27 @@ def _build_parser() -> argparse.ArgumentParser:
              "queueing against the same institutional resolver.",
     )
     parser.add_argument(
+        "--library", action="append", default=None, metavar="LIBRARY",
+        help="With several [library] openurl_base entries: follow only "
+             "this library's routes — the one whose VPN or login is up "
+             "right now. A label from the run banner (e.g. 'aalto') or an "
+             "endpoint URL; repeatable. Every configured library is still "
+             "consulted, so 'no coverage' still means none of them has "
+             "it. Items whose only route is at another library are "
+             "deferred, not logged: re-run with that --library on its "
+             "network. Also settable as LIBRARY_ACTIVE (comma-separated). "
+             "Switch institutions with this, never by editing config.toml.",
+    )
+    parser.add_argument(
+        "--adopt-legacy-resolver-cache", default=None, metavar="LIBRARY",
+        help="One-off, then exit: attribute link-resolver cache entries "
+             "written before cache keys named their library to LIBRARY "
+             "(label or endpoint), in the cache --resolver-cache-dir (or "
+             "--cache-dir) points at. Name the library that was FIRST in "
+             "[library] openurl_base when that cache was built. Without "
+             "this, those entries are re-queried.",
+    )
+    parser.add_argument(
         "--refresh-resolver-cache", action="store_true",
         help="Re-ask the link resolver about items it previously reported "
              "no route for. Cached routes are kept; only the misses are "
@@ -3651,6 +3730,9 @@ def main() -> int:
         print("ERROR: --all cannot be combined with --sources.",
               file=sys.stderr)
         return 2
+
+    if args.adopt_legacy_resolver_cache:
+        return _adopt_legacy_resolver_cache(args)
 
     if args.report:
         rows = pdf_run_report.read_log(args.log_csv)

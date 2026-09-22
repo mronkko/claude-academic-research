@@ -222,7 +222,7 @@ def test_the_label_names_the_library_not_the_product() -> None:
 
 def test_describe_names_every_endpoint() -> None:
     assert _cfg().describe() == ALMA.openurl_base
-    assert "+1 more" in _cfg(additional_resolvers=(SFX,)).describe()
+    assert _cfg(additional_resolvers=(SFX,)).describe().startswith("Aalto + Jyu")
     assert _cfg(resolver=None).describe() == "(no link resolver configured)"
 
 

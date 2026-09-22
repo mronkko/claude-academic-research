@@ -312,3 +312,50 @@ def test_the_resolver_cache_dir_reaches_load_from_config() -> None:
     src = inspect.getsource(enrich_pdfs._run_browser_in_process)
     call = src.split("resolver_cfg = load_from_config(")[1].split("\n    )")[0]
     assert 'getattr(args, "resolver_cache_dir", None) or args.cache_dir' in call
+
+
+def test_the_library_selection_reaches_load_from_config() -> None:
+    """`--library` is how an agent switches institution between runs
+    without editing config.toml; parsed and never passed, the run would
+    silently follow every library's links again."""
+    import inspect
+
+    import enrich_pdfs
+
+    src = inspect.getsource(enrich_pdfs._run_browser_in_process)
+    call = src.split("resolver_cfg = load_from_config(")[1].split("\n    )")[0]
+    assert 'active=getattr(args, "library", None)' in call
+    args = enrich_pdfs._build_parser().parse_args(
+        ["--library", "aalto", "--library", "jyu"])
+    assert args.library == ["aalto", "jyu"]
+
+
+def test_adopt_legacy_resolver_cache_is_a_one_off_command(
+    tmp_path, monkeypatch, capsys,
+) -> None:
+    import json
+
+    import core.config_loader as cl
+    import enrich_pdfs
+
+    base = "https://sfx.finna.fi/nelli09"
+    monkeypatch.setattr(cl, "load_config",
+                        lambda: {"library": {"openurl_base": [base]}})
+    for var in ("LIBRARY_OPENURL_BASE", "LIBRARY_ACTIVE", "LIBRARY_RESOLVER"):
+        monkeypatch.delenv(var, raising=False)
+    (tmp_path / "resolver_cache.json").write_text(json.dumps(
+        {"10.1/x": {"targets": [{"url": "https://ezproxy.jyu.fi/x"}]}}))
+    args = enrich_pdfs._build_parser().parse_args([
+        "--adopt-legacy-resolver-cache", "nelli09",
+        "--resolver-cache-dir", str(tmp_path),
+    ])
+    assert enrich_pdfs._adopt_legacy_resolver_cache(args) == 0
+    data = json.loads((tmp_path / "resolver_cache.json").read_text())
+    assert list(data) == [f"10.1/x@@{base}"]
+    assert "Adopted 1" in capsys.readouterr().out
+
+    bad = enrich_pdfs._build_parser().parse_args([
+        "--adopt-legacy-resolver-cache", "helsinki",
+        "--resolver-cache-dir", str(tmp_path),
+    ])
+    assert enrich_pdfs._adopt_legacy_resolver_cache(bad) == 2

@@ -31,6 +31,7 @@ from xml.sax.saxutils import escape
 
 import pytest
 from fetchers.library_resolver import (
+    select_libraries,
     LibraryResolverConfig,
     ResolverCache,
     cached_answer_count,
@@ -649,6 +650,7 @@ def _stub_config(monkeypatch, data: dict) -> None:
     monkeypatch.setattr(cl, "load_config", lambda: data)
     monkeypatch.delenv("LIBRARY_OPENURL_BASE", raising=False)
     monkeypatch.delenv("LIBRARY_RESOLVER", raising=False)
+    monkeypatch.delenv("LIBRARY_ACTIVE", raising=False)
 
 
 def test_load_from_config_returns_none_when_unset(monkeypatch) -> None:
@@ -752,3 +754,66 @@ def test_adopt_legacy_renames_bare_keys_and_keeps_tagged_ones(tmp_path) -> None:
     reloaded = ResolverCache(tmp_path)
     reloaded.put("10.1/z@@x", [FulltextTarget(url="https://z")])
     assert reloaded.legacy_key_count() == 0
+
+
+# ---------------------------------------------------------------------------
+# Choosing the active library per run, without editing config.toml
+# ---------------------------------------------------------------------------
+
+AALTO_ALMA = "https://eu03.alma.exlibrisgroup.com/view/uresolver/358AALTO_INST/openurl"
+JYU_SFX = "https://sfx.finna.fi/nelli09"
+
+
+def test_no_selection_leaves_every_library_active(monkeypatch) -> None:
+    _stub_config(monkeypatch, {"library": {"openurl_base": [AALTO_ALMA, JYU_SFX]}})
+    assert load_from_config(MagicMock()).active_ids is None
+
+
+def test_select_by_label_or_base(monkeypatch) -> None:
+    _stub_config(monkeypatch, {"library": {"openurl_base": [AALTO_ALMA, JYU_SFX]}})
+    cfg = load_from_config(MagicMock(), active=["nelli09"])
+    assert cfg.active_ids == {JYU_SFX}
+    # Selecting narrows what is followed, not what is consulted.
+    assert [r.openurl_base for r in cfg.resolvers] == [AALTO_ALMA, JYU_SFX]
+    cfg = load_from_config(MagicMock(), active=[AALTO_ALMA + "/"])
+    assert cfg.active_ids == {AALTO_ALMA}
+    cfg = load_from_config(MagicMock(), active=["AALTO"])
+    assert cfg.active_ids == {AALTO_ALMA}
+
+
+def test_env_selects_when_no_flag(monkeypatch) -> None:
+    _stub_config(monkeypatch, {"library": {"openurl_base": [AALTO_ALMA, JYU_SFX]}})
+    monkeypatch.setenv("LIBRARY_ACTIVE", "aalto")
+    assert load_from_config(MagicMock()).active_ids == {AALTO_ALMA}
+    # The flag wins over the env var.
+    assert load_from_config(MagicMock(), active=["nelli09"]).active_ids == {JYU_SFX}
+
+
+def test_select_unknown_library_raises(monkeypatch) -> None:
+    _stub_config(monkeypatch, {"library": {"openurl_base": [AALTO_ALMA, JYU_SFX]}})
+    with pytest.raises(ValueError, match="Aalto") as err:
+        load_from_config(MagicMock(), active=["helsinki"])
+    assert "Nelli09" in str(err.value)
+
+
+def test_select_ambiguous_label_raises() -> None:
+    a = resolver_for("https://sfx.a.fi/jyu")
+    b = resolver_for("https://sfx.b.fi/jyu")
+    with pytest.raises(ValueError, match="more than one"):
+        select_libraries((a, b), ["jyu"])
+    assert select_libraries((a, b), ["https://sfx.b.fi/jyu"]) == {b.resolver_id}
+
+
+def test_env_base_replaces_a_configured_list(monkeypatch) -> None:
+    """Env beats toml everywhere else; a list in toml used to be the one
+    place it silently did not."""
+    _stub_config(monkeypatch, {"library": {"openurl_base": [AALTO_ALMA, JYU_SFX]}})
+    monkeypatch.setenv("LIBRARY_OPENURL_BASE", JYU_SFX)
+    assert [r.openurl_base for r in load_from_config(MagicMock()).resolvers] == [JYU_SFX]
+
+
+def test_describe_says_which_libraries_are_followed(monkeypatch) -> None:
+    _stub_config(monkeypatch, {"library": {"openurl_base": [AALTO_ALMA, JYU_SFX]}})
+    text = load_from_config(MagicMock(), active=["aalto"]).describe()
+    assert "Aalto (following routes)" in text and "Nelli09 (consulted only)" in text
+    assert "--library" in load_from_config(MagicMock()).describe()
