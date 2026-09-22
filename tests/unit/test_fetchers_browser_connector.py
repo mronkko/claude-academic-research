@@ -625,3 +625,15 @@ def test_the_connector_check_runs_before_any_work() -> None:
 
     src = inspect.getsource(enrich_pdfs.main)
     assert src.index("_check_connector_access(") < src.index("os.makedirs(args.cache_dir")
+
+
+def test_versions_are_compared_numerically(monkeypatch, tmp_path: Path) -> None:
+    """As strings, "5.0.99_0" sorts above "5.0.215_0"; Chrome can hold
+    both for a moment during an update."""
+    from fetchers.browser import connector
+
+    base = tmp_path / "ext"
+    for v in ("5.0.99_0", "5.0.215_0"):
+        (base / v).mkdir(parents=True)
+    monkeypatch.setattr(connector, "_default_extension_search_paths", lambda: [])
+    assert resolve_connector_extension_path(base) == base / "5.0.215_0"

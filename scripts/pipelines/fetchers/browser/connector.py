@@ -145,7 +145,8 @@ def _latest_version_subdir(base: Path, blocked: list[Path]) -> Path | None:
         return None
     if not subs:
         return None
-    subs.sort(key=lambda p: p.name)
+    # Numerically: as strings "5.0.99_0" beats "5.0.215_0".
+    subs.sort(key=lambda p: [int(n) for n in re.findall(r"\d+", p.name)])
     return subs[-1]
 
 
