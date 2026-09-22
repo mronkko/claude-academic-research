@@ -278,6 +278,17 @@ def _write_chromium_prefs(user_data_dir: Path) -> None:
     prefs_file.write_text(json.dumps(prefs))
 
 
+#: The one Playwright version this plugin runs. Each release drives exactly
+#: one Chromium build, so the script headers and the install instruction
+#: must name the same version: unpinned, uv resolved 1.63.0 for the
+#: browser pass (chromium-1243) while an unpinned uvx install had put
+#: other builds on disk, and a working setup died at launch. Raise it
+#: deliberately; `tests/unit/test_playwright_pin.py` makes every header,
+#: install instruction and wizard permission rule follow.
+PLAYWRIGHT_VERSION = "1.62.0"
+PLAYWRIGHT_INSTALL_CMD = f"uvx playwright@{PLAYWRIGHT_VERSION} install chromium"
+
+
 async def launch_context(
     playwright,
     cache_dir: str | Path,
@@ -322,10 +333,12 @@ async def launch_context(
     except Exception as e:
         if "Executable doesn't exist" in str(e):
             raise RuntimeError(
-                "Playwright's Chromium binary is not installed. Run the "
-                "one-time install: `uvx playwright install chromium` "
-                "(or `playwright install chromium` if the CLI is on your "
-                "PATH), then retry."
+                f"Playwright's Chromium build for playwright "
+                f"{PLAYWRIGHT_VERSION} is not installed. Run the one-time "
+                f"install: `{PLAYWRIGHT_INSTALL_CMD}`, then retry. If "
+                f"another Playwright version is running this script, its "
+                f"PEP 723 header is not the pinned one — every header must "
+                f"say playwright=={PLAYWRIGHT_VERSION}."
             ) from e
         raise
 

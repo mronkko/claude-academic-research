@@ -49,7 +49,7 @@ dev = [
     # past a green suite. Installing the package is enough for collection;
     # actually running still needs `playwright install chromium`, which
     # the fixture's skip message spells out.
-    "playwright>=1.40",
+    "playwright==1.62.0",
     # The silent-skip problem once more, and this one hid the exact trap it
     # exists to catch: a retrieved file can be `application/pdf`, a few
     # hundred KB, and still be a one-page preview — which is how Elsevier's

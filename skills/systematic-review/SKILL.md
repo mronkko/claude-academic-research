@@ -1565,7 +1565,7 @@ and similar CF-gated publishers, a Playwright-driven Chromium opens
 visibly. The user passes the Cloudflare challenge once per publisher;
 the authenticated session then captures subsequent downloads
 automatically. First-time use needs a one-time browser install:
-`uvx playwright install chromium` (the setup wizard pre-approves
+`uvx playwright@1.62.0 install chromium` (the setup wizard pre-approves
 this command). If the browser cascade regresses, file an issue and
 attach the run log (`--log-csv`) so the failure can be reproduced.
 
