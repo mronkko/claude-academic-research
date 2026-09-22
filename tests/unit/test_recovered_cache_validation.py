@@ -152,7 +152,13 @@ def test_stamp_is_read_from_compressed_page_text(tmp_path: Path) -> None:
     _render_legacy_recovered(path, "0.15.1")
     assert b"claude-academic-research" not in path.read_bytes()
     assert stamped_recovery_version(path) == (0, 15, 1)
-    assert _stale_recovery_reason(path) is None
+    # 0.15.1 itself has been stale since 0.24.1 (tables, see
+    # `_splice_floats`); what this test pins is that a compressed stamp at
+    # the current floor still reads as fresh.
+    fresh = tmp_path / "fresh" / CACHE_NAME
+    fresh.parent.mkdir()
+    _render_legacy_recovered(fresh, "0.24.1")
+    assert _stale_recovery_reason(fresh) is None
 
 
 def test_older_stamp_in_compressed_page_text_is_still_stale(tmp_path: Path) -> None:

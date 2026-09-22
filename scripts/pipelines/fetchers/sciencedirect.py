@@ -96,7 +96,8 @@ def _is_preview_warning(els_status: str) -> bool:
 #: Tables and figures are deliberately *not* here. They are content
 #: rather than annotation, and Elsevier anchors them at block level via
 #: `<ce:float-anchor>` rather than mid-sentence, so they do not break
-#: the sentence they sit in. `<ce:bib-reference>` is not here either:
+#: the sentence they sit in (see `_splice_floats` for where they
+#: actually live). `<ce:bib-reference>` is not here either:
 #: it lives in the bibliography, outside `<body>`. Revisit if a real
 #: article shows otherwise.
 _ANNOTATION_TAGS = frozenset({"footnote", "table-footnote"})
@@ -133,6 +134,11 @@ def _collect_annotations(el) -> list[str]:
     """
     out: list[str] = []
     for child in el:
+        if el.tag == "table" and child.tag == "table-footnote":
+            # A table's own notes (significance keys, abbreviations) are
+            # rendered under its rows by `_table_blocks`; a separate
+            # endnote list would divorce "⁎" from what it means.
+            continue
         if child.tag in _ANNOTATION_TAGS:
             text = " ".join(_element_text(child))
             if text:
@@ -145,7 +151,10 @@ def _collect_annotations(el) -> list[str]:
 #: Elements that start a new block rather than continuing the current
 #: one. Kept out of a paragraph's inline text and emitted in their own
 #: right, so a list does not dissolve into the sentence before it.
-_NESTED_BLOCK_TAGS = frozenset({"list", "displayed-quote", "table"})
+_NESTED_BLOCK_TAGS = frozenset({"list", "displayed-quote", "table", "figure"})
+
+#: Heading for floats the text never anchors, appended after the body.
+_FLOATS_HEADING = "Tables and figures"
 
 #: Deepest heading level rendered. Elsevier nests three deep in
 #: practice; anything further is rendered at the third level rather
@@ -186,8 +195,20 @@ def _prose_blocks(
     return blocks + _sub_blocks(el, depth)
 
 
+def _float_caption(el) -> str:
+    """"Table 1. Caption text." — the label is a sibling of the caption,
+    and without it the prose's "see Table 1" points at nothing."""
+    label_el = el.find("label")
+    label = _inline_text(label_el) if label_el is not None else ""
+    caption_el = el.find("caption")
+    caption = _inline_text(caption_el) if caption_el is not None else ""
+    if label and caption:
+        return f"{label}. {caption}"
+    return label or caption
+
+
 def _table_blocks(el) -> list[tuple[str, str]]:
-    """A table as caption plus one block per row.
+    """A table as caption, one block per row, then its legend and notes.
 
     Table cells hold inline markup rather than `<ce:para>`, so the
     generic block walk finds nothing to emit and the whole table
@@ -195,18 +216,70 @@ def _table_blocks(el) -> list[tuple[str, str]]:
     replaced the flat text join here. Rows are rendered pipe-separated:
     crude, but it keeps the cell boundaries that a wall of concatenated
     cell text destroys.
+
+    Empty cells keep their place. Dropping them shifted every later value
+    one column left, which in a correlation matrix silently re-labels the
+    coefficients. Only trailing blanks go, since they position nothing.
+    Spanned cells (`namest`/`nameend`) are still rendered as one cell.
     """
     blocks: list[tuple[str, str]] = []
-    caption = el.find("caption")
-    if caption is not None:
-        text = _inline_text(caption)
-        if text:
-            blocks.append(("p", text))
+    caption = _float_caption(el)
+    if caption:
+        blocks.append(("p", caption))
     for row in el.iter("row"):
-        cells = [c for c in (_inline_text(e) for e in row.iter("entry")) if c]
+        cells = [_inline_text(e) for e in row.iter("entry")]
+        while cells and not cells[-1]:
+            cells.pop()
         if cells:
             blocks.append(("row", "  |  ".join(cells)))
+    for legend in el.findall("legend"):
+        text = _inline_text(legend)
+        if text:
+            blocks.append(("p", text))
+    for note in el.findall("table-footnote"):
+        text = " ".join(_element_text(note))
+        if text:
+            blocks.append(("note", text))
     return blocks
+
+
+def _figure_blocks(el) -> list[tuple[str, str]]:
+    """A figure's label and caption. The image itself is not in the XML
+    response, but the caption says what the figure shows."""
+    caption = _float_caption(el)
+    return [("p", caption)] if caption else []
+
+
+def _splice_floats(root, body) -> list:
+    """Move each table and figure to its first `<ce:float-anchor>` in
+    `body`, and return the floats nothing anchors, in document order.
+
+    Elsevier keeps every float in `<ce:floats>`, a *sibling* of `<body>`,
+    and marks the reading position with `<ce:float-anchor refid>`. A
+    walk of `<body>` alone therefore never saw a table: in one real
+    corpus, 346 of 431 recovered PDFs whose prose cites "Table N" had no
+    table row anywhere. Moving the element to its anchor rather than
+    appending every float at the end keeps a table next to the paragraph
+    that discusses it. Later anchors to the same float are left as they
+    are; they carry no text, and the table is rendered once.
+    """
+    floats = next(root.iter("floats"), None)
+    if floats is None:
+        return []
+    by_id = {c.get("id"): c for c in floats if c.get("id")}
+    parent_of = {c: p for p in body.iter() for c in p}
+    for anchor in list(body.iter("float-anchor")):
+        target = by_id.pop(anchor.get("refid"), None)
+        if target is None:
+            continue
+        parent = parent_of[anchor]
+        index = list(parent).index(anchor)
+        floats.remove(target)
+        # The anchor's tail is the rest of the sentence; keep it.
+        target.tail = anchor.tail
+        parent.remove(anchor)
+        parent.insert(index, target)
+    return [c for c in floats if c.tag in ("table", "figure")]
 
 
 def _element_blocks(el, depth: int = 1) -> list[tuple[str, str]]:
@@ -250,6 +323,8 @@ def _element_blocks(el, depth: int = 1) -> list[tuple[str, str]]:
         return _prose_blocks(el, "li", depth, frozenset({"label"}))
     if tag == "table":
         return _table_blocks(el)
+    if tag == "figure":
+        return _figure_blocks(el)
     # Containers with no block semantics of their own: descend.
     out: list[tuple[str, str]] = []
     for child in el:
@@ -346,11 +421,16 @@ def _extract_article(
     body = next(root.iter("body"), None)
     if body is None:
         return _extract_metadata(root), [], []
-    return (
-        _extract_metadata(root),
-        _element_blocks(body),
-        _collect_annotations(body),
-    )
+    unanchored = _splice_floats(root, body)
+    blocks = _element_blocks(body)
+    if unanchored:
+        blocks.append(("h1", _FLOATS_HEADING))
+        for el in unanchored:
+            blocks.extend(_element_blocks(el))
+    notes = _collect_annotations(body)
+    for el in unanchored:
+        notes.extend(_collect_annotations(el))
+    return _extract_metadata(root), blocks, notes
 
 
 def _extract_xml_blocks(xml_bytes: bytes) -> tuple[list[tuple[str, str]], list[str]]:
@@ -464,7 +544,11 @@ def _recovery_note(n_annotations: int) -> str:
 #: makes older output wrong. It is not the plugin version: bumping it for
 #: an unrelated release would invalidate every cache on every machine and
 #: spend a publisher's API quota re-fetching files that were already fine.
-_CURRENT_RECOVERY_VERSION: tuple[int, ...] = (0, 15, 0)
+#:
+#: 0.24.1: tables and figures. They live in `<ce:floats>` outside
+#: `<body>` and were never rendered, and blank cells were dropped, which
+#: shifted later values into the wrong column. See `_splice_floats`.
+_CURRENT_RECOVERY_VERSION: tuple[int, ...] = (0, 24, 1)
 
 #: Matches the version in `_recovery_note`'s "…by claude-academic-research
 #: 0.15.1." — in the PDF's Info dictionary, and in the page text.

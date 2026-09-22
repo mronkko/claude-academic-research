@@ -384,3 +384,105 @@ def test_missing_coredata_is_empty_metadata_not_a_crash() -> None:
 
 def test_extract_article_survives_malformed_xml() -> None:
     assert _extract_article(b"<not><well>formed") == ({}, [], [])
+
+
+# ---------------------------------------------------------------------------
+# Floats: tables and figures live outside <body>
+# ---------------------------------------------------------------------------
+
+#: The real shape, trimmed from the 10.1016/j.leaqua.2015.12.008 response.
+#: Elsevier puts every table and figure in <ce:floats>, a sibling of
+#: <body>, and marks the spot in the text with <ce:float-anchor refid>.
+#: Walking only <body> dropped every one: 346 of 431 recovered PDFs that
+#: mention "Table N" in one real corpus had no table rows at all.
+FLOATS_XML = """<?xml version="1.0"?>
+<ns0:article xmlns:ns0="http://www.elsevier.com/xml/common/dtd"
+             xmlns:ns1="http://www.elsevier.com/xml/common/cals/dtd">
+  <ns0:floats>
+    <ns0:figure id="f0005"><ns0:label>Fig. 1</ns0:label><ns0:caption>\
+<ns0:simple-para>Interaction effects.</ns0:simple-para></ns0:caption>\
+<ns0:link locator="gr1"/></ns0:figure>
+    <ns0:table id="t0005"><ns0:label>Table 1</ns0:label><ns0:caption>\
+<ns0:simple-para>Descriptive statistics.</ns0:simple-para></ns0:caption>\
+<ns1:tgroup cols="4"><ns1:thead><ns1:row><ns0:entry>Variable</ns0:entry>\
+<ns0:entry>Mean</ns0:entry><ns0:entry>1</ns0:entry><ns0:entry>2</ns0:entry>\
+</ns1:row></ns1:thead><ns1:tbody><ns1:row><ns0:entry>Individual level\
+</ns0:entry><ns0:entry/><ns0:entry/><ns0:entry/></ns1:row><ns1:row>\
+<ns0:entry>Extraversion</ns0:entry><ns0:entry/><ns0:entry>.21\
+<ns0:sup>⁎</ns0:sup></ns0:entry><ns0:entry/></ns1:row></ns1:tbody>\
+</ns1:tgroup><ns0:legend><ns0:simple-para>N = 263.</ns0:simple-para>\
+</ns0:legend><ns0:table-footnote><ns0:label>⁎</ns0:label><ns0:note-para>\
+p &lt; .05.</ns0:note-para></ns0:table-footnote></ns0:table>
+    <ns0:table id="t0010"><ns0:label>Table 2</ns0:label><ns0:caption>\
+<ns0:simple-para>Never anchored.</ns0:simple-para></ns0:caption>\
+<ns1:tgroup cols="1"><ns1:tbody><ns1:row><ns0:entry>Orphan</ns0:entry>\
+</ns1:row></ns1:tbody></ns1:tgroup></ns0:table>
+  </ns0:floats>
+  <ns0:body><ns0:sections><ns0:section><ns0:section-title>Results\
+</ns0:section-title>
+    <ns0:para>Table 1 shows the statistics.<ns0:float-anchor refid="t0005"/>\
+ The effect was positive.<ns0:footnote><ns0:label>1</ns0:label><ns0:note-para>\
+A body footnote.</ns0:note-para></ns0:footnote></ns0:para>
+    <ns0:para>See Fig. 1.<ns0:float-anchor refid="f0005"/></ns0:para>
+    <ns0:para>Table 1 again.<ns0:float-anchor refid="t0005"/></ns0:para>
+  </ns0:section></ns0:sections></ns0:body>
+</ns0:article>
+""".encode()
+
+
+def test_floated_tables_are_rendered_at_their_anchor() -> None:
+    blocks, _ = _extract_xml_blocks(FLOATS_XML)
+    texts = [t for _k, t in blocks]
+    at = texts.index("Table 1. Descriptive statistics.")
+    assert texts[at - 1] == "Table 1 shows the statistics. The effect was positive."
+    assert blocks[at + 1] == ("row", "Variable  |  Mean  |  1  |  2")
+
+
+def test_a_float_anchored_twice_is_rendered_once() -> None:
+    blocks, _ = _extract_xml_blocks(FLOATS_XML)
+    assert [t for _k, t in blocks].count("Table 1. Descriptive statistics.") == 1
+
+
+def test_empty_cells_keep_their_column() -> None:
+    """Dropping blanks shifted every later value one column left: in a
+    correlation matrix that silently re-labels coefficients. Trailing
+    blanks carry no position and are trimmed."""
+    blocks, _ = _extract_xml_blocks(FLOATS_XML)
+    rows = [t for k, t in blocks if k == "row"]
+    assert "Extraversion  |    |  .21 ⁎" in rows
+    assert "Individual level" in rows
+
+
+def test_table_legend_and_notes_stay_with_the_table() -> None:
+    """Significance markers are meaningless without their key, so table
+    notes are rendered under the rows, not sent to the endnotes."""
+    blocks, notes = _extract_xml_blocks(FLOATS_XML)
+    texts = [t for _k, t in blocks]
+    assert "N = 263." in texts
+    assert "⁎ p < .05." in texts
+    assert texts.index("⁎ p < .05.") > texts.index("Extraversion  |    |  .21 ⁎")
+    assert not any("p < .05" in n for n in notes)
+    assert any("A body footnote." in n for n in notes)
+
+
+def test_figures_keep_their_caption() -> None:
+    blocks, _ = _extract_xml_blocks(FLOATS_XML)
+    assert ("p", "Fig. 1. Interaction effects.") in blocks
+
+
+def test_unanchored_floats_are_appended_not_lost() -> None:
+    blocks, _ = _extract_xml_blocks(FLOATS_XML)
+    texts = [t for _k, t in blocks]
+    assert ("h1", "Tables and figures") in blocks
+    assert texts.index("Table 2. Never anchored.") > texts.index("Tables and figures")
+    assert ("row", "Orphan") in blocks
+
+
+def test_recoveries_before_the_floats_fix_are_stale() -> None:
+    from fetchers.sciencedirect import _CURRENT_RECOVERY_VERSION
+    from plugin_version import plugin_version
+    assert _CURRENT_RECOVERY_VERSION >= (0, 24, 1)
+    # A floor above the shipped version would mark every fresh recovery
+    # stale and re-fetch it on every run.
+    shipped = tuple(int(p) for p in plugin_version().split("."))
+    assert _CURRENT_RECOVERY_VERSION <= shipped
