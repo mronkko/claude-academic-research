@@ -92,6 +92,12 @@ canonical longer entry.
   The resolver runs only in the browser and Zotero Connector passes, to
   skip items your library cannot reach before opening Chromium for them.
 
+  `openurl_base` may be a list, for a reader with more than one
+  affiliation. Every library is *consulted*, but a run *follows* only the
+  routes of the ones named by `enrich_pdfs.py --library` (or
+  `LIBRARY_ACTIVE`), since another institution's link opens its login
+  page rather than a PDF off its network. Nothing chosen means follow all.
+
   Its verdict about a *publisher* differs from its verdict about an
   *article*. When it lists licensed routes for an article but none of
   them is that publisher's own platform, the institution has no

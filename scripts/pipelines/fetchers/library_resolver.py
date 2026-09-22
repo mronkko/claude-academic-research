@@ -19,6 +19,13 @@ Configuration (`~/.config/academic-research/config.toml`)::
     resolver = "auto"                     # or "sfx" / "alma"
     platform_priority = "ebscohost,jstor" # optional reordering
 
+`openurl_base` may be a list, one endpoint per affiliation. All are
+consulted; `load_from_config(active=...)` (`enrich_pdfs.py --library`,
+or `LIBRARY_ACTIVE`) picks whose routes a run may follow. That is how an
+agent switches institution between runs without editing this file.
+`LIBRARY_OPENURL_BASE` (comma-separated) replaces the configured
+endpoints outright.
+
 Finding your own institution's `openurl_base`:
     - SFX: your library or its existing OpenURL/citation-manager
       documentation usually has this already (often the base URL handed

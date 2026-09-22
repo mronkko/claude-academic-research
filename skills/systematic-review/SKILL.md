@@ -1594,6 +1594,18 @@ attach the run log (`--log-csv`) so the failure can be reproduced.
 > `--resolver-cache-dir`, or each pass re-asks the resolver everything
 > the last one already learned.
 
+> **Two libraries, one network at a time.** With several `[library] openurl_base` entries (more than one
+> affiliation), pass `--library <name>` for the institution whose VPN or
+> login is up right now; the run banner lists the names. Every library is
+> still consulted, but only that one's links are opened. Items whose only
+> route is at the other library are deferred, not logged, so re-run with
+> the other `--library` on its network. Switch this way, never by editing
+> config.toml. After upgrading, a warning about cache entries that
+> "predate per-library keys" means to run once with
+> `--adopt-legacy-resolver-cache <name>`, naming the library that was
+> *first* in the list when that cache was built. Ask the user if you
+> don't know.
+
 **Phase 3 — Zotero Connector + institutional SFX/OpenURL**
 (`enrich_pdfs.py` with Connector handlers). For items the browser
 cascade can't reach directly — typically paywalled content accessed via
