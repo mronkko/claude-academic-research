@@ -378,7 +378,8 @@ def test_the_failure_message_stops_blaming_the_library_once_one_item_saved(
     for the fiftieth.
 
     Once anything has saved in this run, the library selection is
-    demonstrably correct — `counter.ok` proves it — so leading with that
+    demonstrably correct — `counter.ok`, or a save queued for merging
+    (`counter.queued`), proves it — so leading with that
     cause sends the user to inspect a setting that is fine. Reported live
     against a run whose real reason was no access to those articles.
     """
@@ -387,7 +388,7 @@ def test_the_failure_message_stops_blaming_the_library_once_one_item_saved(
     from fetchers.browser import connector
 
     src = inspect.getsource(connector)
-    assert "if counter.ok:" in src, (
+    assert "saved = counter.ok + counter.queued" in src and "if saved:" in src, (
         "the message does not branch on what the run already knows"
     )
     # The no-access reading must be offered in both branches, since it is

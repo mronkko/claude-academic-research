@@ -193,6 +193,96 @@ def connector_extension_problem(explicit: str | Path | None = None) -> str | Non
     )
 
 
+class PendingMerges:
+    """Connector saves waiting for cloud sync before they can be merged.
+
+    A JSON list in the cache directory, so a pair queued by one run is
+    merged by the next: that is what the old "will be auto-merged next
+    time" message promised and nothing implemented. Rows are
+    `{"keeper", "new_key", "doi", "queued_at"}`; one per `new_key`.
+    """
+
+    FILENAME = "connector_pending_merges.json"
+
+    def __init__(self, cache_dir) -> None:
+        self.path = Path(cache_dir) / self.FILENAME
+        self._rows: list[dict] = []
+        if self.path.exists():
+            try:
+                import json
+                rows = json.loads(self.path.read_text())
+                self._rows = [r for r in rows if isinstance(r, dict)]
+            except Exception:  # noqa: BLE001 — a corrupt queue is empty
+                self._rows = []
+
+    def rows(self) -> list[dict]:
+        return list(self._rows)
+
+    def keepers(self) -> set[str]:
+        return {r.get("keeper", "") for r in self._rows} - {""}
+
+    def new_keys(self) -> frozenset[str]:
+        return frozenset(r.get("new_key", "") for r in self._rows) - {""}
+
+    def add(self, *, keeper: str, new_key: str, doi: str) -> None:
+        if new_key in self.new_keys():
+            return
+        self._rows.append({
+            "keeper": keeper, "new_key": new_key, "doi": doi,
+            "queued_at": _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds"),
+        })
+        self._save()
+
+    def remove(self, new_key: str) -> None:
+        self._rows = [r for r in self._rows if r.get("new_key") != new_key]
+        self._save()
+
+    def _save(self) -> None:
+        import json
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(f".json.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(self._rows, indent=1))
+        tmp.replace(self.path)
+
+
+def settle_pending_merges(
+    zot, pending: PendingMerges, *, merge, wait_s: float, on_merged,
+    sweep_every_s: float = 15.0,
+) -> None:
+    """Merge every queued pair whose new item has reached the cloud.
+
+    Sweeps until the queue is empty or `wait_s` has passed (0: one
+    sweep). `merge(keeper, new_key)` does the merge and returns its
+    stats; `on_merged(row, stats)` lets the caller log and finish a
+    `--replace` swap. A pair whose merge raises stays queued.
+    """
+    deadline = time.monotonic() + wait_s
+    first = True
+    while pending.rows() and (first or time.monotonic() < deadline):
+        if not first:
+            time.sleep(sweep_every_s)
+        first = False
+        for row in pending.rows():
+            try:
+                visible = bool(zot.cloud.item(row["new_key"]))
+            except Exception:  # noqa: BLE001 — not synced yet
+                visible = False
+            if not visible:
+                continue
+            try:
+                stats = merge(row["keeper"], row["new_key"])
+            except Exception as e:  # noqa: BLE001
+                print(f"  Queued merge {row['new_key']} → {row['keeper']} "
+                      f"failed: {str(e)[:100]}; left queued.", flush=True)
+                continue
+            pending.remove(row["new_key"])
+            on_merged(row, stats)
+        if pending.rows() and time.monotonic() < deadline:
+            left = int(deadline - time.monotonic())
+            print(f"  {len(pending.rows())} queued merge(s) still waiting for "
+                  f"cloud sync (~{left}s left)…", flush=True)
+
+
 class ZoteroConnectorHandler(PublisherHandler):
     """Fallback PDF handler that delegates to the Zotero Connector.
 
@@ -234,6 +324,14 @@ class ZoteroConnectorHandler(PublisherHandler):
         #: Stats of the last merge, read by the caller to finish a
         #: `--replace` swap with the PDF that actually arrived.
         self.last_merge: dict = {}
+        #: Per-item wait for the new item to reach the cloud
+        #: (`--connector-sync-timeout`).
+        self.sync_timeout_s: float = 30.0
+        #: Saves whose sync outlasted that wait; None disables queueing.
+        self.pending: PendingMerges | None = None
+        #: "merge_pending" when the last item was queued rather than
+        #: merged or failed; read by the caller for the log status.
+        self.last_outcome = ""
         self._explicit_extension_path = extension_path
         self.extension_path = resolve_connector_extension_path(extension_path)
         # Hosts the user has already confirmed in this run — once a
@@ -259,6 +357,20 @@ class ZoteroConnectorHandler(PublisherHandler):
     # service worker is ready. Opens the first item's SFX URL so the
     # user can solve any institutional challenge before the first save.
     # ------------------------------------------------------------------
+
+    def merge_saved_item(self, zot, keeper: str, new_key: str) -> dict:
+        """Merge the Connector's saved item into `keeper`.
+
+        By default only the PDF moves: the keeper's metadata came from
+        elsewhere, so the translator's HTML snapshot and its keyword tags
+        are not wanted there (`--connector-keep-extras` restores the old
+        everything-moves behaviour).
+        """
+        return zot.merge_duplicate_item(
+            keeper, new_key,
+            union_tags=self.keep_extras,
+            child_content_types=None if self.keep_extras else ("application/pdf",),
+        )
 
     async def setup(self, page: Page, first_doi: str) -> str:
         del page, first_doi   # URL/DOI aren't needed for the intro banner
@@ -386,6 +498,8 @@ class ZoteroConnectorHandler(PublisherHandler):
         False on any failure. Never raises.
         """
         del ctx, t_start      # unused; service_worker drives the save
+        self.last_outcome = ""
+        self.last_merge = {}
         doi = item["doi"]
         title = (item.get("title") or "")[:50]
         target_url = item.get("resolver_target_url")
@@ -602,8 +716,11 @@ class ZoteroConnectorHandler(PublisherHandler):
         print(f"  │  Waiting for Zotero Desktop to save item "
               f"(up to {int(_SAVE_POLL_TIMEOUT_S)}s)…", flush=True)
         new_key = await asyncio.to_thread(
-            _poll_for_new_item, zot, doi, item["item_key"],
-            _SAVE_POLL_TIMEOUT_S, title=item.get("title", ""),
+            functools.partial(
+                _poll_for_new_item, zot, doi, item["item_key"],
+                _SAVE_POLL_TIMEOUT_S, title=item.get("title", ""),
+                exclude=self.pending.new_keys() if self.pending else frozenset(),
+            ),
         )
         if new_key is None:
             # What to blame depends on something we already know. Once
@@ -614,11 +731,12 @@ class ZoteroConnectorHandler(PublisherHandler):
             # simply no access to those articles — off-VPN, paywalled,
             # or unentitled, which the translator cannot distinguish
             # because all three hand it a page with no PDF on it.
-            if counter.ok:
+            saved = counter.ok + counter.queued
+            if saved:
                 print(
                     f"  └─ FAIL: the translator saved nothing.\n"
-                    f"         {counter.ok} item"
-                    f"{'' if counter.ok == 1 else 's'} already saved this "
+                    f"         {saved} item"
+                    f"{'' if saved == 1 else 's'} already saved this "
                     f"run, so the library\n"
                     f"         selection is correct — it is not that.\n"
                     f"         Most likely you cannot reach this article:\n"
@@ -648,22 +766,37 @@ class ZoteroConnectorHandler(PublisherHandler):
                 )
             counter.failed += 1
             return False
+        wait_s = int(self.sync_timeout_s)
         print(f"  │  New item saved locally ({new_key}). "
-              f"Waiting for cloud sync (up to 30s)…", flush=True)
+              f"Waiting for cloud sync (up to {wait_s}s)…", flush=True)
 
-        # Wait for cloud sync before merging — the merge uses the
-        # cloud API and will 404 if the item hasn't replicated yet.
-        # 30s covers typical Zotero Desktop sync cadence; a handful
-        # of items in the AI Entrepreneurship library sat at ~25s.
+        # The merge runs on the cloud API, so the new item must have
+        # synced first. Usually that takes seconds; under concurrent
+        # writers Zotero Desktop's upload lagged ~7 minutes, and a fixed
+        # 30 s wait failed every item of a run. So a slow sync no longer
+        # fails the item: the pair is queued and merged once it syncs,
+        # at the end of this pass or at the start of the next one.
         synced = await asyncio.to_thread(
-            _wait_for_cloud_sync, zot, new_key, 30,
+            _wait_for_cloud_sync, zot, new_key, self.sync_timeout_s,
         )
         if not synced:
+            if self.pending is not None:
+                self.pending.add(
+                    keeper=item["item_key"], new_key=new_key, doi=doi,
+                )
+                self.last_outcome = "merge_pending"
+                counter.queued += 1
+                print(
+                    f"  └─ QUEUED: {new_key} is saved in Zotero Desktop but not\n"
+                    f"         on the cloud yet ({wait_s}s). Queued; it is merged\n"
+                    f"         into {item['item_key']} as soon as it syncs — later in\n"
+                    f"         this run, or at the start of the next Connector pass.",
+                    flush=True,
+                )
+                return False
             print(
                 f"  └─ FAIL: new item {new_key} is in Zotero Desktop but\n"
-                "         hasn't synced to the cloud in 30s. Merge\n"
-                "         aborted. Re-run after sync completes; the\n"
-                "         item will be auto-merged next time.",
+                f"         hasn't synced to the cloud in {wait_s}s. Merge aborted.",
                 flush=True,
             )
             counter.failed += 1
@@ -695,13 +828,7 @@ class ZoteroConnectorHandler(PublisherHandler):
             # keyword tags are not wanted there (`--connector-keep-extras`
             # restores the old everything-moves behaviour).
             stats = await asyncio.to_thread(
-                functools.partial(
-                    zot.merge_duplicate_item, item["item_key"], new_key,
-                    union_tags=self.keep_extras,
-                    child_content_types=(
-                        None if self.keep_extras else ("application/pdf",)
-                    ),
-                ),
+                self.merge_saved_item, zot, item["item_key"], new_key,
             )
             self.last_merge = stats
         except Exception as e:
@@ -896,6 +1023,7 @@ def _poll_for_new_item(
     *,
     hint_every_s: float = 15.0,
     title: str = "",
+    exclude: frozenset[str] | set[str] = frozenset(),
 ) -> str | None:
     """Return the item_key of the item the Connector just created.
 
@@ -945,7 +1073,9 @@ def _poll_for_new_item(
         except Exception:
             items = []
         for it in items:
-            if it.get("key") == keeper_key:
+            # `exclude`: earlier saves still queued for merging. Same DOI,
+            # among the newest items, and not the save just made.
+            if it.get("key") == keeper_key or it.get("key") in exclude:
                 continue
             data = it.get("data", {})
             if data.get("itemType") in ("attachment", "note", "annotation"):
@@ -1032,7 +1162,9 @@ def _wait_for_child_attachment(
 __all__ = [
     "ZoteroConnectorHandler",
     "ping_zotero_desktop",
+    "PendingMerges",
     "connector_extension_problem",
+    "settle_pending_merges",
     "resolve_connector_extension_path",
     "wait_for_service_worker",
 ]

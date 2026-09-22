@@ -2132,6 +2132,10 @@ async def _drive_connector(
                         zot, item["item_key"], keep=new_pdfs, provenance=[],
                     )
                 status = "attached_via_connector"
+            elif getattr(handler, "last_outcome", "") == "merge_pending":
+                # Saved, not yet merged: neither a success nor a failure,
+                # and no failure-log entry. The merge queue finishes it.
+                status = "connector_merge_pending"
             elif skipped_by_user:
                 status = "skipped_by_user"
             else:
@@ -2168,7 +2172,8 @@ async def _drive_connector(
                 )
 
         print(
-            f"\n  Total: {counter.ok} new, {counter.failed} failed",
+            f"\n  Total: {counter.ok} new, {counter.queued} queued for merge, "
+            f"{counter.failed} failed",
             flush=True,
         )
         await ctx.close()
@@ -3192,10 +3197,61 @@ def _run_browser_in_process(
             ) or None,
         )
         connector_handler.keep_extras = getattr(args, "connector_keep_extras", False)
+        connector_handler.sync_timeout_s = float(
+            getattr(args, "connector_sync_timeout", 30),
+        )
+        from fetchers.browser.connector import PendingMerges, settle_pending_merges
+
+        pending = PendingMerges(args.cache_dir)
+        connector_handler.pending = pending
+
+        def _on_merged(row: dict, stats: dict) -> None:
+            new_pdfs = set(stats.get("moved_pdf_keys") or [])
+            if new_pdfs:
+                _finish_replacement(zot, row["keeper"], keep=new_pdfs, provenance=[])
+            status = "attached_via_connector" if new_pdfs else "connector_save_failed"
+            print(f"  Queued merge {row['new_key']} → {row['keeper']}: "
+                  f"{'attached' if new_pdfs else 'no PDF in the saved item'}.",
+                  flush=True)
+            log_writer.writerow({
+                "run_date": run_date, "item_key": row["keeper"],
+                "doi": row.get("doi", ""), "title": "", "status": status,
+                "source": connector_handler.name,
+                "detail": f"queued merge of {row['new_key']}",
+            })
+
+        def _settle(wait_s: float) -> None:
+            if pending.rows():
+                print(f"\n  Merging {len(pending.rows())} queued Connector "
+                      f"save(s) that were waiting for cloud sync…", flush=True)
+                settle_pending_merges(
+                    zot, pending, wait_s=wait_s, on_merged=_on_merged,
+                    merge=lambda keeper, new: connector_handler.merge_saved_item(
+                        zot, keeper, new,
+                    ),
+                )
+
+        # Pairs queued by an earlier run first, and their keepers are not
+        # saved again: that would put a second copy beside the first.
+        _settle(0)
+        queued = pending.keepers()
+        if queued:
+            before = len(connector_items)
+            connector_items = [
+                it for it in connector_items if it["item_key"] not in queued
+            ]
+            if before != len(connector_items):
+                print(f"  {before - len(connector_items)} item(s) skipped: a "
+                      f"saved copy is already queued for merging.", flush=True)
         asyncio.run(_drive_connector(
             connector_handler, connector_items, zot, log_writer,
             args, run_date,
         ))
+        _settle(float(getattr(args, "connector_merge_wait", 600)))
+        if pending.rows():
+            print(f"  {len(pending.rows())} saved item(s) still not on the "
+                  f"cloud; they stay queued in {pending.path} and are merged "
+                  f"at the start of the next Connector pass.", flush=True)
 
     _print_browser_summary(
         args, [it["key"] for it in to_process], log_fh=log_fh)
@@ -3878,6 +3934,18 @@ def _build_parser() -> argparse.ArgumentParser:
              "to share them across passes. Safe to run beside another pass "
              "— it cannot duplicate attachments — but both will be "
              "queueing against the same institutional resolver.",
+    )
+    parser.add_argument(
+        "--connector-sync-timeout", type=float, default=30, metavar="SECONDS",
+        help="How long each Connector save waits to reach the Zotero cloud "
+             "before its merge is queued instead (default 30). Queued "
+             "merges run at the end of the pass and at the start of the "
+             "next one.",
+    )
+    parser.add_argument(
+        "--connector-merge-wait", type=float, default=600, metavar="SECONDS",
+        help="At the end of the Connector pass, how long to keep waiting "
+             "for queued saves to sync and merging them (default 600).",
     )
     parser.add_argument(
         "--connector-keep-extras", action="store_true",

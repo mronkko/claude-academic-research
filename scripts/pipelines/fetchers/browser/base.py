@@ -45,10 +45,12 @@ class Counter:
     ok: int = 0
     cached: int = 0
     failed: int = 0
+    #: Connector saves waiting for cloud sync before their merge.
+    queued: int = 0
 
     @property
     def done(self) -> int:
-        return self.ok + self.cached + self.failed
+        return self.ok + self.cached + self.failed + self.queued
 
 
 def progress_tag(counter: Counter, total: int, t_start: float) -> str:

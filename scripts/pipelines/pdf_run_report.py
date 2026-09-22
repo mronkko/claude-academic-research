@@ -49,6 +49,12 @@ STATUS_INFO: dict[str, tuple[str, str]] = {
     "attached": ("PDF attached", ""),
     "attached_via_connector": ("PDF attached via the Zotero Connector", ""),
     "dry_run": ("PDF downloaded, upload skipped (--dry-run)", ""),
+    "connector_merge_pending": (
+        "Saved by the Zotero Connector; merge queued until it reaches the cloud",
+        "Nothing to do: it is merged at the end of the pass or at the start "
+        "of the next Connector pass (see connector_pending_merges.json in "
+        "the cache directory).",
+    ),
     "unchanged": (
         "--replace fetched the same file the item already holds; nothing changed",
         "",
