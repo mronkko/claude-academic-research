@@ -12,7 +12,7 @@
 #     "pybliometrics>=3.6",
 #     "wiley-tdm>=0.2",
 #     "reportlab>=4.0",
-#     "playwright==1.62.0",
+#     "playwright>=1.40",
 # ]
 # ///
 """Enrich Zotero items by downloading missing PDFs and attaching them.
@@ -310,9 +310,23 @@ _PLAYWRIGHT_MISSING_MSG = (
     "    (including playwright) are resolved automatically, or\n"
     "    `pip install playwright` into your environment.\n"
     "  - Then install the browser binary once:\n"
-    "    `uvx playwright@1.62.0 install chromium` (or `playwright install chromium`\n"
+    "    `uvx playwright@latest install chromium` (or `playwright install chromium`\n"
     "    if the CLI is on your PATH)."
 )
+
+
+def _check_browser_ready() -> int:
+    """0 when the browser pass can launch Chromium, else 2 after asking
+    the user to install the build their Playwright needs."""
+    try:
+        from fetchers.browser.base import check_chromium_installed
+    except ImportError:
+        return 0          # playwright absent: reported where it is imported
+    problem = check_chromium_installed()
+    if problem:
+        print(f"ERROR: {problem}", file=sys.stderr)
+        return 2
+    return 0
 
 
 def _as_bool(value, *, default: bool = False) -> bool:
@@ -3900,6 +3914,11 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+
+    if (browser_modes or args.all) and not args.plan:
+        rc = _check_browser_ready()
+        if rc:
+            return rc
 
     os.makedirs(args.cache_dir, exist_ok=True)
     run_date = date.today().isoformat()

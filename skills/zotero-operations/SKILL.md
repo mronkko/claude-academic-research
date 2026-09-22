@@ -116,7 +116,7 @@ Only with the option on does it re-render them (one Elsevier API call per
 item; older cached recoveries count as stale and are not reused).
 
 The browser route (`--sources browser`) needs a one-time Playwright
-browser install before first use: `uvx playwright@1.62.0 install chromium`
+browser install before first use: `uvx playwright@latest install chromium`
 (the setup wizard pre-approves this command).
 
 **Exhaust the API cascade before reaching for the browser.** APIs are

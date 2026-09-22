@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "playwright==1.62.0",
+#     "playwright>=1.40",
 #     "requests>=2.31",
 #     "urllib3>=2.0",
 #     "tenacity>=8.0",

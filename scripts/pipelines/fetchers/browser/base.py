@@ -278,15 +278,68 @@ def _write_chromium_prefs(user_data_dir: Path) -> None:
     prefs_file.write_text(json.dumps(prefs))
 
 
-#: The one Playwright version this plugin runs. Each release drives exactly
-#: one Chromium build, so the script headers and the install instruction
-#: must name the same version: unpinned, uv resolved 1.63.0 for the
-#: browser pass (chromium-1243) while an unpinned uvx install had put
-#: other builds on disk, and a working setup died at launch. Raise it
-#: deliberately; `tests/unit/test_playwright_pin.py` makes every header,
-#: install instruction and wizard permission rule follow.
-PLAYWRIGHT_VERSION = "1.62.0"
-PLAYWRIGHT_INSTALL_CMD = f"uvx playwright@{PLAYWRIGHT_VERSION} install chromium"
+#: Install command, filled with the Playwright version that will drive the
+#: browser. Each release drives exactly one Chromium build, and the plugin
+#: runs the newest release (uv resolves it when it rebuilds a script
+#: environment), so the build on disk can fall behind. When it does, the
+#: user is asked to install the matching one: see `chromium_install_problem`.
+PLAYWRIGHT_INSTALL_CMD = "uvx playwright@{version} install chromium"
+
+
+def _playwright_version() -> str:
+    """The installed playwright package's version, or "latest"."""
+    try:
+        from importlib.metadata import version
+        return version("playwright")
+    except Exception:  # noqa: BLE001 — only feeds a hint
+        return "latest"
+
+
+def chromium_install_problem(executable_path: str, version: str) -> str | None:
+    """None when this Playwright's Chromium build is on disk; otherwise
+    the message asking the user to install it."""
+    if executable_path and Path(executable_path).exists():
+        return None
+    cmd = PLAYWRIGHT_INSTALL_CMD.format(version=version)
+    return (
+        f"The browser pass runs Playwright {version}, whose Chromium build "
+        f"is not installed yet (Playwright updates bring a new browser "
+        f"build).\n"
+        f"  Install it once, then re-run:\n"
+        f"    {cmd}\n"
+        f"  It downloads ~150 MB from Playwright's CDN."
+    )
+
+
+def check_chromium_installed() -> str | None:
+    """`chromium_install_problem` for the Playwright in this environment.
+
+    Asked up front, so a missing browser costs seconds rather than a
+    whole Zotero read and resolver pre-flight before launch fails.
+    Returns None when the check itself cannot run: `launch_context` still
+    reports the same problem at launch, so failing open loses nothing.
+    """
+    import subprocess
+    import sys
+
+    # A subprocess, because tearing down a Playwright driver this soon
+    # after starting it prints asyncio "Task was destroyed" noise into
+    # the run's output, and the path is all we want from it.
+    probe = (
+        "from playwright.sync_api import sync_playwright\n"
+        "with sync_playwright() as pw: print(pw.chromium.executable_path)"
+    )
+    try:
+        out = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True, text=True, timeout=60,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    lines = out.stdout.strip().splitlines()
+    if out.returncode != 0 or not lines:
+        return None
+    return chromium_install_problem(lines[-1].strip(), _playwright_version())
 
 
 async def launch_context(
@@ -333,12 +386,7 @@ async def launch_context(
     except Exception as e:
         if "Executable doesn't exist" in str(e):
             raise RuntimeError(
-                f"Playwright's Chromium build for playwright "
-                f"{PLAYWRIGHT_VERSION} is not installed. Run the one-time "
-                f"install: `{PLAYWRIGHT_INSTALL_CMD}`, then retry. If "
-                f"another Playwright version is running this script, its "
-                f"PEP 723 header is not the pinned one — every header must "
-                f"say playwright=={PLAYWRIGHT_VERSION}."
+                chromium_install_problem("", _playwright_version())
             ) from e
         raise
 
