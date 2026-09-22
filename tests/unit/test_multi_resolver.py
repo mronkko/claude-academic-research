@@ -10,10 +10,10 @@ pipeline called those items "no licensed route" and sent them to ILL.
 Design points pinned here:
 
 - `resolver` stays the primary and additional libraries sit alongside
-  it, so existing construction sites and cache keys are untouched.
-- Each library is cached under its own key, so adding a second one does
-  not invalidate the first's warm cache and removing it does not discard
-  answers.
+  it, so existing construction sites are untouched.
+- Each library is cached under a key naming it, whatever its position in
+  the list, so reordering or narrowing the list cannot hand one library
+  another's answers.
 - None is returned only when *no* library could be asked. One library
   being down must not read as "nobody has this".
 - Routes that share a platform are kept, not merged: they are different
@@ -102,9 +102,9 @@ def test_the_primary_is_queried_first(answers) -> None:
     assert calls[0] == ALMA.openurl_base
 
 
-def test_only_the_non_primary_route_is_stamped_with_its_library(answers) -> None:
-    """A single-library setup keeps writing exactly what it always did;
-    the stamp appears only when origin can be ambiguous."""
+def test_every_route_is_stamped_with_its_library(answers) -> None:
+    """Every route names its library, primary included: a filter on the
+    active library needs the id on every target."""
     table, _ = answers
     table[ALMA.openurl_base] = [EBSCO]
     table[SFX.openurl_base] = [OVID]
@@ -113,8 +113,9 @@ def test_only_the_non_primary_route_is_stamped_with_its_library(answers) -> None
         t.interface_name: t
         for t in LR._query_targets("10.1/x", _cfg(additional_resolvers=(SFX,)))
     }
-    assert by_iface["EBSCOhost"].resolver_name == ""
+    assert by_iface["EBSCOhost"].resolver_name == "Aalto"
     assert by_iface["Ovid"].resolver_name == "Jyu"
+    assert by_iface["Ovid"].resolver_id == SFX.resolver_id
 
 
 def test_identical_urls_are_deduped_but_shared_platforms_are_not(answers) -> None:
@@ -169,15 +170,39 @@ def test_both_answering_empty_is_a_real_no_route(answers) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_primary_keeps_the_bare_doi_cache_key() -> None:
-    """Adding a second library must not invalidate a warm cache."""
-    assert LR._cache_key("10.1/x") == "10.1/x"
-    assert LR._cache_key("10.1/x", resolver_id="") == "10.1/x"
+def test_every_cache_key_names_its_resolver() -> None:
+    """Keys used to be bare for the first-listed library, which made the
+    key depend on list position (see `_cache_key`)."""
+    assert LR._cache_key("10.1/x", False, ALMA.resolver_id) == f"10.1/x@@{ALMA.resolver_id}"
+    assert LR._cache_key("10.1/x", True, SFX.resolver_id) == f"10.1/x::any@@{SFX.resolver_id}"
+    with pytest.raises(ValueError):
+        LR._cache_key("10.1/x", False, "")
 
 
-def test_each_library_caches_separately() -> None:
-    assert LR._cache_key("10.1/x", resolver_id=SFX.openurl_base) != "10.1/x"
-    assert LR._cache_key("10.1/x", True) != LR._cache_key("10.1/x", True, SFX.openurl_base)
+def test_resolver_id_ignores_a_trailing_slash() -> None:
+    assert SfxResolver("https://sfx.example.fi/jyu/ ").resolver_id == SFX.resolver_id
+
+
+def test_list_order_does_not_change_which_key_a_library_reads(tmp_path, answers) -> None:
+    """The 2026-09-05 incident: narrow or reorder the list so another
+    library comes first, and it must not read the old first entry's
+    routes."""
+    table, calls = answers
+    cache = LR.ResolverCache(tmp_path)
+    table[ALMA.openurl_base] = [EBSCO]
+    LR._query_targets("10.1/x", _cfg(cache=cache))            # Aalto first, alone
+    table[SFX.openurl_base] = [OVID]
+    got = LR._query_targets("10.1/x", _cfg(resolver=SFX, cache=cache))
+    assert calls[-1] == SFX.openurl_base                        # JYU was asked
+    assert [t.url for t in got] == [OVID.url]                   # not served Aalto's
+
+
+def test_targets_carry_their_resolver_even_with_one_library(answers) -> None:
+    table, _ = answers
+    table[ALMA.openurl_base] = [EBSCO]
+    (t,) = LR._query_targets("10.1/x", _cfg())
+    assert t.resolver_id == ALMA.resolver_id
+    assert t.resolver_name == "Aalto"
 
 
 def test_resolvers_property_skips_an_unconfigured_primary() -> None:
@@ -210,3 +235,20 @@ def test_each_dialect_parses_its_own_response(answers) -> None:
     table[SFX.openurl_base] = [OVID]
     got = LR._query_targets("10.1/x", _cfg(additional_resolvers=(SFX,)))
     assert len(got) == 2
+
+
+def test_an_sfx_secondary_is_asked_its_any_query_under_an_alma_primary(
+    monkeypatch,
+) -> None:
+    """`lookup_dual` used to let the primary's dialect decide whether the
+    date-ignoring query happens at all, for every library."""
+    asked: list[tuple[str, bool]] = []
+
+    def fake(url, cfg, doi, resolver=None):
+        asked.append((resolver.openurl_base, "ignore_date_threshold=1" in url))
+        return [OVID] if resolver is SFX else []
+
+    monkeypatch.setattr(LR, "_fetch_and_parse", fake)
+    dual = LR.lookup_dual("10.1/x", _cfg(additional_resolvers=(SFX,)))
+    assert (SFX.openurl_base, True) in asked
+    assert [t.url for t in dual.any_range] == [OVID.url]

@@ -129,10 +129,11 @@ def test_an_empty_answer_is_cached_but_only_for_a_while(tmp_path) -> None:
     cfg = _cfg(tmp_path, response=(200, _XML_NO_TARGETS))
     lookup_fulltext_target(DOI, cfg)
 
-    assert cfg.cache.get(DOI) == [], "the miss was not remembered at all"
+    key = f"{DOI}@@{cfg.resolver.resolver_id}"
+    assert cfg.cache.get(key) == [], "the miss was not remembered at all"
 
     from fetchers.library_resolver import ResolverCache
-    assert ResolverCache(tmp_path, miss_ttl_s=0).get(DOI) is None, (
+    assert ResolverCache(tmp_path, miss_ttl_s=0).get(key) is None, (
         "an expired miss must read as unknown, not as a negative verdict"
     )
 
@@ -143,7 +144,7 @@ def test_positive_results_are_still_cached(tmp_path) -> None:
     cfg = _cfg(tmp_path, response=(200, _XML_WITH_TARGET))
     lookup_fulltext_target(DOI, cfg)
 
-    cached = cfg.cache.get(DOI)
+    cached = cfg.cache.get(f"{DOI}@@{cfg.resolver.resolver_id}")
     assert cached is not None
     assert [t.url for t in cached]
 

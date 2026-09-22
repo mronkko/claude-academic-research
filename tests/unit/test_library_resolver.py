@@ -41,13 +41,18 @@ from fetchers.library_resolver import (
     lookup_fulltext_target,
     targets_match_domains,
 )
-from fetchers.resolvers import AlmaResolver, FulltextTarget, SfxResolver
+from fetchers.resolvers import AlmaResolver, FulltextTarget, SfxResolver, resolver_for
 
 SFX_BASE = "https://sfx.example.org/inst01"
 ALMA_BASE = (
     "https://eu03.alma.exlibrisgroup.com/view/uresolver/358AALTO_INST/openurl"
 )
 DOI = "10.1002/hrm.21999"
+
+
+def _key(base: str, any_range: bool = False, doi: str = DOI) -> str:
+    """The cache key a lookup against `base` reads and writes."""
+    return f"{doi}{'::any' if any_range else ''}@@{base.strip().rstrip('/')}"
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "sfx"
 
@@ -428,7 +433,7 @@ def test_cache_recovers_from_corrupt_json(tmp_path: Path) -> None:
 
 def test_cache_is_a_hit_and_skips_the_network(tmp_path: Path) -> None:
     cache = ResolverCache(tmp_path)
-    cache.put(DOI, [FulltextTarget(url="https://search.ebscohost.com/x")])
+    cache.put(_key(SFX_BASE), [FulltextTarget(url="https://search.ebscohost.com/x")])
     session = _session(error=True)
     assert lookup_fulltext_target(DOI, _sfx_cfg(session, cache)).url is not None
     session.get.assert_not_called()
@@ -452,7 +457,7 @@ def test_an_empty_answer_expires_instead_of_being_permanent(
     cache = ResolverCache(tmp_path)
     cfg = _sfx_cfg(_session(text=_ft()), cache)
     assert _uq(lookup_fulltext_target(DOI, cfg)) == (None, True)
-    assert ResolverCache(tmp_path).get(DOI) == []
+    assert ResolverCache(tmp_path).get(_key(SFX_BASE)) == []
 
     # A later run with real coverage must still be able to find it, once
     # the miss has aged out.
@@ -569,31 +574,20 @@ def test_dual_cache_keys_follow_the_dialect(tmp_path) -> None:
     "is this DOI warm" is a different question on each, and a caller
     cannot answer it from the bare DOI.
     """
-    assert dual_cache_keys(DOI, _cfg(SFX_BASE, None)) == [DOI, f"{DOI}::any"]
-    assert dual_cache_keys(DOI, _cfg(ALMA_BASE, None)) == [DOI]
+    sfx, alma = resolver_for(SFX_BASE).resolver_id, resolver_for(ALMA_BASE).resolver_id
+    assert dual_cache_keys(DOI, _cfg(SFX_BASE, None)) == [
+        f"{DOI}@@{sfx}", f"{DOI}::any@@{sfx}",
+    ]
+    assert dual_cache_keys(DOI, _cfg(ALMA_BASE, None)) == [f"{DOI}@@{alma}"]
 
 
-def test_dual_cache_keys_cover_every_library(tmp_path) -> None:
-    """A second institution is queried and cached separately. The primary
-    keeps the bare-DOI key, so adding a library must not silently make
-    every previously-warm DOI count as warm for the new one too.
-
-    Note the asymmetry in the expected keys: the *primary* dialect alone
-    decides whether the unfiltered second query happens, and that choice
-    is then applied to every configured library. So an Alma primary
-    suppresses the `::any` query at an SFX secondary as well. This helper
-    mirrors that deliberately rather than correcting it — its contract is
-    to predict what the sweep will actually ask, and an estimate that
-    disagreed with the loop would be worse than no estimate. The
-    asymmetry itself is `lookup_dual`'s to answer for.
-    """
-    keys = dual_cache_keys(DOI, _cfg(ALMA_BASE, None, SFX_BASE))
-    assert keys == [DOI, f"{DOI}@@{SFX_BASE}"]
-
-    # SFX primary, and both libraries are asked both ways.
-    assert dual_cache_keys(DOI, _cfg(SFX_BASE, None, ALMA_BASE)) == [
-        DOI, f"{DOI}::any",
-        f"{DOI}@@{ALMA_BASE}", f"{DOI}::any@@{ALMA_BASE}",
+def test_dual_cache_keys_are_per_dialect(tmp_path) -> None:
+    """Each library is asked the way its own dialect allows. An Alma
+    primary used to suppress the `::any` query at an SFX secondary too,
+    because the primary alone decided."""
+    sfx, alma = resolver_for(SFX_BASE).resolver_id, resolver_for(ALMA_BASE).resolver_id
+    assert dual_cache_keys(DOI, _cfg(ALMA_BASE, None, SFX_BASE)) == [
+        f"{DOI}@@{alma}", f"{DOI}@@{sfx}", f"{DOI}::any@@{sfx}",
     ]
 
 
@@ -603,11 +597,11 @@ def test_a_partly_warm_doi_is_not_counted_as_cached(tmp_path) -> None:
     date-filtered but not unfiltered still costs a round-trip.
     """
     cache = ResolverCache(tmp_path)
-    cache.put(DOI, [FulltextTarget(url="https://x/1")])
+    cache.put(_key(SFX_BASE), [FulltextTarget(url="https://x/1")])
     cfg = _cfg(SFX_BASE, cache)
     assert cached_answer_count([DOI], cfg) == 0
 
-    cache.put(f"{DOI}::any", [FulltextTarget(url="https://x/1")])
+    cache.put(_key(SFX_BASE, True), [FulltextTarget(url="https://x/1")])
     assert cached_answer_count([DOI], cfg) == 1
 
 
@@ -618,13 +612,13 @@ def test_a_cached_miss_still_counts_as_answered(tmp_path) -> None:
     likely to give up on the pre-flight entirely.
     """
     cache = ResolverCache(tmp_path)
-    cache.put_miss(DOI)
+    cache.put_miss(_key(ALMA_BASE))
     assert cached_answer_count([DOI], _cfg(ALMA_BASE, cache)) == 1
 
 
 def test_an_expired_miss_is_work_again(tmp_path) -> None:
     cache = ResolverCache(tmp_path, miss_ttl_s=0)
-    cache.put_miss(DOI)
+    cache.put_miss(_key(ALMA_BASE))
     assert cached_answer_count([DOI], _cfg(ALMA_BASE, cache)) == 0
 
 

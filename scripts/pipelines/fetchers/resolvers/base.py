@@ -94,6 +94,10 @@ class FulltextTarget:
     #: institution's IP range, EZproxy or SSO — so a user handed a link
     #: needs to know which login opens it.
     resolver_name: str = ""
+    #: `LibraryResolver.resolver_id` of the library that produced this
+    #: route — the machine-readable twin of `resolver_name`, used to keep
+    #: a pass on one institution's network off another's links.
+    resolver_id: str = ""
 
     def covers_year(
         self, year: int | str | None, *, today_year: int | None = None,
@@ -123,6 +127,8 @@ class FulltextTarget:
             out["is_free"] = True
         if self.resolver_name:
             out["resolver_name"] = self.resolver_name
+        if self.resolver_id:
+            out["resolver_id"] = self.resolver_id
         return out
 
     @classmethod
@@ -138,6 +144,7 @@ class FulltextTarget:
             coverage=d.get("coverage", "") or "",
             is_free=bool(d.get("is_free", False)),
             resolver_name=d.get("resolver_name", "") or "",
+            resolver_id=d.get("resolver_id", "") or "",
         )
 
 
@@ -384,6 +391,16 @@ class LibraryResolver(ABC):
 
     def __init__(self, openurl_base: str) -> None:
         self.openurl_base = openurl_base
+        #: Stable identity for cache keys and route provenance. The URL
+        #: rather than the label: labels are derived heuristically and two
+        #: SFX instances on one host could share one; URLs cannot.
+        self.resolver_id = openurl_base.strip().rstrip("/")
+
+    @property
+    def label(self) -> str:
+        """Short human name ("Aalto", "Jyu"); see `resolver_label`."""
+        from fetchers.library_resolver import resolver_label
+        return resolver_label(self)
 
     @classmethod
     @abstractmethod

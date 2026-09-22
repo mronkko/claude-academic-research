@@ -373,19 +373,26 @@ def load_from_config(
 
 
 def _cache_key(
-    doi: str, ignore_date_threshold: bool = False, resolver_id: str = "",
+    doi: str, ignore_date_threshold: bool, resolver_id: str,
 ) -> str:
-    """Cache key combining DOI, the ignore-date-threshold flag and — for
-    a non-primary resolver — which library answered.
+    """Cache key combining DOI, the ignore-date-threshold flag and which
+    library answered.
 
-    The primary resolver keeps the bare-DOI key it has always used, so
-    adding a second institution does not invalidate a warm cache built
-    against the first. Entries are per-resolver rather than per-merge for
-    the same reason: removing one library must not discard the other's
-    answers.
+    Every key names its library. The first-listed library used to write
+    bare-DOI keys, so that adding a second institution would not
+    invalidate a warm cache built against the first. That made a key's
+    meaning depend on list position: reorder or narrow the list, and the
+    new first entry read the old one's routes. That is how, on
+    2026-09-05, a pass on the JYU VPN opened Aalto's login page. Entries
+    written before this change are handled by `ResolverCache.adopt_legacy`.
+
+    Entries are per-library rather than per-merge so that removing one
+    library does not discard another's answers.
     """
+    if not resolver_id:
+        raise ValueError("resolver cache keys must name their resolver")
     base = f"{doi}::any" if ignore_date_threshold else doi
-    return f"{base}@@{resolver_id}" if resolver_id else base
+    return f"{base}@@{resolver_id}"
 
 
 def _fetch_and_parse(
@@ -420,9 +427,14 @@ def _query_targets(
     issn: str | None = None,
     pub_date: str | None = None,
     volume: str | None = None,
+    only: tuple[LibraryResolver, ...] | None = None,
 ) -> list[FulltextTarget] | None:
     """Full-text targets for `doi`, or None when the resolver could not
     answer.
+
+    `only` restricts the question to some of the configured libraries;
+    `lookup_dual` uses it to ask the date-ignoring query only of the
+    dialects that support one.
 
     Tries each URL the dialect offers in order, stopping at the first that
     yields targets — Alma's second, ISSN-keyed URL exists because a
@@ -442,7 +454,7 @@ def _query_targets(
     to, and re-running could never re-check because the empty answer was
     cached with no expiry.
     """
-    resolvers = cfg.resolvers
+    resolvers = cfg.resolvers if only is None else only
     if not resolvers:
         return None
 
@@ -453,11 +465,10 @@ def _query_targets(
 
     merged: list[FulltextTarget] = []
     answered = False
-    for index, resolver in enumerate(resolvers):
+    for resolver in resolvers:
         one = _query_one(
             resolver, doi, cfg, req,
             ignore_date_threshold=ignore_date_threshold,
-            resolver_id="" if index == 0 else resolver.openurl_base,
         )
         if one is None:
             continue          # this library could not be asked
@@ -480,17 +491,15 @@ def _query_one(
     req: ResolverRequest,
     *,
     ignore_date_threshold: bool,
-    resolver_id: str,
 ) -> list[FulltextTarget] | None:
     """One library's answer for `doi`, cached per library. None when it
     could not be asked."""
-    key = _cache_key(doi, ignore_date_threshold, resolver_id)
+    key = _cache_key(doi, ignore_date_threshold, resolver.resolver_id)
     if cfg.cache is not None:
         cached = cfg.cache.get(key)
         if cached is not None:
-            return cached
+            return _stamp(cached, resolver)
 
-    label = _resolver_label(resolver)
     targets: list[FulltextTarget] | None = None
     for url in resolver.query_urls(req):
         result = _fetch_and_parse(url, cfg, doi, resolver)
@@ -505,10 +514,10 @@ def _query_one(
 
     if targets is None:
         return None
-    # Stamp the origin only when it can be ambiguous — a single-resolver
-    # setup keeps writing exactly the cache entries it always has.
-    if resolver_id and targets:
-        targets = [replace(t, resolver_name=label) for t in targets]
+    # Stamp every route with its library, even with one configured:
+    # which login opens a link is never obvious from the link, and a
+    # selected-library filter needs the id on every target.
+    targets = _stamp(targets, resolver)
     if cfg.cache is not None:
         if targets:
             cfg.cache.put(key, targets)
@@ -520,7 +529,18 @@ def _query_one(
     return targets
 
 
-def _resolver_label(resolver: LibraryResolver) -> str:
+def _stamp(
+    targets: list[FulltextTarget], resolver: LibraryResolver,
+) -> list[FulltextTarget]:
+    """Mark every route with the library that produced it. Applied to
+    cache hits as well, since adopted legacy entries carry no stamp."""
+    return [
+        replace(t, resolver_id=resolver.resolver_id, resolver_name=resolver.label)
+        for t in targets
+    ]
+
+
+def resolver_label(resolver: LibraryResolver) -> str:
     """Short human name for a resolver, derived from its endpoint.
 
     Both products put the institution in the path, differently: Alma as a
@@ -545,6 +565,10 @@ def _resolver_label(resolver: LibraryResolver) -> str:
         if part.lower() not in ("openurl", "resolve", "sfx", "view", "uresolver"):
             return part.title()
     return (parsed.netloc or resolver.openurl_base).split(".")[0].title()
+
+
+#: Kept for existing callers and tests.
+_resolver_label = resolver_label
 
 
 def _dedupe_targets(targets: list[FulltextTarget]) -> list[FulltextTarget]:
@@ -749,7 +773,11 @@ def lookup_dual(
         doi, cfg, ignore_date_threshold=False,
         issn=issn, pub_date=pub_date, volume=volume,
     )
-    if not cfg.resolver.supports_date_threshold:
+    # Each library is asked the way its own dialect allows. The primary's
+    # dialect used to decide for all of them, so an Alma primary silently
+    # suppressed the date-ignoring query at an SFX secondary.
+    dated = tuple(r for r in cfg.resolvers if r.supports_date_threshold)
+    if not dated:
         return DualResult(
             in_range=in_range or [],
             any_range=in_range or [],
@@ -757,14 +785,18 @@ def lookup_dual(
             date_filtering_available=False,
         )
 
-    any_range = _query_targets(
+    any_dated = _query_targets(
         doi, cfg, ignore_date_threshold=True,
-        issn=issn, pub_date=pub_date, volume=volume,
+        issn=issn, pub_date=pub_date, volume=volume, only=dated,
     )
+    # A dialect without date filtering asked one question; its in-range
+    # answer is also its any-range answer.
+    dated_ids = {r.resolver_id for r in dated}
+    undated = [t for t in in_range or [] if t.resolver_id not in dated_ids]
     return DualResult(
         in_range=in_range or [],
-        any_range=any_range or [],
-        query_ok=in_range is not None and any_range is not None,
+        any_range=_dedupe_targets([*(any_dated or []), *undated]),
+        query_ok=in_range is not None and any_dated is not None,
     )
 
 
@@ -777,13 +809,12 @@ def dual_cache_keys(doi: str, cfg: LibraryResolverConfig) -> list[str]:
     and a caller reasoning about "is this DOI warm" from the bare DOI
     would be right only in the single-SFX-library case.
     """
-    variants = [False]
-    if cfg.resolver is not None and cfg.resolver.supports_date_threshold:
-        variants.append(True)
     keys: list[str] = []
-    for index, resolver in enumerate(cfg.resolvers):
-        resolver_id = "" if index == 0 else resolver.openurl_base
-        keys.extend(_cache_key(doi, ignore, resolver_id) for ignore in variants)
+    for resolver in cfg.resolvers:
+        variants = [False, True] if resolver.supports_date_threshold else [False]
+        keys.extend(
+            _cache_key(doi, ignore, resolver.resolver_id) for ignore in variants
+        )
     return keys
 
 
