@@ -329,6 +329,26 @@ def _check_browser_ready() -> int:
     return 0
 
 
+def _check_connector_access() -> int:
+    """0 unless the Zotero Connector extension is installed but unreadable
+    by this process, then 2 after saying how to fix it.
+
+    Asked before any work: the Connector pass comes last, so finding out
+    there used to cost a whole attended session first.
+    """
+    try:
+        from fetchers.browser.connector import connector_extension_problem
+    except ImportError:
+        return 0
+    problem = connector_extension_problem(
+        get("zotero_connector", "extension_dir", env="ZOTERO_CONNECTOR_DIR") or None,
+    )
+    if problem:
+        print(f"ERROR: {problem}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def _as_bool(value, *, default: bool = False) -> bool:
     """Coerce a config value to bool.
 
@@ -1952,7 +1972,12 @@ async def _drive_connector(
     # Extension pre-flight — surfaced in setup() too, but a clean
     # bail-out here avoids opening Chromium for nothing.
     if handler.extension_path is None:
+        from fetchers.browser.connector import connector_extension_problem
+        problem = connector_extension_problem(
+            getattr(handler, "_explicit_extension_path", None),
+        )
         print(
+            f"  ERROR: {problem}" if problem else
             "  ERROR: Zotero Connector extension not found. Install "
             "from https://www.zotero.org/download/connectors/ in Chrome,\n"
             "  then re-run the setup wizard.",
@@ -3919,6 +3944,12 @@ def main() -> int:
         rc = _check_browser_ready()
         if rc:
             return rc
+        if not args.publisher:
+            # --publisher empties the Connector queue, so it cannot need
+            # the extension.
+            rc = _check_connector_access()
+            if rc:
+                return rc
 
     os.makedirs(args.cache_dir, exist_ok=True)
     run_date = date.today().isoformat()

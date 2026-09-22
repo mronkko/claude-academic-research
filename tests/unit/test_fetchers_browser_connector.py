@@ -550,3 +550,78 @@ def test_click_matching_result_needs_a_title() -> None:
     page = _FakePage(href="https://www.jstor.org/stable/999")
     assert asyncio.run(_click_matching_result(page, "")) is False
     assert page.goto_calls == []
+
+
+# ---------------------------------------------------------------------------
+# A folder the OS will not let us list
+# ---------------------------------------------------------------------------
+#
+# macOS privacy protection can refuse a terminal or editor access to
+# Chrome's app data: the Connector folder exists, but listing it raises
+# PermissionError. That used to escape from the handler's constructor and
+# end a whole attended run after Pass 2, with 314 queued Connector items
+# never attempted.
+
+
+@pytest.fixture
+def unreadable(tmp_path: Path):
+    import sys
+    if sys.platform == "win32":
+        pytest.skip("POSIX permission bits")
+    blocked = tmp_path / "blocked-ext"
+    (blocked / "5.0.211_0").mkdir(parents=True)
+    blocked.chmod(0)
+    try:
+        next(blocked.iterdir())
+    except PermissionError:
+        pass
+    else:
+        blocked.chmod(0o755)
+        pytest.skip("running with privileges that ignore permission bits")
+    yield blocked
+    blocked.chmod(0o755)
+
+
+def test_an_unlistable_folder_falls_through_instead_of_raising(
+    monkeypatch, tmp_path: Path, unreadable: Path,
+) -> None:
+    from fetchers.browser import connector
+
+    installed = tmp_path / "other" / "5.0.300_0"
+    installed.mkdir(parents=True)
+    monkeypatch.setattr(
+        connector, "_default_extension_search_paths",
+        lambda: [unreadable, tmp_path / "other"],
+    )
+    assert resolve_connector_extension_path(unreadable) == installed
+
+
+def test_a_blocked_extension_is_named_with_its_remedies(
+    monkeypatch, unreadable: Path,
+) -> None:
+    from fetchers.browser import connector
+
+    monkeypatch.setattr(connector, "_default_extension_search_paths", lambda: [])
+    assert resolve_connector_extension_path(unreadable) is None
+    problem = connector.connector_extension_problem(unreadable)
+    assert str(unreadable) in problem
+    assert "Privacy & Security" in problem
+    assert "extension_dir" in problem
+
+
+def test_no_problem_when_the_extension_resolves(monkeypatch, tmp_path: Path) -> None:
+    from fetchers.browser import connector
+
+    ok = tmp_path / "ext" / "5.0.1_0"
+    ok.mkdir(parents=True)
+    monkeypatch.setattr(connector, "_default_extension_search_paths", lambda: [])
+    assert connector.connector_extension_problem(tmp_path / "ext") is None
+
+
+def test_the_connector_check_runs_before_any_work() -> None:
+    import inspect
+
+    import enrich_pdfs
+
+    src = inspect.getsource(enrich_pdfs.main)
+    assert src.index("_check_connector_access(") < src.index("os.makedirs(args.cache_dir")

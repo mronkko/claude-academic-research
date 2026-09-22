@@ -116,7 +116,21 @@ def resolve_connector_extension_path(
     Returns None when nothing is found; callers surface a user-facing
     install hint.
     """
-    def _latest_version_subdir(base: Path) -> Path | None:
+    return _resolve(explicit, [])
+
+
+def _latest_version_subdir(base: Path, blocked: list[Path]) -> Path | None:
+    """`base` itself when it is a version folder, else its highest
+    version subfolder; None when neither exists or it cannot be read.
+
+    A folder the OS refuses to list is appended to `blocked` and treated
+    as absent, so resolution moves on to the other candidates. macOS
+    privacy protection does this to Chrome's app data when the calling
+    terminal or editor has not been granted access: the folder exists,
+    and only listing it fails. Raised, that PermissionError escaped from
+    the handler's constructor and ended an attended run after Pass 2.
+    """
+    try:
         if not base.exists():
             return None
         # An extension base folder contains one subdir per installed
@@ -126,24 +140,55 @@ def resolve_connector_extension_path(
         if (base / "manifest.json").exists():
             return base
         subs = [d for d in base.iterdir() if d.is_dir()]
-        if not subs:
-            return None
-        subs.sort(key=lambda p: p.name)
-        return subs[-1]
+    except OSError:
+        blocked.append(base)
+        return None
+    if not subs:
+        return None
+    subs.sort(key=lambda p: p.name)
+    return subs[-1]
 
+
+def _resolve(explicit: str | Path | None, blocked: list[Path]) -> Path | None:
     if explicit:
-        resolved = _latest_version_subdir(Path(explicit).expanduser())
+        resolved = _latest_version_subdir(Path(explicit).expanduser(), blocked)
         if resolved is not None:
             return resolved
         # Fall through to the platform defaults rather than returning
         # None — see the docstring. A stale pin must not mask a working
         # install.
-
     for candidate in _default_extension_search_paths():
-        result = _latest_version_subdir(candidate)
+        result = _latest_version_subdir(candidate, blocked)
         if result is not None:
             return result
     return None
+
+
+def connector_extension_problem(explicit: str | Path | None = None) -> str | None:
+    """Why the Connector extension cannot be used although it is
+    installed, or None.
+
+    Only the "exists but this process may not read it" case: a missing
+    install has its own message where the handler starts. Callers ask
+    this before any work, since an attended run that reaches the
+    Connector pass only to fail there has already cost the user a
+    session.
+    """
+    blocked: list[Path] = []
+    if _resolve(explicit, blocked) is not None or not blocked:
+        return None
+    where = "\n".join(f"    {p}" for p in dict.fromkeys(blocked))
+    return (
+        "The Zotero Connector extension is installed, but this process is "
+        "not allowed to read its folder:\n"
+        f"{where}\n"
+        "  macOS privacy protection blocks Chrome's app data from the app "
+        "that launched this run (Terminal, iTerm, VS Code, …). Either:\n"
+        "  • grant that app access in System Settings → Privacy & Security "
+        "→ Full Disk Access (or App Management), then restart it; or\n"
+        "  • copy the extension's version folder somewhere readable and "
+        "point [zotero_connector] extension_dir at the copy."
+    )
 
 
 class ZoteroConnectorHandler(PublisherHandler):
@@ -181,6 +226,7 @@ class ZoteroConnectorHandler(PublisherHandler):
     def __init__(self, extension_path: str | Path | None = None) -> None:
         """`extension_path` overrides auto-detection. Defaults to the
         platform-standard Chrome Default-profile extension folder."""
+        self._explicit_extension_path = extension_path
         self.extension_path = resolve_connector_extension_path(extension_path)
         # Hosts the user has already confirmed in this run — once a
         # host is here, subsequent items on the same host fire
@@ -209,6 +255,10 @@ class ZoteroConnectorHandler(PublisherHandler):
     async def setup(self, page: Page, first_doi: str) -> str:
         del page, first_doi   # URL/DOI aren't needed for the intro banner
         if self.extension_path is None:
+            problem = connector_extension_problem(self._explicit_extension_path)
+            if problem:
+                print(f"\nERROR: {problem}", flush=True)
+                return "skip"
             print(
                 "\nERROR: Zotero Connector extension not found.\n"
                 "  Install it from https://www.zotero.org/download/connectors/\n"
@@ -956,6 +1006,7 @@ def _wait_for_child_attachment(
 __all__ = [
     "ZoteroConnectorHandler",
     "ping_zotero_desktop",
+    "connector_extension_problem",
     "resolve_connector_extension_path",
     "wait_for_service_worker",
 ]
