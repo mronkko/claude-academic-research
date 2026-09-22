@@ -1937,7 +1937,36 @@ class ZoteroClient:
         # Step 4: trash the duplicate with PATCH {"deleted": 1}.
         # pyzotero's `delete_item` permanently destroys; we want
         # Zotero's Trash (recoverable in the UI).
+        #
+        # Unless it still holds a PDF this merge neither moved nor
+        # skipped as a copy of the keeper's. Under upload load a PDF
+        # child reached the cloud after the listing above; the merge
+        # moved nothing and then trashed the only item holding the real
+        # PDF. Listed again here, as late as possible; a listing that
+        # fails counts as "may hold one".
         trashed: list[str] = []
+        accounted = set(moved) | set(skipped_dupes)
+        try:
+            late = [
+                c for c in (self.cloud.children(duplicate_key) or [])
+                if c.get("data", {}).get("contentType") == "application/pdf"
+                and c.get("key") not in accounted
+            ]
+        except Exception:  # noqa: BLE001
+            late = [None]
+        if late:
+            logger.warning(
+                "merge_duplicate_item: %s still holds a PDF the merge did "
+                "not move; not trashing it", duplicate_key,
+            )
+            return {
+                "moved": len(moved), "moved_keys": moved,
+                "moved_pdf_keys": moved_pdfs,
+                "skipped_dupe_attachments": len(skipped_dupes),
+                "tags_added": len(new_tags),
+                "collections_added": len(new_collections),
+                "trashed": [], "kept_unmoved_pdf": True,
+            }
         try:
             from pyzotero.zotero import build_url
             latest = self.cloud.item(duplicate_key)
@@ -1984,4 +2013,5 @@ class ZoteroClient:
             "tags_added": len(new_tags),
             "collections_added": len(new_collections),
             "trashed": trashed,
+            "kept_unmoved_pdf": False,
         }

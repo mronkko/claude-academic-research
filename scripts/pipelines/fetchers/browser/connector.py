@@ -245,9 +245,16 @@ class PendingMerges:
         tmp.replace(self.path)
 
 
+#: How long a queued save may sit without growing a PDF child before the
+#: queue gives up on it. Upload lag was minutes, not hours; a save still
+#: PDF-less after this is a metadata-only page, and keeping it queued
+#: would stop its keeper from ever being tried again.
+PENDING_GRACE_S = 6 * 3600
+
+
 def settle_pending_merges(
     zot, pending: PendingMerges, *, merge, wait_s: float, on_merged,
-    sweep_every_s: float = 15.0,
+    on_given_up=None, sweep_every_s: float = 15.0,
 ) -> None:
     """Merge every queued pair whose new item has reached the cloud.
 
@@ -270,6 +277,20 @@ def settle_pending_merges(
             if not visible:
                 continue
             try:
+                has_pdf = _has_pdf_child(zot.cloud.children(row["new_key"]))
+            except Exception:  # noqa: BLE001
+                has_pdf = False
+            if not has_pdf:
+                if _age_s(row) > PENDING_GRACE_S:
+                    pending.remove(row["new_key"])
+                    print(f"  Queued save {row['new_key']} still has no PDF after "
+                          f"{PENDING_GRACE_S // 3600} h; giving up on it (left in "
+                          f"place, not trashed). {row['keeper']} will be tried "
+                          f"again.", flush=True)
+                    if on_given_up is not None:
+                        on_given_up(row)
+                continue
+            try:
                 stats = merge(row["keeper"], row["new_key"])
             except Exception as e:  # noqa: BLE001
                 print(f"  Queued merge {row['new_key']} → {row['keeper']} "
@@ -281,6 +302,14 @@ def settle_pending_merges(
             left = int(deadline - time.monotonic())
             print(f"  {len(pending.rows())} queued merge(s) still waiting for "
                   f"cloud sync (~{left}s left)…", flush=True)
+
+
+def _age_s(row: dict) -> float:
+    try:
+        queued = _dt.datetime.fromisoformat(row.get("queued_at", ""))
+    except ValueError:
+        return 0.0
+    return (_dt.datetime.now(_dt.UTC) - queued).total_seconds()
 
 
 class ZoteroConnectorHandler(PublisherHandler):
@@ -807,18 +836,27 @@ class ZoteroConnectorHandler(PublisherHandler):
         # on the attachment, which works at any sync stage. The
         # stub-vs-real race on next run is handled by `pdf_map()`
         # skipping recently-added attachments.
-        print("  │  Parent synced. Waiting for PDF attachment record "
-              "(up to 30s)…", flush=True)
-        has_child = await asyncio.to_thread(
-            _wait_for_child_attachment, zot, new_key, 30,
+        print(f"  │  Parent synced. Waiting for the PDF attachment record "
+              f"(up to {wait_s}s)…", flush=True)
+        has_pdf = await asyncio.to_thread(
+            _wait_for_child_attachment, zot, new_key, self.sync_timeout_s,
         )
-        if not has_child:
+        if not has_pdf and self.pending is not None:
+            # Queue rather than merge. The PDF record can lag its parent
+            # under upload load, and merging then moved nothing and
+            # trashed the only item holding the PDF. The queue merges once
+            # a PDF child is visible, and gives up on a save that never
+            # grows one (a genuinely metadata-only page).
+            self.pending.add(keeper=item["item_key"], new_key=new_key, doi=doi)
+            self.last_outcome = "merge_pending"
+            counter.queued += 1
             print(
-                "  │  No attachment child after 30s — translator may\n"
-                "  │  be metadata-only. Proceeding with merge; it will\n"
-                "  │  report PARTIAL if no PDF child exists to move.",
+                f"  └─ QUEUED: {new_key} is on the cloud but its PDF is not yet\n"
+                f"         ({wait_s}s). Queued; merged into {item['item_key']}\n"
+                f"         once the PDF syncs.",
                 flush=True,
             )
+            return False
 
         # Merge the new item into the existing one.
         print(f"  │  Merging into keeper {item['item_key']}…", flush=True)
@@ -840,6 +878,16 @@ class ZoteroConnectorHandler(PublisherHandler):
         dup = stats.get("skipped_dupe_attachments", 0)
         tags = stats.get("tags_added", 0)
         colls = stats.get("collections_added", 0)
+
+        if moved == 0 and dup == 0 and stats.get("kept_unmoved_pdf") and self.pending:
+            # A PDF appeared after the merge listed children; the merge
+            # left the item in place rather than trash it. Try again later.
+            self.pending.add(keeper=item["item_key"], new_key=new_key, doi=doi)
+            self.last_outcome = "merge_pending"
+            counter.queued += 1
+            print(f"  └─ QUEUED: {new_key}'s PDF arrived mid-merge; queued to "
+                  f"merge into {item['item_key']}.", flush=True)
+            return False
 
         if moved == 0 and dup == 0:
             # Translator saved metadata but no PDF attachment. The
@@ -1151,12 +1199,21 @@ def _wait_for_child_attachment(
             children = zot.cloud.children(item_key) or []
         except Exception:
             children = []
-        for c in children:
-            data = c.get("data", {}) or {}
-            if data.get("itemType") == "attachment":
-                return True
+        if _has_pdf_child(children):
+            return True
         time.sleep(1.0)
     return False
+
+
+def _has_pdf_child(children) -> bool:
+    """A PDF attachment among `children`. Any attachment used to count,
+    but the translator's HTML snapshot can reach the cloud before the
+    PDF, and a merge started then moves nothing."""
+    return any(
+        (c.get("data", {}) or {}).get("itemType") == "attachment"
+        and (c.get("data", {}) or {}).get("contentType") == "application/pdf"
+        for c in children or []
+    )
 
 
 __all__ = [

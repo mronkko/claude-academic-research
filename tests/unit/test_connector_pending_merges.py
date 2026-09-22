@@ -36,6 +36,9 @@ def test_settle_merges_what_has_synced_and_keeps_the_rest(tmp_path) -> None:
     zot.cloud.item.side_effect = lambda key: (
         {"key": key} if key == "SYNCED" else (_ for _ in ()).throw(RuntimeError("404"))
     )
+    zot.cloud.children.return_value = [
+        {"key": "P", "data": {"itemType": "attachment", "contentType": "application/pdf"}},
+    ]
     merge = MagicMock(return_value={"moved": 1, "moved_pdf_keys": ["P"]})
     merged = []
     settle_pending_merges(
@@ -80,3 +83,62 @@ def test_the_waits_are_flags() -> None:
     assert (args.connector_sync_timeout, args.connector_merge_wait) == (90, 1200)
     d = enrich_pdfs._build_parser().parse_args([])
     assert d.connector_sync_timeout == 30 and d.connector_merge_wait == 600
+
+
+# ---------------------------------------------------------------------------
+# The PDF child lags the parent
+# ---------------------------------------------------------------------------
+#
+# Run 5, item 17 (10.1016/s0305-750x(03)00012-3): the parent synced, the
+# PDF attachment record had not, the merge moved nothing, reported
+# PARTIAL "metadata only" and trashed the only item holding the PDF.
+
+
+def _pdf_child(key="P1"):
+    return {"key": key, "data": {"itemType": "attachment",
+                                 "contentType": "application/pdf"}}
+
+
+def _html_child():
+    return {"key": "H1", "data": {"itemType": "attachment", "contentType": "text/html"}}
+
+
+def test_the_child_wait_wants_a_pdf_not_any_attachment() -> None:
+    from fetchers.browser.connector import _wait_for_child_attachment
+
+    zot = MagicMock()
+    zot.cloud.children.return_value = [_html_child()]
+    assert _wait_for_child_attachment(zot, "N", 0.1) is False
+    zot.cloud.children.return_value = [_html_child(), _pdf_child()]
+    assert _wait_for_child_attachment(zot, "N", 0.1) is True
+
+
+def test_settle_waits_for_the_pdf_child_before_merging(tmp_path) -> None:
+    q = PendingMerges(tmp_path)
+    q.add(keeper="K1", new_key="N1", doi="10.1/a")
+    zot = MagicMock()
+    zot.cloud.item.return_value = {"key": "N1"}
+    zot.cloud.children.return_value = [_html_child()]
+    merge = MagicMock()
+    settle_pending_merges(zot, q, merge=merge, wait_s=0, on_merged=lambda *a: None)
+    merge.assert_not_called()
+    assert PendingMerges(tmp_path).keepers() == {"K1"}
+
+
+def test_a_pdfless_save_is_given_up_after_its_grace_period(tmp_path) -> None:
+    """Metadata-only saves exist; queued forever, their keepers would
+    never be tried again."""
+    q = PendingMerges(tmp_path)
+    q.add(keeper="K1", new_key="N1", doi="10.1/a")
+    q._rows[0]["queued_at"] = "2026-01-01T00:00:00+00:00"
+    q._save()
+    zot = MagicMock()
+    zot.cloud.item.return_value = {"key": "N1"}
+    zot.cloud.children.return_value = [_html_child()]
+    gave_up = []
+    settle_pending_merges(
+        zot, PendingMerges(tmp_path), merge=MagicMock(),
+        wait_s=0, on_merged=lambda *a: None, on_given_up=gave_up.append,
+    )
+    assert [r["new_key"] for r in gave_up] == ["N1"]
+    assert PendingMerges(tmp_path).keepers() == set()

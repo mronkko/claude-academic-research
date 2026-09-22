@@ -310,7 +310,8 @@ def test_wait_for_child_attachment_returns_true_when_pdf_has_md5() -> None:
     zot = MagicMock()
     zot.cloud.children.return_value = [
         {"key": "PDF1",
-         "data": {"itemType": "attachment", "md5": "deadbeef"}},
+         "data": {"itemType": "attachment", "md5": "deadbeef",
+                  "contentType": "application/pdf"}},
     ]
     assert _wait_for_child_attachment(zot, "NEW", timeout_s=0.2) is True
 
@@ -323,7 +324,8 @@ def test_wait_for_child_attachment_accepts_shell_without_md5() -> None:
     zot = MagicMock()
     zot.cloud.children.return_value = [
         {"key": "PDF1",
-         "data": {"itemType": "attachment", "md5": ""}},
+         "data": {"itemType": "attachment", "md5": "",
+                  "contentType": "application/pdf"}},
     ]
     assert _wait_for_child_attachment(zot, "NEW", timeout_s=0.2) is True
 
@@ -359,7 +361,8 @@ def test_wait_for_child_attachment_recovers_after_transient_error() -> None:
             raise Exception("transient")
         return [
             {"key": "PDF1",
-             "data": {"itemType": "attachment", "md5": "abc123"}},
+             "data": {"itemType": "attachment", "md5": "abc123",
+                      "contentType": "application/pdf"}},
         ]
 
     zot.cloud.children.side_effect = fake_children

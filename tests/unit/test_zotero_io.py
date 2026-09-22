@@ -560,7 +560,7 @@ def test_merge_duplicate_item_allows_when_one_doi_missing(monkeypatch) -> None:
         # PATCH — return the same keyed shape.
         _fake_item("DUPE",   doi=""),
     ]
-    cloud.children.side_effect = [[], []]      # no children either side
+    cloud.children.side_effect = [[], [], []]  # no children either side, nor on re-check
     monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
 
     stats = zc.merge_duplicate_item("KEEPER", "DUPE")
@@ -595,7 +595,7 @@ def test_merge_duplicate_item_moves_children_and_unions_tags(monkeypatch) -> Non
                    tags=["framing", "institutional"],
                    collections=["C1", "C2"]),
     ]
-    cloud.children.side_effect = [[], [dup_pdf]]
+    cloud.children.side_effect = [[], [dup_pdf], []]
     monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
 
     stats = zc.merge_duplicate_item("KEEPER", "DUPE")
@@ -628,7 +628,7 @@ def test_merge_duplicate_item_skips_duplicate_attachments(monkeypatch) -> None:
         dup_pdf,                         # fresh child before re-parent
         _fake_item("DUPE",   doi="10.1/x"),   # latest before trash
     ]
-    cloud.children.side_effect = [[keeper_pdf], [dup_pdf]]
+    cloud.children.side_effect = [[keeper_pdf], [dup_pdf], [dup_pdf]]
     monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
 
     stats = zc.merge_duplicate_item("KEEPER", "DUPE")
@@ -648,7 +648,7 @@ def test_merge_duplicate_item_trashes_via_patch_not_delete(monkeypatch) -> None:
         _fake_item("DUPE",   doi="10.1/x"),
         _fake_item("DUPE",   doi="10.1/x"),     # latest before trash
     ]
-    cloud.children.side_effect = [[], []]
+    cloud.children.side_effect = [[], [], []]
     monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
 
     zc.merge_duplicate_item("KEEPER", "DUPE")
@@ -676,7 +676,7 @@ def test_merge_duplicate_item_reports_trash_failure(monkeypatch, caplog) -> None
         _fake_item("DUPE",   doi="10.1/x"),
         _fake_item("DUPE",   doi="10.1/x"),
     ]
-    cloud.children.side_effect = [[], []]
+    cloud.children.side_effect = [[], [], []]
     monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
 
     caplog.set_level("WARNING")
@@ -1127,7 +1127,7 @@ def test_upsert_child_note_retries_on_412_version_conflict(monkeypatch) -> None:
     # fails first with 412, succeeds second.
     old_note_v1 = _note_child("N1", 12, f"{MARKER}\n<p>old</p>")
     old_note_v2 = _note_child("N1", 13, f"{MARKER}\n<p>old</p>")
-    fake_cloud.children.side_effect = [[old_note_v1], [old_note_v2]]
+    fake_cloud.children.side_effect = [[old_note_v1], [old_note_v2], []]
     conflict = httpx.HTTPStatusError(
         "Precondition Failed",
         request=httpx.Request("PATCH", "http://test"),
@@ -1408,7 +1408,7 @@ def test_merge_can_move_only_pdfs_and_leave_tags(monkeypatch) -> None:
         dup_pdf, snap,
         _fake_item("DUPE", doi="10.1/x"),
     ]
-    cloud.children.side_effect = [[], [dup_pdf, snap]]
+    cloud.children.side_effect = [[], [dup_pdf, snap], [snap]]
     monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
 
     stats = zc.merge_duplicate_item(
@@ -1418,3 +1418,25 @@ def test_merge_can_move_only_pdfs_and_leave_tags(monkeypatch) -> None:
     assert stats["tags_added"] == 0
     assert snap["data"]["parentItem"] == "DUPE"
     assert stats["trashed"] == ["DUPE"]
+
+
+def test_merge_never_trashes_an_item_still_holding_an_unmoved_pdf(monkeypatch) -> None:
+    """The PDF child reached the cloud after the merge listed children:
+    trashing then hid the only real copy."""
+    zc = _client()
+    cloud = _mock_cloud()
+    late_pdf = _fake_attachment("PDF-LATE", parent="DUPE", filename="a.pdf", md5="aa")
+    cloud.item.side_effect = [
+        _fake_item("KEEPER", doi="10.1/x"),
+        _fake_item("DUPE", doi="10.1/x"),
+    ]
+    # listing at merge start: nothing; re-check before trashing: the PDF
+    cloud.children.side_effect = [[], [], [late_pdf]]
+    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+
+    stats = zc.merge_duplicate_item(
+        "KEEPER", "DUPE", union_tags=False, child_content_types=("application/pdf",),
+    )
+    assert stats["trashed"] == []
+    assert stats["kept_unmoved_pdf"] is True
+    cloud.client.patch.assert_not_called()
