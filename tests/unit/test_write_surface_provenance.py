@@ -65,8 +65,28 @@ def test_the_abstract_log_carries_the_surface():
 
 
 def test_surface_is_appended_last_so_existing_logs_migrate():
-    """`_migrate_header` only handles a pure, ordered column addition."""
-    assert ABSTRACT_FETCH_FIELDS[-1] == "surface"
+    """`_migrate_header` only handles a pure, ordered column addition, so
+    `surface` stays eighth and later columns (`ran_at`) come after it."""
+    assert ABSTRACT_FETCH_FIELDS[7] == "surface"
+    assert ABSTRACT_FETCH_FIELDS[-1] == "ran_at"
+
+
+def test_an_eight_column_log_gains_ran_at(tmp_path):
+    import csv
+
+    import shared_orchestrators as so
+
+    path = tmp_path / "abstract_fetch_log.csv"
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(ABSTRACT_FETCH_FIELDS[:8])
+        w.writerow(["2026-09-22", "A", "10.1/x", "T", "crossref", "updated", "", "local"])
+    fh, writer = so.open_log(str(path), ABSTRACT_FETCH_FIELDS)
+    writer.writerow({"run_date": "2026-09-23", "item_key": "B", "ran_at": "2026-09-23T01:00:00+03:00"})
+    fh.close()
+    rows = list(csv.DictReader(open(path)))
+    assert rows[0]["surface"] == "local" and rows[0]["ran_at"] == ""
+    assert rows[1]["ran_at"] == "2026-09-23T01:00:00+03:00"
 
 
 def test_the_pdf_log_does_not_carry_a_constant_column():

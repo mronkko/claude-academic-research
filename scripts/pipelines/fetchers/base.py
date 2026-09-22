@@ -24,6 +24,17 @@ if TYPE_CHECKING:
     import requests
 
 
+class AbstractWithheld(Exception):  # noqa: N818 — a verdict, not an error
+    """Raised by `fetch_abstract` when the source holds the record but
+    will not show it (outside the subscription's entitlement, say).
+
+    Distinct from returning None, which means "this source has no
+    abstract", and from any other exception, which means the question
+    was never answered. The cascade moves on either way; the log says
+    `withheld`, so nothing downstream reads it as evidence of absence.
+    """
+
+
 class Source(ABC):  # noqa: B024  # marker base; abstractmethods live on AbstractFetcher / PdfFetcher
     """Root base class. Subclasses MUST set `name` as a class attribute.
 

@@ -74,7 +74,7 @@ def fulltext_screening_fields(coding_field_names: list[str]) -> list[str]:
 # use the cloud, so the column would carry no information.
 ABSTRACT_FETCH_FIELDS: list[str] = [
     "run_date", "item_key", "doi", "title", "source", "status", "detail",
-    "surface",
+    "surface", "ran_at",
 ]
 
 # Schema for `enrich_pdfs.py`'s run-log, `output/pdf_attach_log.csv`.

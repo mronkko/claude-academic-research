@@ -35,6 +35,9 @@ Log statuses (`output/abstract_fetch_log.csv`):
     update_failed  abstract fetched, the Zotero write raised
     not_found      every source answered and none had an abstract —
                    the article genuinely has none
+    withheld       a source holds the record but would not show it (e.g.
+                   outside the WoS subscription) and nothing else had
+                   an abstract; absence is NOT established
     lookup_failed  at least one source raised, so absence was never
                    established; the abstract is unknown, not absent
     no_doi         no DOI on the item, so the cascade never ran
@@ -68,6 +71,7 @@ import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
 from abstract_clean import clean_abstract  # noqa: E402
 from core.config_loader import get, require  # noqa: E402
+from fetchers.base import AbstractWithheld  # noqa: E402
 from log_schemas import ABSTRACT_FETCH_FIELDS  # noqa: E402
 
 DEFAULT_LOG_CSV = os.path.join("output", "abstract_fetch_log.csv")
@@ -111,8 +115,29 @@ def _load_config() -> Config:
     )
 
 
+class _TimestampedWriter:
+    """Adds `ran_at` — an ISO timestamp with time zone — to every row.
+
+    `run_date` is a date, so two runs on one day tie and a consumer that
+    keeps the latest row per item cannot tell them apart. `run_date`
+    stays as it is for the readers that already parse it.
+    """
+
+    def __init__(self, writer) -> None:
+        self._writer = writer
+
+    def writerow(self, row: dict) -> None:
+        from datetime import datetime
+        stamped = dict(row)
+        stamped.setdefault(
+            "ran_at", datetime.now().astimezone().isoformat(timespec="seconds"),
+        )
+        self._writer.writerow(stamped)
+
+
 def _open_log(path: str):
-    return shared_orchestrators.open_log(path, LOG_FIELDS)
+    fh, writer = shared_orchestrators.open_log(path, LOG_FIELDS)
+    return fh, _TimestampedWriter(writer)
 
 
 def _already_done(log_path: str) -> set[str]:
@@ -156,6 +181,9 @@ class CascadeResult:
     source: str = ""
     asked: list[str] = field(default_factory=list)
     errors: list[tuple[str, str]] = field(default_factory=list)
+    #: `(source_name, message)` for sources that hold the record but
+    #: would not show it (`AbstractWithheld`).
+    withheld: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def found(self) -> bool:
@@ -163,12 +191,26 @@ class CascadeResult:
 
     @property
     def confirmed_absent(self) -> bool:
-        return not self.found and not self.errors and bool(self.asked)
+        return (not self.found and not self.errors and not self.withheld
+                and bool(self.asked))
+
+    def status(self) -> str:
+        """The log status for a miss: `lookup_failed` when any source
+        raised, else `withheld` when one held the record back, else
+        `not_found`. Only `not_found` is evidence the abstract does not
+        exist."""
+        if self.errors:
+            return "lookup_failed"
+        if self.withheld:
+            return "withheld"
+        return "not_found"
 
     def detail(self) -> str:
         """One-line human-readable summary for the log's `detail` column."""
-        if self.errors:
-            return "; ".join(f"{name}: {msg}" for name, msg in self.errors)
+        if self.errors or self.withheld:
+            return "; ".join(
+                f"{name}: {msg}" for name, msg in [*self.errors, *self.withheld]
+            )
         if self.asked:
             return "no abstract at: " + ",".join(self.asked)
         return ""
@@ -198,6 +240,9 @@ def _try_cascade(
         try:
             text = src.fetch_abstract(doi, title=title or None, cache_dir=cache_dir)
         except NotImplementedError:
+            continue
+        except AbstractWithheld as e:
+            result.withheld.append((src.name, str(e)))
             continue
         except Exception as e:
             print(f"    {src.name}: {e}", flush=True)
@@ -423,7 +468,7 @@ def main() -> int:
 
     log_fh, log_writer = _open_log(args.log_csv)
     log_lock = threading.Lock()
-    counters = {"updated": 0, "skipped": 0, "failed": 0, "done": 0}
+    counters = {"updated": 0, "skipped": 0, "withheld": 0, "failed": 0, "done": 0}
     total = len(missing)
 
     def _process(item: dict, result: CascadeResult) -> None:
@@ -439,13 +484,19 @@ def main() -> int:
         if not result.found:
             if not doi:
                 status, note = "no_doi", "no abstract looked up (item has no DOI)"
-            elif result.confirmed_absent:
-                status, note = "not_found", "no abstract found"
             else:
-                status, note = "lookup_failed", "lookup failed, absence unconfirmed"
+                status = result.status()
+                note = {
+                    "not_found": "no abstract found",
+                    "withheld": "a source holds it but would not show it; "
+                                "absence unconfirmed",
+                    "lookup_failed": "lookup failed, absence unconfirmed",
+                }[status]
             with log_lock:
                 counters[
-                    "skipped" if status == "not_found" else "failed"
+                    {"not_found": "skipped", "withheld": "withheld"}.get(
+                        status, "failed",
+                    )
                 ] += 1
                 log_writer.writerow({
                     "run_date": run_date, "item_key": key, "doi": doi,
@@ -514,6 +565,7 @@ def main() -> int:
     print(
         f"\nDone. updated={counters['updated']}, "
         f"confirmed-absent={counters['skipped']}, "
+        f"withheld={counters['withheld']}, "
         f"failed={counters['failed']}",
         flush=True,
     )

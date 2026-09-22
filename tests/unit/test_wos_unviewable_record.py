@@ -30,7 +30,12 @@ def test_found_but_not_viewable_is_no_record_not_a_crash() -> None:
         "Data": {"Records": {"records": ""}},
     })
     assert src._expanded_search("DO=(10.18311/sdmimd/2019/y)", {}, count=1) == []
-    assert src._fetch_expanded(
-        "10.18311/sdmimd/2019/y",
-        "Employee Benefits and its Effect on Productivity", "key",
-    ) is None
+    # Not None: WoS has the record, so "no abstract" would be a false
+    # negative. See test_abstract_withheld.py.
+    import pytest
+    from fetchers.base import AbstractWithheld
+    with pytest.raises(AbstractWithheld):
+        src._fetch_expanded(
+            "10.18311/sdmimd/2019/y",
+            "Employee Benefits and its Effect on Productivity", "key",
+        )

@@ -20,7 +20,7 @@ import logging
 import os
 
 from fetchers._title_match import matches, strip_html
-from fetchers.base import AbstractFetcher
+from fetchers.base import AbstractFetcher, AbstractWithheld
 
 logger = logging.getLogger(__name__)
 
@@ -65,14 +65,18 @@ class WosSource(AbstractFetcher):
         headers = {"X-ApiKey": key, "Accept": "application/json"}
 
         # Phase 1: DOI.
-        text = self._extract_expanded_abstract_from_query(
-            query=f"DO=({doi})", headers=headers,
-        )
+        hits, withheld = self._expanded_query(f"DO=({doi})", headers, count=1)
+        text = self._expanded_abstract(hits[0]) if hits else None
         if text:
             return text
 
         # Phase 2: title fallback.
         if not title:
+            if withheld:
+                raise AbstractWithheld(
+                    "WoS holds the record outside this subscription's "
+                    "entitlement",
+                )
             return None
         # Guard against double-quotes in the title breaking the query.
         cleaned_title = strip_html(title).replace('"', "").strip()
@@ -86,8 +90,8 @@ class WosSource(AbstractFetcher):
         # title).  The shortlist is then re-filtered in Python via
         # `matches()` so false-positive keyword hits don't return the
         # wrong abstract.
-        hits = self._expanded_search(
-            query=f"TI=({cleaned_title[:200]})", headers=headers, count=5,
+        hits, title_withheld = self._expanded_query(
+            f"TI=({cleaned_title[:200]})", headers, count=5,
         )
         for rec in hits:
             rec_title = self._expanded_title(rec)
@@ -95,6 +99,11 @@ class WosSource(AbstractFetcher):
                 text = self._expanded_abstract(rec)
                 if text:
                     return text
+        if withheld or title_withheld:
+            raise AbstractWithheld(
+                "WoS holds a matching record outside this subscription's "
+                "entitlement",
+            )
         return None
 
     def _extract_expanded_abstract_from_query(
@@ -108,6 +117,12 @@ class WosSource(AbstractFetcher):
     def _expanded_search(
         self, query: str, headers: dict, *, count: int,
     ) -> list[dict]:
+        return self._expanded_query(query, headers, count=count)[0]
+
+    def _expanded_query(
+        self, query: str, headers: dict, *, count: int,
+    ) -> tuple[list[dict], bool]:
+        """(viewable records, whether a found record was withheld)."""
         try:
             resp = self.http.get(
                 _EXPANDED_URL,
@@ -122,12 +137,13 @@ class WosSource(AbstractFetcher):
             )
         except Exception as e:
             logger.debug("wos expanded %s failed: %s", query, e)
-            return []
+            return [], False
         if resp.status_code != 200:
-            return []
+            return [], False
         data = resp.json() or {}
-        if data.get("QueryResult", {}).get("RecordsFound", 0) == 0:
-            return []
+        found = data.get("QueryResult", {}).get("RecordsFound", 0)
+        if found == 0:
+            return [], False
         # `RecordsFound` can be positive while `records` is an empty
         # *string*: the record exists but is outside this subscription's
         # entitlement. Seen live for 10.18311/sdmimd/2019/y on both the
@@ -139,9 +155,9 @@ class WosSource(AbstractFetcher):
             node = node.get(level) if isinstance(node, dict) else None
         rec = node.get("REC") if isinstance(node, dict) else None
         if rec is None:
-            return []
+            return [], True
         recs = rec if isinstance(rec, list) else [rec]
-        return [r for r in recs if isinstance(r, dict)]
+        return [r for r in recs if isinstance(r, dict)], False
 
     @staticmethod
     def _expanded_title(rec: dict) -> str:
