@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as _dt
+import functools
 import os
 import re
 import sys
@@ -227,6 +228,12 @@ class ZoteroConnectorHandler(PublisherHandler):
     def __init__(self, extension_path: str | Path | None = None) -> None:
         """`extension_path` overrides auto-detection. Defaults to the
         platform-standard Chrome Default-profile extension folder."""
+        #: Move the Connector's snapshot and keyword tags into the keeper
+        #: too, not only the PDF (`--connector-keep-extras`).
+        self.keep_extras = False
+        #: Stats of the last merge, read by the caller to finish a
+        #: `--replace` swap with the PDF that actually arrived.
+        self.last_merge: dict = {}
         self._explicit_extension_path = extension_path
         self.extension_path = resolve_connector_extension_path(extension_path)
         # Hosts the user has already confirmed in this run — once a
@@ -683,9 +690,20 @@ class ZoteroConnectorHandler(PublisherHandler):
         # Merge the new item into the existing one.
         print(f"  │  Merging into keeper {item['item_key']}…", flush=True)
         try:
+            # By default only the PDF moves: the keeper's metadata came
+            # from elsewhere, so the translator's HTML snapshot and its
+            # keyword tags are not wanted there (`--connector-keep-extras`
+            # restores the old everything-moves behaviour).
             stats = await asyncio.to_thread(
-                zot.merge_duplicate_item, item["item_key"], new_key,
+                functools.partial(
+                    zot.merge_duplicate_item, item["item_key"], new_key,
+                    union_tags=self.keep_extras,
+                    child_content_types=(
+                        None if self.keep_extras else ("application/pdf",)
+                    ),
+                ),
             )
+            self.last_merge = stats
         except Exception as e:
             print(f"  └─ FAIL: merge errored: {str(e)[:100]}", flush=True)
             counter.failed += 1
@@ -918,13 +936,20 @@ def _poll_for_new_item(
     next_hint_at = start + hint_every_s
     while time.monotonic() < deadline:
         try:
-            items = zot.journal_articles()
+            # Newest items only. Listing every journal article took 95 s
+            # per poll on a 25,703-article library, so a save Zotero had
+            # finished in seconds was reported minutes later. It also
+            # stops an older copy with the same DOI from being taken for
+            # the item that was just saved.
+            items = zot.recent_items()
         except Exception:
             items = []
         for it in items:
             if it.get("key") == keeper_key:
                 continue
             data = it.get("data", {})
+            if data.get("itemType") in ("attachment", "note", "annotation"):
+                continue
             it_doi = (data.get("DOI") or "").strip().lower()
             if needle and it_doi == needle:
                 return it["key"]

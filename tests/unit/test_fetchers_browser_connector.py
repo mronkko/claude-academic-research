@@ -208,7 +208,7 @@ def test_poll_for_new_item_returns_new_key_when_found() -> None:
     """A new Zotero item with the same DOI as the keeper (but a
     different key) is exactly what the Connector creates."""
     zot = MagicMock()
-    zot.journal_articles.return_value = [
+    zot.recent_items.return_value = [
         {"key": "KEEPER", "data": {"DOI": "10.1/x"}},
         {"key": "NEW123", "data": {"DOI": "10.1/x"}},
     ]
@@ -220,7 +220,7 @@ def test_poll_for_new_item_ignores_keeper_itself() -> None:
     """If the only item with the matching DOI IS the keeper, the poll
     returns None (no duplicate was created)."""
     zot = MagicMock()
-    zot.journal_articles.return_value = [
+    zot.recent_items.return_value = [
         {"key": "KEEPER", "data": {"DOI": "10.1/x"}},
     ]
     assert _poll_for_new_item(
@@ -230,7 +230,7 @@ def test_poll_for_new_item_ignores_keeper_itself() -> None:
 
 def test_poll_for_new_item_matches_case_insensitive() -> None:
     zot = MagicMock()
-    zot.journal_articles.return_value = [
+    zot.recent_items.return_value = [
         {"key": "NEW", "data": {"DOI": "10.1/ABC"}},
     ]
     assert _poll_for_new_item(
@@ -242,10 +242,23 @@ def test_poll_for_new_item_survives_zotero_errors() -> None:
     """Transient errors from the library listing must not propagate —
     the pipeline would otherwise crash mid-batch."""
     zot = MagicMock()
-    zot.journal_articles.side_effect = RuntimeError("zotero down")
+    zot.recent_items.side_effect = RuntimeError("zotero down")
     assert _poll_for_new_item(
         zot, "10.1/x", "KEEPER", timeout_s=0.1,
     ) is None
+
+
+def test_poll_asks_only_for_the_newest_items() -> None:
+    """Each poll used to list every journal article: 25,703 of them took
+    95 s through the local API, so a save Zotero had finished in seconds
+    was reported after 142 s or more."""
+    zot = MagicMock()
+    zot.recent_items.return_value = [
+        {"key": "ATT", "data": {"itemType": "attachment", "DOI": "10.1/x"}},
+        {"key": "NEW", "data": {"itemType": "journalArticle", "DOI": "10.1/x"}},
+    ]
+    assert _poll_for_new_item(zot, "10.1/x", "KEEPER", timeout_s=0.1) == "NEW"
+    zot.journal_articles.assert_not_called()  # the full scan is gone
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +443,7 @@ def test_normalise_title_ignores_case_and_punctuation() -> None:
 
 def test_poll_matches_on_title_when_the_save_has_no_doi() -> None:
     zot = MagicMock()
-    zot.journal_articles.return_value = [
+    zot.recent_items.return_value = [
         {"key": "NEW", "data": {"DOI": "", "title": "Scientific Specialties",
                                 "dateAdded": _recent()}},
     ]
@@ -444,7 +457,7 @@ def test_poll_title_match_ignores_items_predating_the_poll() -> None:
     """Without the recency window a title match would return a
     pre-existing copy and the caller would merge the wrong pair."""
     zot = MagicMock()
-    zot.journal_articles.return_value = [
+    zot.recent_items.return_value = [
         {"key": "OLDCOPY", "data": {"DOI": "", "title": "Scientific Specialties",
                                     "dateAdded": "2019-01-01T00:00:00Z"}},
     ]
@@ -458,7 +471,7 @@ def test_poll_doi_match_is_not_subject_to_the_recency_window() -> None:
     """A DOI identifies the article on its own; narrowing that path
     would change behaviour that was already correct."""
     zot = MagicMock()
-    zot.journal_articles.return_value = [
+    zot.recent_items.return_value = [
         {"key": "NEW", "data": {"DOI": "10.1/x",
                                 "dateAdded": "2019-01-01T00:00:00Z"}},
     ]

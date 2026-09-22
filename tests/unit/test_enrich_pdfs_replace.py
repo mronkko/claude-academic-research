@@ -246,3 +246,44 @@ def test_the_summary_counts_items_without_a_pdf_separately() -> None:
     )
     assert line == "0 items without real PDF, 323 to replace."
     assert "unchanged" in enrich_pdfs.pdf_run_report.STATUS_INFO
+
+
+# ---------------------------------------------------------------------------
+# Finishing a swap: old files and stale provenance tags go, on every route
+# ---------------------------------------------------------------------------
+
+
+def test_a_real_pdf_replacing_a_recovery_drops_the_recovered_tag(tmp_path, monkeypatch) -> None:
+    zot, pdf, log_writer = _attach_env(tmp_path)
+    monkeypatch.setitem(enrich_pdfs._REPLACE_TARGETS, "A", ["OLDATT01"])
+    assert enrich_pdfs._attach_and_log(
+        zot, log_writer, run_date="2026-09-23", item_key="A",
+        doi="10.1/A", title="A", source="t", pdf_path=pdf, check_text=False,
+    )
+    removed = set(zot.update_tags.call_args.kwargs.get("remove", ()))
+    assert "pdf:tdm-recovered" in removed
+
+
+def test_the_connector_route_finishes_the_swap(monkeypatch) -> None:
+    """Pass 4b merged the Connector's PDF in and stopped there: the old
+    recovered attachment and its tag stayed (Lupoli et al. 2018,
+    keeper 9UNEIEC3)."""
+    zot = MagicMock()
+    monkeypatch.setitem(enrich_pdfs._REPLACE_TARGETS, "K", ["OLD1"])
+    enrich_pdfs._finish_replacement(zot, "K", keep={"NEWPDF"}, provenance=[])
+    zot.delete_item.assert_called_once_with("OLD1")
+    assert "pdf:tdm-recovered" in set(zot.update_tags.call_args.kwargs["remove"])
+
+
+def test_no_swap_means_no_tag_changes(monkeypatch) -> None:
+    zot = MagicMock()
+    enrich_pdfs._finish_replacement(zot, "NOTREPLACING", keep=set(), provenance=[])
+    zot.delete_item.assert_not_called()
+    zot.update_tags.assert_not_called()
+
+
+def test_the_connector_success_path_calls_finish_replacement() -> None:
+    import inspect
+    src = inspect.getsource(enrich_pdfs._drive_connector)
+    assert "_finish_replacement(" in src
+    assert src.index("_finish_replacement(") < src.index("log_writer.writerow({", src.index("if ok:"))

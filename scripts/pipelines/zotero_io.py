@@ -678,6 +678,16 @@ class ZoteroClient:
         z = self._read_client()
         return z.everything(z.items(itemType="journalArticle"))
 
+    def recent_items(self, limit: int = 50) -> list[dict]:
+        """The `limit` most recently added items, newest first, any type.
+
+        For polling "did something just arrive": listing every journal
+        article instead took 95 s per poll on a 25,703-article library,
+        this takes about half a second.
+        """
+        z = self._read_client()
+        return z.items(sort="dateAdded", direction="desc", limit=limit)
+
     def cloud_journal_articles(self) -> list[dict]:
         """`journal_articles()` forced through api.zotero.org.
 
@@ -1794,6 +1804,9 @@ class ZoteroClient:
         self,
         target_key: str,
         duplicate_key: str,
+        *,
+        union_tags: bool = True,
+        child_content_types: tuple[str, ...] | None = None,
     ) -> dict[str, int | list[str]]:
         """Merge `duplicate_key` into `target_key` and trash the duplicate.
 
@@ -1817,6 +1830,13 @@ class ZoteroClient:
               "collections_added": int,
               "trashed":      [target_key] on success, [] on failure,
             }
+
+        `union_tags=False` leaves the target's tags alone, and
+        `child_content_types` moves only attachments of those types (notes
+        and other attachments stay on the duplicate and go to the trash
+        with it). The Connector route uses both: its keeper's metadata
+        came from elsewhere, and the translator's HTML snapshot and
+        keyword tags are not wanted there.
 
         Safety guard: refuses to merge when the two items carry
         different non-empty DOIs, since a mismatched merge permanently
@@ -1859,7 +1879,7 @@ class ZoteroClient:
                          for t in target_data.get("tags", [])}
         dup_tags = {t.get("tag", "")
                     for t in dup_data.get("tags", [])}
-        new_tags = (dup_tags - existing_tags) - {""}
+        new_tags = (dup_tags - existing_tags) - {""} if union_tags else set()
         if new_tags:
             target_data["tags"] = [
                 {"tag": t} for t in sorted(existing_tags | new_tags)
@@ -1887,11 +1907,17 @@ class ZoteroClient:
             if c.get("data", {}).get("itemType") == "attachment"
         }
         moved: list[str] = []
+        moved_pdfs: list[str] = []
         skipped_dupes: list[str] = []
         for child in dup_children:
             child_key = child.get("key", "")
             fresh = self.cloud.item(child_key)
             fd = fresh.get("data", {})
+            if child_content_types is not None and (
+                fd.get("itemType") != "attachment"
+                or fd.get("contentType", "") not in child_content_types
+            ):
+                continue
             if fd.get("itemType") == "attachment":
                 sig = (
                     fd.get("contentType", ""),
@@ -1905,6 +1931,8 @@ class ZoteroClient:
             fd["parentItem"] = target_key
             self._safe_update_item(fresh, self.cloud)
             moved.append(child_key)
+            if fd.get("contentType") == "application/pdf":
+                moved_pdfs.append(child_key)
 
         # Step 4: trash the duplicate with PATCH {"deleted": 1}.
         # pyzotero's `delete_item` permanently destroys; we want
@@ -1950,6 +1978,8 @@ class ZoteroClient:
 
         return {
             "moved": len(moved),
+            "moved_keys": moved,
+            "moved_pdf_keys": moved_pdfs,
             "skipped_dupe_attachments": len(skipped_dupes),
             "tags_added": len(new_tags),
             "collections_added": len(new_collections),

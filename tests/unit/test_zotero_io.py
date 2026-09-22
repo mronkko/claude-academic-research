@@ -1391,3 +1391,30 @@ def test_safe_update_item_reraises_unrelated_errors():
     z = _client_with_cloud(Cloud())
     with pytest.raises(RuntimeError, match="network down"):
         z._safe_update_item({"data": {"key": "A"}})
+
+
+def test_merge_can_move_only_pdfs_and_leave_tags(monkeypatch) -> None:
+    """The Connector route: the keeper's metadata came from elsewhere, so
+    the Connector's HTML snapshot and keyword tags are not wanted there.
+    Everything else goes to Zotero's trash with the duplicate."""
+    zc = _client()
+    cloud = _mock_cloud()
+    dup_pdf = _fake_attachment("PDF-NEW", parent="DUPE", filename="a.pdf", md5="aa")
+    snap = _fake_attachment("SNAP", parent="DUPE", filename="s.html",
+                            content_type="text/html")
+    cloud.item.side_effect = [
+        _fake_item("KEEPER", doi="10.1/x", tags=["pdf:tdm-recovered"]),
+        _fake_item("DUPE", doi="10.1/x", tags=["Deception", "Paternalism"]),
+        dup_pdf, snap,
+        _fake_item("DUPE", doi="10.1/x"),
+    ]
+    cloud.children.side_effect = [[], [dup_pdf, snap]]
+    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+
+    stats = zc.merge_duplicate_item(
+        "KEEPER", "DUPE", union_tags=False, child_content_types=("application/pdf",),
+    )
+    assert stats["moved"] == 1 and stats["moved_keys"] == ["PDF-NEW"]
+    assert stats["tags_added"] == 0
+    assert snap["data"]["parentItem"] == "DUPE"
+    assert stats["trashed"] == ["DUPE"]

@@ -1029,20 +1029,40 @@ _REPLACE_TARGETS: dict[str, list[str]] = {}
 _REPLACE_MD5: dict[str, set[str]] = {}
 
 
-def _drop_replaced_attachments(zot, item_key: str, *, keep: str | None) -> None:
-    """Delete the attachments `item_key`'s new PDF replaces.
+def _attachment_summary(*, to_process: int, to_replace: int, stubs_deleted: int) -> str:
+    """The "N items without real PDF" line. Re-admitted `--replace`
+    items are in `to_process` too, and used to be counted as missing."""
+    return (
+        f"{to_process - to_replace} items without real PDF"
+        + (f", {to_replace} to replace" if to_replace else "")
+        + (f" ({stubs_deleted} stubs deleted)" if stubs_deleted else "") + "."
+    )
 
-    `keep` is the attachment just created, and is never deleted even if
-    the registry names it — a stale entry there would otherwise remove
-    the replacement and leave the item with nothing at all.
 
-    A failed delete is reported and swallowed. The new PDF is already on
-    the item, so the fetch succeeded; returning failure would send the
-    item back into the retry population and attach a third copy, which is
-    a worse outcome than one leftover attachment the user can see.
+#: Tags that describe *which copy* an item holds. When a swap replaces
+#: that copy they stop being true, and must go unless the new file earns
+#: them again.
+_PROVENANCE_TAGS = (
+    fetchers.TDM_RECOVERED_TAG,
+    fetchers.REPOSITORY_COPY_TAG,
+    fetchers.PREPRINT_VERSION_TAG,
+)
+
+
+def _finish_replacement(zot, item_key: str, *, keep: set[str], provenance: list[str]) -> None:
+    """Complete a `--replace` swap once the new PDF is on `item_key`.
+
+    Deletes the attachments it replaces (never one in `keep`) and drops
+    provenance tags the new file does not carry. Both routes need this:
+    the Connector route used to merge the new PDF in and stop, leaving
+    the old recovered attachment and its `pdf:tdm-recovered` tag beside
+    it; the API route deleted the file but kept the tag. A no-op for an
+    item this run is not replacing.
     """
+    if item_key not in _REPLACE_TARGETS:
+        return
     for attachment_key in _REPLACE_TARGETS.get(item_key, []):
-        if attachment_key == keep:
+        if attachment_key in keep:
             continue
         try:
             zot.delete_item(attachment_key)
@@ -1052,16 +1072,12 @@ def _drop_replaced_attachments(zot, item_key: str, *, keep: str | None) -> None:
                 f"{attachment_key} failed: {_failure_detail(exc)}",
                 flush=True,
             )
-
-
-def _attachment_summary(*, to_process: int, to_replace: int, stubs_deleted: int) -> str:
-    """The "N items without real PDF" line. Re-admitted `--replace`
-    items are in `to_process` too, and used to be counted as missing."""
-    return (
-        f"{to_process - to_replace} items without real PDF"
-        + (f", {to_replace} to replace" if to_replace else "")
-        + (f" ({stubs_deleted} stubs deleted)" if stubs_deleted else "") + "."
-    )
+    stale = [t for t in _PROVENANCE_TAGS if t not in provenance]
+    try:
+        zot.update_tags(item_key, remove=stale)
+    except Exception as exc:
+        print(f"  WARN: replaced, but removing old provenance tags failed: "
+              f"{_failure_detail(exc)}", flush=True)
 
 
 def _partition_by_attachment(
@@ -1205,9 +1221,6 @@ def _attach_and_log(
     # delete. Every earlier `return False` above leaves the old
     # attachment untouched, which is what makes the flag safe to run
     # across a corpus rather than one cautious item at a time.
-    _drop_replaced_attachments(zot, item_key, keep=new_attachment_key)
-
-    # Everything below is best-effort annotation.
     provenance_tags = [
         tag for predicate, tag in (
             (fetchers.is_tdm_recovered_path, fetchers.TDM_RECOVERED_TAG),
@@ -1215,6 +1228,11 @@ def _attach_and_log(
             (fetchers.is_preprint_path, fetchers.PREPRINT_VERSION_TAG),
         ) if predicate(pdf_path)
     ]
+    _finish_replacement(
+        zot, item_key, keep={new_attachment_key}, provenance=provenance_tags,
+    )
+
+    # Everything below is best-effort annotation.
     if provenance_tags:
         try:
             zot.update_tags(item_key, add=provenance_tags)
@@ -2102,6 +2120,17 @@ async def _drive_connector(
                 handler, "_skipped_hosts", set(),
             )
             if ok:
+                # Finish a --replace swap with the PDF that actually
+                # arrived. Only when one did: a merge that moved nothing
+                # (the keeper already held these bytes) must not delete
+                # the keeper's copy.
+                new_pdfs = set(
+                    getattr(handler, "last_merge", {}).get("moved_pdf_keys") or [],
+                )
+                if new_pdfs:
+                    _finish_replacement(
+                        zot, item["item_key"], keep=new_pdfs, provenance=[],
+                    )
                 status = "attached_via_connector"
             elif skipped_by_user:
                 status = "skipped_by_user"
@@ -3162,6 +3191,7 @@ def _run_browser_in_process(
                 env="ZOTERO_CONNECTOR_DIR",
             ) or None,
         )
+        connector_handler.keep_extras = getattr(args, "connector_keep_extras", False)
         asyncio.run(_drive_connector(
             connector_handler, connector_items, zot, log_writer,
             args, run_date,
@@ -3848,6 +3878,14 @@ def _build_parser() -> argparse.ArgumentParser:
              "to share them across passes. Safe to run beside another pass "
              "— it cannot duplicate attachments — but both will be "
              "queueing against the same institutional resolver.",
+    )
+    parser.add_argument(
+        "--connector-keep-extras", action="store_true",
+        help="In the Zotero Connector pass, also move the Connector's HTML "
+             "snapshot and keyword tags into the existing item. By default "
+             "only the PDF is kept: the item's metadata came from "
+             "elsewhere, and the rest goes to Zotero's trash with the "
+             "Connector's temporary item.",
     )
     parser.add_argument(
         "--library", action="append", default=None, metavar="LIBRARY",
