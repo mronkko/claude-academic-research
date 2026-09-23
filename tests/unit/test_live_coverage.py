@@ -203,6 +203,7 @@ PDF_LIVE_TESTS: dict[str, list[str]] = {
     "openalex": ["test_openalex_oa_url_present"],
     "openalex_content": ["test_openalex_content_api_returns_pdf_bytes"],
     "unpaywall": ["test_unpaywall_returns_pdf_url"],
+    "arxiv": ["test_arxiv_serves_the_pdf_named_by_the_doi"],
     "semantic_scholar": ["test_semantic_scholar_open_access_pdf_url"],
     "core": ["test_core_search_returns_a_download_url"],
     "openaire": ["test_openaire_search_returns_a_record"],

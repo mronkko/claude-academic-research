@@ -123,6 +123,16 @@ def test_springer_reachable() -> None:
     assert body.startswith(b"%PDF-")
 
 
+def test_arxiv_serves_the_pdf_named_by_the_doi() -> None:
+    """arXiv answers `arxiv.org/pdf/<id>` for the id in its own DOI."""
+    from fetchers.arxiv import arxiv_pdf_url
+    url = arxiv_pdf_url(KNOWN_DOIS["arxiv"])
+    assert url, "arxiv_pdf_url did not recognise the known arXiv DOI"
+    status, body, _ = http_get(url)
+    assert status == 200, f"arXiv returned {status} for {url}"
+    assert body.startswith(b"%PDF-")
+
+
 def test_unpaywall_returns_pdf_url() -> None:
     """Unpaywall returns an OA PDF URL for an open-access DOI."""
     mailto = require_config("crossref", "mailto", env="CROSSREF_MAILTO")

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
+from .arxiv import ArxivSource
 from .base import AbstractFetcher, PdfFetcher, Source
 from .base_search import BaseSearchSource
 from .browser import BrowserSource
@@ -82,7 +83,8 @@ def pdf_sources(
         Stage 2 — paid version of record
             OpenAlex Content API ($0.01/PDF, opt-in)
         Stage 3 — open access, often the author's accepted manuscript
-            OpenAlex OA tier → Unpaywall → Semantic Scholar → CORE
+            arXiv (its own DOI only) → OpenAlex OA tier → Unpaywall
+            → Semantic Scholar → CORE
             → OpenAIRE → BASE
             → [preprint, only with `allow_preprints`]
         Stage 4 — browser handlers for Cloudflare/SSO-gated publishers
@@ -160,6 +162,9 @@ def pdf_sources(
         # Stage 2 — the cascade's only per-item cost, ranked here rather
         # than last because what it returns is the version of record.
         OpenAlexContentSource(http, config),
+        # Stage 3 — open access. arXiv first: for an arXiv-native item
+        # its own DOI names the PDF, and it answers nothing else.
+        ArxivSource(http, config),
         OpenAlexSource(http, config),
         UnpaywallSource(http, config),
         SemanticScholarSource(http, config),
@@ -191,6 +196,7 @@ __all__ = [
     "is_preprint_path",
     "is_repository_copy_path",
     "is_tdm_recovered_path",
+    "ArxivSource",
     "BaseSearchSource",
     "BrowserSource",
     "CoreSource",

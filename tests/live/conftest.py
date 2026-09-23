@@ -47,6 +47,9 @@ KNOWN_DOIS: dict[str, str] = {
     "elsevier": "10.1016/j.jbusvent.2006.10.003",       # JBV 2007, Elsevier
     "openalex_content": "10.1371/journal.pone.0012345",
     "unpaywall": "10.1371/journal.pone.0012345",
+    # Kizilcec & Lee 2020, DataCite's upper-case form: one of the four
+    # arXiv items no route fetched before `fetchers/arxiv.py`.
+    "arxiv": "10.48550/ARXIV.2007.05443",
     "openalex_oa": "10.1371/journal.pone.0012345",
     "semantic_scholar_pdf": "10.1371/journal.pone.0012345",  # PLOS ONE — S2 resolves an openAccessPdf
     "core": "10.1371/journal.pone.0012345",              # PLOS ONE — harvested into repositories
