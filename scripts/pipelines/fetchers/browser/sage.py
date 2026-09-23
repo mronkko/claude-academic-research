@@ -8,10 +8,19 @@ class attributes if their institutional agreement permits more.
 
 from __future__ import annotations
 
-from .base import RequestHandler
+from .base import PageNavigationHandler
 
 
-class SageHandler(RequestHandler):
+class SageHandler(PageNavigationHandler):
+    """Downloads by navigating the page to the PDF URL.
+
+    Was a `RequestHandler` (`ctx.request.get`), and on 2026-09-23 failed
+    88 of 88 with Cloudflare's "Just a moment…" while the same window
+    showed the article with no challenge: the clearance the page holds
+    does not carry to Playwright's separate request client. Navigation
+    uses the page's own connection, as for T&F, Wiley and AoM.
+    """
+
     name = "sage"
     display_name = "Sage"
     # `10.2190` = Baywood Publishing, acquired by Sage in 2015; its
@@ -20,7 +29,8 @@ class SageHandler(RequestHandler):
     url_template = "https://journals.sagepub.com/doi/pdf/{doi}?download=true"
     # Landing page for setup — opening the PDF URL directly triggers
     # a Chromium auto-download that consumes the session and leaves
-    # the user with about:blank.
+    # the user with about:blank. (For `download()` that auto-download
+    # is the point: `PageNavigationHandler` waits for it.)
     setup_url_template = "https://journals.sagepub.com/doi/{doi}"
     direct_access_domains = ("sagepub.com",)
     concurrency = 1

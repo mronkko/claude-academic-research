@@ -941,9 +941,12 @@ def normalise_setup_result(result: bool | str) -> str:
 class RequestHandler(PublisherHandler):
     """Handler that downloads PDFs via `ctx.request.get(url)`.
 
-    Works for publishers where a Cloudflare-blessed session lets the
-    Playwright request client through (Emerald, Sage). Faster than
-    page-nav because requests can run concurrently.
+    Works only where the publisher lets the Playwright request client
+    through. Cloudflare's clearance is earned by the page and does not
+    reliably carry to that client — Sage failed 88/88 this way on
+    2026-09-23 and moved to `PageNavigationHandler` — so no handler uses
+    this today. Faster than page-nav when it works, because requests can
+    run concurrently.
     """
 
     _is_intermediate_base = True
@@ -983,7 +986,10 @@ class RequestHandler(PublisherHandler):
         # Not a PDF — figure out what happened for diagnostics.
         preview = body[:2000].decode("utf-8", errors="replace").lower()
         if "just a moment" in preview or "cf-chl" in preview or "cloudflare" in preview:
-            hint = "CF challenge"
+            # The request client, not the page, was challenged: a window
+            # showing the article with no challenge on screen is the
+            # usual picture, and solving anything there will not help.
+            hint = "CF challenge to the request client; the page's clearance does not carry to it"
         elif "client challenge" in preview or "incapsula" in preview:
             # Imperva/Incapsula JS interstitial — Springer's block. Named
             # explicitly because it is otherwise indistinguishable from a
