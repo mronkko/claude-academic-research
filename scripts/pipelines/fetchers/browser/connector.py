@@ -392,6 +392,14 @@ class PendingMerges:
 #: would stop its keeper from ever being tried again.
 PENDING_GRACE_S = 6 * 3600
 
+#: The same, when merges run in Zotero Desktop (`_merges_locally`). There
+#: is no upload to wait for: Desktop has the PDF by the time the
+#: Connector reports the save over, so a local save still PDF-less after
+#: half an hour is metadata-only. Twelve such saves (ScienceDirect, after
+#: a publisher block, 2026-09-23) would otherwise have barred their
+#: keepers from the next pass for six hours.
+PENDING_GRACE_LOCAL_S = 30 * 60
+
 
 def settle_pending_merges(
     zot, pending: PendingMerges, *, merge, wait_s: float, on_merged,
@@ -432,12 +440,14 @@ def settle_pending_merges(
             ):
                 continue
             if not has_pdf:
-                if _age_s(row) > PENDING_GRACE_S:
+                grace = (PENDING_GRACE_LOCAL_S if _merges_locally(zot)
+                         else PENDING_GRACE_S)
+                if _age_s(row) > grace:
                     pending.remove(row["new_key"])
+                    fate = _trash_if_pdfless(zot, row["new_key"])
                     print(f"  Queued save {row['new_key']} still has no PDF after "
-                          f"{PENDING_GRACE_S // 3600} h; giving up on it (left in "
-                          f"place, not trashed). {row['keeper']} will be tried "
-                          f"again.", flush=True)
+                          f"{grace // 60} min; giving up on it ({fate}). "
+                          f"{row['keeper']} will be tried again.", flush=True)
                     if on_given_up is not None:
                         on_given_up(row)
                 continue
@@ -453,6 +463,19 @@ def settle_pending_merges(
             left = int(deadline - time.monotonic())
             print(f"  {len(pending.rows())} queued merge(s) still waiting for "
                   f"cloud sync (~{left}s left)…", flush=True)
+
+
+def _trash_if_pdfless(zot, new_key: str) -> str:
+    """Trash a given-up save that holds no PDF child at all; say what
+    happened. One with an unsettled PDF child is left in place — that
+    PDF may be the only copy. Zotero's trash is recoverable."""
+    try:
+        if _has_pdf_child(_merge_surface(zot).children(new_key) or []):
+            return "left in place: it has an unsettled PDF child"
+        zot.trash_item(new_key)
+        return "trashed: it held no PDF"
+    except Exception as e:  # noqa: BLE001
+        return f"left in place ({str(e)[:60]})"
 
 
 def _retire_empty_save(zot, pending, row: dict, keeper_has_pdf) -> bool:
@@ -629,6 +652,11 @@ class ZoteroConnectorHandler(PublisherHandler):
         # Their remaining items are not opened: each would land on the
         # same login page. See `_proxy_login_page`.
         self._logged_out_proxies: set[str] = set()
+        # Publisher families that served a block page this run
+        # (`_find_block_page`), with the page's reference number.
+        self._blocked_families: dict[str, str] = {}
+        # Last page load per family, for `HOST_MIN_INTERVAL_S`.
+        self._last_load_at: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # PublisherHandler overrides — __init_subclass__ enforces that leaf
@@ -644,6 +672,35 @@ class ZoteroConnectorHandler(PublisherHandler):
     # service worker is ready. Opens the first item's SFX URL so the
     # user can solve any institutional challenge before the first save.
     # ------------------------------------------------------------------
+
+    async def _stop_if_blocked(
+        self, ctx, page, item_host: str, family: str, *, after_save=False,
+    ) -> bool:
+        """Stop `family` for the run when a window shows its block page.
+
+        Not an access verdict — the publisher refused the proxy's IP, not
+        the article — so the items get no failure-log row and a re-run
+        (later, paced) picks them up.
+        """
+        found = await _find_block_page(ctx, page)
+        if not found:
+            return False
+        publisher, ref = found
+        self._blocked_families[family] = ref
+        if not after_save:
+            self.last_outcome = "publisher_blocked"
+        lead = "│ " if after_save else "└─"
+        print(
+            f"  {lead} BLOCKED: {publisher} served its \"problem providing the "
+            f"content\" page\n"
+            f"         ({item_host}{', reference ' + ref if ref else ''}). "
+            f"That is a block on the\n"
+            f"         proxy's IP, not a paywall: every further {item_host} "
+            f"item this\n"
+            f"         run is skipped, logged connector_publisher_blocked.",
+            flush=True,
+        )
+        return True
 
     def merge_saved_item(
         self, zot, keeper: str, new_key: str, *, verify_s: float | None = None,
@@ -811,7 +868,7 @@ class ZoteroConnectorHandler(PublisherHandler):
         Returns True on success (merge stats logged by the driver),
         False on any failure. Never raises.
         """
-        del ctx, t_start      # unused; service_worker drives the save
+        del t_start           # unused; service_worker drives the save
         self.last_outcome = ""
         self.last_merge = {}
         doi = item["doi"]
@@ -853,6 +910,22 @@ class ZoteroConnectorHandler(PublisherHandler):
             )
             counter.failed += 1
             return False
+
+        family = host_family(item_host)
+        if family in self._blocked_families:
+            self.last_outcome = "publisher_blocked"
+            print(f"  └─ NOT TRIED: {item_host} blocked this reader earlier "
+                  f"this run.", flush=True)
+            counter.failed += 1
+            return False
+        interval = HOST_MIN_INTERVAL_S.get(family, 0.0)
+        if interval and family in self._last_load_at:
+            wait = self._last_load_at[family] + interval - time.monotonic()
+            if wait > 0:
+                print(f"  │  Pacing {item_host}: one article per "
+                      f"{int(interval)}s, waiting {int(wait)}s…", flush=True)
+                await asyncio.sleep(wait)
+        self._last_load_at[family] = time.monotonic()
 
         print("  │  Opening page…", flush=True)
         try:
@@ -914,6 +987,10 @@ class ZoteroConnectorHandler(PublisherHandler):
                 )
                 counter.failed += 1
                 return False
+
+        if await self._stop_if_blocked(ctx, page, item_host, family):
+            counter.failed += 1
+            return False
 
         # One-prompt-per-host confirmation. The translator otherwise
         # fires too eagerly on pages that briefly render reCAPTCHA
@@ -1176,6 +1253,9 @@ class ZoteroConnectorHandler(PublisherHandler):
                 )
             counter.failed += 1
             return False
+        # A block that surfaced during the save leaves this save
+        # metadata-only (the queue retires it) and stops the family.
+        await self._stop_if_blocked(ctx, page, item_host, family, after_save=True)
         wait_s = int(self.sync_timeout_s)
         local = _merges_locally(zot)
         if local and self.background is not None and self.pending is not None:
@@ -1625,6 +1705,76 @@ def is_proxy_login_url(page_url: str, target_url: str) -> bool:
         _LOGIN_HOST_LABELS & set(host.split("."))
         or any(m in path for m in _LOGIN_PATH_MARKERS)
     )
+
+
+#: Publisher pages saying the publisher has blocked this reader — a rate
+#: limit on the proxy's IP, not a paywall. Title/body text only: the URL
+#: stays on the article. Observed 2026-09-23 19:22 UTC on ScienceDirect
+#: through the JYU EZproxy, after ~55 saves at one every 15-20 s: "There
+#: was a problem providing the content you requested… Reference number
+#: a3fbeabfbd8fb606, IP 130.234.10.199". It opened as a second window,
+#: and every save after it was metadata-only.
+_PUBLISHER_BLOCK_MARKERS: tuple[tuple[str, re.Pattern], ...] = (
+    ("Elsevier", re.compile(
+        r"There was a problem providing the content you requested", re.I,
+    )),
+)
+_BLOCK_REFERENCE = re.compile(r"Reference number:?\s*([0-9a-f]{8,})", re.I)
+
+#: Publisher families that share one rate limit, by registrable domain.
+#: ScienceDirect articles arrive via linkinghub.elsevier.com as often as
+#: via sciencedirect.com, so both count against the same clock.
+_HOST_FAMILIES = {
+    "sciencedirect.com": "elsevier", "elsevier.com": "elsevier",
+}
+
+#: Minimum seconds between two Connector page loads in one family. The
+#: block above came through one proxy IP that the whole institution
+#: shares, so the cost of tripping it is not ours alone. Families not
+#: listed keep the handler's `delay_s`.
+HOST_MIN_INTERVAL_S: dict[str, float] = {"elsevier": 75.0}
+
+
+def host_family(host: str) -> str:
+    """`elsevier` for www.sciencedirect.com, else the host itself."""
+    host = (host or "").lower()
+    for domain, family in _HOST_FAMILIES.items():
+        if host == domain or host.endswith("." + domain):
+            return family
+    return host
+
+
+def publisher_block(text: str) -> tuple[str, str] | None:
+    """`(publisher, reference number)` when `text` is a block page."""
+    for publisher, marker in _PUBLISHER_BLOCK_MARKERS:
+        if marker.search(text or ""):
+            m = _BLOCK_REFERENCE.search(text)
+            return publisher, (m.group(1) if m else "")
+    return None
+
+
+async def _find_block_page(ctx, main_page) -> tuple[str, str] | None:
+    """A block page in any window of `ctx`; closes it unless it is
+    `main_page` (a second window held the Connector back until the user
+    closed it). Best-effort: an unreadable page is skipped."""
+    pages = list(getattr(ctx, "pages", None) or [main_page])
+    for p in pages:
+        try:
+            text = await asyncio.wait_for(p.evaluate(
+                "() => (document.title || '') + '\\n' + "
+                "(document.body ? document.body.innerText.slice(0, 4000) : '')"
+            ), timeout=3.0)
+        except Exception:  # noqa: BLE001
+            continue
+        found = publisher_block(text if isinstance(text, str) else "")
+        if found:
+            if p is not main_page:
+                try:
+                    await p.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            return found
+    return None
 
 
 async def _proxy_login_page(page, target_url: str) -> bool:

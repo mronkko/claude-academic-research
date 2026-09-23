@@ -2289,6 +2289,11 @@ async def _connector_item_loop(
             # Saved, not yet merged: neither a success nor a failure,
             # and no failure-log entry. The merge queue finishes it.
             status = "connector_merge_pending"
+        elif getattr(handler, "last_outcome", "") == "publisher_blocked":
+            # The publisher refused the proxy's IP (a rate limit), not the
+            # article: no access verdict, no failure-log row, retried on
+            # the next (paced) pass.
+            status = "connector_publisher_blocked"
         elif getattr(handler, "last_outcome", "") == "login_required":
             # The proxy's sign-in page, not the article: nothing was
             # learned about access, so no failure-log row (which would
@@ -2647,6 +2652,22 @@ async def _drive_connector(
             print(
                 f"\n  Total: {counter.ok} new, {counter.queued} queued for "
                 f"merge, {counter.failed} failed",
+                flush=True,
+            )
+        blocked = getattr(handler, "_blocked_families", {}) or {}
+        if blocked:
+            refs = ", ".join(
+                f"{fam}{' (reference ' + ref + ')' if ref else ''}"
+                for fam, ref in sorted(blocked.items())
+            )
+            print(
+                f"\n  PUBLISHER BLOCK: {refs} refused the proxy's IP, so its\n"
+                f"  remaining items were not tried (logged "
+                f"connector_publisher_blocked).\n"
+                f"  The proxy IP is shared by the whole institution: wait "
+                f"before re-running\n"
+                f"  (hours, not minutes), and if it persists give the library "
+                f"the reference.",
                 flush=True,
             )
         logged_out = sorted(getattr(handler, "_logged_out_proxies", set()))
@@ -3739,12 +3760,30 @@ def _run_browser_in_process(
                 "detail": f"queued merge of {row['new_key']}",
             })
 
+        def _on_given_up(row: dict) -> None:
+            # The save never grew a PDF: the page offered metadata only.
+            # NO_PDF_OFFERED, not ACCESS_BLOCKED — and not a done status,
+            # so the keeper is tried again on the next pass.
+            item = {"item_key": row["keeper"], "doi": row.get("doi", "")}
+            log_writer.writerow({
+                "run_date": run_date, "item_key": row["keeper"],
+                "doi": row.get("doi", ""), "title": "",
+                "status": "connector_offered_nothing",
+                "source": connector_handler.name,
+                "detail": f"queued save {row['new_key']} never grew a PDF",
+            })
+            _log_browser_failure(
+                args, item, source="connector",
+                cause=pdf_fetch_log.FailureCause.NO_PDF_OFFERED,
+            )
+
         def _settle(wait_s: float) -> None:
             if pending.rows():
                 print(f"\n  Merging {len(pending.rows())} queued Connector "
                       f"save(s) that were waiting for cloud sync…", flush=True)
                 settle_pending_merges(
                     zot, pending, wait_s=wait_s, on_merged=_on_merged,
+                    on_given_up=_on_given_up,
                     keeper_has_pdf=lambda keeper: _keeper_has_pdf(zot, keeper),
                     merge=lambda keeper, new: connector_handler.merge_saved_item(
                         zot, keeper, new,

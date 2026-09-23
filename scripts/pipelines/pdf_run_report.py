@@ -54,6 +54,14 @@ STATUS_INFO: dict[str, tuple[str, str]] = {
         "Check Zotero Desktop for an open dialog (or restart it) and re-run; "
         "nothing about access was learned for these items.",
     ),
+    "connector_publisher_blocked": (
+        "The publisher served a block page to the library proxy's IP (a rate "
+        "limit); not attempted",
+        "Nothing was learned about access. Wait hours before re-running "
+        "`--sources browser` (the proxy IP is shared institution-wide); the "
+        "Connector now paces Elsevier to one article per 75 s. If the block "
+        "persists, give the library the printed reference number.",
+    ),
     "connector_login_required": (
         "The Connector landed on a library proxy's sign-in page; not attempted",
         "Nothing was learned about access. Sign in to the proxy in the "
