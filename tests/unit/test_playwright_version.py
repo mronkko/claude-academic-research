@@ -33,7 +33,7 @@ def test_no_playwright_requirement_is_pinned() -> None:
     offenders = [
         f"{path.relative_to(REPO)}: {m.group(0)}"
         for path in _files()
-        for m in re.finditer(r'"playwright\s*(==|~=|<)[^"]*"', path.read_text())
+        for m in re.finditer(r'"playwright\s*(==|~=|<)[^"]*"', path.read_text(encoding="utf-8"))
     ]
     assert not offenders, offenders
 
@@ -44,7 +44,7 @@ def test_uvx_install_instructions_ask_for_the_latest() -> None:
     offenders = [
         f"{path.relative_to(REPO)}: {m.group(0)}"
         for path in _files()
-        for m in re.finditer(r"uvx playwright(@\S+)? install", path.read_text())
+        for m in re.finditer(r"uvx playwright(@\S+)? install", path.read_text(encoding="utf-8"))
         if m.group(1) not in ("@latest", "@{version}")
     ]
     assert not offenders, offenders
