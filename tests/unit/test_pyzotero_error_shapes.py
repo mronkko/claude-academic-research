@@ -102,3 +102,12 @@ def test_a_permanent_upload_failure_does_not_retry():
 
 def test_a_transport_error_still_retries():
     assert _is_retryable_upload_error(httpx.ConnectError("reset")) is True
+
+
+def test_a_transport_error_from_httpx2_retries_too():
+    """pyzotero 1.15 raises `httpx2` errors, which are not subclasses of
+    `httpx`'s; an `isinstance(exc, httpx.TransportError)` never matched
+    them, so upload transport errors went unretried."""
+    httpx2 = pytest.importorskip("httpx2")
+    assert _is_retryable_upload_error(httpx2.ReadTimeout("timed out")) is True
+    assert _is_retryable_upload_error(httpx2.ConnectError("reset")) is True

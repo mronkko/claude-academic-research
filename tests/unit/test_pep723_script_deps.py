@@ -99,9 +99,9 @@ def test_zotero_io_consumers_declare_its_third_party_imports() -> None:
         for module in _unguarded_toplevel_imports(ZOTERO_IO)
         if _is_third_party(module, local)
     )
-    assert "httpx" in required, (
-        "expected zotero_io to import httpx at module scope; if it moved to "
-        f"httpx2 this guard follows it automatically. Found: {required}"
+    assert "pyzotero" in required, (
+        "expected zotero_io to import pyzotero at module scope; the parse "
+        f"above has stopped seeing its imports. Found: {required}"
     )
 
     missing: list[str] = []

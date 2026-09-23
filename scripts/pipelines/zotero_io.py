@@ -81,7 +81,6 @@ try:
 except Exception:
     pass
 
-import httpx
 from pyzotero import errors as _pyzotero_errors
 from pyzotero import zotero
 from tenacity import (
@@ -158,7 +157,89 @@ def _is_retryable_upload_error(exc: BaseException) -> bool:
     status = _http_status_of(exc)
     if status is not None:
         return status in _RETRYABLE_UPLOAD_STATUSES
-    return isinstance(exc, httpx.TransportError)
+    return _is_httpx_error(exc, "TransportError")
+
+
+def _is_httpx_error(exc: BaseException, *names: str) -> bool:
+    """Whether `exc` is one of httpx's exception classes `names`, or a
+    subclass — from **either** `httpx` or `httpx2`.
+
+    pyzotero 1.15 moved to `httpx2`, a separate distribution whose
+    classes share httpx's names but not its hierarchy:
+    `issubclass(httpx2.ReadTimeout, httpx.TransportError)` is False. An
+    `isinstance(exc, httpx.TransportError)` here therefore stopped
+    matching anything pyzotero raised, and the upload retry quietly
+    stopped retrying transport errors. Matching by class name across
+    the MRO covers both, without importing a package this module's
+    PEP 723 users may not have.
+    """
+    return any(
+        c.__name__ in names and c.__module__.split(".")[0] in ("httpx", "httpx2")
+        for c in type(exc).__mro__
+    )
+
+
+def _is_slow_local_read(exc: BaseException) -> bool:
+    """A listing page that failed because the server was slow or dropped
+    the connection mid-response — Zotero Desktop busy with another
+    session's bulk write. Not `ConnectError`: nothing listening is not
+    going to start listening within a backoff, and should fail fast."""
+    return _is_httpx_error(
+        exc, "TimeoutException", "ReadError", "RemoteProtocolError",
+    )
+
+
+#: Attempts per listing page. The whole listing is not restarted: a
+#: 24k-attachment library is ~240 pages, and one busy moment should cost
+#: a page, not the two minutes already spent.
+_PAGE_ATTEMPTS = 4
+
+
+#: Indirection so tests can skip the backoff: tenacity binds its own
+#: `sleep` when `retry` is defined, out of reach of a monkeypatch.
+_page_sleep = time.sleep
+
+
+def _read_page(fetch):
+    """`fetch()` with retries on `_is_slow_local_read`, backing off."""
+    return retry(
+        stop=stop_after_attempt(_PAGE_ATTEMPTS),
+        retry=retry_if_exception(_is_slow_local_read),
+        wait=wait_exponential(multiplier=2, max=30),
+        sleep=lambda s: _page_sleep(s),
+        reraise=True,
+        before_sleep=lambda rs: logger.warning(
+            "Zotero listing page failed (%s); retrying (attempt %d of %d)",
+            type(rs.outcome.exception()).__name__,
+            rs.attempt_number + 1, _PAGE_ATTEMPTS,
+        ),
+    )(fetch)()
+
+
+def _everything(z: zotero.Zotero, first) -> list:
+    """`z.everything(first())`, retrying each page rather than the lot.
+
+    Live 2026-09-23: enrich_pdfs died at startup on `httpx2.ReadTimeout`
+    one page into listing 23,995 attachments over the local API, while
+    another session's 1,265-item trash kept Zotero Desktop busy.
+    pyzotero only retries 429s.
+
+    pyzotero's own `everything` still does the paging; only `follow` is
+    wrapped for the duration, so the paging logic stays pyzotero's.
+    Retrying `follow()` is safe because pyzotero replaces `z.links` only
+    after a response has arrived, so a failed page leaves the same
+    `next` link to ask for again.
+    """
+    page = _read_page(first)
+    follow = getattr(z, "follow", None)
+    if follow is None:              # a test double with no paging
+        return z.everything(page)
+    z.follow = lambda: _read_page(follow)
+    try:
+        return z.everything(page)
+    finally:
+        z.follow = follow
+
 
 
 def slr_coding_marker(ns: str) -> str:
@@ -677,7 +758,7 @@ class ZoteroClient:
         frame, which is what most callers actually want.
         """
         z = self._read_client()
-        return z.everything(z.items(itemType="journalArticle"))
+        return _everything(z, lambda: z.items(itemType="journalArticle"))
 
     def recent_items(self, limit: int = 50) -> list[dict]:
         """The `limit` most recently added items, newest first, any type.
@@ -703,7 +784,7 @@ class ZoteroClient:
         reading its own writes.
         """
         z = self.cloud
-        return z.everything(z.items(itemType="journalArticle"))
+        return _everything(z, lambda: z.items(itemType="journalArticle"))
 
     def abstractable_items(
         self, item_types: Sequence[str] | None = None,
@@ -715,7 +796,7 @@ class ZoteroClient:
         """
         types = tuple(item_types or self.ABSTRACTABLE_ITEM_TYPES)
         z = self._read_client()
-        return z.everything(z.items(itemType=" || ".join(types)))
+        return _everything(z, lambda: z.items(itemType=" || ".join(types)))
 
     #: Zotero's `itemKey` filter takes a comma-separated list; 50 is the
     #: documented ceiling per request.
@@ -748,18 +829,20 @@ class ZoteroClient:
         out: list[dict] = []
         for i in range(0, len(wanted), self.ITEM_KEY_BATCH):
             batch = wanted[i:i + self.ITEM_KEY_BATCH]
-            out.extend(z.everything(z.items(itemKey=",".join(batch))))
+            out.extend(_everything(
+                z, lambda batch=batch: z.items(itemKey=",".join(batch)),
+            ))
         return out
 
     def top_items(self) -> list[dict]:
         """All top-level items (includes non-article types: book, report, etc.)."""
         z = self._read_client()
-        return z.everything(z.top())
+        return _everything(z, lambda: z.top())
 
     def all_attachments(self) -> list[dict]:
         """All attachment items in the library."""
         z = self._read_client()
-        return z.everything(z.items(itemType="attachment"))
+        return _everything(z, lambda: z.items(itemType="attachment"))
 
     def collection_items(self, collection: str, *,
                          item_type: str = "journalArticle") -> list[dict]:
@@ -776,7 +859,7 @@ class ZoteroClient:
         """
         z = self._read_client()
         key = self._resolve_collection_for_read(collection, z)
-        return z.everything(z.collection_items(key, itemType=item_type))
+        return _everything(z, lambda: z.collection_items(key, itemType=item_type))
 
     def _resolve_collection_for_read(self, collection: str, z) -> str:
         """A collection key for `collection`, resolving a name if needed.
@@ -799,7 +882,7 @@ class ZoteroClient:
         if self._COLLECTION_KEY_RE.match(wanted):
             return wanted
 
-        collections = z.everything(z.collections())
+        collections = _everything(z, lambda: z.collections())
         matches = [
             c for c in collections
             if (c.get("data", {}) or {}).get("name", "") == wanted
