@@ -552,6 +552,19 @@ def _report_outage(exc: Exception) -> None:
     articles that could not be found — which is the difference between
     re-running and excluding them from a review.
     """
+    from fetchers.browser.base import BrowserGone
+    if isinstance(exc, BrowserGone):
+        print(
+            f"\nSTOPPED: the browser crashed or closed mid-run ({exc}).\n"
+            f"  Nothing here is a verdict about any article; items not yet\n"
+            f"  reached are not logged. If Chromium crashes again soon after\n"
+            f"  launch, the Playwright build may be at fault on this OS —\n"
+            f"  macOS 27 crashed Chrome for Testing 153 (Playwright 1.63)\n"
+            f"  while 151 ran fine. Pin the older one for the re-run:\n"
+            f"    uv run --with 'playwright==1.62.0' <same command>",
+            file=sys.stderr, flush=True,
+        )
+        return
     print(
         f"\nSTOPPED: the network went away mid-run ({exc}).\n"
         f"  Nothing here is a verdict about any article. Items already\n"
@@ -1319,7 +1332,9 @@ async def _drive_handler(
     """
     from fetchers.browser import Counter, interaction, launch_context
     from fetchers.browser.base import (
+        BrowserGone,
         NetworkOutage,
+        is_browser_gone,
         is_transport_error,
         normalise_setup_result,
     )
@@ -1519,6 +1534,8 @@ async def _drive_handler(
                 await coord.pace(lane_handler.delay_s)
             elif lane_handler.delay_s > 0:
                 await asyncio.sleep(lane_handler.delay_s)
+            # Per item, or the last failure's reason is read as this one's.
+            lane_handler.last_error = ""
             result = await lane_handler.download(
                 lane_page, ctx, item, args.cache_dir,
                 counter=counter, total=total, t_start=t_start,
@@ -1543,6 +1560,9 @@ async def _drive_handler(
                 and not deferred_setup_done
                 and not coord.skip_remaining
                 and not is_transport_error(
+                    getattr(lane_handler, "last_error", ""),
+                )
+                and not is_browser_gone(
                     getattr(lane_handler, "last_error", ""),
                 )
             ):
@@ -1592,6 +1612,14 @@ async def _drive_handler(
                 # reason out on `last_error` — and why each lane needs
                 # its own handler instance, since that attribute would
                 # otherwise be read across lanes.
+                if is_browser_gone(getattr(lane_handler, "last_error", "")):
+                    # Checked first: the prompt below would ask whether
+                    # the user can reach this PDF, and the answer has
+                    # nothing to do with it.
+                    raise BrowserGone(
+                        f"the browser closed during {display} "
+                        f"(last: {lane_handler.last_error[:80]})"
+                    )
                 transport = is_transport_error(
                     getattr(lane_handler, "last_error", ""),
                 )
@@ -1953,7 +1981,11 @@ async def _drive_connector(
         ping_zotero_desktop,
         wait_for_service_worker,
     )
-    from fetchers.browser.base import normalise_setup_result
+    from fetchers.browser.base import (
+        BrowserGone,
+        is_browser_gone,
+        normalise_setup_result,
+    )
 
     try:
         from playwright.async_api import async_playwright
@@ -2185,6 +2217,14 @@ async def _drive_connector(
                 page, ctx, service_worker, item, zot,
                 counter=counter, total=total, t_start=t_start,
             )
+            if not ok and is_browser_gone(getattr(handler, "last_error", "")):
+                # Every later item would fail the same way, and each would
+                # be logged connector_save_failed — ACCESS_BLOCKED — for an
+                # article nobody looked at. Leave them unlogged instead.
+                raise BrowserGone(
+                    f"the browser closed during the Connector pass "
+                    f"(last: {handler.last_error[:80]})"
+                )
             # Host-scoped skips (user pressed 's' at the first-item
             # prompt on this host) are a distinct status from "the
             # Connector tried to save but failed".
@@ -3309,10 +3349,14 @@ def _run_browser_in_process(
             if before != len(connector_items):
                 print(f"  {before - len(connector_items)} item(s) skipped: a "
                       f"saved copy is already queued for merging.", flush=True)
-        asyncio.run(_drive_connector(
-            connector_handler, connector_items, zot, log_writer,
-            args, run_date,
-        ))
+        try:
+            asyncio.run(_drive_connector(
+                connector_handler, connector_items, zot, log_writer,
+                args, run_date,
+            ))
+        except NetworkOutage as e:
+            _report_outage(e)
+            return 1
         _settle(float(getattr(args, "connector_merge_wait", 600)))
         if pending.rows():
             print(f"  {len(pending.rows())} saved item(s) still not on the "

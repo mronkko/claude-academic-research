@@ -301,3 +301,54 @@ def test_a_publisher_failure_is_not_mistaken_for_an_outage(
 
     assert len(state["seen"]) == 30
     assert len(bucket) == 30
+
+
+def test_a_crashed_browser_stops_the_pass_at_once(fake_browser, tmp_path) -> None:
+    """Chrome for Testing 153 crashed ~14 s after launch on macOS 27
+    (2026-09-23). Each remaining item then failed with "Target page,
+    context or browser has been closed" and the first failure asked the
+    user whether they could reach the PDF. One such error is enough:
+    stop, prompt nobody, log nothing un-attempted."""
+    from fetchers.browser.base import BrowserGone
+
+    state = _state()
+    handler = _FakeHandler(
+        state, concurrency=1, fail=True,
+        error="Download.save_as: Target page, context or browser has been closed",
+    )
+    bucket: list[dict] = []
+    args = _args(tmp_path, 1)
+    args.no_prompt = False                   # the prompt must not be reached
+
+    def _no_prompt(*a, **kw):                # pragma: no cover - the failure
+        raise AssertionError("asked the user about a crashed browser")
+
+    import enrich_pdfs as ep
+    orig = ep._prompt_on_first_failure
+    ep._prompt_on_first_failure = _no_prompt
+    try:
+        with pytest.raises(BrowserGone):
+            asyncio.run(ep._drive_handler(
+                handler, _items(50), object(), _Rows(), args, "2026-09-23",
+                on_failure="retry_bucket", retry_bucket=bucket,
+                prompt_on_first_failure=True,
+            ))
+    finally:
+        ep._prompt_on_first_failure = orig
+
+    assert len(state["seen"]) == 1
+    assert bucket == []
+
+
+def test_report_failure_records_last_error() -> None:
+    """Page handlers funnel failures through `report_failure`; unless it
+    records the reason, the driver cannot tell a crash or a dead network
+    from "no PDF here"."""
+    from fetchers.browser.base import Counter
+    from fetchers.browser.sage import SageHandler
+
+    h = SageHandler()
+    asyncio.run(h.report_failure(
+        RuntimeError("Target closed"), counter=Counter(), total=1, t_start=0.0,
+    ))
+    assert h.last_error == "Target closed"

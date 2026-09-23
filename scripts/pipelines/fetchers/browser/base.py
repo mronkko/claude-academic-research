@@ -598,6 +598,35 @@ class NetworkOutage(RuntimeError):
     """
 
 
+#: Playwright's wording when the page, its context or the whole browser
+#: is gone — "Download.save_as: Target page, context or browser has been
+#: closed", seen live when Chrome for Testing 153 crashed (SIGSEGV)
+#: ~14 s after launch on macOS 27, 2026-09-23.
+_BROWSER_GONE_MARKERS: tuple[str, ...] = (
+    "target page, context or browser has been closed",
+    "browser has been closed",
+    "browser has disconnected",
+    "target closed",
+)
+
+
+def is_browser_gone(text: str) -> bool:
+    """True when a failure says the browser itself died, not the item."""
+    low = (text or "").lower()
+    return any(marker in low for marker in _BROWSER_GONE_MARKERS)
+
+
+class BrowserGone(NetworkOutage):
+    """The browser crashed or closed mid-run.
+
+    One is conclusive — every later item would fail the same way — and,
+    like an outage, it says nothing about any article. Before this, each
+    remaining item failed in turn and the first failure asked the user
+    whether they could reach the PDF, which pointed at the article.
+    A subclass so every `except NetworkOutage` already stops the pass.
+    """
+
+
 class PublisherHandler(ABC):
     """One handler per publisher. Subclasses set:
 
@@ -886,6 +915,11 @@ class PublisherHandler(ABC):
         screenshot of whatever the shared page happens to show.
         """
         counter.failed += 1
+        # The driver reads this to tell "no PDF here" from "nothing was
+        # asked" (a dead network, a crashed browser). Only the Connector
+        # and EBSCO used to set it, so neither breaker could fire for a
+        # page-navigation handler.
+        self.last_error = str(exc)
         detail = ""
         if page is not None and cache_dir is not None:
             detail = await capture_page_diagnostics(
@@ -964,6 +998,7 @@ class RequestHandler(PublisherHandler):
             body = await resp.body()
         except Exception as e:
             counter.failed += 1
+            self.last_error = str(e)
             print(
                 f"  {progress_tag(counter, total, t_start)} "
                 f"ERROR: {str(e)[:70]}",
