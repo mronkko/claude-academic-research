@@ -44,8 +44,11 @@ _ENDS = (
     re.compile(r"All rights reserved\.", re.IGNORECASE),
     # "…Springer Nature.Given…", "© 2014.If…": a sentence end with no
     # space before a capital, which ordinary prose never has. A
-    # lower-case letter or digit before the dot keeps "B.V" out.
-    re.compile(r"[a-z0-9)]\.(?=[A-Z])"),
+    # lower-case letter or digit before the dot keeps "B.V" out; so does
+    # requiring a whole acronym of two or more capitals ("© 2016
+    # IABE.Strikes…", Scopus, whose own `.copyright` there was a generic
+    # Elsevier line and no help).
+    re.compile(r"(?:[a-z0-9)]|\b[A-Z]{2,})\.(?=[A-Z])"),
 )
 
 #: A publisher-name ending followed by the abstract's first word, with

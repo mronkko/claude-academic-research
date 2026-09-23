@@ -59,6 +59,17 @@ def test_fused_and_spaced_publisher_endings(raw) -> None:
     assert clean_abstract(raw)[0].isupper()
 
 
+def test_a_notice_ending_in_a_fused_acronym() -> None:
+    """DOI 10.18374/ijbr-16-4.6 via Scopus, whose `.copyright` was a
+    generic Elsevier line that matched nothing in the text."""
+    raw = "© 2016 IABE.Strikes are a key tool for workers."
+    hint = "Copyright 2016 Elsevier B.V., All rights reserved."
+    assert clean_abstract(raw) == "Strikes are a key tool for workers."
+    assert clean_abstract(raw, copyright=hint) == "Strikes are a key tool for workers."
+    # One capital before the dot is still an initial, not a sentence end.
+    assert clean_abstract("© 2013 Elsevier B.V.This paper.") == "This paper."
+
+
 @pytest.mark.parametrize("tail", [
     "Copyright (C) 2001 John Wiley & Sons, Ltd.",
     "Copyright ? 2006 John Wiley & Sons, Ltd.",
