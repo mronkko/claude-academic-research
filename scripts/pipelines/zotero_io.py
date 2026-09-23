@@ -1909,6 +1909,20 @@ class ZoteroClient:
         )
         return resp.status_code
 
+    def parent_of(self, item_key: str) -> str:
+        """`item_key`'s parent on the write surface ("" for a top item).
+
+        Where a merge re-parented it, so where its result is checked."""
+        item = self._write_client().item(item_key)
+        return (item.get("data", {}) or {}).get("parentItem", "") or ""
+
+    def reparent(self, child_key: str, parent_key: str) -> None:
+        """Move `child_key` under `parent_key` on the write surface."""
+        z = self._write_client()
+        item = z.item(child_key)
+        item["data"]["parentItem"] = parent_key
+        self._safe_update_item(item, z)
+
     def trash_item(self, item_key: str) -> None:
         """Move `item_key` to Zotero's trash (cloud), recoverable from the
         Trash in the UI, unlike pyzotero's permanent `delete_item`.
@@ -1926,6 +1940,7 @@ class ZoteroClient:
     def _reparent_child(
         self, child_key: str, target_key: str, keeper_sigs: set,
         child_content_types: tuple[str, ...] | None, *, attempts: int = 4,
+        client=None,
     ) -> str | None:
         """Move one child to `target_key`. Returns None when the child is
         filtered out, "dupe" when the keeper already has the same file,
@@ -1936,8 +1951,9 @@ class ZoteroClient:
         and the md5/mtime update it writes bumps the attachment's version
         between our read and our PATCH; seen twice in one night.
         """
+        z = client if client is not None else self.cloud
         for attempt in range(attempts):
-            fresh = self.cloud.item(child_key)
+            fresh = z.item(child_key)
             fd = fresh.get("data", {})
             if child_content_types is not None and (
                 fd.get("itemType") != "attachment"
@@ -1955,7 +1971,7 @@ class ZoteroClient:
                     return "dupe"
             fd["parentItem"] = target_key
             try:
-                self._safe_update_item(fresh, self.cloud)
+                self._safe_update_item(fresh, z)
             except Exception as exc:
                 if _http_status_of(exc) != 412 or attempt == attempts - 1:
                     raise
@@ -2006,24 +2022,29 @@ class ZoteroClient:
         different non-empty DOIs, since a mismatched merge permanently
         entangles two separate papers' metadata. Raises ValueError.
 
-        **Pinned to the cloud surface, unlike every other write here.**
-        Two reasons, and they reinforce each other. The trash step is a
-        hand-built PATCH rather than a pyzotero call, and its local form
-        needs the `Zotero-Server-ID` header that pyzotero only computes
-        behind a private method — so that one step could not follow the
-        others across, and a merge split over two surfaces would 412 on
-        the version it carries between them. Independently, the only
-        caller already waits for the Connector's freshly-saved item to
-        reach the cloud (`_wait_for_cloud_sync` in
-        `fetchers/browser/connector.py`) precisely because this runs
-        there. Reads inside therefore use `self.cloud` directly rather
-        than `get_item`, which now follows the write surface.
+        **Runs on the write surface: Desktop's local API when a local
+        key is configured, the cloud otherwise. The trash step alone
+        stays on the cloud.** It used to be pinned to the cloud, and
+        Zotero Desktop did not always take the result. The Connector
+        saves the item in Desktop, and Desktop may still be writing to
+        that attachment (the md5/mtime of a finishing upload) when the
+        cloud re-parents it. Desktop overwrote two re-parents that had
+        looked successful, and on 2026-09-23 26 of 213 merged PDFs were
+        still under the trashed item in Desktop hours later while the
+        cloud had them under the keeper. A re-parent made in Desktop
+        itself has nothing to be overwritten by.
 
-        Once the trash step has a local form, this and that 30-second
-        sync wait can go local together — not before.
+        The trash is a hand-built `PATCH {"deleted": 1}`, since pyzotero
+        rejects `deleted` as a field. Its local form (Zotero-Server-ID,
+        now public on pyzotero's client as `server_id`, plus the local
+        key) has not been verified live, so it stays on the cloud, which
+        has. That keeps the Connector's wait for the new item to reach
+        the cloud. The version it sends is read from the cloud at trash
+        time, so no version crosses surfaces.
         """
-        target = self.cloud.item(target_key)
-        duplicate = self.cloud.item(duplicate_key)
+        z = self._write_client()
+        target = z.item(target_key)
+        duplicate = z.item(duplicate_key)
 
         target_data = target.get("data", {})
         dup_data = duplicate.get("data", {})
@@ -2035,8 +2056,8 @@ class ZoteroClient:
                 f"duplicate DOI {dup_doi!r}",
             )
 
-        target_children = self.cloud.children(target_key)
-        dup_children = self.cloud.children(duplicate_key)
+        target_children = z.children(target_key)
+        dup_children = z.children(duplicate_key)
 
         # Step 1: tag union.
         existing_tags = {t.get("tag", "")
@@ -2048,16 +2069,16 @@ class ZoteroClient:
             target_data["tags"] = [
                 {"tag": t} for t in sorted(existing_tags | new_tags)
             ]
-            self._safe_update_item(target, self.cloud)
-            target = self.cloud.item(target_key)          # refresh version
+            self._safe_update_item(target, z)
+            target = z.item(target_key)          # refresh version
 
         # Step 2: collection union.
         existing_collections = set(target.get("data", {}).get("collections", []))
         dup_collections = set(dup_data.get("collections", []))
         new_collections = dup_collections - existing_collections
         for coll_key in new_collections:
-            self.cloud.addto_collection(coll_key, target)
-            target = self.cloud.item(target_key)          # refresh version
+            z.addto_collection(coll_key, target)
+            target = z.item(target_key)          # refresh version
 
         # Step 3: re-parent children, skipping duplicate attachments.
         keeper_sigs = {
@@ -2077,6 +2098,7 @@ class ZoteroClient:
             child_key = child.get("key", "")
             moved_one = self._reparent_child(
                 child_key, target_key, keeper_sigs, child_content_types,
+                client=z,
             )
             if moved_one is None:
                 continue
@@ -2101,7 +2123,7 @@ class ZoteroClient:
         accounted = set(moved) | set(skipped_dupes)
         try:
             late = [
-                c for c in (self.cloud.children(duplicate_key) or [])
+                c for c in (z.children(duplicate_key) or [])
                 if c.get("data", {}).get("contentType") == "application/pdf"
                 and c.get("key") not in accounted
             ]

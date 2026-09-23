@@ -402,11 +402,13 @@ class ZoteroConnectorHandler(PublisherHandler):
         # Read the moved PDFs back, twice, a few seconds apart. A merge
         # counts, and --replace may delete the old copy, only if they are
         # still under the keeper: Zotero Desktop overwrote two re-parents
-        # that had looked successful.
+        # that had looked successful. Read where the merge wrote (Desktop
+        # when a local key is set), not the cloud: the cloud catches up
+        # only when Desktop next syncs.
         for _ in range(2):
             time.sleep(verify_s)
             for key in stats.get("moved_pdf_keys") or []:
-                parent = (zot.cloud.item(key).get("data", {}) or {}).get("parentItem")
+                parent = zot.parent_of(key)
                 if parent != keeper:
                     raise MergeNotVerified(
                         f"{key} is under {parent}, not {keeper}, after the merge",

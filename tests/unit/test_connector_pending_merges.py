@@ -196,10 +196,11 @@ def test_a_merge_counts_only_if_the_pdf_stays_under_the_keeper(monkeypatch) -> N
     handler.keep_extras = False
     zot = MagicMock()
     zot.merge_duplicate_item.return_value = {"moved": 1, "moved_pdf_keys": ["P"]}
-    zot.cloud.item.side_effect = [_pdf("P", "KEEPER", 7), _pdf("P", "KEEPER", 7)]
+    # Read on the merge's own surface (`parent_of`), not the cloud.
+    zot.parent_of.side_effect = ["KEEPER", "KEEPER"]
     assert handler.merge_saved_item(zot, "KEEPER", "N")["moved_pdf_keys"] == ["P"]
 
-    zot.cloud.item.side_effect = [_pdf("P", "KEEPER", 7), _pdf("P", "N", 8)]  # overwritten
+    zot.parent_of.side_effect = ["KEEPER", "N"]  # overwritten
     with pytest.raises(connector.MergeNotVerified):
         handler.merge_saved_item(zot, "KEEPER", "N")
 
