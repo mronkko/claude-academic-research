@@ -9,9 +9,19 @@ Two-phase lookup strategy:
      (e.g. Annals `10.1080/...` in WoS vs `10.5465/...` in the
      library).
 
-Requires `WOS_API_KEY_EXTENDED`. Falls back to `WOS_API_KEY` (Starter
-tier) if only the starter key is configured — Starter has a narrower
-query language but supports `DO=` and `TI=` for abstract lookup.
+Requires `WOS_API_KEY_EXTENDED` (the Expanded tier). **The Starter tier
+cannot supply abstracts**: its documents carry citations, identifiers,
+keywords, links, names, source, title and types, and no abstract —
+checked live on 2026-09-23 (`DO=(10.5465/amd.2015.0052)`, HTTP 200, no
+`abstract` field). This module used to fall back to a Starter-only key
+and read `hit["abstract"]`, which is never there, so every item came
+back None — "WoS answered and has no abstract" — and was counted towards
+`not_found`. With only a Starter key the source now reports itself
+unavailable instead, which counts for nothing.
+
+The same finding rules out falling back to Starter when the Expanded
+key's daily quota runs out, although the two tiers do have separate
+quotas.
 """
 
 from __future__ import annotations
@@ -105,8 +115,14 @@ class WosSource(AbstractFetcher):
         key, tier = self._key_and_tier()
         if not key or self.http is None:
             raise SourceUnavailable("no WoS API key configured")
-        fetcher = self._fetch_expanded if tier == "expanded" else self._fetch_starter
-        return fetcher(doi, _fallback_title(title), key, meta or _NO_META)
+        if tier != "expanded":
+            raise SourceUnavailable(
+                "only a WoS Starter key is configured, and the Starter API "
+                "returns no abstracts; set [wos] expanded_key to use WoS here",
+            )
+        return self._fetch_expanded(
+            doi, _fallback_title(title), key, meta or _NO_META,
+        )
 
     # ------------------------------------------------------------------
     # Expanded tier (richer XML/JSON payload, real abstract element)
@@ -277,74 +293,3 @@ class WosSource(AbstractFetcher):
             text = " ".join(str(p) for p in text)
         text = str(text).strip()
         return text if len(text) > 40 else None
-
-    # ------------------------------------------------------------------
-    # Starter tier (simpler payload)
-    # ------------------------------------------------------------------
-
-    def _fetch_starter(
-        self, doi: str, title: str | None, key: str,
-        meta: ItemMeta = _NO_META,
-    ) -> str | None:
-        headers = {"X-ApiKey": key, "Accept": "application/json"}
-
-        text = self._starter_abstract_from_query(f"DO=({doi})", headers)
-        if text:
-            return text
-        if not title:
-            return None
-        # Quoted phrase here, so the operator words stay: inside quotes
-        # they are words, and dropping them would break the phrase.
-        cleaned_title = _query_title(title, drop_operators=False)
-        if not cleaned_title:
-            return None
-        hits = self._starter_search(
-            f'TI=("{cleaned_title[:100]}")', headers, limit=5,
-        )
-        for hit in hits:
-            hit_title = (hit.get("title") or {}).get("value") or ""
-            if not (hit_title and matches(hit_title, title)):
-                continue
-            source = hit.get("source") or {}
-            authors = (hit.get("names") or {}).get("authors") or []
-            why = record_agrees(
-                meta,
-                year=source.get("publishYear"),
-                surnames={
-                    str(a.get("wosStandard") or a.get("displayName") or "")
-                    .split(",")[0]
-                    for a in authors if isinstance(a, dict)
-                },
-                venue=str(source.get("sourceTitle") or ""),
-            )
-            if why:
-                logger.info("wos: title hit for %s refused — %s", doi, why)
-                continue
-            abstract = hit.get("abstract") or ""
-            if len(abstract.strip()) > 40:
-                return abstract.strip()
-        return None
-
-    def _starter_abstract_from_query(
-        self, query: str, headers: dict,
-    ) -> str | None:
-        hits = self._starter_search(query, headers, limit=1)
-        if not hits:
-            return None
-        abstract = hits[0].get("abstract") or ""
-        return abstract.strip() if len(abstract.strip()) > 40 else None
-
-    def _starter_search(
-        self, query: str, headers: dict, *, limit: int,
-    ) -> list[dict]:
-        resp = self.http.get(
-            _STARTER_URL,
-            headers=headers,
-            params={"q": query, "limit": limit, "page": 1, "db": "WOS"},
-            timeout=30,
-        )
-        if not answered(resp, "wos"):
-            return []
-        data = resp.json() or {}
-        hits = data.get("hits") or []
-        return hits if isinstance(hits, list) else []

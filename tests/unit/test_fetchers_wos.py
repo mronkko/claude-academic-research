@@ -247,17 +247,16 @@ def test_wos_prefers_extended_key_over_starter() -> None:
     assert _STARTER_URL not in called_urls
 
 
-def test_wos_starter_tier_is_used_when_only_starter_key() -> None:
-    sess, _ = _http_returning(
-        # Starter response shape: {hits: [{abstract: ...}]}
-        {"hits": [{"abstract": "starter abstract text long enough to qualify"}]},
-    )
+def test_a_starter_only_key_is_unavailable_not_a_miss() -> None:
+    """The Starter API returns no abstracts (checked live 2026-09-23).
+    Reading one that is never there made every item "WoS has no
+    abstract", which counted towards not_found."""
+    from fetchers.base import SourceUnavailable
+    sess, _ = _http_returning({"hits": [{"title": {"value": "T"}}]})
     src = WosSource(http=sess, config=_Config(starter="STA"))
-    result = src.fetch_abstract("10.5465/amd.2015.0052")
-    assert result is not None
-    assert "starter" in result
-    from fetchers.wos import _STARTER_URL
-    assert sess.get.call_args_list[0].args[0] == _STARTER_URL
+    with pytest.raises(SourceUnavailable, match="Starter"):
+        src.fetch_abstract("10.5465/amd.2015.0052")
+    sess.get.assert_not_called()
 
 
 def test_wos_short_abstract_rejected() -> None:
