@@ -359,3 +359,93 @@ def test_adopt_legacy_resolver_cache_is_a_one_off_command(
         "--resolver-cache-dir", str(tmp_path),
     ])
     assert enrich_pdfs._adopt_legacy_resolver_cache(bad) == 2
+
+
+def _doi_cache_with(tmp_path, entries: dict[str, str]):
+    from fetchers.doi_resolver import DoiResolution, DoiResolverCache
+
+    cache = DoiResolverCache(tmp_path)
+    for doi, url in entries.items():
+        cache.put(doi, DoiResolution(url=url))
+    return cache
+
+
+def test_the_preflight_prices_only_dois_that_reach_the_dual_lookup(
+    tmp_path,
+) -> None:
+    """Only handler-routed items reach `lookup_dual`; Connector items are
+    asked the dated query alone, later. Pricing the whole queue at the
+    dual key set reported "569 of 712 still need a resolver query" on a
+    run that then checked 143 — the date-ignoring answers it counted as
+    missing were never going to be asked for.
+    """
+    import enrich_pdfs
+    from fetchers.browser import all_handlers
+
+    cache = _doi_cache_with(tmp_path, {
+        "10.1111/a": "https://onlinelibrary.wiley.com/doi/10.1111/a",
+        "10.99999/b": "https://example.org/b",
+    })
+    handlers = all_handlers()
+    got = enrich_pdfs._dual_lookup_candidates(
+        ["10.1111/a", "10.99999/b", "10.99999/uncached"],
+        doi_cache=cache, handlers=handlers, no_access=set(), publisher=None,
+    )
+    # The uncached DOI stays: Crossref may still route it to a handler.
+    assert got == ["10.1111/a", "10.99999/uncached"]
+
+    wiley = resolve_by_doi("10.1111/a", handlers).name
+    assert enrich_pdfs._dual_lookup_candidates(
+        ["10.1111/a"], doi_cache=cache, handlers=handlers,
+        no_access={wiley}, publisher=None,
+    ) == []
+    assert enrich_pdfs._dual_lookup_candidates(
+        ["10.1111/a"], doi_cache=cache, handlers=handlers,
+        no_access=set(), publisher="some-other-publisher",
+    ) == []
+
+
+def test_the_banner_says_the_connector_share_is_not_priced() -> None:
+    from unittest.mock import MagicMock
+
+    import enrich_pdfs
+
+    cfg = MagicMock()
+    cfg.cache = None
+    cfg.resolvers = ()
+    line = " ".join(
+        enrich_pdfs._preflight_cost_line(["10.1/a"], cfg, queued=3).split()
+    )
+    assert "1 of 1 handler-routed" in line
+    assert "other 2 queued DOIs go to the Connector" in line
+
+    none = " ".join(
+        enrich_pdfs._preflight_cost_line([], cfg, queued=4).split()
+    )
+    assert "None of the 4 queued DOIs" in none
+
+
+def test_an_empty_cache_names_a_warm_sibling(tmp_path) -> None:
+    """A fresh `--cache-dir` per pass leaves the answers one directory
+    over. Saying where turns "0 already cached" into an instruction.
+    """
+    from unittest.mock import MagicMock
+
+    import enrich_pdfs
+
+    warm = tmp_path / "pass1"
+    warm.mkdir()
+    (warm / "resolver_cache.json").write_text('{"10.1/a@@x": {}}')
+    fresh = tmp_path / "pass2"
+    fresh.mkdir()
+
+    cfg = MagicMock()
+    cfg.cache.path = fresh / "resolver_cache.json"
+    cfg.resolvers = ()
+    line = " ".join(
+        enrich_pdfs._preflight_cost_line(["10.1/a"], cfg).split()
+    )
+    assert f"--resolver-cache-dir {warm}" in line
+
+    cfg.cache.path = warm / "resolver_cache.json"
+    assert enrich_pdfs._sibling_resolver_cache(cfg) is None

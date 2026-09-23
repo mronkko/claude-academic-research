@@ -982,7 +982,87 @@ def _humanize_duration(seconds: float) -> str:
     return f"{hours}h{minutes:02d}m"
 
 
-def _preflight_cost_line(dois: list[str], resolver_cfg) -> str:
+def _dual_lookup_candidates(
+    dois: list[str],
+    *,
+    doi_cache,
+    handlers,
+    no_access: Collection[str],
+    publisher: str | None,
+) -> list[str]:
+    """The queued DOIs the pre-flight loop may send through `lookup_dual`.
+
+    Only items routed to a direct publisher handler reach it; everything
+    else goes to the Connector, whose route lookup later asks the dated
+    query alone. The cost banner used to price the whole queue at
+    `lookup_dual`'s key set, so a cache holding every dated answer but few
+    date-ignoring ones reported hundreds of queries the run never made —
+    "569 of 712 still need a resolver query", followed by 143 checked.
+
+    Routing is replayed from the Crossref cache only, never the network:
+    a DOI whose resolution is not cached yet might resolve to a handler's
+    host, so it stays in. The result is still an upper bound — a Pass 2
+    API hit skips the resolver too — but no longer one inflated by items
+    that cannot reach it.
+    """
+    from urllib.parse import urlparse as _urlparse
+
+    from fetchers.browser import resolve_by_doi, resolve_by_host
+    from fetchers.doi_resolver import cached_resolution
+
+    out: list[str] = []
+    for doi in dois:
+        resolution = cached_resolution(doi, doi_cache)
+        if resolution is None:
+            out.append(doi)
+            continue
+        host = (
+            _urlparse(resolution.url).hostname or "" if resolution.url else ""
+        )
+        direct = resolve_by_host(host, handlers) if host else None
+        if direct is None:
+            direct = resolve_by_doi(doi, handlers)
+        if direct is None or direct.name in no_access:
+            continue
+        if publisher and direct.name != publisher:
+            continue
+        out.append(doi)
+    return out
+
+
+def _sibling_resolver_cache(resolver_cfg) -> Path | None:
+    """A warmer `resolver_cache.json` next to the one this run uses, if any.
+
+    The usual cause of an empty resolver cache is a fresh `--cache-dir`
+    per pass without `--resolver-cache-dir`: the answers exist, one
+    directory over. Naming the file turns "0 already cached" from a
+    symptom into an instruction.
+    """
+    cache = getattr(resolver_cfg, "cache", None)
+    path = getattr(cache, "path", None)
+    if not isinstance(path, Path):
+        return None
+    here = path.parent.resolve()
+    best: tuple[int, Path] | None = None
+    try:
+        candidates = list(here.parent.glob("*/resolver_cache.json"))
+    except OSError:
+        return None
+    for cand in candidates:
+        if cand.parent.resolve() == here:
+            continue
+        try:
+            size = cand.stat().st_size
+        except OSError:
+            continue
+        if size > 2 and (best is None or size > best[0]):
+            best = (size, cand)
+    return best[1] if best else None
+
+
+def _preflight_cost_line(
+    dois: list[str], resolver_cfg, *, queued: int | None = None,
+) -> str:
     """One line pricing the resolver sweep before it starts.
 
     The sweep is serial and runs against an institutional endpoint, so a
@@ -1004,32 +1084,59 @@ def _preflight_cost_line(dois: list[str], resolver_cfg) -> str:
     from fetchers.library_resolver import cached_answer_count
 
     total = len(dois)
+    others = (queued - total) if queued is not None and queued > total else 0
+    connector_note = (
+        f" The other {others} queued DOI{'' if others == 1 else 's'} "
+        f"{'goes' if others == 1 else 'go'} to the Connector and "
+        f"{'is' if others == 1 else 'are'} asked the dated query only, "
+        f"later."
+        if others else ""
+    )
     if not total:
-        body = "No DOIs in the queue — nothing to ask the resolver about."
+        body = (
+            "No DOIs in the queue — nothing to ask the resolver about."
+            if not others else
+            f"None of the {others} queued DOIs routes to a direct "
+            f"publisher handler, so this pre-flight asks nothing; they "
+            f"go to the Connector."
+        )
     else:
+        # Once narrowed to handler-routed DOIs, "queued" would claim the
+        # count covers the whole queue, which is the overstatement this
+        # function used to make.
+        kind = "handler-routed" if others else "queued"
         cached = cached_answer_count(dois, resolver_cfg)
         todo = total - cached
         if not todo:
             body = (
-                f"All {total} queued DOI{'' if total == 1 else 's'} already "
+                f"All {total} {kind} DOI{'' if total == 1 else 's'} already "
                 f"{'has' if total == 1 else 'have'} a cached resolver "
                 f"answer — this pre-flight is free."
             )
         else:
             estimate = _humanize_duration(todo * _PREFLIGHT_SECONDS_PER_ITEM)
             body = (
-                f"Up to {todo} of {total} queued DOIs still "
+                f"Up to {todo} of {total} {kind} DOIs still "
                 f"{'needs' if todo == 1 else 'need'} a resolver query "
                 f"({cached} already cached) — roughly {estimate}. "
                 f"Answers persist, so a re-run pays only for what is new. "
                 f"Progress every {_PREFLIGHT_TICK} queries."
             )
+            if not cached:
+                sibling = _sibling_resolver_cache(resolver_cfg)
+                if sibling is not None:
+                    body += (
+                        f" A populated resolver cache exists at "
+                        f"{sibling.parent} — pass --resolver-cache-dir "
+                        f"{sibling.parent} to reuse it."
+                    )
+        body += connector_note
     # `break_on_hyphens=False`: the default splits "pre-flight" across
     # lines, which reads as a typo in output whose whole job is to be
     # believed.
     return textwrap.fill(
         body, width=74, initial_indent="  ", subsequent_indent="  ",
-        break_on_hyphens=False,
+        break_on_hyphens=False, break_long_words=False,
     )
 
 
@@ -2800,6 +2907,7 @@ def _run_browser_in_process(
             for zi in to_process
         ) if doi
     ]
+    queued_doi_count = len(preflight_dois)
 
     if resolver_cfg is not None and not connector_only:
         print(
@@ -2839,7 +2947,18 @@ def _run_browser_in_process(
                 "resolver output.",
                 flush=True,
             )
-        print(_preflight_cost_line(preflight_dois, resolver_cfg), flush=True)
+        # Narrowed from the whole queue to what can reach `lookup_dual`;
+        # see `_dual_lookup_candidates` for the overstatement this fixes.
+        preflight_dois = _dual_lookup_candidates(
+            preflight_dois, doi_cache=doi_cache, handlers=direct_handlers,
+            no_access=no_access, publisher=args.publisher,
+        )
+        print(
+            _preflight_cost_line(
+                preflight_dois, resolver_cfg, queued=queued_doi_count,
+            ),
+            flush=True,
+        )
 
     # Counter for that progress line. Only items that actually reach the
     # resolver are counted, so the number means "queries made", not
@@ -3008,9 +3127,9 @@ def _run_browser_in_process(
             if checked % _PREFLIGHT_TICK == 0:
                 rate = checked / max(time.monotonic() - t_preflight, 1e-6)
                 # An upper bound, and said as one: `len(preflight_dois)`
-                # counts every DOI in the queue, while `checked` counts
-                # only those that reached the resolver, so the remainder
-                # over-states. The live rate is the honest half — it
+                # counts every DOI that *could* reach the resolver (see
+                # `_dual_lookup_candidates`), while `checked` counts only
+                # those that did, so the remainder over-states. The live rate is the honest half — it
                 # already reflects this run's cache hit mix, which the
                 # constant-rate estimate printed before the loop cannot.
                 left = max(len(preflight_dois) - checked, 0)

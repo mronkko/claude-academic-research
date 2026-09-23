@@ -171,6 +171,22 @@ def _extract_resolution(msg: dict) -> DoiResolution:
     )
 
 
+def cached_resolution(
+    doi: str, cache: DoiResolverCache | None,
+) -> DoiResolution | None:
+    """The cached answer `resolve_doi` would return, without asking Crossref.
+
+    For callers that must reason about routing before paying for it — the
+    `enrich_pdfs.py` pre-flight prices its resolver sweep from the routes
+    already known, and a network call there would cost the very time the
+    estimate is meant to warn about.
+    """
+    doi_key = _normalize_doi_key(doi or "")
+    if not doi_key or cache is None:
+        return None
+    return cache.get(doi_key)
+
+
 def resolve_doi(
     doi: str,
     *,
@@ -221,5 +237,6 @@ def resolve_doi(
 __all__ = [
     "DoiResolution",
     "DoiResolverCache",
+    "cached_resolution",
     "resolve_doi",
 ]
