@@ -72,7 +72,11 @@ import zotero_io  # noqa: E402
 from abstract_clean import clean_abstract, not_an_abstract  # noqa: E402
 from core.config_loader import get, require  # noqa: E402
 from fetchers._title_match import item_meta  # noqa: E402
-from fetchers.base import AbstractWithheld, SourceUnavailable  # noqa: E402
+from fetchers.base import (  # noqa: E402
+    AbstractWithheld,
+    QuotaExhausted,
+    SourceUnavailable,
+)
 from log_schemas import ABSTRACT_FETCH_FIELDS  # noqa: E402
 
 DEFAULT_LOG_CSV = os.path.join("output", "abstract_fetch_log.csv")
@@ -230,6 +234,11 @@ class CascadeResult:
 #: so once rather than 850 times.
 _UNAVAILABLE_REPORTED: set[str] = set()
 
+#: Source name -> message, for sources whose daily quota ran out during
+#: this run. Asking again cannot succeed before the reset, and each ask
+#: used to cost an item a 429 (see `rate_limits`).
+_QUOTA_EXHAUSTED: dict[str, str] = {}
+
 
 def _try_cascade(
     item: dict,
@@ -255,6 +264,12 @@ def _try_cascade(
     title = (data.get("title") or "").strip()
     meta = item_meta(data)
     for src in sources:
+        spent = _QUOTA_EXHAUSTED.get(src.name)
+        if spent:
+            # Not asked, so not an answer: the item stays lookup_failed
+            # and a later run (after the reset) picks it up.
+            result.errors.append((src.name, spent))
+            continue
         try:
             text = src.fetch_abstract(
                 doi, title=title or None, cache_dir=cache_dir, meta=meta,
@@ -268,6 +283,19 @@ def _try_cascade(
             continue
         except AbstractWithheld as e:
             result.withheld.append((src.name, str(e)))
+            continue
+        except QuotaExhausted as e:
+            msg = str(e)
+            if _QUOTA_EXHAUSTED.setdefault(src.name, msg) is msg:
+                print(
+                    f"  Not asking {src.name} for the rest of this run: its "
+                    f"daily request quota is exhausted (it resets daily, and "
+                    f"every session using the same key draws on it). Items "
+                    f"it would have answered are logged lookup_failed, so a "
+                    f"later run retries them.",
+                    flush=True,
+                )
+            result.errors.append((src.name, msg))
             continue
         except Exception as e:
             print(f"    {src.name}: {e}", flush=True)

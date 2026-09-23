@@ -20,6 +20,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from rate_limits import daily_quota_exhausted
+
 if TYPE_CHECKING:
     import requests
 
@@ -55,6 +57,13 @@ def is_not_found(exc: BaseException) -> bool:
     return getattr(resp, "status_code", None) == 404
 
 
+class QuotaExhausted(RuntimeError):
+    """The source's daily request quota is spent: nothing more can be
+    asked of it this run. A lookup failure, not a verdict — the item is
+    logged `lookup_failed` — but one that holds for every later item, so
+    the cascade stops asking (see `enrich_abstracts`)."""
+
+
 def answered(resp, source: str) -> bool:
     """True for a 200, False for a 404 ("no such record"); raises for
     any other status, so a 429 or a 503 reaches the log as
@@ -63,6 +72,10 @@ def answered(resp, source: str) -> bool:
         return True
     if resp.status_code == 404:
         return False
+    if resp.status_code == 429 and daily_quota_exhausted(
+        getattr(resp, "headers", None),
+    ):
+        raise QuotaExhausted(f"{source}: daily request quota exhausted")
     raise RuntimeError(f"{source} answered HTTP {resp.status_code}")
 
 

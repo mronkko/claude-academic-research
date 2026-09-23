@@ -24,12 +24,14 @@ import sys
 from urllib.parse import urlsplit
 
 import requests
+from rate_limits import daily_quota_exhausted
 from tenacity import (
     retry,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
+from urllib3.exceptions import MaxRetryError
 from urllib3.util.retry import Retry
 
 DEFAULT_TIMEOUT = 30
@@ -56,6 +58,25 @@ class VerboseRetry(Retry):
     `type(self)(**params)`, which preserves the subclass, so overriding
     `sleep()` alone is enough — no extra state to carry across.
     """
+
+    def increment(self, method=None, url=None, response=None, error=None,  # noqa: ANN001, PLR0913 — urllib3's signature
+                  _pool=None, _stacktrace=None):
+        """Give up at once when the response says today's quota is spent.
+
+        Retrying cannot succeed until the quota resets, and every retry
+        is a wait (see `rate_limits`). Raising `MaxRetryError` here is
+        urllib3's own "no more retries" signal: with
+        `raise_on_status=False` the adapter hands back the 429 so the
+        caller sees it immediately.
+        """
+        if response is not None and daily_quota_exhausted(
+            getattr(response, "headers", None),
+        ):
+            raise MaxRetryError(_pool, url, "daily request quota exhausted")
+        return super().increment(
+            method, url, response=response, error=error, _pool=_pool,
+            _stacktrace=_stacktrace,
+        )
 
     def sleep(self, response=None) -> None:  # noqa: ANN001 — urllib3's signature
         delay = None
