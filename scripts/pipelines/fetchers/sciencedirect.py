@@ -883,7 +883,18 @@ class ScienceDirectSource(AbstractFetcher, PdfFetcher):
             # non-Elsevier article) — an answer. Anything else is not.
             if is_not_found(e):
                 return None
-            raise
+            # FULL is refused with a 400 "View parameter specified in
+            # request is not valid" for a journal outside the
+            # entitlement (15 items in one run, 2026-09-23); META_ABS is
+            # served for those and still carries the abstract.
+            if "View parameter" not in str(e):
+                raise
+            try:
+                a = ArticleRetrieval(doi, view="META_ABS")
+            except Exception as meta_err:
+                if is_not_found(meta_err):
+                    return None
+                raise
 
         if a.abstract:
             text = str(a.abstract).strip()

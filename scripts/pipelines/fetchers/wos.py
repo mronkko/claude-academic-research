@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 from fetchers._title_match import matches, strip_html
 from fetchers.base import (
@@ -31,6 +32,27 @@ logger = logging.getLogger(__name__)
 
 _EXPANDED_URL = "https://api.clarivate.com/api/wos"
 _STARTER_URL = "https://api.clarivate.com/apis/wos-starter/v1/documents"
+
+
+#: Words WoS reads as operators in an unquoted query.
+_OPERATORS = frozenset({"and", "or", "not", "near", "same"})
+
+
+def _query_title(title: str, *, drop_operators: bool) -> str:
+    """`title` as words only, fit for `TI=(…)`.
+
+    WoS answers HTTP 400 to a title carrying punctuation its parser or
+    its URL filter rejects: "10% cuts" ("Suspicious content detected in
+    URL"), a stray curly quote ("Unclosed quoted string"), or a leading
+    "And" / "To Strike or Not To Strike" read as operators ("Missing
+    Field Value"). Ten items in one run (2026-09-23) failed that way on
+    the title fallback; as words only, all ten queries succeed. The
+    candidates are re-checked with `matches()` anyway.
+    """
+    words = re.findall(r"[^\W_]+", strip_html(title))
+    if drop_operators:
+        words = [w for w in words if w.lower() not in _OPERATORS]
+    return " ".join(words)
 
 
 class WosSource(AbstractFetcher):
@@ -83,8 +105,7 @@ class WosSource(AbstractFetcher):
                     "entitlement",
                 )
             return None
-        # Guard against double-quotes in the title breaking the query.
-        cleaned_title = strip_html(title).replace('"', "").strip()
+        cleaned_title = _query_title(title, drop_operators=True)
         if not cleaned_title:
             return None
         # WoS `TI=(...)` with unquoted tokens does keyword-AND matching,
@@ -211,7 +232,9 @@ class WosSource(AbstractFetcher):
             return text
         if not title:
             return None
-        cleaned_title = strip_html(title).replace('"', "").strip()
+        # Quoted phrase here, so the operator words stay: inside quotes
+        # they are words, and dropping them would break the phrase.
+        cleaned_title = _query_title(title, drop_operators=False)
         if not cleaned_title:
             return None
         hits = self._starter_search(

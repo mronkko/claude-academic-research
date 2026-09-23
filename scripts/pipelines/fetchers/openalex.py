@@ -46,11 +46,13 @@ from __future__ import annotations
 import gzip
 import logging
 import os
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fetchers import _pdf_validate
+from fetchers._title_match import strip_html
 from fetchers.base import (
     AbstractFetcher,
     PdfFetcher,
@@ -211,6 +213,60 @@ class _OpenAlexClient:
         return work or None
 
 
+#: Words too common to show that two texts are about the same thing.
+_STOPWORDS = frozenset(
+    "about after also among and are because been being between both but "
+    "does during each from have into more most much only other over same "
+    "some such than that their them then there these they this those "
+    "through under upon very what when where which while with within "
+    "without would your".split()
+)
+
+
+def _content_words(text: str) -> set[str]:
+    """Lower-cased words of four letters or more, stopwords out."""
+    words = re.findall(r"[^\W\d_]{4,}", strip_html(text).lower())
+    return {w for w in words if w not in _STOPWORDS}
+
+
+def _grobid_abstract_problem(root, text: str, title: str | None) -> str | None:
+    """Why GROBID's `<abstract>` is not this item's abstract, or None.
+
+    GROBID fills `<abstract>` whether or not the PDF has one. For a
+    letter, news item, editorial or book review it takes whatever text
+    comes first — a reference, the next article on the page, body text —
+    and in one library's re-check (2026-09-23) every one of ten such
+    items got text that was not an abstract. Measured on 92 GROBID
+    abstracts written to that library (17 wrong, 75 right), these four
+    checks reject all 17 and 3 of the 75 (each of the 3 had no GROBID
+    title). The cascade has asked every
+    other source first, so a rejected real abstract costs little and a
+    wrong one written to Zotero is read by screening as the paper's.
+    """
+    header = root.find(".//tei:teiHeader/tei:fileDesc/tei:titleStmt/tei:title", _TEI_NS)
+    header_title = " ".join("".join(header.itertext()).split()) if header is not None else ""
+    # GROBID could not find the front matter; 12 of the 17.
+    if not header_title:
+        return "GROBID found no title, so no front matter"
+    wanted = _content_words(title or "")
+    # The PDF is a different paper: J9JJMWWZ, "The job demands-resources
+    # model of burnout", got the abstract of "Disability, Program Access,
+    # Empathy and Burnout in US Medical Students" — one word in four.
+    # The right ones share 0.4 or more (a PDF title often drops a
+    # subtitle or keeps only one half of it).
+    if wanted and len(wanted & _content_words(header_title)) < len(wanted) / 3:
+        return f"the PDF's title is not the item's ({header_title[:60]!r})"
+    # A footnote or a sentence picked up mid-way: "I1. See …", "3 Access
+    # was…", "effects. In particular…".
+    first = next((c for c in text if c.isalnum()), "")
+    if first.islower() or any(c.isdigit() for c in text[:2]):
+        return f"it starts like a fragment ({text[:20]!r})"
+    # No word of the title anywhere in it; none of the 75 right ones.
+    if wanted and not wanted & _content_words(text):
+        return "it shares no word with the title"
+    return None
+
+
 class OpenAlexSource(_OpenAlexClient, AbstractFetcher, PdfFetcher):
     """Free OA tier for PDFs; paid GROBID tier for abstracts.
 
@@ -261,7 +317,13 @@ class OpenAlexSource(_OpenAlexClient, AbstractFetcher, PdfFetcher):
         if abstract_el is None:
             return None
         text = ET.tostring(abstract_el, encoding="unicode", method="text").strip()
-        return text if len(text) > 50 else None
+        if len(text) <= 50:
+            return None
+        problem = _grobid_abstract_problem(root, text, title)
+        if problem:
+            logger.info("openalex: GROBID abstract for %s rejected — %s", doi, problem)
+            return None
+        return text
 
     def _download_grobid_xml(self, work_id: str, cache_dir) -> bytes | None:
         api_key = self._api_key()
