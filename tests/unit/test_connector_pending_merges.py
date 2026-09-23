@@ -227,7 +227,7 @@ def test_restore_from_trash_patches_deleted_zero(monkeypatch) -> None:
     cloud.item.return_value = {"key": "G2FY5SZZ", "version": 41, "data": {"deleted": 1}}
     cloud.client.patch.return_value = MagicMock(status_code=204)
     monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
-    zc.api_key = "k"
+    zc.api_key, zc.prefer_local, zc.local_api_key = "k", True, None
     assert zc.restore_from_trash("G2FY5SZZ") is True
     kwargs = cloud.client.patch.call_args.kwargs
     assert kwargs["content"] == '{"deleted": 0}'
@@ -243,6 +243,35 @@ def test_trash_item_patches_deleted_one(monkeypatch) -> None:
     cloud.item.return_value = {"key": "OLD", "version": 9, "data": {}}
     cloud.client.patch.return_value = MagicMock(status_code=204)
     monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
-    zc.api_key = "k"
+    zc.api_key, zc.prefer_local, zc.local_api_key = "k", True, None
     zc.trash_item("OLD")
     assert cloud.client.patch.call_args.kwargs["content"] == '{"deleted": 1}'
+
+
+def test_with_a_local_key_the_trash_goes_through_desktop(monkeypatch) -> None:
+    """Verified live on 2026-09-23 against a scratch note: 204 locally,
+    `deleted` read back in Desktop, `deleted: 1` on the Web API after
+    sync. Two details are load-bearing. `_write` adds the Server-ID and
+    local-key headers (428/401 without them). The explicit Content-Type
+    avoids the local API's "400 Empty request body". The version comes
+    from Desktop too.
+    """
+    import zotero_io
+
+    zc = zotero_io.ZoteroClient(api_key="k", group_id="1", local_api_key="LK")
+    local, cloud = MagicMock(), MagicMock()
+    zc._local, zc._cloud = local, cloud
+    local.endpoint, local.library_type, local.library_id = "http://localhost:23119/api", "groups", "1"
+    local.item.return_value = {"key": "OLD", "version": 31036, "data": {}}
+    local._write.return_value = MagicMock(status_code=204)
+
+    zc.trash_item("OLD")
+
+    method = local._write.call_args.args[0]
+    kwargs = local._write.call_args.kwargs
+    assert method == "PATCH"
+    assert kwargs["content"] == '{"deleted": 1}'
+    assert kwargs["headers"]["If-Unmodified-Since-Version"] == "31036"
+    assert kwargs["headers"]["Content-Type"] == "application/json"
+    cloud.item.assert_not_called()
+    cloud.client.patch.assert_not_called()

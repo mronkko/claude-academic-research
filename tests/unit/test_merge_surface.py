@@ -34,9 +34,8 @@ def test_with_a_local_key_the_merge_moves_the_pdf_in_desktop() -> None:
     items = {"KEEPER": _item("KEEPER"), "DUPE": _item("DUPE"), "P": pdf}
     local.item.side_effect = lambda k: items[k]
     local.children.side_effect = lambda k: [pdf] if k == "DUPE" else []
-    cloud.item.return_value = _item("DUPE", version=9)
-    cloud.endpoint, cloud.library_type, cloud.library_id = "https://x", "groups", "1"
-    cloud.client.patch.return_value = MagicMock(status_code=204)
+    local.endpoint, local.library_type, local.library_id = "http://l", "groups", "1"
+    local._write.return_value = MagicMock(status_code=204)
 
     stats = _local_client(local, cloud).merge_duplicate_item(
         "KEEPER", "DUPE", union_tags=False,
@@ -48,10 +47,12 @@ def test_with_a_local_key_the_merge_moves_the_pdf_in_desktop() -> None:
     assert moved["data"]["parentItem"] == "KEEPER"
     cloud.update_item.assert_not_called()
     cloud.children.assert_not_called()
-    # The trash alone stays on the cloud, with the cloud's own version.
+    # The trash goes through Desktop too, with Desktop's own version.
     assert stats["trashed"] == ["DUPE"]
-    headers = cloud.client.patch.call_args.kwargs["headers"]
-    assert headers["If-Unmodified-Since-Version"] == "9"
+    headers = local._write.call_args.kwargs["headers"]
+    assert headers["If-Unmodified-Since-Version"] == "1"
+    cloud.item.assert_not_called()
+    cloud.client.patch.assert_not_called()
 
 
 def test_the_late_pdf_guard_reads_desktop_too() -> None:

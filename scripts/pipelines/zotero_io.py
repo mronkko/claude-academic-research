@@ -1885,27 +1885,47 @@ class ZoteroClient:
             client.update_item(item)
 
     def _set_deleted(self, item_key: str, deleted: int) -> int:
-        """PATCH `{"deleted": 0|1}` on the cloud item; returns the HTTP
+        """PATCH `{"deleted": 0|1}` on the write surface; returns the HTTP
         status. Hand-built because pyzotero rejects `deleted` as an
-        invalid field; see `merge_duplicate_item`'s docstring."""
+        invalid field.
+
+        The version it sends is read from the same surface, so no version
+        crosses surfaces. It was pinned to the cloud until the local form
+        was verified live on 2026-09-23: a standalone note trashed through
+        Desktop's local API answered 204, read back `deleted` locally, and
+        showed `deleted: 1` on the Web API once Desktop synced. The
+        local form has two requirements. It goes through pyzotero's
+        `_write`, which adds the `Zotero-Server-ID` and local-key headers
+        a local write needs (428/401 without them). It also needs an
+        explicit `Content-Type`, since the local API answers a raw body
+        without one with "400 Empty request body". The Web API tolerates
+        the missing header, which is why it went unnoticed.
+        """
         from pyzotero.zotero import build_url
-        latest = self.cloud.item(item_key)
+        local = self.local_writes_enabled
+        z = self._write_client()
+        latest = z.item(item_key)
         url = build_url(
-            self.cloud.endpoint,
-            f"/{self.cloud.library_type}/{self.cloud.library_id}/items/{item_key}",
+            z.endpoint, f"/{z.library_type}/{z.library_id}/items/{item_key}",
         )
-        http = self.cloud.client
+        headers = {
+            "If-Unmodified-Since-Version": str(latest["version"]),
+            "Content-Type": "application/json",
+        }
+        body = json.dumps({"deleted": deleted})
+        if local:
+            return z._write("PATCH", url=url, headers=headers, content=body).status_code
+        http = z.client
         if http is None:
             raise RuntimeError("pyzotero client is not initialised")
         resp = http.patch(
             url=url,
             headers={
-                "If-Unmodified-Since-Version": str(latest["version"]),
+                **headers,
                 "Zotero-API-Key": self.api_key,
                 "Zotero-API-Version": "3",
-                "Content-Type": "application/json",
             },
-            content=json.dumps({"deleted": deleted}),
+            content=body,
         )
         return resp.status_code
 
@@ -1924,15 +1944,15 @@ class ZoteroClient:
         self._safe_update_item(item, z)
 
     def trash_item(self, item_key: str) -> None:
-        """Move `item_key` to Zotero's trash (cloud), recoverable from the
-        Trash in the UI, unlike pyzotero's permanent `delete_item`.
+        """Move `item_key` to Zotero's trash (write surface), recoverable
+        from the Trash in the UI, unlike pyzotero's permanent `delete_item`.
         Raises on failure."""
         status = self._set_deleted(item_key, 1)
         if status not in (200, 204):
             raise RuntimeError(f"trash PATCH returned HTTP {status} for {item_key}")
 
     def restore_from_trash(self, item_key: str) -> bool:
-        """Take `item_key` back out of Zotero's trash (cloud). True on
+        """Take `item_key` back out of Zotero's trash (write surface). True on
         success. For recovering a Connector save a merge trashed while
         its PDF was still under it."""
         return self._set_deleted(item_key, 0) in (200, 204)
@@ -2023,8 +2043,8 @@ class ZoteroClient:
         entangles two separate papers' metadata. Raises ValueError.
 
         **Runs on the write surface: Desktop's local API when a local
-        key is configured, the cloud otherwise. The trash step alone
-        stays on the cloud.** It used to be pinned to the cloud, and
+        key is configured, the cloud otherwise.** It used to be pinned
+        to the cloud, and
         Zotero Desktop did not always take the result. The Connector
         saves the item in Desktop, and Desktop may still be writing to
         that attachment (the md5/mtime of a finishing upload) when the
@@ -2034,13 +2054,7 @@ class ZoteroClient:
         cloud had them under the keeper. A re-parent made in Desktop
         itself has nothing to be overwritten by.
 
-        The trash is a hand-built `PATCH {"deleted": 1}`, since pyzotero
-        rejects `deleted` as a field. Its local form (Zotero-Server-ID,
-        now public on pyzotero's client as `server_id`, plus the local
-        key) has not been verified live, so it stays on the cloud, which
-        has. That keeps the Connector's wait for the new item to reach
-        the cloud. The version it sends is read from the cloud at trash
-        time, so no version crosses surfaces.
+        The trash is `_set_deleted`, on the same surface; see there.
         """
         z = self._write_client()
         target = z.item(target_key)
@@ -2143,36 +2157,13 @@ class ZoteroClient:
                 "trashed": [], "kept_unmoved_pdf": True,
             }
         try:
-            from pyzotero.zotero import build_url
-            latest = self.cloud.item(duplicate_key)
-            url = build_url(
-                self.cloud.endpoint,
-                f"/{self.cloud.library_type}/{self.cloud.library_id}"
-                f"/items/{duplicate_key}",
-            )
-            headers = {
-                "If-Unmodified-Since-Version": str(latest["version"]),
-                "Zotero-API-Key": self.api_key,
-                "Zotero-API-Version": "3",
-                "Content-Type": "application/json",
-            }
-            # pyzotero's httpx client is lazily typed as Optional but
-            # is always created in Zotero.__init__; access it once we've
-            # issued a read against the same instance.
-            http = self.cloud.client
-            if http is None:
-                raise RuntimeError("pyzotero client is not initialised")
-            resp = http.patch(
-                url=url,
-                headers=headers,
-                content=json.dumps({"deleted": 1}),
-            )
-            if resp.status_code in (200, 204):
+            status = self._set_deleted(duplicate_key, 1)
+            if status in (200, 204):
                 trashed.append(duplicate_key)
             else:
                 logger.warning(
                     "merge_duplicate_item: trash PATCH returned HTTP %d for %s",
-                    resp.status_code, duplicate_key,
+                    status, duplicate_key,
                 )
         except Exception as e:
             logger.warning(
