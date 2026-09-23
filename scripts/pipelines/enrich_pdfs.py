@@ -2149,6 +2149,12 @@ def _log_connector_bailout(
         })
 
 
+#: Handler outcomes whose row `_EmptySaveStreak.observe` writes.
+_STREAK_LOGGED_OUTCOMES = frozenset({
+    "saved_nothing", "offered_nothing", "offered_nothing_unasked",
+})
+
+
 class _EmptySaveStreak:
     """Tells "Zotero Desktop stopped taking saves" from "no access".
 
@@ -2159,6 +2165,14 @@ class _EmptySaveStreak:
     established, and not ACCESS_BLOCKED. Run 7 attached 54 items, then
     logged four ScienceDirect pages ACCESS_BLOCKED, 240 s each, while
     Desktop answered reads but received nothing.
+
+    Two outcomes skip the hold, because the Connector itself said the
+    save was over (`connector.classify_save_watch`). `offered_nothing`
+    means Desktop answered, so it cannot be stalled: the held items are
+    released too. `offered_nothing_unasked` means Desktop was never
+    asked, so it proves nothing either way and leaves the hold as is.
+    Without this, three HTML-galley pages in a row ended an overnight
+    pass while Desktop was working fine.
     """
 
     def __init__(self, limit: int = 3) -> None:
@@ -2179,6 +2193,10 @@ class _EmptySaveStreak:
                 self.held = []
                 return out
             return []
+        if outcome == "offered_nothing_unasked":
+            return [(item, "connector_save_failed")]
+        if outcome == "offered_nothing":
+            return self.flush() + [(item, "connector_save_failed")]
         return self.flush()
 
     def flush(self) -> list[tuple]:
@@ -2286,7 +2304,8 @@ async def _connector_item_loop(
         ):
             log_row(held_item, held_status)
         if status and not (
-            status == "connector_save_failed" and outcome == "saved_nothing"
+            status == "connector_save_failed"
+            and outcome in _STREAK_LOGGED_OUTCOMES
         ):
             log_row(item, status)
         if streak.stalled:

@@ -70,6 +70,137 @@ _CONNECTOR_PING_URL = "http://127.0.0.1:23119/connector/ping"
 #: publisher latency, not just with the user clicking a picker.
 _SAVE_POLL_TIMEOUT_S = 240.0
 
+#: How long to keep polling once the Connector says the save is over.
+#: A finished save has already written its parent item (Desktop gets it
+#: from `saveItems`, before attachments download), so this is headroom
+#: for `recent_items` latency, not for the save itself.
+_SAVE_DONE_GRACE_S = {"saved": 30.0}
+_SAVE_DONE_GRACE_DEFAULT_S = 5.0
+
+#: Installed once per service-worker lifetime; re-run before every save
+#: because an MV3 worker can be torn down between items. It watches the
+#: two things the background sees of a save. The promise
+#: `saveWithTranslator` returns cannot be used: it resolves with the
+#: first frame that answers, and a frame that ignores the save (wrong
+#: `instanceID`) answers `undefined` at once.
+#:   * `progressWindow.done`, which the page sends once `onTranslate`
+#:     is over (every translator, fallback and attachment tried) and the
+#:     background forwards to the top frame: `[true]` or `[false, why]`.
+#:   * `Zotero.Connector.callMethod("save…")` — the calls to Desktop.
+#:     Their settling is the evidence Desktop is (or is not) answering.
+#: Missing either hook degrades to the old behaviour, the full wait.
+_SAVE_WATCH_INSTALL_JS = """
+() => {
+    if (self.__arSaveWatch) return true;
+    if (typeof Zotero === 'undefined' || !Zotero.Messaging
+        || !Zotero.Connector) return false;
+    const w = {cur: null, everSawSave: false};
+    w.begin = () => { w.cur = {done: null, saves: []}; };
+    const origSend = Zotero.Messaging.sendMessage;
+    Zotero.Messaging.sendMessage = function (name, args, ...rest) {
+        try {
+            if (name === 'progressWindow.done' && w.cur && !w.cur.done) {
+                const a = Array.isArray(args) ? args : [];
+                w.cur.done = {ok: a[0] === true,
+                              reason: a[1] ? String(a[1]) : ''};
+            }
+        } catch (_) {}
+        return origSend.call(this, name, args, ...rest);
+    };
+    for (const fn of ['callMethod', 'callMethodWithCookies']) {
+        const orig = Zotero.Connector[fn];
+        if (typeof orig !== 'function') continue;
+        Zotero.Connector[fn] = function (options, ...rest) {
+            const method = typeof options === 'string'
+                ? options : (options && options.method) || '';
+            if (!/^save/.test(method) || !w.cur) {
+                return orig.call(this, options, ...rest);
+            }
+            w.everSawSave = true;
+            const rec = {method, state: 'pending'};
+            w.cur.saves.push(rec);
+            let p;
+            try { p = orig.call(this, options, ...rest); }
+            catch (e) { rec.state = 'error'; throw e; }
+            Promise.resolve(p).then(() => { rec.state = 'ok'; },
+                                    () => { rec.state = 'error'; });
+            return p;
+        };
+    }
+    self.__arSaveWatch = w;
+    return true;
+}
+"""
+
+_SAVE_WATCH_READ_JS = """
+() => {
+    const w = self.__arSaveWatch;
+    if (!w || !w.cur) return null;
+    return {done: w.cur.done, saves: w.cur.saves.map(s => s.state),
+            everSawSave: w.everSawSave};
+}
+"""
+
+
+def classify_save_watch(state: dict | None) -> str:
+    """What the Connector's own signals say about a save, or "".
+
+    "" — not over yet, or no watch: keep waiting the full timeout.
+    Otherwise the save is over and nothing more is coming:
+
+    * ``saved`` — `progressWindow.done` true: Desktop took a record.
+    * ``desktop_error`` — a call to Desktop failed. Over, but the fault
+      may be Desktop's, so it still counts towards a stall.
+    * ``offered_nothing`` — the translator gave up and Desktop answered
+      every call it got: the page, not Desktop.
+    * ``offered_nothing_unasked`` — the translator gave up without
+      asking Desktop anything (it found no item). Says nothing either
+      way about Desktop.
+    * ``finished_unverified`` — over, but the `save…` hook has never
+      fired in this worker, so "Desktop was not asked" is unproven.
+    """
+    if not state or not state.get("done"):
+        return ""
+    saves = state.get("saves") or []
+    if "pending" in saves:
+        return ""
+    if state["done"].get("ok"):
+        return "saved"
+    if "error" in saves:
+        return "desktop_error"
+    if saves:
+        return "offered_nothing"
+    return ("offered_nothing_unasked" if state.get("everSawSave")
+            else "finished_unverified")
+
+
+async def _watch_save(
+    service_worker, poll_task, stop: threading.Event,
+    *, every_s: float = 2.0,
+) -> str:
+    """Stop `_poll_for_new_item` shortly after the Connector finishes.
+
+    Runs beside the poll. Returns the last `classify_save_watch` verdict
+    ("" if the save never visibly finished). A worker that stops
+    answering ends the watch and leaves the poll to its own deadline.
+    """
+    verdict = ""
+    while not poll_task.done():
+        await asyncio.wait({poll_task}, timeout=every_s)
+        if poll_task.done():
+            break
+        try:
+            state = await service_worker.evaluate(_SAVE_WATCH_READ_JS)
+        except Exception:
+            return verdict
+        verdict = classify_save_watch(state)
+        if verdict:
+            grace = _SAVE_DONE_GRACE_S.get(verdict, _SAVE_DONE_GRACE_DEFAULT_S)
+            await asyncio.wait({poll_task}, timeout=grace)
+            stop.set()
+            break
+    return verdict
+
 
 def _default_extension_search_paths() -> list[Path]:
     """Platform-default folders the Zotero Connector unpacks into.
@@ -875,6 +1006,10 @@ class ZoteroConnectorHandler(PublisherHandler):
         # query sometimes points at a Connector popup on JSTOR.
         page_url = page.url
         try:
+            await service_worker.evaluate(_SAVE_WATCH_INSTALL_JS)
+        except Exception:
+            pass                     # no watch: the full wait, as before
+        try:
             save_result = await service_worker.evaluate(
                 """
                 async (pageUrl) => {
@@ -900,6 +1035,7 @@ class ZoteroConnectorHandler(PublisherHandler):
                         || !Zotero.Connector_Browser) {
                         return {ok: false, reason: 'no-zotero-object'};
                     }
+                    if (self.__arSaveWatch) self.__arSaveWatch.begin();
                     try {
                         Zotero.Connector_Browser.saveWithTranslator(
                             t, 0, {fallbackOnFailure: true},
@@ -946,13 +1082,46 @@ class ZoteroConnectorHandler(PublisherHandler):
         # click through it.
         print(f"  │  Waiting for Zotero Desktop to save item "
               f"(up to {int(_SAVE_POLL_TIMEOUT_S)}s)…", flush=True)
-        new_key = await asyncio.to_thread(
+        stop = threading.Event()
+        poll_started = time.monotonic()
+        poll_task = asyncio.ensure_future(asyncio.to_thread(
             functools.partial(
                 _poll_for_new_item, zot, doi, item["item_key"],
                 _SAVE_POLL_TIMEOUT_S, title=item.get("title", ""),
                 exclude=self.pending.new_keys() if self.pending else frozenset(),
+                stop=stop,
             ),
-        )
+        ))
+        verdict = await _watch_save(service_worker, poll_task, stop)
+        new_key = await poll_task
+        if new_key is None and verdict in (
+            "saved", "offered_nothing", "offered_nothing_unasked",
+        ):
+            # The Connector finished and Desktop was not the problem, so
+            # this is the page: an HTML galley, a paywall, metadata only.
+            # Not stall evidence — `_EmptySaveStreak` logs it at once.
+            self.last_outcome = (
+                "offered_nothing_unasked"
+                if verdict == "offered_nothing_unasked" else "offered_nothing"
+            )
+            what = (
+                "saved a record this item could not be matched to"
+                if verdict == "saved" else "offered nothing to save"
+            )
+            who = (
+                "It never needed Zotero Desktop"
+                if verdict == "offered_nothing_unasked"
+                else "Zotero Desktop answered"
+            )
+            print(
+                f"  └─ FAIL: the translator finished and {what}\n"
+                f"         ({int(time.monotonic() - poll_started)}s). "
+                f"{who}, so this is the page,\n"
+                f"         not a stall: logged ACCESS_BLOCKED (no PDF reachable).",
+                flush=True,
+            )
+            counter.failed += 1
+            return False
         if new_key is None:
             self.last_outcome = "saved_nothing"
             # What to blame depends on something we already know. Once
@@ -1306,8 +1475,13 @@ def _poll_for_new_item(
     hint_every_s: float = 15.0,
     title: str = "",
     exclude: frozenset[str] | set[str] = frozenset(),
+    stop: threading.Event | None = None,
 ) -> str | None:
     """Return the item_key of the item the Connector just created.
+
+    `stop`, once set, ends the wait early: `_watch_save` sets it when
+    the Connector reports the save over, so a page with nothing to save
+    no longer costs the whole `timeout_s`.
 
     Matches on DOI **or** title, and that is not redundant: Zotero's
     translators routinely save a record with no DOI field at all —
@@ -1344,7 +1518,7 @@ def _poll_for_new_item(
     start = time.monotonic()
     deadline = start + timeout_s
     next_hint_at = start + hint_every_s
-    while time.monotonic() < deadline:
+    while time.monotonic() < deadline and not (stop and stop.is_set()):
         try:
             # Newest items only. Listing every journal article took 95 s
             # per poll on a 25,703-article library, so a save Zotero had
@@ -1383,7 +1557,10 @@ def _poll_for_new_item(
                 flush=True,
             )
             next_hint_at = now + hint_every_s
-        time.sleep(1.0)
+        if stop is not None:
+            stop.wait(1.0)
+        else:
+            time.sleep(1.0)
     return None
 
 

@@ -54,3 +54,36 @@ def test_the_driver_stops_on_a_stall_and_the_handler_reports_empty_saves() -> No
     handler_src = inspect.getsource(connector.ZoteroConnectorHandler.download_and_attach)
     assert 'self.last_outcome = "saved_nothing"' in handler_src
     assert "connector_desktop_stalled" in enrich_pdfs.pdf_run_report.STATUS_INFO
+
+
+# The Connector's own "save over" signal (connector.classify_save_watch).
+# Reported live on 2aad88e: an HTML galley (10.20529/ijme.2012.079) waited
+# the full 240 s, and three such pages in a row stopped an overnight pass.
+
+
+def test_a_page_that_offered_nothing_is_logged_at_once_and_releases_the_hold() -> None:
+    s = _EmptySaveStreak(limit=3)
+    s.observe("A", "saved_nothing", saved_before=5)
+    s.observe("B", "saved_nothing", saved_before=5)
+    got = s.observe("C", "offered_nothing", saved_before=5)
+    assert got == [(k, "connector_save_failed") for k in "ABC"]
+    assert not s.stalled
+
+
+def test_pages_desktop_was_never_asked_about_neither_grow_nor_clear_the_hold() -> None:
+    s = _EmptySaveStreak(limit=3)
+    s.observe("A", "saved_nothing", saved_before=5)
+    for k in "XYZW":
+        assert s.observe(k, "offered_nothing_unasked", saved_before=5) == [
+            (k, "connector_save_failed"),
+        ]
+    assert not s.stalled
+    assert s.flush() == [("A", "connector_save_failed")]
+
+
+def test_the_driver_leaves_streak_outcomes_to_the_streak() -> None:
+    src = inspect.getsource(enrich_pdfs._connector_item_loop)
+    assert "_STREAK_LOGGED_OUTCOMES" in src
+    assert {"saved_nothing", "offered_nothing", "offered_nothing_unasked"} <= (
+        enrich_pdfs._STREAK_LOGGED_OUTCOMES
+    )
