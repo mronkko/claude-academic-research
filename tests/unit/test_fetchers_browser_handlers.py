@@ -307,3 +307,22 @@ def test_cambridge_offers_no_fallback_for_modern_or_book_dois() -> None:
         "",
     ):
         assert h.fallback_pdf_urls(doi) == [], doi
+
+
+def test_springer_setup_url_sends_book_dois_to_chapter_or_book() -> None:
+    """A chapter DOI opened at /article/ is a 404 ("Page not found"),
+    reported from a live run on 10.1007/978-3-030-02053-8_174."""
+    from fetchers.browser import SpringerHandler
+    h = SpringerHandler()
+    assert h._setup_url_for("10.1007/978-3-030-02053-8_174") == (
+        "https://link.springer.com/chapter/10.1007/978-3-030-02053-8_174"
+    )
+    assert h._setup_url_for("10.1057/978-1-137-12345-6_3").startswith(
+        "https://link.springer.com/chapter/"
+    )
+    assert h._setup_url_for("10.1007/978-3-030-02053-8") == (
+        "https://link.springer.com/book/10.1007/978-3-030-02053-8"
+    )
+    assert h._setup_url_for("10.1007/s10551-020-04567-8") == (
+        "https://link.springer.com/article/10.1007/s10551-020-04567-8"
+    )

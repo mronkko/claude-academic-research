@@ -62,3 +62,17 @@ class SpringerHandler(PageNavigationHandler):
     # and Imperva rate-limits aggressively once it is watching a session.
     concurrency = 1
     delay_s = 1.5
+
+    def _setup_url_for(self, doi: str) -> str:
+        """Book DOIs (ISBN-prefixed suffix) live at /chapter/ or /book/.
+
+        `10.1007/978-3-030-02053-8_174` opened at /article/ is a 404, and
+        the user was then asked whether they could reach the PDF from
+        it. The PDF URL needs no such split: /content/pdf/{doi}.pdf
+        serves chapters too.
+        """
+        suffix = doi.partition("/")[2]
+        if suffix.startswith("978-"):
+            kind = "chapter" if "_" in suffix else "book"
+            return f"https://link.springer.com/{kind}/{doi}"
+        return super()._setup_url_for(doi)

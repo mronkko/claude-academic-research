@@ -616,6 +616,17 @@ def is_browser_gone(text: str) -> bool:
     return any(marker in low for marker in _BROWSER_GONE_MARKERS)
 
 
+def gone_status(resp) -> int | None:
+    """The status when a navigation landed on a page that does not exist.
+
+    Only 404 and 410. A 403 or 503 is what Cloudflare and Imperva serve
+    while their challenge runs, and the page clears itself afterwards;
+    treating those as final would fail every item behind a bot wall.
+    """
+    status = getattr(resp, "status", None)
+    return status if status in (404, 410) else None
+
+
 class BrowserGone(NetworkOutage):
     """The browser crashed or closed mid-run.
 
@@ -803,12 +814,32 @@ class PublisherHandler(ABC):
         url = self._setup_url_for(first_doi)
         if url:
             print(f"\nOpening: {url}", flush=True)
+            resp = None
             try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                resp = await page.goto(url, wait_until="domcontentloaded", timeout=20000)
             except Exception:
                 # The landing page may not fully load if it's a Cloudflare
                 # challenge — the user sees it anyway and solves it.
                 pass
+            if (status := gone_status(resp)) is not None:
+                # A built URL the publisher does not serve — Springer
+                # chapters opened at /article/ did this. Asking the user
+                # whether they can reach the PDF from a "Page not found"
+                # makes them diagnose our URL, so say what happened and
+                # show them the DOI's real landing page instead.
+                fallback = f"https://doi.org/{first_doi}"
+                print(
+                    f"  HTTP {status} at {url} — the handler built a URL "
+                    f"this publisher does not serve for this DOI (a plugin "
+                    f"bug, not an access problem). Opening {fallback} "
+                    f"instead.",
+                    flush=True,
+                )
+                try:
+                    await page.goto(fallback, wait_until="domcontentloaded",
+                                    timeout=20000)
+                except Exception:
+                    pass
             if await self._cleared_without_asking(page):
                 return "proceed"
         self._print_setup_banner()
@@ -1088,11 +1119,17 @@ class PageNavigationHandler(PublisherHandler):
         url = self.url_template.format(doi=doi)
         try:
             async with page.expect_download(timeout=30000) as dl_info:
+                resp = None
                 try:
-                    await page.goto(url, wait_until="commit", timeout=15000)
+                    resp = await page.goto(url, wait_until="commit", timeout=15000)
                 except Exception:
                     # Expected — the download event interrupts navigation.
                     pass
+                if (status := gone_status(resp)) is not None:
+                    # No download is coming from a "Page not found";
+                    # waiting out the 30 s only to report a timeout hid
+                    # what went wrong. Raising cancels the waiter.
+                    raise RuntimeError(f"HTTP {status}: no page at {url}")
             dl = await dl_info.value
             await dl.save_as(str(out))
         except Exception as e:

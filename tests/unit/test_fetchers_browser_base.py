@@ -450,3 +450,90 @@ def test_request_handler_uses_cache_on_second_call(tmp_path: Path) -> None:
     assert result is not None
     assert counter.cached == 1
     assert counter.ok == 0
+
+
+class _NotFoundPage(_DeadPage):
+    """A PDF URL the publisher does not serve: goto lands on a 404."""
+
+    def __init__(self) -> None:
+        super().__init__(url="https://example.com/missing.pdf")
+        self.waited_for_download = False
+
+    async def goto(self, url, wait_until="", timeout=0):
+        del url, wait_until, timeout
+        resp = MagicMock()
+        resp.status = 404
+        return resp
+
+    def expect_download(self, timeout=0):
+        del timeout
+        page = self
+
+        class _Info:
+            @property
+            def value(self):
+                page.waited_for_download = True
+                raise AssertionError("must not wait for a download after a 404")
+
+        class _CM:
+            async def __aenter__(self):
+                return _Info()
+
+            async def __aexit__(self, *exc):
+                return False
+
+        return _CM()
+
+
+def test_page_navigation_reports_a_404_instead_of_a_download_timeout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A 404 used to surface as "Timeout 30000ms exceeded while waiting
+    for event 'download'", which says nothing about the real problem."""
+    counter = Counter()
+    page = _NotFoundPage()
+    result = asyncio.run(_NavHandler().download(
+        page=page, ctx=None, item={"doi": "10.9998/x", "title": "T"},
+        cache_dir=tmp_path, counter=counter, total=1, t_start=time.monotonic(),
+    ))
+    assert result is None
+    assert counter.failed == 1
+    assert not page.waited_for_download
+    assert "HTTP 404" in capsys.readouterr().out
+
+
+def test_gone_status_ignores_bot_wall_statuses() -> None:
+    """403/503 are what a challenge page answers while it runs; only a
+    page that does not exist is final."""
+    from fetchers.browser.base import gone_status
+    for code, want in ((404, 404), (410, 410), (403, None), (503, None),
+                       (200, None)):
+        resp = MagicMock()
+        resp.status = code
+        assert gone_status(resp) == want
+    assert gone_status(None) is None
+
+
+def test_setup_falls_back_to_doi_org_when_the_setup_page_is_a_404(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    visited: list[str] = []
+
+    class _Page:
+        url = ""
+
+        async def goto(self, url, **kw):
+            del kw
+            visited.append(url)
+            resp = MagicMock()
+            resp.status = 404 if len(visited) == 1 else 200
+            return resp
+
+    monkeypatch.setattr("fetchers.browser.base._read_user_line",
+                        lambda prompt: "y")
+    h = _NavHandler()
+    h.clearance_timeout_s = 0
+    assert asyncio.run(h.setup(_Page(), "10.9998/x")) == "proceed"
+    assert visited == ["https://example.com/10.9998/x.pdf",
+                       "https://doi.org/10.9998/x"]
+    assert "HTTP 404" in capsys.readouterr().out
