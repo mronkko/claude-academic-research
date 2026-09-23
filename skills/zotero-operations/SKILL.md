@@ -207,6 +207,7 @@ running these stages:**
    | `ACCESS_BLOCKED` (anything else) | Hand the user `retry.ill.keys` as an interlibrary-loan list |
    | `NETWORK_ERROR` | Re-run the same stage; the cause is transient |
    | `CORRUPT_DOWNLOAD` | The source served a broken file (usually truncated). Re-running the *same* source returns the same bad bytes — escalate to a different one: the publisher TDM route, or `--sources browser`. |
+   | `NO_PDF_OFFERED` | The Connector reached the page and it offered no PDF — usually an HTML-only galley, not a paywall. Hand the user `retry.manual.keys` to open by hand (save the HTML full text, or find the PDF link the translator missed). Not an ILL candidate. |
    | `UPLOAD_FAILED` | The PDF is already in the local cache and only the Zotero attach failed. Re-run `enrich_pdfs.py`; it attaches from cache with no new download. Cheapest rung on the ladder — always offer it first. |
    | `OUT_OF_SCOPE` | A book chapter, thesis, or preprint. No rung applies — the item is excluded on its type, not on retrieval, and chasing a PDF for it wastes the user's time. |
    | `UNAVAILABLE` | Genuinely unreachable *as published* — every route was tried, so this cannot appear before a browser pass has run. One route remains — see below — and only after the user declines it is "not available" the honest report. |

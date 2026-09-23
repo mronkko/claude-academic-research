@@ -367,6 +367,7 @@ def _report_retrieval_failures(
         pdf_fetch_log.FailureCause.BROWSER_REQUIRED.value,
         pdf_fetch_log.FailureCause.UPLOAD_FAILED.value,
         pdf_fetch_log.FailureCause.CORRUPT_DOWNLOAD.value,
+        pdf_fetch_log.FailureCause.NO_PDF_OFFERED.value,
         pdf_fetch_log.FailureCause.ACCESS_BLOCKED.value,
         pdf_fetch_log.FailureCause.NETWORK_ERROR.value,
         pdf_fetch_log.FailureCause.OUT_OF_SCOPE.value,
@@ -451,6 +452,7 @@ def _write_retry_keys(pdf_fetch_log, verdicts: dict, stem: Path) -> dict[str, Pa
         "retry.ill": [],
         "retry.network": [],
         "retry.reattach": [],
+        "retry.manual": [],
         "true_negative": [],
         "out_of_scope": [],
     }
@@ -463,6 +465,9 @@ def _write_retry_keys(pdf_fetch_log, verdicts: dict, stem: Path) -> dict[str, Pa
         # CORRUPT_DOWNLOAD re-fetches after the bad bytes were dropped.
         cause.UPLOAD_FAILED.value: "retry.reattach",
         cause.CORRUPT_DOWNLOAD.value: "retry.reattach",
+        # The page answered but offered no PDF: a person opening it is
+        # the next step, not ILL and not another automated pass.
+        cause.NO_PDF_OFFERED.value: "retry.manual",
         cause.UNAVAILABLE.value: "true_negative",
         cause.OUT_OF_SCOPE.value: "out_of_scope",
     }
@@ -536,7 +541,7 @@ def main() -> int:
             "present, the audit prints a per-publisher x cause breakdown "
             "of the items that still have no PDF, says how many are "
             "recoverable rather than genuinely unavailable, and writes "
-            "retry key-files (retry.browser[.<publisher>], retry.ill, "
+            "retry key-files (retry.browser[.<publisher>], retry.ill, retry.manual, "
             "retry.network, true_negative, out_of_scope) for "
             "--filter-keys-file. Pass an empty string to skip."
         ),

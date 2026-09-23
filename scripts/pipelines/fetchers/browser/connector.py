@@ -1098,12 +1098,11 @@ class ZoteroConnectorHandler(PublisherHandler):
             "saved", "offered_nothing", "offered_nothing_unasked",
         ):
             # The Connector finished and Desktop was not the problem, so
-            # this is the page: an HTML galley, a paywall, metadata only.
+            # this is the page: an HTML galley, or one no translator reads.
             # Not stall evidence — `_EmptySaveStreak` logs it at once.
-            self.last_outcome = (
-                "offered_nothing_unasked"
-                if verdict == "offered_nothing_unasked" else "offered_nothing"
-            )
+            self.last_outcome = {
+                "saved": "saved_unmatched",
+            }.get(verdict, verdict)
             what = (
                 "saved a record this item could not be matched to"
                 if verdict == "saved" else "offered nothing to save"
@@ -1113,11 +1112,21 @@ class ZoteroConnectorHandler(PublisherHandler):
                 if verdict == "offered_nothing_unasked"
                 else "Zotero Desktop answered"
             )
+            blame = (
+                "the save worked but not as this item"
+                if verdict == "saved" else "this is the page"
+            )
+            logged = (
+                "connector_save_unmatched — look for it in Zotero"
+                if verdict == "saved"
+                else "connector_offered_nothing (NO_PDF_OFFERED), not\n"
+                     "         ACCESS_BLOCKED: nobody refused access"
+            )
             print(
                 f"  └─ FAIL: the translator finished and {what}\n"
                 f"         ({int(time.monotonic() - poll_started)}s). "
-                f"{who}, so this is the page,\n"
-                f"         not a stall: logged ACCESS_BLOCKED (no PDF reachable).",
+                f"{who}, so {blame},\n"
+                f"         not a stall. Logged {logged}.",
                 flush=True,
             )
             counter.failed += 1

@@ -111,6 +111,21 @@ class FailureCause(StrEnum):
     returned a perfect file, so the useful action is a different source,
     not another attempt at the same one."""
 
+    NO_PDF_OFFERED = "NO_PDF_OFFERED"
+    """The Zotero Connector opened the library's route to the article and
+    its translator finished without offering a PDF — most often an
+    HTML-only galley, or a landing page no translator can read. Nobody
+    refused access, so this is not ACCESS_BLOCKED, and the page may well
+    carry the full text as HTML, so it is not UNAVAILABLE either. The
+    Connector reports the save as over (`connector.classify_save_watch`),
+    which is what separates it from a page that never answered.
+
+    Reported live: rows like 10.20529/ijme.2012.079 (an ijme.in HTML
+    galley) were being logged ACCESS_BLOCKED and hand-corrected, because
+    downstream an ACCESS_BLOCKED row reads as "we were refused".
+    Suggested action: open the page by hand — save the HTML full text,
+    or find the PDF link the translator missed. Not an exclusion."""
+
     UPLOAD_FAILED = "UPLOAD_FAILED"
     """The PDF was fetched successfully but could not be attached to
     Zotero. Categorically different from the four above: the full text
@@ -349,6 +364,7 @@ CAUSE_PRECEDENCE: tuple[str, ...] = (
     FailureCause.BROWSER_REQUIRED.value,
     FailureCause.UPLOAD_FAILED.value,
     FailureCause.CORRUPT_DOWNLOAD.value,
+    FailureCause.NO_PDF_OFFERED.value,
     FailureCause.ACCESS_BLOCKED.value,
     FailureCause.NETWORK_ERROR.value,
     FailureCause.UNAVAILABLE.value,
@@ -397,6 +413,9 @@ SUGGESTED_FE_CODE: dict[str, str] = {
     FailureCause.CORRUPT_DOWNLOAD.value:
         "NOT an exclusion — the source served a broken file; retry via a "
         "different source (publisher TDM route or --sources browser)",
+    FailureCause.NO_PDF_OFFERED.value:
+        "NOT an exclusion — the page offered no PDF; open it by hand "
+        "(HTML-only full text is common)",
 }
 
 #: Causes that must never be adjudicated as a full-text exclusion —
@@ -416,4 +435,5 @@ RECOVERABLE_CAUSES: frozenset[str] = frozenset({
     FailureCause.NETWORK_ERROR.value,
     FailureCause.CORRUPT_DOWNLOAD.value,
     FailureCause.UPLOAD_FAILED.value,
+    FailureCause.NO_PDF_OFFERED.value,
 })

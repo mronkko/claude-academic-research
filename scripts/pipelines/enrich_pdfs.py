@@ -2152,6 +2152,7 @@ def _log_connector_bailout(
 #: Handler outcomes whose row `_EmptySaveStreak.observe` writes.
 _STREAK_LOGGED_OUTCOMES = frozenset({
     "saved_nothing", "offered_nothing", "offered_nothing_unasked",
+    "saved_unmatched",
 })
 
 
@@ -2166,11 +2167,14 @@ class _EmptySaveStreak:
     logged four ScienceDirect pages ACCESS_BLOCKED, 240 s each, while
     Desktop answered reads but received nothing.
 
-    Two outcomes skip the hold, because the Connector itself said the
+    Three outcomes skip the hold, because the Connector itself said the
     save was over (`connector.classify_save_watch`). `offered_nothing`
-    means Desktop answered, so it cannot be stalled: the held items are
-    released too. `offered_nothing_unasked` means Desktop was never
-    asked, so it proves nothing either way and leaves the hold as is.
+    and `saved_unmatched` mean Desktop answered, so it cannot be
+    stalled: the held items are released too. `offered_nothing_unasked`
+    means Desktop was never asked, so it proves nothing either way and
+    leaves the hold as is. Both "offered nothing" outcomes log
+    `connector_offered_nothing` (NO_PDF_OFFERED), not ACCESS_BLOCKED:
+    the page answered, nobody refused.
     Without this, three HTML-galley pages in a row ended an overnight
     pass while Desktop was working fine.
     """
@@ -2194,9 +2198,11 @@ class _EmptySaveStreak:
                 return out
             return []
         if outcome == "offered_nothing_unasked":
-            return [(item, "connector_save_failed")]
+            return [(item, "connector_offered_nothing")]
         if outcome == "offered_nothing":
-            return self.flush() + [(item, "connector_save_failed")]
+            return self.flush() + [(item, "connector_offered_nothing")]
+        if outcome == "saved_unmatched":
+            return self.flush() + [(item, "connector_save_unmatched")]
         return self.flush()
 
     def flush(self) -> list[tuple]:
@@ -2561,6 +2567,13 @@ async def _drive_connector(
                         else pdf_fetch_log.FailureCause.ACCESS_BLOCKED
                     ),
                 )
+            elif status == "connector_offered_nothing":
+                _log_browser_failure(
+                    args, item, source="connector",
+                    cause=pdf_fetch_log.FailureCause.NO_PDF_OFFERED,
+                )
+            # connector_save_unmatched writes no failure row: something
+            # was saved, so no verdict about the article was reached.
 
         merger = None
         if (handler.pending is not None

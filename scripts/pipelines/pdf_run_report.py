@@ -159,6 +159,17 @@ STATUS_INFO: dict[str, tuple[str, str]] = {
         "Connector's service worker did not come up in time",
         "Transient — re-run. If it persists, restart Chromium/Zotero.",
     ),
+    "connector_offered_nothing": (
+        "The Connector's translator finished and offered no PDF (HTML-only "
+        "galley, or a page it cannot read); nobody refused access",
+        "Open the page by hand: save the HTML full text, or find the PDF "
+        "link the translator missed. Not an access failure — not for ILL.",
+    ),
+    "connector_save_unmatched": (
+        "The Connector saved a record that could not be matched to this item",
+        "Look in Zotero for a recent item with this title (possibly a "
+        "different DOI or item type); merge it by hand if it holds the PDF.",
+    ),
     "connector_save_failed": (
         "Connector opened the page but could not save the item",
         "Often a login/paywall wall behind the resolver link. Re-run and "

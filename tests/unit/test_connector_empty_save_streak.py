@@ -66,7 +66,10 @@ def test_a_page_that_offered_nothing_is_logged_at_once_and_releases_the_hold() -
     s.observe("A", "saved_nothing", saved_before=5)
     s.observe("B", "saved_nothing", saved_before=5)
     got = s.observe("C", "offered_nothing", saved_before=5)
-    assert got == [(k, "connector_save_failed") for k in "ABC"]
+    assert got == [
+        ("A", "connector_save_failed"), ("B", "connector_save_failed"),
+        ("C", "connector_offered_nothing"),
+    ]
     assert not s.stalled
 
 
@@ -75,7 +78,7 @@ def test_pages_desktop_was_never_asked_about_neither_grow_nor_clear_the_hold() -
     s.observe("A", "saved_nothing", saved_before=5)
     for k in "XYZW":
         assert s.observe(k, "offered_nothing_unasked", saved_before=5) == [
-            (k, "connector_save_failed"),
+            (k, "connector_offered_nothing"),
         ]
     assert not s.stalled
     assert s.flush() == [("A", "connector_save_failed")]
@@ -87,3 +90,24 @@ def test_the_driver_leaves_streak_outcomes_to_the_streak() -> None:
     assert {"saved_nothing", "offered_nothing", "offered_nothing_unasked"} <= (
         enrich_pdfs._STREAK_LOGGED_OUTCOMES
     )
+
+
+def test_an_unmatched_save_releases_the_hold_without_an_access_verdict() -> None:
+    s = _EmptySaveStreak(limit=3)
+    s.observe("A", "saved_nothing", saved_before=5)
+    assert s.observe("B", "saved_unmatched", saved_before=5) == [
+        ("A", "connector_save_failed"), ("B", "connector_save_unmatched"),
+    ]
+
+
+def test_offered_nothing_is_not_an_access_verdict() -> None:
+    """Reported live: a PDF-less HTML galley logged ACCESS_BLOCKED read
+    downstream as "we were refused" and was hand-corrected all day."""
+    import pdf_fetch_log
+    cause = pdf_fetch_log.FailureCause.NO_PDF_OFFERED.value
+    assert cause in pdf_fetch_log.RECOVERABLE_CAUSES
+    assert "ILL" not in pdf_fetch_log.SUGGESTED_FE_CODE[cause].split("—")[0]
+    src = inspect.getsource(enrich_pdfs._drive_connector)
+    assert "FailureCause.NO_PDF_OFFERED" in src
+    for status in ("connector_offered_nothing", "connector_save_unmatched"):
+        assert status in enrich_pdfs.pdf_run_report.STATUS_INFO

@@ -1670,6 +1670,7 @@ Then act by cause:
 | `ACCESS_BLOCKED` | Paywalled; the full text exists | Offer the ILL list. **Not an exclusion.** |
 | `NETWORK_ERROR` | Transport failure | Re-run. **Not an exclusion.** |
 | `CORRUPT_DOWNLOAD` | A source served bytes that are not a usable PDF — usually a truncated download | Retry via a *different* source, not the same one. **Not an exclusion.** |
+| `NO_PDF_OFFERED` | The Zotero Connector opened the library's route and its translator finished without a PDF — usually an HTML-only galley. Nobody refused access | Open the page by hand (`retry.manual.keys`): save the HTML full text or find the PDF link. Not ILL. **Not an exclusion.** |
 | `UPLOAD_FAILED` | The PDF was fetched but the Zotero attach failed | The file is already in the local cache; re-run `enrich_pdfs.py` and it attaches without re-downloading. **Not an exclusion.** |
 | `OUT_OF_SCOPE` | Book chapter, thesis, preprint | FE2 / FE3 — exclude on item type, not on retrieval |
 | `UNAVAILABLE` | Every route tried, nothing found | FE6 — the only cause that justifies a full-text-unavailable exclusion |
@@ -1692,7 +1693,7 @@ its cause in the retrieval report is `UNAVAILABLE`.** If you have not run
 the audit, you do not know the cause, and you may not tag. The audit
 writes the retry sets for you as key files
 (`retry.browser[.<publisher>]`, `retry.ill`, `retry.network`,
-`retry.reattach`, `true_negative`, `out_of_scope`) — feed them straight
+`retry.reattach`, `retry.manual`, `true_negative`, `out_of_scope`) — feed them straight
 to `--filter-keys-file`; do not assemble key lists by hand.
 
 The pipeline now enforces the same rule from its side: `pdf_fetch_log`
