@@ -183,11 +183,14 @@ def test_second_lookup_on_same_instance_does_not_resend_rejected_key() -> None:
     assert "x-api-key" not in http.calls[2]
 
 
-def test_fetch_abstract_returns_none_when_403_has_no_key() -> None:
+def test_fetch_abstract_raises_when_403_has_no_key() -> None:
+    """No key to drop, so no retry — and a 403 is a refusal, not "no
+    abstract", so it reaches the cascade as a failed lookup."""
     http = _http_returning((403, {}))
     src = SemanticScholarSource(http=http, config=None)  # no key configured
 
-    assert src.fetch_abstract("10.1/x") is None
+    with pytest.raises(RuntimeError, match="403"):
+        src.fetch_abstract("10.1/x")
     assert len(http.calls) == 1
 
 

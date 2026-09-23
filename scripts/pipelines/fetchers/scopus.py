@@ -8,7 +8,12 @@ from __future__ import annotations
 
 import logging
 
-from fetchers.base import AbstractFetcher
+from fetchers.base import (
+    AbstractFetcher,
+    AbstractWithheld,
+    SourceUnavailable,
+    is_not_found,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,14 +27,31 @@ class ScopusSource(AbstractFetcher):
             init()
             from pybliometrics.scopus import AbstractRetrieval
         except Exception as e:
-            logger.debug("pybliometrics import/init failed: %s", e)
-            return None
+            raise SourceUnavailable(f"pybliometrics would not start: {e}") from e
 
         try:
             a = AbstractRetrieval(doi, id_type="doi", view="FULL")
         except Exception as e:
-            logger.debug("Scopus AbstractRetrieval(%s) failed: %s", doi, e)
-            return None
+            # Scopus404Error: Scopus does not index the DOI — an answer.
+            # A 429 or 5xx is not, and must reach the log as one.
+            if is_not_found(e):
+                return None
+            if type(e).__name__ != "Scopus401Error":
+                raise
+            # The FULL view checks entitlement before it looks the record
+            # up, so a DOI Scopus has never heard of also answers 401
+            # (seen 2026-09-23 for 10.9999/not-a-doi-xyz). META answers
+            # 404 for those; one META call tells the two apart.
+            try:
+                AbstractRetrieval(doi, id_type="doi", view="META")
+            except Exception as meta_err:
+                if is_not_found(meta_err):
+                    return None
+                raise
+            raise AbstractWithheld(
+                "Scopus holds the record but this key may not view its "
+                "abstract",
+            ) from e
 
         text = a.abstract
         if not text:

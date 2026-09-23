@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fetchers import _pdf_validate
-from fetchers.base import AbstractFetcher, PdfFetcher
+from fetchers.base import AbstractFetcher, PdfFetcher, is_not_found
 
 if TYPE_CHECKING:
     import habanero
@@ -72,8 +72,12 @@ class CrossrefSource(AbstractFetcher, PdfFetcher):
         try:
             msg = self.cr.works(ids=doi).get("message") or {}
         except Exception as e:
-            logger.debug("crossref.works(%s) failed: %s", doi, e)
-            return None
+            # A 404 is Crossref saying it has no such DOI. Anything else
+            # (a timeout, a 5xx) left the question unanswered, and the
+            # cascade must log it so rather than as "no abstract".
+            if is_not_found(e):
+                return None
+            raise
         abstract = msg.get("abstract")
         if not abstract:
             return None

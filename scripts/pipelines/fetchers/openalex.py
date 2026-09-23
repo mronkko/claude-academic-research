@@ -51,7 +51,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fetchers import _pdf_validate
-from fetchers.base import AbstractFetcher, PdfFetcher
+from fetchers.base import (
+    AbstractFetcher,
+    PdfFetcher,
+    SourceUnavailable,
+    answered,
+    is_not_found,
+)
 
 if TYPE_CHECKING:
     pass
@@ -180,12 +186,26 @@ class _OpenAlexClient:
             pyalex.config.api_key = api_key
         self._configured = True
 
-    def _work(self, doi: str):
-        """Look up one work by DOI, or None on any failure."""
+    def _work(self, doi: str, *, strict: bool = False):
+        """Look up one work by DOI, or None on any failure.
+
+        `strict` narrows None to "OpenAlex has no such work" (a 404) and
+        lets every other failure raise — what the abstract cascade needs
+        to tell a miss from a lookup that never happened. The PDF paths
+        keep the lenient form: they only ever move on either way.
+        """
         import pyalex
         try:
             work = pyalex.Works()[f"doi:{doi}"]
         except Exception as e:
+            if strict and not is_not_found(e):
+                # Not `raise`: pyalex's message quotes the request URL,
+                # which carries the API key.
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                raise RuntimeError(
+                    f"OpenAlex lookup failed: {type(e).__name__}"
+                    + (f" (HTTP {status})" if status else ""),
+                ) from None
             logger.debug("openalex lookup %s failed: %s", doi, e)
             return None
         return work or None
@@ -207,11 +227,16 @@ class OpenAlexSource(_OpenAlexClient, AbstractFetcher, PdfFetcher):
 
     def fetch_abstract(self, doi: str, *, title=None, cache_dir=None) -> str | None:
         api_key = self._api_key()
-        if not api_key or not self._paid_enabled():
-            return None
+        if not api_key:
+            raise SourceUnavailable(
+                "no OpenAlex API key (abstracts come from the paid "
+                "Content API)",
+            )
+        if not self._paid_enabled():
+            raise SourceUnavailable("the paid Content API is switched off")
         self._ensure_configured()
 
-        work = self._work(doi)
+        work = self._work(doi, strict=True)
         if not work:
             return None
         has_grobid = (work.get("has_content") or {}).get("grobid_xml", False)
@@ -252,12 +277,17 @@ class OpenAlexSource(_OpenAlexClient, AbstractFetcher, PdfFetcher):
             cache_path = None
 
         url = f"https://content.openalex.org/works/{work_id}.grobid-xml?api_key={api_key}"
+        # Raises on a timeout or a status other than 200/404, so the
+        # cascade logs lookup_failed rather than "no abstract". Not with
+        # the client's own message: that quotes the URL, key and all,
+        # into the console and the log CSV.
         try:
             resp = self.http.get(url, timeout=30)
         except Exception as e:
-            logger.debug("openalex GROBID download %s failed: %s", work_id, e)
-            return None
-        if resp.status_code != 200:
+            raise RuntimeError(
+                f"GROBID download for {work_id} failed: {type(e).__name__}",
+            ) from None
+        if not answered(resp, "openalex"):
             return None
         try:
             xml_bytes = gzip.decompress(resp.content)

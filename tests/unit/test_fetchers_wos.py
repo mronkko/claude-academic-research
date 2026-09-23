@@ -133,9 +133,13 @@ def _http_returning(*responses: dict) -> tuple[MagicMock, list]:
     return sess, calls
 
 
-def test_wos_returns_none_when_no_key() -> None:
+def test_wos_without_a_key_is_unavailable_not_a_miss() -> None:
+    """None would put WoS in the log's "no abstract at" list although
+    it was never asked."""
+    from fetchers.base import SourceUnavailable
     src = WosSource(http=MagicMock(), config=_Config())
-    assert src.fetch_abstract("10.1/x") is None
+    with pytest.raises(SourceUnavailable):
+        src.fetch_abstract("10.1/x")
 
 
 def test_wos_doi_hit_returns_abstract() -> None:
@@ -265,18 +269,24 @@ def test_wos_concatenates_list_paragraphs() -> None:
     assert "Second paragraph" in result
 
 
-def test_wos_non_200_returns_none() -> None:
+@pytest.mark.parametrize("status", [429, 500, 503])
+def test_wos_error_status_raises(status) -> None:
+    """A failed lookup must reach the cascade as a failure: returning
+    None logged 6I9S5R8C not_found although WoS holds it."""
     sess = MagicMock()
     bad = MagicMock()
-    bad.status_code = 503
+    bad.status_code = status
     sess.get.return_value = bad
     src = WosSource(http=sess, config=_Config(extended="KEY"))
-    assert src.fetch_abstract("10.5465/amd.2015.0052") is None
+    with pytest.raises(RuntimeError, match=str(status)):
+        src.fetch_abstract("10.5465/amd.2015.0052")
 
 
-def test_wos_exception_returns_none() -> None:
-    """Network errors must not propagate — upstream cascade continues."""
+def test_wos_exception_propagates() -> None:
+    """The cascade catches it and logs lookup_failed; swallowing it here
+    turned a network error into "no abstract"."""
     sess = MagicMock()
     sess.get.side_effect = RuntimeError("network down")
     src = WosSource(http=sess, config=_Config(extended="KEY"))
-    assert src.fetch_abstract("10.5465/amd.2015.0052") is None
+    with pytest.raises(RuntimeError, match="network down"):
+        src.fetch_abstract("10.5465/amd.2015.0052")

@@ -35,6 +35,37 @@ class AbstractWithheld(Exception):  # noqa: N818 — a verdict, not an error
     """
 
 
+class SourceUnavailable(Exception):  # noqa: N818 — a verdict, not an error
+    """Raised by `fetch_abstract` when the source cannot be asked at all
+    here — no API key, an opt-in not given, a client library that will
+    not initialise.
+
+    The cascade does not count the source as asked: returning None
+    instead would put it in the log's "no abstract at: …" list, claiming
+    an answer nobody gave.
+    """
+
+
+def is_not_found(exc: BaseException) -> bool:
+    """True when `exc` is the source saying "no such record" — an HTTP
+    404, whichever client raised it (requests, httpx, pybliometrics)."""
+    if type(exc).__name__ == "Scopus404Error":
+        return True
+    resp = getattr(exc, "response", None)
+    return getattr(resp, "status_code", None) == 404
+
+
+def answered(resp, source: str) -> bool:
+    """True for a 200, False for a 404 ("no such record"); raises for
+    any other status, so a 429 or a 503 reaches the log as
+    `lookup_failed` rather than as a clean "no abstract here"."""
+    if resp.status_code == 200:
+        return True
+    if resp.status_code == 404:
+        return False
+    raise RuntimeError(f"{source} answered HTTP {resp.status_code}")
+
+
 class Source(ABC):  # noqa: B024  # marker base; abstractmethods live on AbstractFetcher / PdfFetcher
     """Root base class. Subclasses MUST set `name` as a class attribute.
 
@@ -67,7 +98,14 @@ class AbstractFetcher(Source, ABC):
         title: str | None = None,
         cache_dir: str | Path | None = None,
     ) -> str | None:
-        """Return the abstract text, or None if the source has nothing."""
+        """Return the abstract text, or None if the source answered and
+        has nothing.
+
+        None is a claim that the source was asked and said no. When the
+        question was not answered, raise instead: `SourceUnavailable`
+        (not configured), `AbstractWithheld` (held but not shown), or any
+        other exception (the lookup failed — a timeout, a 5xx, a 429).
+        """
 
 
 class PdfFetcher(Source, ABC):

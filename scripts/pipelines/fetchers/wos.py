@@ -20,7 +20,12 @@ import logging
 import os
 
 from fetchers._title_match import matches, strip_html
-from fetchers.base import AbstractFetcher, AbstractWithheld
+from fetchers.base import (
+    AbstractFetcher,
+    AbstractWithheld,
+    SourceUnavailable,
+    answered,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +56,7 @@ class WosSource(AbstractFetcher):
         del cache_dir                 # WoS fetchers don't use the cache dir
         key, tier = self._key_and_tier()
         if not key or self.http is None:
-            return None
+            raise SourceUnavailable("no WoS API key configured")
         fetcher = self._fetch_expanded if tier == "expanded" else self._fetch_starter
         return fetcher(doi, title, key)
 
@@ -123,22 +128,22 @@ class WosSource(AbstractFetcher):
         self, query: str, headers: dict, *, count: int,
     ) -> tuple[list[dict], bool]:
         """(viewable records, whether a found record was withheld)."""
-        try:
-            resp = self.http.get(
-                _EXPANDED_URL,
-                headers=headers,
-                params={
-                    "databaseId": "WOK",
-                    "usrQuery": query,
-                    "count": count,
-                    "firstRecord": 1,
-                },
-                timeout=30,
-            )
-        except Exception as e:
-            logger.debug("wos expanded %s failed: %s", query, e)
-            return [], False
-        if resp.status_code != 200:
+        # A failed request raises: returning "no hits" logs the item
+        # not_found on the strength of a 429 or a timeout. The likely
+        # story of 6I9S5R8C, logged not_found by a run on 2026-09-23
+        # although WoS holds it and answers "withheld" when asked again.
+        resp = self.http.get(
+            _EXPANDED_URL,
+            headers=headers,
+            params={
+                "databaseId": "WOK",
+                "usrQuery": query,
+                "count": count,
+                "firstRecord": 1,
+            },
+            timeout=30,
+        )
+        if not answered(resp, "wos"):
             return [], False
         data = resp.json() or {}
         found = data.get("QueryResult", {}).get("RecordsFound", 0)
@@ -232,17 +237,13 @@ class WosSource(AbstractFetcher):
     def _starter_search(
         self, query: str, headers: dict, *, limit: int,
     ) -> list[dict]:
-        try:
-            resp = self.http.get(
-                _STARTER_URL,
-                headers=headers,
-                params={"q": query, "limit": limit, "page": 1, "db": "WOS"},
-                timeout=30,
-            )
-        except Exception as e:
-            logger.debug("wos starter %s failed: %s", query, e)
-            return []
-        if resp.status_code != 200:
+        resp = self.http.get(
+            _STARTER_URL,
+            headers=headers,
+            params={"q": query, "limit": limit, "page": 1, "db": "WOS"},
+            timeout=30,
+        )
+        if not answered(resp, "wos"):
             return []
         data = resp.json() or {}
         hits = data.get("hits") or []

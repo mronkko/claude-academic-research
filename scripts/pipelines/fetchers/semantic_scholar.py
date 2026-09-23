@@ -22,7 +22,7 @@ import urllib.parse
 from pathlib import Path
 
 from fetchers import _pdf_validate
-from fetchers.base import AbstractFetcher, PdfFetcher
+from fetchers.base import AbstractFetcher, PdfFetcher, answered
 
 logger = logging.getLogger(__name__)
 
@@ -81,13 +81,12 @@ class SemanticScholarSource(AbstractFetcher, PdfFetcher):
 
     def fetch_abstract(self, doi: str, *, title=None, cache_dir=None) -> str | None:
         # Primary: look up by DOI.
+        # A failed request, or a status other than 200/404, raises: S2's
+        # 429s are common enough that reading them as "no abstract"
+        # would fill the log with false not_found rows.
         url = f"{_API_BASE}/paper/DOI:{doi}?fields=abstract"
-        try:
-            resp = self._get(url)
-        except Exception as e:
-            logger.debug("semantic_scholar DOI lookup failed: %s", e)
-            return None
-        if resp.status_code == 200:
+        resp = self._get(url)
+        if answered(resp, "semantic_scholar"):
             abstract = (resp.json() or {}).get("abstract")
             if abstract:
                 return abstract
@@ -103,12 +102,8 @@ class SemanticScholarSource(AbstractFetcher, PdfFetcher):
             f"{_API_BASE}/paper/search"
             f"?query={encoded}&fields=externalIds,abstract&limit=5"
         )
-        try:
-            resp = self._get(url)
-        except Exception as e:
-            logger.debug("semantic_scholar title search failed: %s", e)
-            return None
-        if resp.status_code != 200:
+        resp = self._get(url)
+        if not answered(resp, "semantic_scholar"):
             return None
         doi_norm = doi.lower().strip()
         for hit in (resp.json() or {}).get("data") or []:

@@ -36,7 +36,12 @@ import zlib
 from pathlib import Path
 
 from fetchers import _pdf_validate
-from fetchers.base import AbstractFetcher, PdfFetcher
+from fetchers.base import (
+    AbstractFetcher,
+    PdfFetcher,
+    SourceUnavailable,
+    is_not_found,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -869,14 +874,16 @@ class ScienceDirectSource(AbstractFetcher, PdfFetcher):
             init()
             from pybliometrics.sciencedirect import ArticleRetrieval
         except Exception as e:
-            logger.debug("pybliometrics import/init failed: %s", e)
-            return None
+            raise SourceUnavailable(f"pybliometrics would not start: {e}") from e
 
         try:
             a = ArticleRetrieval(doi, view="FULL")
         except Exception as e:
-            logger.debug("ScienceDirect ArticleRetrieval(%s) failed: %s", doi, e)
-            return None
+            # A 404 is ScienceDirect not holding the DOI (every
+            # non-Elsevier article) — an answer. Anything else is not.
+            if is_not_found(e):
+                return None
+            raise
 
         if a.abstract:
             text = str(a.abstract).strip()

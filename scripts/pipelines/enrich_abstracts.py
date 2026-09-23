@@ -71,7 +71,7 @@ import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
 from abstract_clean import clean_abstract  # noqa: E402
 from core.config_loader import get, require  # noqa: E402
-from fetchers.base import AbstractWithheld  # noqa: E402
+from fetchers.base import AbstractWithheld, SourceUnavailable  # noqa: E402
 from log_schemas import ABSTRACT_FETCH_FIELDS  # noqa: E402
 
 DEFAULT_LOG_CSV = os.path.join("output", "abstract_fetch_log.csv")
@@ -216,6 +216,11 @@ class CascadeResult:
         return ""
 
 
+#: Sources already reported as unavailable, so a run over 850 items says
+#: so once rather than 850 times.
+_UNAVAILABLE_REPORTED: set[str] = set()
+
+
 def _try_cascade(
     item: dict,
     sources: list,
@@ -228,7 +233,9 @@ def _try_cascade(
     than being silently skipped, so a run that failed to answer is
     distinguishable from one that answered "no abstract exists".
     Sources raising `NotImplementedError` are not counted either way —
-    that means the fetcher does not offer abstracts at all.
+    that means the fetcher does not offer abstracts at all — and nor are
+    those raising `SourceUnavailable` (not configured here), which are
+    reported once per run.
     """
     result = CascadeResult()
     data = item.get("data", {})
@@ -240,6 +247,11 @@ def _try_cascade(
         try:
             text = src.fetch_abstract(doi, title=title or None, cache_dir=cache_dir)
         except NotImplementedError:
+            continue
+        except SourceUnavailable as e:
+            if src.name not in _UNAVAILABLE_REPORTED:
+                _UNAVAILABLE_REPORTED.add(src.name)
+                print(f"  Not asking {src.name}: {e}", flush=True)
             continue
         except AbstractWithheld as e:
             result.withheld.append((src.name, str(e)))
