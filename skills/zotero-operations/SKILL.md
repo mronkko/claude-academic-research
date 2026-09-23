@@ -285,7 +285,8 @@ running these stages:**
    non-interactive challenges pass in seconds. Silence is the normal case,
    not a hang. Read `--progress-json` to tell the two apart: it is one
    JSON object per line (`publisher_start`, `item`, `publisher_done`,
-   `run_done`), so the last line tells you where the run is without
+   `routes_start` / `routes_progress` / `routes_done` for the library-route
+   lookups before the Connector pass, `run_done`), so the last line tells you where the run is without
    parsing stdout. Report progress from there rather than guessing.
 
    `--auto-publishers` takes the item list from the audit's

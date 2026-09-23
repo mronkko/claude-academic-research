@@ -896,6 +896,75 @@ _PREFLIGHT_SECONDS_PER_ITEM = 2.0
 _DETAIL_MAX = 300
 
 
+class _RouteLookupProgress:
+    """Progress for Pass 3's per-item route lookups.
+
+    The lookups run serially after the last direct-publisher block and,
+    on a cold cache, take minutes: a 940-item Connector queue at JYU sat
+    silent for 14+ minutes after "Total: …", with the last progress event
+    `publisher_done`, and the user asked whether the run was stuck. Same
+    cadence as the pre-flight's tick, plus `routes_*` progress events so
+    an agent reading `--progress-json` sees the step too.
+
+    Silent when there is no resolver: every lookup then returns at once.
+    """
+
+    def __init__(self, total: int, *, enabled: bool) -> None:
+        self.total = total
+        self.enabled = enabled and total > 0
+        self.checked = 0
+        self.t0 = time.monotonic()
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        from fetchers.browser import interaction
+        print(
+            f"\nLooking up library routes for {self.total} Connector "
+            f"item{'' if self.total == 1 else 's'} (answers are cached, "
+            f"so a re-run is fast)…",
+            flush=True,
+        )
+        interaction.report_progress(
+            {"event": "routes_start", "queued": self.total},
+        )
+
+    def tick(self) -> None:
+        if not self.enabled:
+            return
+        self.checked += 1
+        if self.checked % _PREFLIGHT_TICK or self.checked == self.total:
+            return
+        from fetchers.browser import interaction
+        rate = self.checked / max(time.monotonic() - self.t0, 1e-6)
+        left = self.total - self.checked
+        eta = f", ~{_humanize_duration(left / rate)} left" if rate > 0 else ""
+        print(
+            f"  … {self.checked}/{self.total} routes looked up "
+            f"({rate:.1f}/s{eta})",
+            flush=True,
+        )
+        interaction.report_progress({
+            "event": "routes_progress", "done": self.checked,
+            "queued": self.total,
+        })
+
+    def done(self) -> None:
+        if not self.enabled:
+            return
+        from fetchers.browser import interaction
+        elapsed = time.monotonic() - self.t0
+        print(
+            f"  Route lookups done: {self.checked} in "
+            f"{_humanize_duration(elapsed)}.",
+            flush=True,
+        )
+        interaction.report_progress({
+            "event": "routes_done", "done": self.checked,
+            "queued": self.total, "elapsed_s": round(elapsed, 1),
+        })
+
+
 def _humanize_duration(seconds: float) -> str:
     """Coarse wall-clock estimate: seconds, minutes or hours and minutes.
 
@@ -3175,6 +3244,10 @@ def _run_browser_in_process(
     )
     failed_open = 0
     deferred_pass3 = 0
+    route_progress = _RouteLookupProgress(
+        len(origins), enabled=resolver_cfg is not None and not ignore_coverage,
+    )
+    route_progress.start()
     for it, origin in origins:
         # Query B only (date-filtered). When Query B is empty, we do NOT
         # fall back to Query A. The cache data against JYU's SFX (see
@@ -3196,6 +3269,7 @@ def _run_browser_in_process(
         lookup = _pass3_target(
             it, resolver_cfg, ignore_coverage=ignore_coverage,
         )
+        route_progress.tick()
         target, query_ok, chosen = lookup.url, lookup.query_ok, lookup.target
 
         if lookup.deferred:
@@ -3246,6 +3320,7 @@ def _run_browser_in_process(
                 cause=pdf_fetch_log.FailureCause.ACCESS_BLOCKED,
             )
             skipped_no_target += 1
+    route_progress.done()
 
     if skipped_no_target:
         print(
@@ -3993,6 +4068,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--progress-json", default="",
         help="Append one JSON object per line to this file as the browser "
              "pass progresses (publisher_start / item / publisher_done / "
+             "routes_start / routes_progress / routes_done / "
              "run_done). Lets an agent driving a background run report "
              "progress without parsing stdout, which is written for a "
              "person. The file is truncated at start — one file per run.",
