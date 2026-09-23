@@ -71,6 +71,7 @@ import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
 from abstract_clean import clean_abstract  # noqa: E402
 from core.config_loader import get, require  # noqa: E402
+from fetchers._title_match import item_meta  # noqa: E402
 from fetchers.base import AbstractWithheld, SourceUnavailable  # noqa: E402
 from log_schemas import ABSTRACT_FETCH_FIELDS  # noqa: E402
 
@@ -243,9 +244,12 @@ def _try_cascade(
     if not doi:
         return result
     title = (data.get("title") or "").strip()
+    meta = item_meta(data)
     for src in sources:
         try:
-            text = src.fetch_abstract(doi, title=title or None, cache_dir=cache_dir)
+            text = src.fetch_abstract(
+                doi, title=title or None, cache_dir=cache_dir, meta=meta,
+            )
         except NotImplementedError:
             continue
         except SourceUnavailable as e:

@@ -68,7 +68,9 @@ class CrossrefSource(AbstractFetcher, PdfFetcher):
             self._cr = habanero.Crossref(mailto=mailto or None)
         return self._cr
 
-    def fetch_abstract(self, doi: str, *, title=None, cache_dir=None) -> str | None:
+    def fetch_abstract(
+        self, doi: str, *, title=None, cache_dir=None, meta=None,
+    ) -> str | None:
         try:
             msg = self.cr.works(ids=doi).get("message") or {}
         except Exception as e:

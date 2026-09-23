@@ -868,7 +868,9 @@ class ScienceDirectSource(AbstractFetcher, PdfFetcher):
             or os.environ.get("ELSEVIER_API_KEY", "")
         )
 
-    def fetch_abstract(self, doi: str, *, title=None, cache_dir=None) -> str | None:
+    def fetch_abstract(
+        self, doi: str, *, title=None, cache_dir=None, meta=None,
+    ) -> str | None:
         try:
             from pybliometrics.utils.startup import init
             init()

@@ -46,13 +46,12 @@ from __future__ import annotations
 import gzip
 import logging
 import os
-import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fetchers import _pdf_validate
-from fetchers._title_match import strip_html
+from fetchers._title_match import content_words
 from fetchers.base import (
     AbstractFetcher,
     PdfFetcher,
@@ -213,22 +212,6 @@ class _OpenAlexClient:
         return work or None
 
 
-#: Words too common to show that two texts are about the same thing.
-_STOPWORDS = frozenset(
-    "about after also among and are because been being between both but "
-    "does during each from have into more most much only other over same "
-    "some such than that their them then there these they this those "
-    "through under upon very what when where which while with within "
-    "without would your".split()
-)
-
-
-def _content_words(text: str) -> set[str]:
-    """Lower-cased words of four letters or more, stopwords out."""
-    words = re.findall(r"[^\W\d_]{4,}", strip_html(text).lower())
-    return {w for w in words if w not in _STOPWORDS}
-
-
 def _grobid_abstract_problem(root, text: str, title: str | None) -> str | None:
     """Why GROBID's `<abstract>` is not this item's abstract, or None.
 
@@ -248,13 +231,13 @@ def _grobid_abstract_problem(root, text: str, title: str | None) -> str | None:
     # GROBID could not find the front matter; 12 of the 17.
     if not header_title:
         return "GROBID found no title, so no front matter"
-    wanted = _content_words(title or "")
+    wanted = content_words(title or "")
     # The PDF is a different paper: J9JJMWWZ, "The job demands-resources
     # model of burnout", got the abstract of "Disability, Program Access,
     # Empathy and Burnout in US Medical Students" — one word in four.
     # The right ones share 0.4 or more (a PDF title often drops a
     # subtitle or keeps only one half of it).
-    if wanted and len(wanted & _content_words(header_title)) < len(wanted) / 3:
+    if wanted and len(wanted & content_words(header_title)) < len(wanted) / 3:
         return f"the PDF's title is not the item's ({header_title[:60]!r})"
     # A footnote or a sentence picked up mid-way: "I1. See …", "3 Access
     # was…", "effects. In particular…".
@@ -262,7 +245,7 @@ def _grobid_abstract_problem(root, text: str, title: str | None) -> str | None:
     if first.islower() or any(c.isdigit() for c in text[:2]):
         return f"it starts like a fragment ({text[:20]!r})"
     # No word of the title anywhere in it; none of the 75 right ones.
-    if wanted and not wanted & _content_words(text):
+    if wanted and not wanted & content_words(text):
         return "it shares no word with the title"
     return None
 
@@ -281,7 +264,9 @@ class OpenAlexSource(_OpenAlexClient, AbstractFetcher, PdfFetcher):
     # Abstract (GROBID XML — paid Content API)
     # ------------------------------------------------------------------
 
-    def fetch_abstract(self, doi: str, *, title=None, cache_dir=None) -> str | None:
+    def fetch_abstract(
+        self, doi: str, *, title=None, cache_dir=None, meta=None,
+    ) -> str | None:
         api_key = self._api_key()
         if not api_key:
             raise SourceUnavailable(

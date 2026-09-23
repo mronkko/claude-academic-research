@@ -97,9 +97,15 @@ class AbstractFetcher(Source, ABC):
         *,
         title: str | None = None,
         cache_dir: str | Path | None = None,
+        meta: Any = None,
     ) -> str | None:
         """Return the abstract text, or None if the source answered and
         has nothing.
+
+        `meta` is the item's `fetchers._title_match.ItemMeta` (year,
+        creator surnames, venue). A source that looks up by anything
+        other than the DOI must check its hit against it: a title
+        search alone matched "Erratum" to a 2024 erratum.
 
         None is a claim that the source was asked and said no. When the
         question was not answered, raise instead: `SourceUnavailable`

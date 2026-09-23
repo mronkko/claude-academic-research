@@ -20,7 +20,13 @@ import logging
 import os
 import re
 
-from fetchers._title_match import matches, strip_html
+from fetchers._title_match import (
+    ItemMeta,
+    content_words,
+    matches,
+    record_agrees,
+    strip_html,
+)
 from fetchers.base import (
     AbstractFetcher,
     AbstractWithheld,
@@ -55,6 +61,24 @@ def _query_title(title: str, *, drop_operators: bool) -> str:
     return " ".join(words)
 
 
+#: A title with fewer content words than this is not searched for.
+#: "Erratum", "Introduction", "Discrimination", "COMMENTARY", "Time to
+#: get tough": `TI=` matches thousands of records, `matches()` accepts
+#: any of them whose title merely starts that way, and on 2026-09-23 at
+#: least 15 of 152 WoS abstracts in one library were another record's.
+_MIN_TITLE_WORDS = 3
+
+#: An item with no metadata: its title fallback can never be verified.
+_NO_META = ItemMeta()
+
+
+def _fallback_title(title: str | None) -> str | None:
+    """`title`, or None when it is too generic to search WoS by."""
+    if title and len(content_words(title)) >= _MIN_TITLE_WORDS:
+        return title
+    return None
+
+
 class WosSource(AbstractFetcher):
     name = "wos"
 
@@ -74,13 +98,15 @@ class WosSource(AbstractFetcher):
             return starter, "starter"
         return "", ""
 
-    def fetch_abstract(self, doi: str, *, title=None, cache_dir=None) -> str | None:
+    def fetch_abstract(
+        self, doi: str, *, title=None, cache_dir=None, meta=None,
+    ) -> str | None:
         del cache_dir                 # WoS fetchers don't use the cache dir
         key, tier = self._key_and_tier()
         if not key or self.http is None:
             raise SourceUnavailable("no WoS API key configured")
         fetcher = self._fetch_expanded if tier == "expanded" else self._fetch_starter
-        return fetcher(doi, title, key)
+        return fetcher(doi, _fallback_title(title), key, meta or _NO_META)
 
     # ------------------------------------------------------------------
     # Expanded tier (richer XML/JSON payload, real abstract element)
@@ -88,6 +114,7 @@ class WosSource(AbstractFetcher):
 
     def _fetch_expanded(
         self, doi: str, title: str | None, key: str,
+        meta: ItemMeta = _NO_META,
     ) -> str | None:
         headers = {"X-ApiKey": key, "Accept": "application/json"}
 
@@ -121,10 +148,15 @@ class WosSource(AbstractFetcher):
         )
         for rec in hits:
             rec_title = self._expanded_title(rec)
-            if rec_title and matches(rec_title, title):
-                text = self._expanded_abstract(rec)
-                if text:
-                    return text
+            if not (rec_title and matches(rec_title, title)):
+                continue
+            why = record_agrees(meta, **self._expanded_facts(rec))
+            if why:
+                logger.info("wos: title hit for %s refused — %s", doi, why)
+                continue
+            text = self._expanded_abstract(rec)
+            if text:
+                return text
         if withheld or title_withheld:
             raise AbstractWithheld(
                 "WoS holds a matching record outside this subscription's "
@@ -186,6 +218,34 @@ class WosSource(AbstractFetcher):
         return [r for r in recs if isinstance(r, dict)], False
 
     @staticmethod
+    def _expanded_facts(rec: dict) -> dict:
+        """Year, author surnames and source title, for `record_agrees`."""
+        summary = rec.get("static_data", {}).get("summary", {})
+        year = (summary.get("pub_info") or {}).get("pubyear")
+        names = (summary.get("names") or {}).get("name") or []
+        if not isinstance(names, list):
+            names = [names]
+        surnames: set[str] = set()
+        for n in names:
+            if isinstance(n, dict):
+                surnames.add(str(n.get("last_name") or ""))
+                surnames.add(str((n.get("preferred_name") or {}).get("last_name") or ""))
+                surnames.add(str(n.get("wos_standard") or "").split(",")[0])
+        titles = (summary.get("titles") or {}).get("title") or []
+        if not isinstance(titles, list):
+            titles = [titles]
+        venue = next(
+            (str(t.get("content", "")) for t in titles
+             if isinstance(t, dict) and t.get("type") == "source"),
+            "",
+        )
+        try:
+            year = int(year) if year else None
+        except (TypeError, ValueError):
+            year = None
+        return {"year": year, "surnames": surnames, "venue": venue}
+
+    @staticmethod
     def _expanded_title(rec: dict) -> str:
         titles = (
             rec.get("static_data", {})
@@ -224,6 +284,7 @@ class WosSource(AbstractFetcher):
 
     def _fetch_starter(
         self, doi: str, title: str | None, key: str,
+        meta: ItemMeta = _NO_META,
     ) -> str | None:
         headers = {"X-ApiKey": key, "Accept": "application/json"}
 
@@ -242,10 +303,26 @@ class WosSource(AbstractFetcher):
         )
         for hit in hits:
             hit_title = (hit.get("title") or {}).get("value") or ""
-            if hit_title and matches(hit_title, title):
-                abstract = hit.get("abstract") or ""
-                if len(abstract.strip()) > 40:
-                    return abstract.strip()
+            if not (hit_title and matches(hit_title, title)):
+                continue
+            source = hit.get("source") or {}
+            authors = (hit.get("names") or {}).get("authors") or []
+            why = record_agrees(
+                meta,
+                year=source.get("publishYear"),
+                surnames={
+                    str(a.get("wosStandard") or a.get("displayName") or "")
+                    .split(",")[0]
+                    for a in authors if isinstance(a, dict)
+                },
+                venue=str(source.get("sourceTitle") or ""),
+            )
+            if why:
+                logger.info("wos: title hit for %s refused — %s", doi, why)
+                continue
+            abstract = hit.get("abstract") or ""
+            if len(abstract.strip()) > 40:
+                return abstract.strip()
         return None
 
     def _starter_abstract_from_query(

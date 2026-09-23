@@ -79,7 +79,9 @@ class SemanticScholarSource(AbstractFetcher, PdfFetcher):
             resp = self.http.get(url, headers=self._headers(), timeout=30)
         return resp
 
-    def fetch_abstract(self, doi: str, *, title=None, cache_dir=None) -> str | None:
+    def fetch_abstract(
+        self, doi: str, *, title=None, cache_dir=None, meta=None,
+    ) -> str | None:
         # Primary: look up by DOI.
         # A failed request, or a status other than 200/404, raises: S2's
         # 429s are common enough that reading them as "no abstract"

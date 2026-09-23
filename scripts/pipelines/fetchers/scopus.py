@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 class ScopusSource(AbstractFetcher):
     name = "scopus"
 
-    def fetch_abstract(self, doi: str, *, title=None, cache_dir=None) -> str | None:
+    def fetch_abstract(
+        self, doi: str, *, title=None, cache_dir=None, meta=None,
+    ) -> str | None:
         try:
             from pybliometrics.utils.startup import init
             init()

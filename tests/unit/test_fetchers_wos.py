@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fetchers import WosSource
-from fetchers._title_match import matches, normalise, strip_html
+from fetchers._title_match import item_meta, matches, normalise, strip_html
 
 
 @pytest.fixture(autouse=True)
@@ -86,7 +86,10 @@ def _expanded_response(records_found: int, records: list[dict] | None = None) ->
     }
 
 
-def _expanded_record(title: str, abstract_text: str | list | None) -> dict:
+def _expanded_record(
+    title: str, abstract_text: str | list | None, *,
+    year: int = 2014, author: str = "Cornelissen", source: str = "ACADEMY OF MANAGEMENT ANNALS",
+) -> dict:
     """One WoS Expanded record with the fields WosSource reads."""
     abstracts_block: dict
     if abstract_text is None:
@@ -99,7 +102,12 @@ def _expanded_record(title: str, abstract_text: str | list | None) -> dict:
     return {
         "static_data": {
             "summary": {
-                "titles": {"title": [{"type": "item", "content": title}]},
+                "titles": {"title": [
+                    {"type": "item", "content": title},
+                    {"type": "source", "content": source},
+                ]},
+                "pub_info": {"pubyear": year},
+                "names": {"name": [{"role": "author", "last_name": author}]},
             },
             "fullrecord_metadata": {"abstracts": abstracts_block},
         },
@@ -159,6 +167,12 @@ def test_wos_doi_miss_with_no_title_returns_none() -> None:
     assert src.fetch_abstract("10.5465/amd.2015.0052") is None
 
 
+ANNALS_2014 = item_meta({
+    "date": "2014", "creators": [{"lastName": "Cornelissen"}],
+    "publicationTitle": "Academy of Management Annals",
+})
+
+
 def test_wos_doi_miss_title_fallback_hits() -> None:
     """Key scenario: DOI missing because WoS has a different DOI alias,
     but the title matches one of the title-search hits."""
@@ -179,6 +193,7 @@ def test_wos_doi_miss_title_fallback_hits() -> None:
     result = src.fetch_abstract(
         "10.5465/19416520.2014.875669",
         title="Putting Framing in Perspective: A Review of Framing",
+        meta=ANNALS_2014,
     )
     assert result is not None
     assert "framing" in result.lower()
@@ -290,3 +305,58 @@ def test_wos_exception_propagates() -> None:
     src = WosSource(http=sess, config=_Config(extended="KEY"))
     with pytest.raises(RuntimeError, match="network down"):
         src.fetch_abstract("10.5465/amd.2015.0052")
+
+
+# ---------------------------------------------------------------------------
+# Title fallback: another record's abstract (2026-09-23, 15 of 152)
+# ---------------------------------------------------------------------------
+
+
+def _fallback(title: str, meta, rec: dict):
+    sess, calls = _http_returning(_expanded_response(0), _expanded_response(1, [rec]))
+    src = WosSource(http=sess, config=_Config(extended="KEY"))
+    return src.fetch_abstract("10.1/x", title=title, meta=meta), calls
+
+
+@pytest.mark.parametrize("title", ["Erratum", "COMMENTARY", "Introduction", "Time to get tough"])
+def test_a_generic_title_is_not_searched(title) -> None:
+    """IKBK6EQN "COMMENTARY" (1993) got a 2026 SEC proposal's abstract;
+    SEFAI6KR "Erratum" (2015) a 2024 erratum."""
+    got, calls = _fallback(title, ANNALS_2014, _expanded_record(title, "x" * 80))
+    assert got is None
+    assert len(calls) == 1                   # the DOI query only
+
+
+def test_a_title_hit_from_another_year_is_refused() -> None:
+    """W6FFXNPB "Striking the right note", Nature 1999, got modern text
+    on electric-vehicle sound."""
+    meta = item_meta({"date": "1999-07-01", "creators": [{"lastName": "Ball"}],
+                      "publicationTitle": "Nature"})
+    rec = _expanded_record("Striking the right note: acoustic vehicle alerts", "y" * 80,
+                           year=2023, author="Ball", source="NATURE")
+    assert _fallback("Striking the right note", meta, rec)[0] is None
+
+
+def test_a_title_hit_with_no_author_or_venue_in_common_is_refused() -> None:
+    rec = _expanded_record("Putting Framing in Perspective: A Review", "z" * 80,
+                           author="Someone", source="JOURNAL OF ELSEWHERE")
+    assert _fallback("Putting Framing in Perspective: A Review", ANNALS_2014, rec)[0] is None
+
+
+def test_a_title_hit_matching_the_venue_alone_is_accepted() -> None:
+    rec = _expanded_record("Putting Framing in Perspective: A Review", "w" * 80,
+                           author="Someone")
+    assert _fallback("Putting Framing in Perspective: A Review", ANNALS_2014, rec)[0]
+
+
+def test_an_item_without_a_year_gets_no_title_fallback() -> None:
+    meta = item_meta({"creators": [{"lastName": "Cornelissen"}]})
+    rec = _expanded_record("Putting Framing in Perspective: A Review", "v" * 80)
+    assert _fallback("Putting Framing in Perspective: A Review", meta, rec)[0] is None
+
+
+def test_surnames_match_across_accents() -> None:
+    meta = item_meta({"date": "2019", "creators": [{"lastName": "Röth"}]})
+    rec = _expanded_record("Resistance to change and innovativeness", "u" * 80,
+                           year=2019, author="Roth", source="J BUS RES")
+    assert _fallback("Resistance to change and innovativeness", meta, rec)[0]
