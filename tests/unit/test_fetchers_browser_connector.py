@@ -659,3 +659,57 @@ def test_versions_are_compared_numerically(monkeypatch, tmp_path: Path) -> None:
         (base / v).mkdir(parents=True)
     monkeypatch.setattr(connector, "_default_extension_search_paths", lambda: [])
     assert resolve_connector_extension_path(base) == base / "5.0.215_0"
+
+
+# ---------------------------------------------------------------------------
+# Logged-out proxy — a sign-in page is not an access verdict
+# ---------------------------------------------------------------------------
+
+_WRAPPED = "http://ezproxy.jyu.fi/login?url=https://doi.org/10.1016/j.ejor.2022.11.003"
+_REWRITTEN = "https://research-ebsco-com.ezproxy.jyu.fi/linkprocessor/plink?id=1"
+
+
+def test_a_proxy_login_page_is_recognised() -> None:
+    """Twice on 2026-09-23 a relaunched Connector profile (EZproxy keeps
+    its session in a browser-session cookie) landed on the proxy's
+    sign-in page. "No translator" followed and the items were logged
+    ACCESS_BLOCKED, removed by hand afterwards.
+    """
+    from fetchers.browser.connector import _proxy_base, is_proxy_login_url
+
+    assert _proxy_base(_WRAPPED) == "ezproxy.jyu.fi"
+    assert _proxy_base(_REWRITTEN) == "ezproxy.jyu.fi"
+    for target in (_WRAPPED, _REWRITTEN):
+        # EZproxy's own form, and the institution's IdP behind it.
+        assert is_proxy_login_url("https://ezproxy.jyu.fi/login?url=x", target)
+        assert is_proxy_login_url(
+            "https://login.jyu.fi/idp/profile/SAML2/Redirect/SSO?execution=e1s1",
+            target,
+        )
+        # Signed in: the publisher rewritten onto the proxy.
+        assert not is_proxy_login_url(
+            "https://www-sciencedirect-com.ezproxy.jyu.fi/science/article/pii/S1",
+            target,
+        )
+
+
+def test_unproxied_routes_are_never_judged() -> None:
+    """Most publisher pages link to a login of their own. Without a
+    signing-in proxy in the route there is nothing to be logged out of,
+    and Aalto's IP-authenticated OCLC proxy must not be dragged in.
+    """
+    from fetchers.browser.connector import _proxy_base, is_proxy_login_url
+
+    direct = "https://www.sciencedirect.com/science/article/pii/S1"
+    assert not is_proxy_login_url("https://login.elsevier.com/x", direct)
+    oclc = "https://login.aalto-libproxy.idm.oclc.org/login?url=https://doi.org/10.1/x"
+    assert _proxy_base(oclc) == ""
+    # Off the proxy on an ordinary publisher page is not a login page.
+    assert not is_proxy_login_url("https://direct.mit.edu/article/1", _WRAPPED)
+
+
+def test_login_required_is_its_own_status() -> None:
+    import enrich_pdfs
+
+    assert "connector_login_required" in enrich_pdfs.pdf_run_report.STATUS_INFO
+    assert "connector_login_required" not in enrich_pdfs.DONE_STATUSES

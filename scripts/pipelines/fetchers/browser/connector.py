@@ -37,6 +37,7 @@ import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 from .base import (
     Counter,
@@ -370,6 +371,10 @@ class ZoteroConnectorHandler(PublisherHandler):
         # Hosts the user asked to skip entirely (e.g. a platform
         # they know they have no access to).
         self._skipped_hosts: set[str] = set()
+        # Signing-in proxies (`ezproxy.jyu.fi`) found logged out this run.
+        # Their remaining items are not opened: each would land on the
+        # same login page. See `_proxy_login_page`.
+        self._logged_out_proxies: set[str] = set()
 
     # ------------------------------------------------------------------
     # PublisherHandler overrides — __init_subclass__ enforces that leaf
@@ -566,6 +571,14 @@ class ZoteroConnectorHandler(PublisherHandler):
         from fetchers.library_resolver import effective_host
         item_host = effective_host(target_url)
 
+        proxy = _proxy_base(target_url)
+        if proxy and proxy in self._logged_out_proxies:
+            self.last_outcome = "login_required"
+            print(f"  └─ NOT TRIED: {proxy} is logged out (found earlier "
+                  f"this run).", flush=True)
+            counter.failed += 1
+            return False
+
         # User-skipped host → drop every item for this host without
         # even opening its page.
         if item_host in self._skipped_hosts:
@@ -599,6 +612,44 @@ class ZoteroConnectorHandler(PublisherHandler):
         # Zotero sees a multi-item page → picker. A 3-second wait
         # catches typical redirect chains at negligible cost.
         await asyncio.sleep(3.0)
+
+        # A logged-out proxy session has to be caught here. Otherwise the
+        # login form reaches the translator poll, "no translator" follows,
+        # and the item is logged ACCESS_BLOCKED, telling the review that
+        # the library cannot reach an article it can. EZproxy keeps its
+        # session in a browser-session cookie, so a login does not survive
+        # a relaunch of the Connector profile. Twice on 2026-09-23 a
+        # restarted run wrote such rows (6, then 2), which had to be
+        # removed by hand.
+        if proxy and await _proxy_login_page(page, target_url):
+            if sys.stdin.isatty():
+                await asyncio.to_thread(
+                    _read_user_line,
+                    f"  │  {proxy} is asking you to sign in. Sign in in the\n"
+                    f"  │  Chromium window, wait for the article page, then\n"
+                    f"  │  press [Enter]: ",
+                )
+            else:
+                # A signed-in redirect can still be on the proxy host after
+                # the 3 s dwell. Mistaking it costs every remaining item
+                # behind this proxy, so give it longer before concluding.
+                for _ in range(10):
+                    await asyncio.sleep(1.0)
+                    if not await _proxy_login_page(page, target_url):
+                        break
+            if await _proxy_login_page(page, target_url):
+                self._logged_out_proxies.add(proxy)
+                self.last_outcome = "login_required"
+                print(
+                    f"  └─ LOGIN REQUIRED: landed on {proxy}'s sign-in page.\n"
+                    f"         Not an access verdict, so nothing goes in the\n"
+                    f"         failure log. The remaining {proxy} items are\n"
+                    f"         skipped this run. Sign in in the Connector\n"
+                    f"         window before \"Ready to start?\" and re-run.",
+                    flush=True,
+                )
+                counter.failed += 1
+                return False
 
         # One-prompt-per-host confirmation. The translator otherwise
         # fires too eagerly on pages that briefly render reCAPTCHA
@@ -1187,6 +1238,73 @@ def _poll_for_new_item(
             next_hint_at = now + hint_every_s
         time.sleep(1.0)
     return None
+
+
+#: Host labels and path fragments of sign-in pages. A proxy hands a
+#: logged-out reader to its own login form or on to the institution's
+#: identity provider (JYU: ezproxy.jyu.fi -> login.jyu.fi, SAML).
+_LOGIN_HOST_LABELS = frozenset({"login", "idp", "sso", "shibboleth", "auth"})
+_LOGIN_PATH_MARKERS = ("/login", "/idp/", "/saml", "/sso", "/shibboleth")
+
+
+def _proxy_base(target_url: str) -> str:
+    """`ezproxy.jyu.fi` for a route through a signing-in proxy, else "".
+
+    Covers both EZproxy shapes: the wrapper `ezproxy.jyu.fi/login?url=…`
+    and the rewritten host `www-sciencedirect-com.ezproxy.jyu.fi`.
+    """
+    from fetchers.resolvers.base import (
+        INTERACTIVE_PROXY_LABELS,
+        needs_interactive_login,
+    )
+
+    if not needs_interactive_login(target_url):
+        return ""
+    labels = (urlparse(target_url).hostname or "").lower().split(".")
+    for i, label in enumerate(labels):
+        if label in INTERACTIVE_PROXY_LABELS:
+            return ".".join(labels[i:])
+    return ""
+
+
+def is_proxy_login_url(page_url: str, target_url: str) -> bool:
+    """Whether `page_url`, reached from a proxied `target_url`, is a
+    sign-in page rather than the proxied article.
+
+    Signed in, EZproxy rewrites the publisher onto a subdomain of itself
+    (`www-sciencedirect-com.ezproxy.jyu.fi`). The bare proxy host is its
+    own login or menu page. Anywhere else is off the proxy, and that
+    counts only when it looks like an identity provider. Only proxied
+    routes are judged at all, because most publisher pages carry a login
+    link of their own.
+    """
+    proxy = _proxy_base(target_url)
+    if not proxy or not page_url:
+        return False
+    parsed = urlparse(page_url)
+    host = (parsed.hostname or "").lower()
+    if host == proxy:
+        return True
+    if host.endswith("." + proxy):
+        return False
+    path = (parsed.path or "").lower()
+    return bool(
+        _LOGIN_HOST_LABELS & set(host.split("."))
+        or any(m in path for m in _LOGIN_PATH_MARKERS)
+    )
+
+
+async def _proxy_login_page(page, target_url: str) -> bool:
+    """`is_proxy_login_url` on the page as it stands.
+
+    URL only, no password-field probe. Publisher pages routinely carry a
+    hidden login form, and a false positive here is not cheap, because
+    it skips every remaining item behind that proxy.
+    """
+    try:
+        return is_proxy_login_url(page.url, target_url)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _merges_locally(zot) -> bool:

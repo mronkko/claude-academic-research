@@ -54,6 +54,13 @@ STATUS_INFO: dict[str, tuple[str, str]] = {
         "Check Zotero Desktop for an open dialog (or restart it) and re-run; "
         "nothing about access was learned for these items.",
     ),
+    "connector_login_required": (
+        "The Connector landed on a library proxy's sign-in page; not attempted",
+        "Nothing was learned about access. Sign in to the proxy in the "
+        "Connector's Chromium window before answering \"Ready to start?\" "
+        "(EZproxy sessions do not survive a browser restart), then re-run "
+        "`--sources browser`.",
+    ),
     "connector_merge_pending": (
         "Saved by the Zotero Connector; merge queued until it reaches the cloud",
         "Nothing to do: it is merged at the end of the pass or at the start "

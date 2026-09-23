@@ -2425,6 +2425,12 @@ async def _drive_connector(
                 # Saved, not yet merged: neither a success nor a failure,
                 # and no failure-log entry. The merge queue finishes it.
                 status = "connector_merge_pending"
+            elif getattr(handler, "last_outcome", "") == "login_required":
+                # The proxy's sign-in page, not the article: nothing was
+                # learned about access, so no failure-log row (which would
+                # say ACCESS_BLOCKED). Not a done status either, so the
+                # re-run after signing in picks it up.
+                status = "connector_login_required"
             elif skipped_by_user:
                 status = "skipped_by_user"
             else:
@@ -2458,6 +2464,19 @@ async def _drive_connector(
             f"{counter.failed} failed",
             flush=True,
         )
+        logged_out = sorted(getattr(handler, "_logged_out_proxies", set()))
+        if logged_out:
+            print(
+                f"\n  LOGIN REQUIRED: {', '.join(logged_out)} was logged out, "
+                f"so its items\n"
+                f"  were not tried (logged connector_login_required, not as "
+                f"no access).\n"
+                f"  The proxy session does not survive a browser restart: "
+                f"sign in in the\n"
+                f"  Connector window before answering \"Ready to start?\", "
+                f"then re-run.",
+                flush=True,
+            )
         await ctx.close()
 
 
