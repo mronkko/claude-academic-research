@@ -26,9 +26,12 @@ from .base import (
     LibraryResolver,
     Platform,
     ResolverRequest,
+    doi_landing_via,
     effective_host,
     host_matches_domains,
+    is_journal_level,
     local_name,
+    looks_journal_level,
     platform_priority_from_keys,
 )
 from .coverage import CoverageWindow, covers_year, parse_coverage
@@ -78,6 +81,9 @@ __all__ = [
     "Platform",
     "RESOLVERS",
     "ResolverRequest",
+    "doi_landing_via",
+    "is_journal_level",
+    "looks_journal_level",
     "SfxResolver",
     "effective_host",
     "host_matches_domains",

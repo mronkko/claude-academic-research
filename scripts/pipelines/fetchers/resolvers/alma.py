@@ -135,5 +135,10 @@ class AlmaResolver(LibraryResolver):
                 interface_name=keys.get("interface_name", ""),
                 coverage=keys.get("Availability") or keys.get("availability", ""),
                 is_free=(keys.get("Is_free", "").strip().lower() in _TRUE_WORDS),
+                # Every Alma URL is the tenant's redirector, so the URL
+                # says nothing about where it lands and the journal-page
+                # guess (`looks_journal_level`) has nothing to read. Alma
+                # does resolve to the article where the package allows.
+                journal_level=False,
             ))
         return targets

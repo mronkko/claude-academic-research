@@ -62,8 +62,10 @@ from fetchers.resolvers import (
     LibraryResolver,
     Platform,
     ResolverRequest,
+    doi_landing_via,
     effective_host,
     host_matches_domains,
+    is_journal_level,
     platform_priority_from_keys,
     resolver_for,
 )
@@ -748,6 +750,11 @@ class TargetLookup(NamedTuple):
     #: the caller must neither attempt nor log the item, so a run on the
     #: other institution's network picks it up.
     deferred: bool = False
+    #: True when the winning route opened only the journal (see
+    #: `resolvers.base.is_journal_level`) and `url` was replaced by the
+    #: article's DOI landing page, behind the route's proxy if it had one.
+    #: `target` still names the route the resolver gave.
+    journal_page_replaced: bool = False
 
 
 def lookup_fulltext_target(
@@ -803,10 +810,20 @@ def lookup_fulltext_target(
     # Stable: equal keys keep the resolver's response order. `pub_date`
     # makes coverage outrank platform preference, so an embargoed
     # first-choice platform loses to one that actually holds this year.
+    # An article-level route beats a journal front page whatever the
+    # platform preference: the front page has no article on it to save.
     best = min(
         targets,
-        key=lambda t: resolver.sort_key(t, ranking, pub_date=pub_date),
+        key=lambda t: (
+            is_journal_level(t, doi),
+            resolver.sort_key(t, ranking, pub_date=pub_date),
+        ),
     )
+    if is_journal_level(best, doi):
+        return TargetLookup(
+            doi_landing_via(best.url, doi), True, best,
+            journal_page_replaced=True,
+        )
     return TargetLookup(best.url, True, best)
 
 

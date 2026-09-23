@@ -42,9 +42,10 @@ missing a field instead.
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 # SFX's service_type value for "this target serves the full text".
 # Other service types (getHolding, getAuthor, getDOI, getWebSearch, ...)
@@ -98,6 +99,12 @@ class FulltextTarget:
     #: route — the machine-readable twin of `resolver_name`, used to keep
     #: a pass on one institution's network off another's links.
     resolver_id: str = ""
+    #: Whether the route opens the journal (a front page, an issue list)
+    #: rather than the article. True/False when the resolver said so —
+    #: SFX does, through its `<parser>`; None when it did not, which is
+    #: Alma and every cache entry written before this field existed.
+    #: Read it through `is_journal_level`, which fills the None case in.
+    journal_level: bool | None = None
 
     def covers_year(
         self, year: int | str | None, *, today_year: int | None = None,
@@ -129,6 +136,8 @@ class FulltextTarget:
             out["resolver_name"] = self.resolver_name
         if self.resolver_id:
             out["resolver_id"] = self.resolver_id
+        if self.journal_level is not None:
+            out["journal_level"] = self.journal_level
         return out
 
     @classmethod
@@ -145,7 +154,97 @@ class FulltextTarget:
             is_free=bool(d.get("is_free", False)),
             resolver_name=d.get("resolver_name", "") or "",
             resolver_id=d.get("resolver_id", "") or "",
+            journal_level=d.get("journal_level"),
         )
+
+
+# ---------------------------------------------------------------------------
+# Journal-level routes
+# ---------------------------------------------------------------------------
+#
+# A resolver can count a journal's home page as "full text": SFX's
+# freely-available lists (EZB-FREE, "Free E- Journals", "Single
+# Journals", Norart, CLOCKSS) store one URL per journal and hand it back
+# for every article in it. Opened in the Connector that is a page with no
+# article on it, so no translator fires and the item fails — live on
+# 2026-09-23 with 10.5897/ajbmx11.031 sent to https://academicjournals.org/ajbm/,
+# and 17 such targets were counted in JYU's cache on 2026-09-05.
+
+#: Where the target URL carries the article after all: an OpenURL or
+#: gateway link built from the citation, a repository copy, a PDF.
+_ARTICLE_MARKERS: tuple[str, ...] = (
+    ".pdf", "/doi/", "/article", "/abs", "/full", "/download", "/record",
+    "/handle/", "/bitstream", "/files/", "/output/", "/retrieve/", "/id/",
+    "/pmc/", "/content/", "/view/", "/dataset/", "/publication",
+    "/stable/", "/docview/",
+    "delivery", "openurl", "linking", "gateway", "uresolver",
+    "citationsearch", "id_article", "abstractid", "genre=", "atitle=",
+    "spage=", "volume=",
+)
+
+#: A run of five or more digits reads as an item id (`hal-02290402`,
+#: `record/5425194`) unless the whole segment is an ISSN (`03135926`);
+#: so does a UUID-shaped segment (a repository's publication record).
+_ITEM_ID_RE = re.compile(r"\d{5,}|^(?=.*\d)[0-9a-f-]{20,}$")
+_ISSN_RE = re.compile(r"^\d{4}-?\d{3}[\dx]$")
+
+
+def _proxy_split(url: str) -> tuple[str, str]:
+    """(`https://ezproxy.x/login?url=`, inner URL), or ("", url)."""
+    marker = "login?url="
+    i = url.find(marker)
+    if i < 0:
+        return "", url
+    return url[:i + len(marker)], url[i + len(marker):]
+
+
+def looks_journal_level(url: str, doi: str) -> bool:
+    """Whether a target URL, on its own, looks like a journal page.
+
+    The fallback for routes the resolver did not label (see
+    `FulltextTarget.journal_level`), so it is built to say no when in
+    doubt: a URL carrying the DOI, an article marker or an item id is
+    article-level. A missed journal page costs one failed item, as it
+    did before; a false positive would trade a repository PDF for a
+    paywalled landing page. Checked against 150 real SFX targets.
+    """
+    _, inner = _proxy_split(url or "")
+    low = unquote(unquote(inner)).lower()
+    doi = (doi or "").lower()
+    if not low or (doi and (doi in low or doi.partition("/")[2] in low)):
+        return False
+    if any(m in low for m in _ARTICLE_MARKERS):
+        return False
+    parsed = urlparse(low)
+    if parsed.hostname in ("doi.org", "dx.doi.org"):
+        return False
+    # A query string is how most platforms name the item (`AN=`, `pii=`,
+    # `_volkey=`), so one reads as article-level — except an ISSN alone,
+    # which names nothing narrower than the journal.
+    if parsed.query and "issn=" not in parsed.query:
+        return False
+    for seg in parsed.path.split("/"):
+        if _ITEM_ID_RE.search(seg) and not _ISSN_RE.match(seg):
+            return False
+    return True
+
+
+def is_journal_level(target: FulltextTarget, doi: str) -> bool:
+    """The resolver's word when it gave one, else `looks_journal_level`."""
+    if target.journal_level is not None:
+        return target.journal_level
+    return looks_journal_level(target.url, doi)
+
+
+def doi_landing_via(target_url: str, doi: str) -> str:
+    """`https://doi.org/<doi>`, behind the target's EZproxy if it had one.
+
+    The proxy keeps the entitlement the route was chosen for; without
+    one (the free lists, `<proxy>no</proxy>`) the plain DOI link is
+    what the journal page would have needed the user to search from.
+    """
+    prefix, _ = _proxy_split(target_url or "")
+    return f"{prefix}https://doi.org/{doi}"
 
 
 # ---------------------------------------------------------------------------

@@ -83,6 +83,7 @@ class SfxResolver(LibraryResolver):
             url = ""
             public_name = ""
             name = ""
+            parser = ""
             for child in el:
                 cn = local_name(child)
                 text = (child.text or "").strip()
@@ -94,10 +95,20 @@ class SfxResolver(LibraryResolver):
                     public_name = text
                 elif cn == "target_name":
                     name = text
+                elif cn == "parser":
+                    parser = text
             if is_fulltext and url:
                 targets.append(FulltextTarget(
                     url=url,
                     package_name=public_name or name,
                     interface_name=name,
+                    # `Bulk::DI` / `Bulk::BULK` link from one stored URL
+                    # per journal; every other parser builds the link from
+                    # the citation. Sampled live on JYU's SFX, 2026-09-23:
+                    # all eleven Bulk targets were journal pages, and no
+                    # other parser produced one. No <parser> -> unknown.
+                    journal_level=(
+                        parser.startswith("Bulk::") if parser else None
+                    ),
                 ))
         return targets

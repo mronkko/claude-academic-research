@@ -3244,6 +3244,7 @@ def _run_browser_in_process(
     )
     failed_open = 0
     deferred_pass3 = 0
+    journal_pages_replaced = 0
     route_progress = _RouteLookupProgress(
         len(origins), enabled=resolver_cfg is not None and not ignore_coverage,
     )
@@ -3295,6 +3296,12 @@ def _run_browser_in_process(
                     failed_open += 1
                 target = f"https://doi.org/{it['doi']}"
             entry_with_target = {**it, "resolver_target_url": target}
+            if lookup.journal_page_replaced:
+                journal_pages_replaced += 1
+                entry_with_target["resolver_target_note"] = (
+                    f"journal-level target {chosen.url} replaced by the "
+                    f"DOI landing page"
+                )
             if is_ebsco_target(chosen):
                 ebsco_items.append(entry_with_target)
             else:
@@ -3321,6 +3328,14 @@ def _run_browser_in_process(
             )
             skipped_no_target += 1
     route_progress.done()
+    if journal_pages_replaced:
+        print(
+            f"  {journal_pages_replaced} resolver target"
+            f"{'' if journal_pages_replaced == 1 else 's'} opened only the "
+            f"journal's home page; the article's DOI landing page is used "
+            f"instead (through the library proxy where the route had one).",
+            flush=True,
+        )
 
     if skipped_no_target:
         print(

@@ -216,7 +216,7 @@ def test_required_domains_rejects_indirect_routes() -> None:
     the handler can only drive pubsonline.informs.org, so those routes are
     not access *for that handler*."""
     cfg = _sfx_cfg(_session(text=_ft(
-        "https://www.jstor.org/stable/1", "https://search.ebscohost.com/x",
+        "https://www.jstor.org/stable/1", "https://search.ebscohost.com/login.aspx?direct=true&AN=12345678",
     )))
     assert _uq(lookup_fulltext_target(
         DOI, cfg, required_domains=("pubsonline.informs.org",),
@@ -259,7 +259,7 @@ def test_best_target_prefers_ebscohost_over_jstor_and_proquest() -> None:
     EZproxy direction is the one that occurs in practice and works —
     see `test_ezproxy_wrapped_ebscohost_still_ranks_as_ebscohost`."""
     cfg = _sfx_cfg(_session(text=_ft(
-        "https://www.proquest.com/x",
+        "https://www.proquest.com/docview/123456789",
         "https://www.jstor.org/stable/1",
         "https://search.ebscohost.com/login.aspx?direct=true&db=bth&AN=1234",
     )))
@@ -271,7 +271,7 @@ def test_ezproxy_wrapped_ebscohost_still_ranks_as_ebscohost() -> None:
     inside. Unwrapping is what makes ranking see EBSCOhost at all."""
     cfg = _sfx_cfg(_session(text=_ft(
         "https://www.jstor.org/stable/1",
-        "http://ezproxy.example.edu/login?url=https://search.ebscohost.com/x",
+        "http://ezproxy.example.edu/login?url=https://search.ebscohost.com/login.aspx?direct=true&AN=12345678",
     )))
     assert "ebscohost" in lookup_fulltext_target(DOI, cfg).url
 
@@ -282,7 +282,7 @@ def test_config_priority_overrides_the_default_order() -> None:
     from fetchers.resolvers import platform_priority_from_keys
     cfg = _sfx_cfg(
         _session(text=_ft(
-            "https://search.ebscohost.com/x", "https://www.jstor.org/stable/1",
+            "https://search.ebscohost.com/login.aspx?direct=true&AN=12345678", "https://www.jstor.org/stable/1",
         )),
         priority=platform_priority_from_keys(("jstor",)),
     )
@@ -335,9 +335,9 @@ def test_sfx_never_uses_an_issn_fallback() -> None:
 def test_sfx_dual_runs_two_queries_and_reports_date_filtering(tmp_path) -> None:
     session = _routing_session([
         ("ignore_date_threshold", _ft(
-            "https://onlinelibrary.wiley.com/a", "https://www.jstor.org/b",
+            "https://onlinelibrary.wiley.com/doi/a", "https://www.jstor.org/stable/2",
         )),
-        ("rft_id", _ft("https://onlinelibrary.wiley.com/a")),
+        ("rft_id", _ft("https://onlinelibrary.wiley.com/doi/a")),
     ])
     result = lookup_dual(DOI, _sfx_cfg(session, ResolverCache(tmp_path)))
     assert len(result.in_range) == 1
@@ -434,7 +434,7 @@ def test_cache_recovers_from_corrupt_json(tmp_path: Path) -> None:
 
 def test_cache_is_a_hit_and_skips_the_network(tmp_path: Path) -> None:
     cache = ResolverCache(tmp_path)
-    cache.put(_key(SFX_BASE), [FulltextTarget(url="https://search.ebscohost.com/x")])
+    cache.put(_key(SFX_BASE), [FulltextTarget(url="https://search.ebscohost.com/login.aspx?direct=true&AN=12345678")])
     session = _session(error=True)
     assert lookup_fulltext_target(DOI, _sfx_cfg(session, cache)).url is not None
     session.get.assert_not_called()
@@ -463,7 +463,7 @@ def test_an_empty_answer_expires_instead_of_being_permanent(
     # A later run with real coverage must still be able to find it, once
     # the miss has aged out.
     cfg2 = _sfx_cfg(
-        _session(text=_ft("https://search.ebscohost.com/x")),
+        _session(text=_ft("https://search.ebscohost.com/login.aspx?direct=true&AN=12345678")),
         ResolverCache(tmp_path, miss_ttl_s=0),
     )
     assert lookup_fulltext_target(DOI, cfg2).url is not None
@@ -478,7 +478,7 @@ def test_a_legacy_sfx_cache_file_is_ignored_not_misread(tmp_path: Path) -> None:
     )
     assert ResolverCache(tmp_path).get(DOI) is None
     cfg = _sfx_cfg(
-        _session(text=_ft("https://search.ebscohost.com/x")),
+        _session(text=_ft("https://search.ebscohost.com/login.aspx?direct=true&AN=12345678")),
         ResolverCache(tmp_path),
     )
     assert "ebscohost" in lookup_fulltext_target(DOI, cfg).url

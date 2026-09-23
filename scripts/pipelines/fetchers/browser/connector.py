@@ -551,6 +551,8 @@ class ZoteroConnectorHandler(PublisherHandler):
             f"  │  URL: {target_url or '(missing)'}",
             flush=True,
         )
+        if item.get("resolver_target_note"):
+            print(f"  │  ({item['resolver_target_note']})", flush=True)
 
         if not target_url:
             print("  └─ SKIP: no resolver target URL assigned.", flush=True)
