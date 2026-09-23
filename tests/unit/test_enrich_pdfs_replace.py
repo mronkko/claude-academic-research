@@ -299,3 +299,28 @@ def test_the_replaced_attachment_goes_to_the_trash_not_away() -> None:
     import inspect
     src = inspect.getsource(enrich_pdfs._finish_replacement)
     assert "zot.trash_item(" in src and "zot.delete_item(" not in src
+
+
+def test_a_relaunched_replace_run_skips_its_own_finished_items(tmp_path) -> None:
+    """On 2026-09-23 five `--replace` launches in a row each reported 712
+    items to process. An item the Connector attached at 15:24 was item 1
+    of the next launch and was fetched again for a swap. Rows from
+    ordinary runs must still not count: redoing them is what `--replace`
+    is for.
+    """
+    import enrich_pdfs
+
+    log = str(tmp_path / "log.csv")
+    fh, w = enrich_pdfs._open_log(log)
+    w.writerow({"item_key": "OLDRUN", "status": "attached", "detail": ""})
+    fh.close()
+    fh, w = enrich_pdfs._open_log(log, replace=True)
+    w.writerow({"item_key": "VIACONN", "status": "attached_via_connector"})
+    w.writerow({"item_key": "SAME", "status": "unchanged", "detail": "byte-identical"})
+    w.writerow({"item_key": "FAILED", "status": "connector_save_failed"})
+    fh.close()
+
+    done = enrich_pdfs._load_replace_done_items(log)
+    assert done == {"viaconn", "same"}
+    # The ordinary resume set is unaffected by the mark.
+    assert {"oldrun", "viaconn"} <= enrich_pdfs._load_done_items(log)

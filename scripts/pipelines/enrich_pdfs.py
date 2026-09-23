@@ -58,6 +58,7 @@ import argparse
 import asyncio
 import contextlib
 import copy
+import csv
 import os
 import re
 import sys
@@ -415,8 +416,39 @@ def _load_config() -> Config:
     )
 
 
-def _open_log(path: str):
-    return shared_orchestrators.open_log(path, LOG_FIELDS)
+def _open_log(path: str, *, replace: bool = False):
+    fh, writer = shared_orchestrators.open_log(path, LOG_FIELDS)
+    return fh, (_ReplaceMarkingWriter(writer) if replace else writer)
+
+
+#: Appended to `detail` on every success row a `--replace` run writes.
+#: It is what lets a relaunched `--replace` run resume; see
+#: `_load_replace_done_items`.
+REPLACE_MARK = "[--replace]"
+
+
+class _ReplaceMarkingWriter:
+    """Tags a `--replace` run's success rows with `REPLACE_MARK`.
+
+    `--replace` has to ignore the plain resume set. Its job is to redo
+    items the log already calls attached, such as TDM-recovered copies
+    from a superseded transformation. But ignoring the log entirely meant
+    a relaunch redid its own finished work. On 2026-09-23 "Items not yet
+    processed" read 712 on five launches in a row, and an item attached
+    through the Connector at 15:24 was item 1 of the next launch, fetched
+    again for a swap. The mark tells this run's successes apart from the
+    ones it exists to redo, without a schema change.
+    """
+
+    def __init__(self, writer) -> None:
+        self._writer = writer
+
+    def writerow(self, row) -> None:
+        if row.get("status") in REPLACE_DONE_STATUSES:
+            detail = row.get("detail") or ""
+            if REPLACE_MARK not in detail:
+                row = {**row, "detail": f"{detail} {REPLACE_MARK}".strip()}
+        self._writer.writerow(row)
 
 
 # Statuses that mean "this item has its PDF; don't fetch it again".
@@ -440,6 +472,27 @@ def _open_log(path: str):
 # success on the next run, and the item only fell out later via the
 # "already has a real PDF" attachment scan.
 DONE_STATUSES = ("attached", "attached_via_connector")
+
+#: What a `--replace` run counts as finished. `unchanged` is included
+#: because a swap that fetched the same bytes was still attempted, and
+#: repeating it would fetch the same bytes again.
+REPLACE_DONE_STATUSES = (*DONE_STATUSES, "unchanged")
+
+
+def _load_replace_done_items(path: str) -> set[str]:
+    """Item keys a previous `--replace` run already finished: success
+    rows carrying `REPLACE_MARK`. Rows from ordinary runs do not count,
+    since redoing those is what `--replace` is for. To redo a finished
+    `--replace` pass as well, point it at a fresh `--log-csv`."""
+    if not os.path.exists(path):
+        return set()
+    with open(path, newline="", encoding="utf-8") as f:
+        return {
+            (r.get("item_key") or "").strip().lower()
+            for r in csv.DictReader(f)
+            if r.get("status") in REPLACE_DONE_STATUSES
+            and REPLACE_MARK in (r.get("detail") or "")
+        }
 
 
 def _load_done_items(path: str) -> set[str]:
@@ -4240,8 +4293,11 @@ def _build_parser() -> argparse.ArgumentParser:
              "reaches a fetcher, so the only way to get a better copy is to "
              "delete the one you have first and hope a replacement arrives. "
              "Use it to repair a corpus — e.g. TDM-recovered PDFs written by "
-             "a superseded XML transformation. Ignores the resume log, and "
-             "costs one extra pass over the library's attachments.",
+             "a superseded XML transformation. Ignores ordinary runs' resume "
+             "log, but a relaunch skips items an earlier --replace run with "
+             "the same --log-csv already finished (use a fresh --log-csv to "
+             "redo those too). Costs one extra pass over the library's "
+             "attachments.",
     )
     parser.add_argument(
         "--all", action="store_true",
@@ -4430,7 +4486,10 @@ def main() -> int:
 
     os.makedirs(args.cache_dir, exist_ok=True)
     run_date = date.today().isoformat()
-    done_items = _load_done_items(args.log_csv)
+    done_items = (
+        _load_replace_done_items(args.log_csv) if args.replace
+        else _load_done_items(args.log_csv)
+    )
 
     if args.auto_publishers:
         if args.filter_keys_file:
@@ -4517,13 +4576,13 @@ def main() -> int:
     # scoped to these so a filtered run doesn't dump the whole log.
     scope_keys = {it["key"] for it in all_items}
 
-    # Items with DOI that haven't already been attached. `--replace` is
-    # explicitly asking to redo work the log calls finished, so the
-    # resume set does not apply to it.
+    # Items with DOI that haven't already been attached. Under
+    # `--replace` the resume set holds only what an earlier `--replace`
+    # run finished (see `_ReplaceMarkingWriter`).
     candidates = [
         it for it in all_items
         if (it.get("data", {}).get("DOI") or "").strip()
-        and (args.replace or it["key"].strip().lower() not in done_items)
+        and it["key"].strip().lower() not in done_items
     ]
     print(f"Items not yet processed: {len(candidates)}", flush=True)
 
@@ -4561,7 +4620,7 @@ def main() -> int:
     # the cache; nothing used to go back for it, so a live run lost 48
     # PDFs it had already paid to download.
     if not args.dry_run:
-        log_fh, log_writer = _open_log(args.log_csv)
+        log_fh, log_writer = _open_log(args.log_csv, replace=args.replace)
         try:
             recovered = _attach_from_cache(
                 to_process, zot, log_writer, args, run_date,
@@ -4581,7 +4640,7 @@ def main() -> int:
     # directly to the Connector (useful for targeted validation).
     if browser_modes:
         _install_interaction_channel(args)
-        log_fh, log_writer = _open_log(args.log_csv)
+        log_fh, log_writer = _open_log(args.log_csv, replace=args.replace)
         try:
             rc = _run_browser_in_process(
                 to_process, zot, log_writer, args, run_date,
@@ -4603,7 +4662,7 @@ def main() -> int:
         )
         print(f"Active fetchers: {[s.name for s in sources]}", flush=True)
 
-        log_fh, log_writer = _open_log(args.log_csv)
+        log_fh, log_writer = _open_log(args.log_csv, replace=args.replace)
         try:
             attached, no_pdf, failed = _run_api_cascade(
                 to_process, sources, args, run_date, zot, log_writer,
@@ -4633,7 +4692,7 @@ def main() -> int:
             return 0
 
         _install_interaction_channel(args)
-        log_fh, log_writer = _open_log(args.log_csv)
+        log_fh, log_writer = _open_log(args.log_csv, replace=args.replace)
         try:
             rc = _run_browser_in_process(
                 residuals, zot, log_writer, args, run_date,
@@ -4656,7 +4715,7 @@ def main() -> int:
         return 2
     print(f"Active fetchers: {[s.name for s in sources]}", flush=True)
 
-    log_fh, log_writer = _open_log(args.log_csv)
+    log_fh, log_writer = _open_log(args.log_csv, replace=args.replace)
     try:
         attached, no_pdf, failed = _run_api_cascade(
             to_process, sources, args, run_date, zot, log_writer,
