@@ -180,3 +180,85 @@ def clean_abstract(text: str | None, *, copyright: str | None = None) -> str | N
     text = _HEADING.sub("", text, count=1)
     text = " ".join(text.split())
     return text or None
+
+
+# ---------------------------------------------------------------------------
+# Text that is not an abstract at all
+# ---------------------------------------------------------------------------
+#
+# `clean_abstract` trims debris *around* an abstract. Some sources hand
+# back text with no abstract in it — Semantic Scholar and Crossref most
+# often — and because the source keeps serving it, clearing it by hand
+# lasted only until the next run wrote it back (2026-09-23, ten items in
+# one library). `not_an_abstract` names that text so the cascade can
+# treat it as the source having nothing.
+#
+# Same rule as above: only the unambiguous. Every check is anchored at
+# the start of the text, where these shapes live and where a real
+# abstract's first sentence does not look like them; measured against
+# 6,064 real abstracts from that library, no check fires on any.
+
+#: Fewer alphabetic words than this is not prose: ",", "Abstract".
+_MIN_WORDS = 8
+_WORD = re.compile(r"[^\W\d_]{2,}")
+
+_ACKNOWLEDGEMENT = re.compile(
+    r"\b(would like to thank|wish to thank|are grateful to"
+    r"|gratefully acknowledge|acknowledge?ments?\b)", re.IGNORECASE,
+)
+_EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+_AFFILIATION_WORD = re.compile(
+    r"\b(University|Department|Institute|School|Faculty|Centre|Center)\b",
+)
+#: "1 International University of La Rioja, Department of …": a footnote
+#: number, then an institution.
+_AFFILIATION = re.compile(
+    r"^\s*\d\s*[A-Z][^.]{0,80}\b(University|Department|Institute|School)\b",
+)
+_AUTHOR_LIST = re.compile(r"^\s*Authors?\s*(\(s\))?\s*:", re.IGNORECASE)
+_RUNNING_HEADER = re.compile(r"www\.|\bdoi\s*:", re.IGNORECASE)
+#: "Left History features articles from …": a Title-Case name, then the
+#: journal's own verb. Title Case is what keeps "This paper seeks to
+#: describe several features …" out.
+_JOURNAL_BLURB = re.compile(
+    r"^\s*(?:The\s+)?(?:(?:[A-Z][\w&'’-]*|of|and|for|in|on|the)\s+){0,7}?"
+    r"[A-Z][\w&'’-]*\s+"
+    r"(?:features|publishes)\s+(?:articles|original|research|papers|scholarly)"
+    r"|^\s*(?:The\s+)?(?:(?:[A-Z][\w&'’-]*|of|and|for|in|on|the)\s+){0,7}?"
+    r"[A-Z][\w&'’-]*\s+is\s+an?\s+(?:international\s+|interdisciplinary\s+)?"
+    r"(?:peer[- ]reviewed|refereed|scholarly)\s+journal",
+)
+_PLACEHOLDER = re.compile(r"\bno abstract (?:is )?(?:available|provided)\b", re.I)
+
+
+def _letters(text: str) -> str:
+    return re.sub(r"[\W_]+", "", text).lower()
+
+
+def not_an_abstract(text: str | None, *, title: str | None = None) -> str | None:
+    """Why `text` is not an abstract, or None when it may be one.
+
+    Run on text `clean_abstract` has already normalised. The reason is a
+    short label for logs ("title", "acknowledgements", …).
+    """
+    text = (text or "").strip()
+    if len(_WORD.findall(text)) < _MIN_WORDS:
+        return "too short"
+    if title and _letters(text) == _letters(title):
+        return "title"
+    if _AUTHOR_LIST.match(text):
+        return "author list"
+    if _ACKNOWLEDGEMENT.search(text[:80]):
+        return "acknowledgements"
+    head = text[:150]
+    if _AFFILIATION.match(text) or (
+        _EMAIL.search(head) and _AFFILIATION_WORD.search(head)
+    ):
+        return "affiliations"
+    if _RUNNING_HEADER.search(text[:60]):
+        return "page header"
+    if _JOURNAL_BLURB.match(text):
+        return "journal description"
+    if _PLACEHOLDER.search(text[:200]):
+        return "placeholder"
+    return None

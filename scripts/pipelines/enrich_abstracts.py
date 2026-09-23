@@ -69,7 +69,7 @@ import fetchers  # noqa: E402
 import http_client  # noqa: E402
 import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
-from abstract_clean import clean_abstract  # noqa: E402
+from abstract_clean import clean_abstract, not_an_abstract  # noqa: E402
 from core.config_loader import get, require  # noqa: E402
 from fetchers._title_match import item_meta  # noqa: E402
 from fetchers.base import AbstractWithheld, SourceUnavailable  # noqa: E402
@@ -185,6 +185,10 @@ class CascadeResult:
     #: `(source_name, message)` for sources that hold the record but
     #: would not show it (`AbstractWithheld`).
     withheld: list[tuple[str, str]] = field(default_factory=list)
+    #: `(source_name, reason)` for sources that answered with text that is
+    #: not an abstract (`abstract_clean.not_an_abstract`). They count as
+    #: answered-with-nothing: the source was asked and has no abstract.
+    rejected: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def found(self) -> bool:
@@ -213,7 +217,12 @@ class CascadeResult:
                 f"{name}: {msg}" for name, msg in [*self.errors, *self.withheld]
             )
         if self.asked:
-            return "no abstract at: " + ",".join(self.asked)
+            out = "no abstract at: " + ",".join(self.asked)
+            if self.rejected:
+                out += " (not an abstract: " + ", ".join(
+                    f"{name} {why}" for name, why in self.rejected
+                ) + ")"
+            return out
         return ""
 
 
@@ -270,6 +279,15 @@ def _try_cascade(
         # abstract_clean). Text that is nothing *but* those has not
         # answered the question, so the cascade moves on.
         text = clean_abstract(text)
+        # Some sources keep serving text that is no abstract at all — a
+        # title, acknowledgements, an author list. Written, it undid every
+        # hand clean-up on the next run (ten items, 2026-09-23).
+        why = not_an_abstract(text, title=title) if text else None
+        if why:
+            result.rejected.append((src.name, why))
+            print(f"    {src.name}: not an abstract ({why}); trying the "
+                  f"next source", flush=True)
+            continue
         if text:
             result.abstract = text
             result.source = src.name

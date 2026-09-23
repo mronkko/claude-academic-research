@@ -43,12 +43,13 @@ def _source(name: str, *, text: str = "", raises: Exception | None = None):
 
 
 def test_hit_reports_the_source_that_supplied_it(tmp_path):
-    sources = [_source("crossref"), _source("openalex", text="An abstract.")]
+    text = "We study labor unions across firms in twelve countries."
+    sources = [_source("crossref"), _source("openalex", text=text)]
 
     result = _try_cascade(_item(), sources, str(tmp_path))
 
     assert result.found
-    assert result.abstract == "An abstract."
+    assert result.abstract == text
     assert result.source == "openalex"
     assert not result.confirmed_absent
 
