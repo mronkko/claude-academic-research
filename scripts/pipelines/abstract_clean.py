@@ -241,6 +241,16 @@ _AUTHOR_BIO = re.compile(
     r"(?:(?:Associate|Assistant|Full|Emeritus|Adjunct|Clinical|Senior)\s+)?"
     r"(?:Professor|Lecturer|Reader|Director|Chair|Fellow|Researcher|Dean)\b",
 )
+#: A book's table of contents: "Introduction Part I Beginning Prior to
+#: 1850 Chapter 1 Indian Women's Agency…" (Semantic Scholar, a Routledge
+#: handbook, 2026-09-23). Either a contents opener followed closely by a
+#: part or chapter marker, or three chapter markers close together.
+_TOC_OPEN = re.compile(
+    r"^\s*(?:Introduction|Contents|Table of contents)\b.{0,60}?"
+    r"\b(?:Part\s+(?:I|1|One)|Chapter\s+(?:1|I|One))\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_CHAPTER = re.compile(r"\bChapter\s+(?:\d+|[IVXL]+)\b")
 _PLACEHOLDER = re.compile(r"\bno abstract (?:is )?(?:available|provided)\b", re.I)
 
 
@@ -274,6 +284,8 @@ def not_an_abstract(text: str | None, *, title: str | None = None) -> str | None
         return "page header"
     if _JOURNAL_BLURB.match(text):
         return "journal description"
+    if _TOC_OPEN.match(text) or len(_CHAPTER.findall(text[:400])) >= 3:
+        return "table of contents"
     if _PLACEHOLDER.search(text[:200]):
         return "placeholder"
     return None

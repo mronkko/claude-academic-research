@@ -117,3 +117,24 @@ def test_an_abstract_about_a_professor_passes() -> None:
         "Professor Smith, a surgeon, is the subject of this case study of "
         "burnout among senior clinicians in teaching hospitals.",
     ) is None
+
+
+@pytest.mark.parametrize("text", [
+    # LCP8IIL3, Semantic Scholar, 2026-09-23
+    "Introduction Part I Beginning Prior to 1850 Chapter 1 Indian Women's "
+    "Agency through Indian Women's Organizations",
+    # A2VICMII, stored in the same library as its abstract
+    "Introduction: Currency and Exchange Rates Part 1: The Early Years, "
+    "1895-1901: Slavery and its Abolition. Porters.",
+    "Foreword Chapter 1 Origins of the union Chapter 2 The long strike "
+    "Chapter 3 Aftermath and legacy of the dispute",
+])
+def test_a_table_of_contents_is_named(text: str) -> None:
+    assert not_an_abstract(text) == "table of contents"
+
+
+def test_an_abstract_that_mentions_a_part_later_passes() -> None:
+    assert not_an_abstract(
+        "Introduction: This chapter examines how firms respond to strikes, "
+        "drawing on Part I of the survey data collected in 2019.",
+    ) is None
