@@ -275,3 +275,54 @@ def test_with_a_local_key_the_trash_goes_through_desktop(monkeypatch) -> None:
     assert kwargs["headers"]["Content-Type"] == "application/json"
     cloud.item.assert_not_called()
     cloud.client.patch.assert_not_called()
+
+
+def _local_zot():
+    """A client with local writes on. `local_writes_enabled` must be the
+    real `True`: `_merges_locally` ignores a MagicMock's truthy stand-in."""
+    zot = MagicMock()
+    zot.local_writes_enabled = True
+    zot.cloud.item.side_effect = AssertionError("cloud must not be read")
+    zot.cloud.children.side_effect = AssertionError("cloud must not be read")
+    return zot
+
+
+def test_with_local_writes_the_waits_poll_desktop_not_the_cloud(monkeypatch) -> None:
+    """Live on 2026-09-23 the cloud lagged a Connector save by 167-208 s
+    while the PDF was on the local API within 6-14 s, md5 set. The 30 s
+    cloud wait queued every item even though the merge (re-parent and
+    trash) no longer touches the cloud.
+    """
+    from fetchers.browser import connector
+    from fetchers.browser.connector import (
+        _pdf_child_settled,
+        _wait_for_child_attachment,
+        _wait_for_cloud_sync,
+    )
+
+    monkeypatch.setattr(connector.time, "sleep", lambda s: None)
+    zot = _local_zot()
+    zot.local.item.side_effect = lambda k: (
+        _pdf_child() if k == "P1" else {"key": k, "version": 1, "data": {}}
+    )
+    zot.local.children.return_value = [_pdf_child()]
+    assert _wait_for_cloud_sync(zot, "N", 0.1) is True
+    assert _pdf_child_settled(zot, "N", stable_s=0) is True
+    assert _wait_for_child_attachment(zot, "N", 0.1) is True
+
+
+def test_with_local_writes_the_queue_settles_from_desktop(
+    tmp_path, monkeypatch,
+) -> None:
+    from fetchers.browser import connector
+
+    zot = _local_zot()
+    zot.local.item.return_value = {"key": "N1"}
+    monkeypatch.setattr(connector, "_pdf_child_settled", lambda z, k: True)
+    q = PendingMerges(tmp_path)
+    q.add(keeper="K", new_key="N1", doi="10.1/a")
+    merge = MagicMock(return_value={"moved": 1})
+    connector.settle_pending_merges(
+        zot, q, merge=merge, wait_s=0, on_merged=lambda *a: None,
+    )
+    merge.assert_called_once_with("K", "N1")

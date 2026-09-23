@@ -256,7 +256,9 @@ def settle_pending_merges(
     zot, pending: PendingMerges, *, merge, wait_s: float, on_merged,
     on_given_up=None, sweep_every_s: float = 15.0,
 ) -> None:
-    """Merge every queued pair whose new item has reached the cloud.
+    """Merge every queued pair whose new item has reached the merge's
+    surface (`_merge_surface`): Desktop when local writes are on, else
+    the cloud.
 
     Sweeps until the queue is empty or `wait_s` has passed (0: one
     sweep). `merge(keeper, new_key)` does the merge and returns its
@@ -271,7 +273,7 @@ def settle_pending_merges(
         first = False
         for row in pending.rows():
             try:
-                visible = bool(zot.cloud.item(row["new_key"]))
+                visible = bool(_merge_surface(zot).item(row["new_key"]))
             except Exception:  # noqa: BLE001 — not synced yet
                 visible = False
             if not visible:
@@ -813,11 +815,17 @@ class ZoteroConnectorHandler(PublisherHandler):
             counter.failed += 1
             return False
         wait_s = int(self.sync_timeout_s)
-        print(f"  │  New item saved locally ({new_key}). "
-              f"Waiting for cloud sync (up to {wait_s}s)…", flush=True)
+        local = _merges_locally(zot)
+        if local:
+            print(f"  │  New item saved locally ({new_key}). Merging in "
+                  f"Zotero Desktop; no cloud sync needed.", flush=True)
+        else:
+            print(f"  │  New item saved locally ({new_key}). "
+                  f"Waiting for cloud sync (up to {wait_s}s)…", flush=True)
 
-        # The merge runs on the cloud API, so the new item must have
-        # synced first. Usually that takes seconds; under concurrent
+        # Without a local key the merge runs on the cloud API, so the new
+        # item must have synced first. (With one, `_merge_surface` makes
+        # this a local read that succeeds at once.) Usually that takes seconds; under concurrent
         # writers Zotero Desktop's upload lagged ~7 minutes, and a fixed
         # 30 s wait failed every item of a run. So a slow sync no longer
         # fails the item: the pair is queued and merged once it syncs,
@@ -853,7 +861,8 @@ class ZoteroConnectorHandler(PublisherHandler):
         # on the attachment, which works at any sync stage. The
         # stub-vs-real race on next run is handled by `pdf_map()`
         # skipping recently-added attachments.
-        print(f"  │  Parent synced. Waiting for the PDF attachment record "
+        print(f"  │  {'Parent found' if local else 'Parent synced'}. "
+              f"Waiting for the PDF attachment record "
               f"(up to {wait_s}s)…", flush=True)
         has_pdf = await asyncio.to_thread(
             _wait_for_child_attachment, zot, new_key, self.sync_timeout_s,
@@ -868,7 +877,7 @@ class ZoteroConnectorHandler(PublisherHandler):
             self.last_outcome = "merge_pending"
             counter.queued += 1
             print(
-                f"  └─ QUEUED: {new_key} is on the cloud but its PDF is not yet\n"
+                f"  └─ QUEUED: {new_key} is saved but its PDF is not yet\n"
                 f"         ({wait_s}s). Queued; merged into {item['item_key']}\n"
                 f"         once the PDF syncs.",
                 flush=True,
@@ -1180,19 +1189,53 @@ def _poll_for_new_item(
     return None
 
 
+def _merges_locally(zot) -> bool:
+    """True when this client merges in Zotero Desktop (local writes on).
+
+    `is True`, not truthiness: test doubles are MagicMocks, whose every
+    attribute is truthy, and they model the cloud path.
+    """
+    return getattr(zot, "local_writes_enabled", False) is True
+
+
+def _merge_surface(zot):
+    """The pyzotero client the merge reads and writes: Desktop's local
+    API when local writes are on, the cloud otherwise.
+
+    Every wait below polls this surface, not the cloud. With the merge
+    (re-parent and trash, e849081) running in Desktop, the cloud has no
+    part in it. Observed on 2026-09-23 on six live Connector saves, the
+    cloud lagged the local save by 167-208 s under the run's own upload
+    load. So the 30 s cloud wait queued every single item, while the PDF
+    child was on the local API within 6-14 s with md5 and mtime already
+    set. That wait was most of the ~1.4 min per item.
+
+    Desktop's later upload does not disturb a local re-parent. The
+    2026-09-23 lost-PDF race was a *cloud* re-parent that Desktop's
+    still-pending push then overwrote with its own, older local state.
+    A change made in Desktop is that local state. Desktop does bump the
+    attachment's local version once the file upload finishes, which is
+    why the merge's read-back (`merge_saved_item`) checks the parent and
+    not the version.
+    """
+    return zot.local if _merges_locally(zot) else zot.cloud
+
+
 def _wait_for_cloud_sync(zot, item_key: str, timeout_s: float) -> bool:
-    """Block until `item_key` is visible via the Zotero cloud API.
+    """Block until `item_key` is visible on the merge's surface — the
+    Zotero cloud API unless local writes are on (`_merge_surface`).
 
     Zotero Desktop saves items locally first and replicates to the
-    cloud on its auto-sync cadence (typically 1–10s). Our merge
-    routine uses the cloud API; calling it before sync completes
-    produces a spurious 404. Poll `zot.cloud.item(key)` every second
-    until it returns successfully, or give up after `timeout_s`.
+    cloud on its auto-sync cadence, which under upload load can take
+    minutes. A cloud merge started before sync completes gets a spurious
+    404. Poll every second until the item is visible, or give up after
+    `timeout_s`.
     """
+    surface = _merge_surface(zot)
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         try:
-            if zot.cloud.item(item_key):
+            if surface.item(item_key):
                 return True
         except Exception:
             pass
@@ -1203,8 +1246,8 @@ def _wait_for_cloud_sync(zot, item_key: str, timeout_s: float) -> bool:
 def _wait_for_child_attachment(
     zot, item_key: str, timeout_s: float,
 ) -> bool:
-    """Block until `item_key` has at least one attachment child
-    visible via the Zotero cloud API.
+    """Block until `item_key` has a settled PDF child on the merge's
+    surface (`_merge_surface`).
 
     This is enough to proceed with the merge: the merge PATCHes
     `parentItem` on the attachment record, which works regardless
@@ -1223,7 +1266,7 @@ def _wait_for_child_attachment(
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         try:
-            children = zot.cloud.children(item_key) or []
+            children = _merge_surface(zot).children(item_key) or []
         except Exception:
             children = []
         if _has_pdf_child(children) and _pdf_child_settled(zot, item_key):
@@ -1245,17 +1288,24 @@ def _pdf_child_settled(zot, item_key: str, *, stable_s: float = 3.0) -> bool:
     uploading it; our re-parent landed, and Desktop's later push of that
     attachment put the old parent back — under the temporary item we had
     just trashed — after --replace had deleted the keeper's old copy.
+
+    On the local surface md5 means something weaker: Desktop sets it the
+    moment the file is written, before any upload. That is enough there,
+    since a re-parent made in Desktop is not exposed to the push race
+    (see `_merge_surface`). The version check still catches a record
+    Desktop is actively rewriting.
     """
+    surface = _merge_surface(zot)
     try:
         pdfs = [
-            c for c in zot.cloud.children(item_key) or []
+            c for c in surface.children(item_key) or []
             if _has_pdf_child([c]) and (c.get("data", {}) or {}).get("md5")
         ]
         if not pdfs:
             return False
         time.sleep(stable_s)
         for c in pdfs:
-            again = zot.cloud.item(c.get("key"))
+            again = surface.item(c.get("key"))
             if (again.get("version") != c.get("version")
                     or not (again.get("data", {}) or {}).get("md5")):
                 return False
