@@ -102,3 +102,18 @@ def test_the_cascade_moves_past_a_rejected_text_and_counts_it_answered() -> None
     assert miss.status() == "not_found"
     assert miss.confirmed_absent
     assert "semantic_scholar too short" in miss.detail()
+
+
+def test_an_author_bio_is_named() -> None:
+    """XWUEEAT3, Semantic Scholar, 2026-09-23."""
+    assert not_an_abstract(
+        "Bruce E. Zawacki, MD, MA, is Associate Professor of Surgery at the "
+        "University of Southern California School of Medicine, Los Angeles.",
+    ) == "author bio"
+
+
+def test_an_abstract_about_a_professor_passes() -> None:
+    assert not_an_abstract(
+        "Professor Smith, a surgeon, is the subject of this case study of "
+        "burnout among senior clinicians in teaching hospitals.",
+    ) is None

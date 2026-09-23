@@ -291,3 +291,18 @@ def test_markup_revealed_by_unescaping_is_removed() -> None:
 def test_trailing_notice_without_a_sentence_end(tail) -> None:
     body = "We study smartphone use outside of work hours"
     assert clean_abstract(f"{body} {tail}") == body
+
+
+@pytest.mark.parametrize("notice", [
+    "© 2019 Canadian Psychological Association",
+    "© 2022. American Psychological Association",
+])
+def test_a_holder_fused_onto_the_first_word_is_cut(notice: str) -> None:
+    """Scopus, 2026-09-23: "© 2019 Canadian Psychological AssociationDo
+    different types…". 38 texts in one library had this shape."""
+    assert clean_abstract(f"{notice}{BODY}") == BODY
+
+
+def test_a_spaced_holder_word_inside_the_abstract_survives() -> None:
+    text = "American Psychological Association Members were surveyed twice."
+    assert clean_abstract(text) == text

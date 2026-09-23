@@ -54,10 +54,14 @@ _ENDS = (
 #: A publisher-name ending followed by the abstract's first word, with
 #: or without the space: "…Elsevier Ltd We…", "…Elsevier LtdCOVID-19…",
 #: "…Elsevier B.V.This paper…". "B.V." always closes a publisher name.
+#: The fused form covers holder words too ("© 2019 Canadian Psychological
+#: AssociationDo different types…", Scopus, 2026-09-23): a capital
+#: straight after the word, with no space, is never the notice's own.
 _PUBLISHER_END = re.compile(
     r"(?:\b(?:Ltd|Inc|LLC|GmbH|Nature|Sons|Society|Association|Press|"
     r"Publishing|Publications|Group|Authors?)\b\.?(?=\s+[A-Z])"
-    r"|(?:Ltd|Inc|LLC|GmbH|Authors)\.?(?=[A-Z])"
+    r"|(?:Ltd|Inc|LLC|GmbH|Authors|Association|Society|Press|Publishing|"
+    r"Publications|Nature|Sons|Group)\.?(?=[A-Z])"
     r"|\bB\.V\.(?=\s*[A-Z]))"
 )
 
@@ -228,6 +232,15 @@ _JOURNAL_BLURB = re.compile(
     r"[A-Z][\w&'’-]*\s+is\s+an?\s+(?:international\s+|interdisciplinary\s+)?"
     r"(?:peer[- ]reviewed|refereed|scholarly)\s+journal",
 )
+#: "Bruce E. Zawacki, MD, MA, is Associate Professor of Surgery at …":
+#: a contributor note. A name, optional degrees, then "is" and a post.
+_AUTHOR_BIO = re.compile(
+    r"^\s*(?:[A-Z][\w.'’-]*\s+){1,4}?[A-Z][\w'’-]+,"
+    r"(?:\s*(?:MD|PhD|MA|MS|MSc|MPH|RN|DPhil|JD|MBA|BA|BSc|FRCP\w*)\.?,)*"
+    r"\s*is\s+(?:an?\s+|the\s+)?"
+    r"(?:(?:Associate|Assistant|Full|Emeritus|Adjunct|Clinical|Senior)\s+)?"
+    r"(?:Professor|Lecturer|Reader|Director|Chair|Fellow|Researcher|Dean)\b",
+)
 _PLACEHOLDER = re.compile(r"\bno abstract (?:is )?(?:available|provided)\b", re.I)
 
 
@@ -248,6 +261,8 @@ def not_an_abstract(text: str | None, *, title: str | None = None) -> str | None
         return "title"
     if _AUTHOR_LIST.match(text):
         return "author list"
+    if _AUTHOR_BIO.match(text):
+        return "author bio"
     if _ACKNOWLEDGEMENT.search(text[:80]):
         return "acknowledgements"
     head = text[:150]
