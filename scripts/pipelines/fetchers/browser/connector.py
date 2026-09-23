@@ -34,6 +34,7 @@ import functools
 import os
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -207,6 +208,9 @@ class PendingMerges:
 
     def __init__(self, cache_dir) -> None:
         self.path = Path(cache_dir) / self.FILENAME
+        # The run's main loop adds rows while the background merger
+        # removes them (`BackgroundMerger`); each method is atomic.
+        self._lock = threading.RLock()
         self._rows: list[dict] = []
         if self.path.exists():
             try:
@@ -217,26 +221,31 @@ class PendingMerges:
                 self._rows = []
 
     def rows(self) -> list[dict]:
-        return list(self._rows)
+        with self._lock:
+            return list(self._rows)
 
     def keepers(self) -> set[str]:
-        return {r.get("keeper", "") for r in self._rows} - {""}
+        with self._lock:
+            return {r.get("keeper", "") for r in self._rows} - {""}
 
     def new_keys(self) -> frozenset[str]:
-        return frozenset(r.get("new_key", "") for r in self._rows) - {""}
+        with self._lock:
+            return frozenset(r.get("new_key", "") for r in self._rows) - {""}
 
     def add(self, *, keeper: str, new_key: str, doi: str) -> None:
-        if new_key in self.new_keys():
-            return
-        self._rows.append({
-            "keeper": keeper, "new_key": new_key, "doi": doi,
-            "queued_at": _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds"),
-        })
-        self._save()
+        with self._lock:
+            if new_key in self.new_keys():
+                return
+            self._rows.append({
+                "keeper": keeper, "new_key": new_key, "doi": doi,
+                "queued_at": _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds"),
+            })
+            self._save()
 
     def remove(self, new_key: str) -> None:
-        self._rows = [r for r in self._rows if r.get("new_key") != new_key]
-        self._save()
+        with self._lock:
+            self._rows = [r for r in self._rows if r.get("new_key") != new_key]
+            self._save()
 
     def _save(self) -> None:
         import json
@@ -255,7 +264,7 @@ PENDING_GRACE_S = 6 * 3600
 
 def settle_pending_merges(
     zot, pending: PendingMerges, *, merge, wait_s: float, on_merged,
-    on_given_up=None, sweep_every_s: float = 15.0,
+    on_given_up=None, sweep_every_s: float = 15.0, keeper_has_pdf=None,
 ) -> None:
     """Merge every queued pair whose new item has reached the merge's
     surface (`_merge_surface`): Desktop when local writes are on, else
@@ -265,6 +274,13 @@ def settle_pending_merges(
     sweep). `merge(keeper, new_key)` does the merge and returns its
     stats; `on_merged(row, stats)` lets the caller log and finish a
     `--replace` swap. A pair whose merge raises stays queued.
+
+    `keeper_has_pdf(keeper)` retires a save that never grew a PDF when
+    its keeper got one by another route. Without it, such a pair sat in
+    the queue for the full grace period, and its keeper was barred from
+    the pass all that time as "a saved copy is already queued", with no
+    per-pair line to say why (WKC6FD4U and G5S5R2L7, 2026-09-23). The
+    empty save is trashed; a save that holds any PDF child is kept.
     """
     deadline = time.monotonic() + wait_s
     first = True
@@ -280,6 +296,10 @@ def settle_pending_merges(
             if not visible:
                 continue
             has_pdf = _pdf_child_settled(zot, row["new_key"])
+            if not has_pdf and keeper_has_pdf is not None and _retire_empty_save(
+                zot, pending, row, keeper_has_pdf,
+            ):
+                continue
             if not has_pdf:
                 if _age_s(row) > PENDING_GRACE_S:
                     pending.remove(row["new_key"])
@@ -302,6 +322,106 @@ def settle_pending_merges(
             left = int(deadline - time.monotonic())
             print(f"  {len(pending.rows())} queued merge(s) still waiting for "
                   f"cloud sync (~{left}s left)…", flush=True)
+
+
+def _retire_empty_save(zot, pending, row: dict, keeper_has_pdf) -> bool:
+    """Drop a queued save with no PDF whose keeper already holds one.
+    True when retired."""
+    try:
+        kids = _merge_surface(zot).children(row["new_key"]) or []
+        if _has_pdf_child(kids) or not keeper_has_pdf(row["keeper"]):
+            return False
+    except Exception:  # noqa: BLE001 — unknown: leave it queued
+        return False
+    pending.remove(row["new_key"])
+    try:
+        zot.trash_item(row["new_key"])
+        fate = "trashed"
+    except Exception as e:  # noqa: BLE001
+        fate = f"not trashed ({str(e)[:60]})"
+    print(f"  Queued save {row['new_key']} has no PDF, and {row['keeper']} "
+          f"already holds one: dropped from the queue, {fate}.", flush=True)
+    return True
+
+
+class BackgroundMerger:
+    """Merges Connector saves on one worker thread while the next page loads.
+
+    About 14 s of every ~31 s item was spent after the save and before
+    the next page load, measured on 6643c93: the PDF-child wait, the
+    settled check's 3 s, the merge, and 2 x 5 s of read-back. None of
+    it needs the browser.
+
+    The pending queue is the ledger. The caller adds the pair to
+    `PendingMerges` *before* submitting it, and the pair leaves the queue
+    only after a verified merge. That gives three guarantees without new
+    state. `_poll_for_new_item` already excludes queued keys, so a later
+    save cannot claim this one. A killed run leaves unfinished pairs on
+    disk for the next pass's sweep. Any failure (no settled PDF in time,
+    a merge that raises, `MergeNotVerified`) leaves the pair queued rather
+    than losing the PDF. `--replace` deletes the old copy only in
+    `on_done`, after `merge_saved_item` has verified the move.
+
+    There is one worker, so Desktop sees one merge's writes at a time.
+
+    `on_done(row, outcome, stats)` runs on the worker. `outcome` is
+    "merged", "no_pdf" (merged, but nothing to move: a metadata-only
+    save) or "pending" (left queued).
+    """
+
+    def __init__(self, zot, pending: PendingMerges, *, merge, on_done,
+                 wait_s: float) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        self.zot, self.pending = zot, pending
+        self.merge, self.on_done, self.wait_s = merge, on_done, wait_s
+        self._pool = ThreadPoolExecutor(max_workers=1,
+                                        thread_name_prefix="connector-merge")
+        self._futures: list = []
+        self.counts = {"merged": 0, "no_pdf": 0, "pending": 0}
+
+    def submit(self, row: dict) -> None:
+        self._futures.append(self._pool.submit(self._run, row))
+
+    def in_flight(self) -> int:
+        return sum(1 for f in self._futures if not f.done())
+
+    def drain(self) -> None:
+        """Block until every submitted merge has finished."""
+        for f in list(self._futures):
+            try:
+                f.result()
+            except Exception:  # noqa: BLE001 — _run reports its own
+                pass
+        self._pool.shutdown(wait=True)
+
+    def _finish(self, row: dict, outcome: str, stats) -> None:
+        self.counts[outcome] += 1
+        try:
+            self.on_done(row, outcome, stats)
+        except Exception as e:  # noqa: BLE001 — never kill the worker
+            print(f"  ⤷ {row['keeper']}: logging after merge failed: "
+                  f"{str(e)[:100]}", flush=True)
+
+    def _run(self, row: dict) -> None:
+        keeper, new_key = row["keeper"], row["new_key"]
+        if not _wait_for_child_attachment(self.zot, new_key, self.wait_s):
+            self._finish(row, "pending", None)
+            return
+        try:
+            stats = self.merge(keeper, new_key)
+        except Exception as e:  # noqa: BLE001 — MergeNotVerified included
+            print(f"  ⤷ {keeper}: background merge of {new_key} failed "
+                  f"({str(e)[:80]}); left queued.", flush=True)
+            self._finish(row, "pending", None)
+            return
+        moved = stats.get("moved", 0)
+        dup = stats.get("skipped_dupe_attachments", 0)
+        if moved == 0 and dup == 0 and stats.get("kept_unmoved_pdf"):
+            self._finish(row, "pending", stats)
+            return
+        self.pending.remove(new_key)
+        self._finish(row, "merged" if (moved or dup) else "no_pdf", stats)
 
 
 def _age_s(row: dict) -> float:
@@ -358,6 +478,9 @@ class ZoteroConnectorHandler(PublisherHandler):
         self.sync_timeout_s: float = 30.0
         #: Saves whose sync outlasted that wait; None disables queueing.
         self.pending: PendingMerges | None = None
+        #: Set by the driver when merges run in the background; see
+        #: `BackgroundMerger`. None merges each item before the next.
+        self.background: BackgroundMerger | None = None
         #: "merge_pending" when the last item was queued rather than
         #: merged or failed; read by the caller for the log status.
         self.last_outcome = ""
@@ -392,7 +515,7 @@ class ZoteroConnectorHandler(PublisherHandler):
     # ------------------------------------------------------------------
 
     def merge_saved_item(
-        self, zot, keeper: str, new_key: str, *, verify_s: float = 5.0,
+        self, zot, keeper: str, new_key: str, *, verify_s: float | None = None,
     ) -> dict:
         """Merge the Connector's saved item into `keeper`.
 
@@ -406,13 +529,23 @@ class ZoteroConnectorHandler(PublisherHandler):
             union_tags=self.keep_extras,
             child_content_types=None if self.keep_extras else ("application/pdf",),
         )
-        # Read the moved PDFs back, twice, a few seconds apart. A merge
-        # counts, and --replace may delete the old copy, only if they are
-        # still under the keeper: Zotero Desktop overwrote two re-parents
-        # that had looked successful. Read where the merge wrote (Desktop
-        # when a local key is set), not the cloud: the cloud catches up
-        # only when Desktop next syncs.
-        for _ in range(2):
+        # Read the moved PDFs back. A merge counts, and --replace may
+        # delete the old copy, only if they are still under the keeper:
+        # Zotero Desktop overwrote two re-parents that had looked
+        # successful. Read where the merge wrote (Desktop when a local key
+        # is set), not the cloud: the cloud catches up only when Desktop
+        # next syncs.
+        #
+        # Twice, 5 s apart, on the cloud, where the overwrite happened:
+        # it was Desktop's pending push landing after our re-parent. A
+        # re-parent made in Desktop has no such push behind it
+        # (`_merge_surface`), so one read after 2 s there confirms the
+        # write without paying 10 s per item for a race that cannot occur.
+        local = _merges_locally(zot)
+        passes = 1 if local else 2
+        if verify_s is None:
+            verify_s = 2.0 if local else 5.0
+        for _ in range(passes):
             time.sleep(verify_s)
             for key in stats.get("moved_pdf_keys") or []:
                 parent = zot.parent_of(key)
@@ -867,6 +1000,20 @@ class ZoteroConnectorHandler(PublisherHandler):
             return False
         wait_s = int(self.sync_timeout_s)
         local = _merges_locally(zot)
+        if local and self.background is not None and self.pending is not None:
+            # Queue first, then submit: the queue is what keeps this save
+            # from being claimed by the next item's poll, and what
+            # survives a kill.
+            self.pending.add(keeper=item["item_key"], new_key=new_key, doi=doi)
+            self.background.submit({
+                "keeper": item["item_key"], "new_key": new_key, "doi": doi,
+                "title": item.get("title", ""),
+            })
+            self.last_outcome = "merge_background"
+            counter.queued += 1
+            print(f"  └─ SAVED ({new_key}); merging into {item['item_key']} "
+                  f"in the background.", flush=True)
+            return False
         if local:
             print(f"  │  New item saved locally ({new_key}). Merging in "
                   f"Zotero Desktop; no cloud sync needed.", flush=True)
@@ -1444,6 +1591,7 @@ def _has_pdf_child(children) -> bool:
 
 
 __all__ = [
+    "BackgroundMerger",
     "ZoteroConnectorHandler",
     "ping_zotero_desktop",
     "MergeNotVerified",

@@ -326,3 +326,157 @@ def test_with_local_writes_the_queue_settles_from_desktop(
         zot, q, merge=merge, wait_s=0, on_merged=lambda *a: None,
     )
     merge.assert_called_once_with("K", "N1")
+
+
+# ---------------------------------------------------------------------------
+# BackgroundMerger — the post-save work runs while the next page loads
+# ---------------------------------------------------------------------------
+
+
+def _bg(tmp_path, monkeypatch, *, child_ok=True, merge=None):
+    from fetchers.browser import connector
+
+    monkeypatch.setattr(connector, "_wait_for_child_attachment",
+                        lambda zot, key, t: child_ok)
+    q = PendingMerges(tmp_path)
+    done = []
+    m = connector.BackgroundMerger(
+        MagicMock(), q,
+        merge=merge or MagicMock(return_value={"moved": 1, "moved_pdf_keys": ["P"]}),
+        on_done=lambda row, outcome, stats: done.append((row["new_key"], outcome)),
+        wait_s=1,
+    )
+    return m, q, done
+
+
+def _submit(m, q, new_key="N1", keeper="K1"):
+    # The handler's order: queue first, then submit.
+    q.add(keeper=keeper, new_key=new_key, doi="10.1/a")
+    m.submit({"keeper": keeper, "new_key": new_key, "doi": "10.1/a"})
+
+
+def test_a_verified_background_merge_leaves_the_queue(tmp_path, monkeypatch) -> None:
+    m, q, done = _bg(tmp_path, monkeypatch)
+    _submit(m, q)
+    m.drain()
+    assert done == [("N1", "merged")]
+    assert PendingMerges(tmp_path).rows() == []
+
+
+def test_a_failed_background_merge_stays_queued(tmp_path, monkeypatch) -> None:
+    """Never a lost PDF: MergeNotVerified (or any error) keeps the pair
+    on disk for the end-of-pass sweep, and --replace is not told to
+    delete anything."""
+    from fetchers.browser.connector import MergeNotVerified
+
+    m, q, done = _bg(tmp_path, monkeypatch,
+                     merge=MagicMock(side_effect=MergeNotVerified("moved back")))
+    _submit(m, q)
+    m.drain()
+    assert done == [("N1", "pending")]
+    assert PendingMerges(tmp_path).new_keys() == {"N1"}
+
+
+def test_no_settled_pdf_in_time_stays_queued(tmp_path, monkeypatch) -> None:
+    merge = MagicMock()
+    m, q, done = _bg(tmp_path, monkeypatch, child_ok=False, merge=merge)
+    _submit(m, q)
+    m.drain()
+    merge.assert_not_called()
+    assert done == [("N1", "pending")]
+    assert PendingMerges(tmp_path).new_keys() == {"N1"}
+
+
+def test_a_queued_save_is_excluded_from_the_next_poll_at_once(
+    tmp_path, monkeypatch,
+) -> None:
+    """The next item's `_poll_for_new_item` gets `pending.new_keys()` as
+    `exclude`. So the pair must be in the queue before the merge starts,
+    not only after it fails."""
+    import threading
+
+    gate = threading.Event()
+    merge = MagicMock(side_effect=lambda k, n: (gate.wait(5), {"moved": 1})[1])
+    m, q, done = _bg(tmp_path, monkeypatch, merge=merge)
+    _submit(m, q)
+    assert "N1" in q.new_keys()          # merge still in flight
+    gate.set()
+    m.drain()
+    assert done == [("N1", "merged")]
+
+
+def test_one_worker_serialises_merges(tmp_path, monkeypatch) -> None:
+    import threading
+    import time as _time
+
+    active, peak = [0], [0]
+    lock = threading.Lock()
+
+    def merge(keeper, new):
+        with lock:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        _time.sleep(0.02)
+        with lock:
+            active[0] -= 1
+        return {"moved": 1}
+
+    m, q, done = _bg(tmp_path, monkeypatch, merge=merge)
+    for i in range(4):
+        _submit(m, q, new_key=f"N{i}", keeper=f"K{i}")
+    m.drain()
+    assert peak[0] == 1
+    assert [o for _, o in done] == ["merged"] * 4
+
+
+def test_a_local_merge_reads_back_once(monkeypatch) -> None:
+    """The 2 x 5 s read-back was sized for the cloud re-parent that
+    Desktop's pending push overwrote. A re-parent made in Desktop has no
+    push behind it, so one read after 2 s is kept and 8 s per item saved."""
+    from fetchers.browser import connector
+
+    sleeps = []
+    monkeypatch.setattr(connector.time, "sleep", sleeps.append)
+    h = connector.ZoteroConnectorHandler.__new__(connector.ZoteroConnectorHandler)
+    h.keep_extras = False
+    zot = MagicMock()
+    zot.merge_duplicate_item.return_value = {"moved_pdf_keys": ["P"]}
+    zot.parent_of.return_value = "K"
+
+    zot.local_writes_enabled = True
+    h.merge_saved_item(zot, "K", "N")
+    assert sleeps == [2.0]
+
+    sleeps.clear()
+    zot.local_writes_enabled = False
+    h.merge_saved_item(zot, "K", "N")
+    assert sleeps == [5.0, 5.0]
+
+
+def test_an_empty_save_is_retired_when_its_keeper_has_a_pdf(tmp_path) -> None:
+    """WKC6FD4U and G5S5R2L7 (2026-09-23): empty saves whose keepers had
+    PDFs from elsewhere sat queued, silently, and barred the keepers."""
+    q = PendingMerges(tmp_path)
+    q.add(keeper="K1", new_key="EMPTY", doi="10.1/a")
+    zot = MagicMock()
+    zot.local_writes_enabled = True
+    zot.local.item.return_value = {"key": "EMPTY"}
+    zot.local.children.return_value = []
+    merge = MagicMock()
+    settle_pending_merges(
+        zot, q, merge=merge, wait_s=0, on_merged=lambda *a: None,
+        keeper_has_pdf=lambda keeper: True,
+    )
+    merge.assert_not_called()
+    zot.trash_item.assert_called_once_with("EMPTY")
+    assert PendingMerges(tmp_path).rows() == []
+
+    # A save with a PDF child still uploading is not retired.
+    q.add(keeper="K1", new_key="UPLOADING", doi="10.1/a")
+    zot.local.children.return_value = [_pdf_child()]
+    zot.local.item.side_effect = lambda k: {"key": k, "version": 1, "data": {}}
+    settle_pending_merges(
+        zot, q, merge=merge, wait_s=0, on_merged=lambda *a: None,
+        keeper_has_pdf=lambda keeper: True,
+    )
+    assert PendingMerges(tmp_path).new_keys() == {"UPLOADING"}

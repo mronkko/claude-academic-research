@@ -48,7 +48,8 @@ def test_held_items_are_released_at_the_end() -> None:
 
 def test_the_driver_stops_on_a_stall_and_the_handler_reports_empty_saves() -> None:
     src = inspect.getsource(enrich_pdfs._drive_connector)
-    assert "_EmptySaveStreak(" in src and "streak.stalled" in src
+    assert "_EmptySaveStreak(" in src
+    assert "streak.stalled" in inspect.getsource(enrich_pdfs._connector_item_loop)
     from fetchers.browser import connector
     handler_src = inspect.getsource(connector.ZoteroConnectorHandler.download_and_attach)
     assert 'self.last_outcome = "saved_nothing"' in handler_src

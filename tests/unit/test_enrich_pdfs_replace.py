@@ -284,11 +284,17 @@ def test_no_swap_means_no_tag_changes(monkeypatch) -> None:
 
 def test_the_connector_success_path_calls_finish_replacement() -> None:
     import inspect
-    src = inspect.getsource(enrich_pdfs._drive_connector)
+    src = inspect.getsource(enrich_pdfs._connector_item_loop)
     assert "_finish_replacement(" in src
     ok_at = src.index("if ok:")
     assert src.index("_finish_replacement(", ok_at) < src.index(
-        "_log_connector_row(item, status)", ok_at,
+        "log_row(item, status)", ok_at,
+    )
+    # The background path finishes the swap only on a verified merge.
+    driver = inspect.getsource(enrich_pdfs._drive_connector)
+    merged_at = driver.index('if outcome == "merged":')
+    assert merged_at < driver.index("_finish_replacement(", merged_at) < driver.index(
+        'elif outcome == "no_pdf":', merged_at,
     )
 
 

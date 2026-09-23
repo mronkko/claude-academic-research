@@ -2187,6 +2187,121 @@ class _EmptySaveStreak:
         return out
 
 
+def _keeper_has_pdf(zot, keeper: str) -> bool:
+    """Whether `keeper` holds a PDF on the surface merges write to."""
+    from fetchers.browser.connector import _has_pdf_child, _merge_surface
+
+    return _has_pdf_child(_merge_surface(zot).children(keeper) or [])
+
+
+async def _connector_item_loop(
+    handler, items_sorted: list[dict], page, ctx, service_worker, zot, *,
+    counter, total: int, t_start: float, streak, log_row,
+) -> None:
+    """The per-item Connector loop of `_drive_connector`.
+
+    Its own function so the driver can wrap it in the `try/finally` that
+    drains background merges (`BackgroundMerger`) however it exits.
+    """
+    from fetchers.browser.base import BrowserGone, is_browser_gone
+    from fetchers.library_resolver import effective_host
+
+    current_host = None
+    for item in items_sorted:
+        host = effective_host(item.get("resolver_target_url", ""))
+        if host != current_host:
+            current_host = host
+            remaining_on_host = sum(
+                1 for it in items_sorted
+                if effective_host(it.get("resolver_target_url", "")) == host
+            )
+            print(
+                f"\n  ══ Batch: {host or '(unknown host)'} "
+                f"({remaining_on_host} "
+                f"item{'s' if remaining_on_host != 1 else ''}) ══\n"
+                f"  Solve any login / reCAPTCHA once for this host; "
+                f"subsequent items reuse the session.",
+                flush=True,
+            )
+
+        if handler.delay_s > 0:
+            await asyncio.sleep(handler.delay_s)
+        ok = await handler.download_and_attach(
+            page, ctx, service_worker, item, zot,
+            counter=counter, total=total, t_start=t_start,
+        )
+        if not ok and is_browser_gone(getattr(handler, "last_error", "")):
+            # Every later item would fail the same way, and each would
+            # be logged connector_save_failed — ACCESS_BLOCKED — for an
+            # article nobody looked at. Leave them unlogged instead.
+            raise BrowserGone(
+                f"the browser closed during the Connector pass "
+                f"(last: {handler.last_error[:80]})"
+            )
+        # Host-scoped skips (user pressed 's' at the first-item
+        # prompt on this host) are a distinct status from "the
+        # Connector tried to save but failed".
+        item_host = effective_host(item.get("resolver_target_url", ""))
+        skipped_by_user = item_host in getattr(
+            handler, "_skipped_hosts", set(),
+        )
+        if ok:
+            # Finish a --replace swap with the PDF that actually
+            # arrived. Only when one did: a merge that moved nothing
+            # (the keeper already held these bytes) must not delete
+            # the keeper's copy.
+            new_pdfs = set(
+                getattr(handler, "last_merge", {}).get("moved_pdf_keys") or [],
+            )
+            if new_pdfs:
+                _finish_replacement(
+                    zot, item["item_key"], keep=new_pdfs, provenance=[],
+                )
+            status = "attached_via_connector"
+        elif getattr(handler, "last_outcome", "") == "merge_background":
+            # Saved; `BackgroundMerger` logs the item once it is merged.
+            status = ""
+        elif getattr(handler, "last_outcome", "") == "merge_pending":
+            # Saved, not yet merged: neither a success nor a failure,
+            # and no failure-log entry. The merge queue finishes it.
+            status = "connector_merge_pending"
+        elif getattr(handler, "last_outcome", "") == "login_required":
+            # The proxy's sign-in page, not the article: nothing was
+            # learned about access, so no failure-log row (which would
+            # say ACCESS_BLOCKED). Not a done status either, so the
+            # re-run after signing in picks it up.
+            status = "connector_login_required"
+        elif skipped_by_user:
+            status = "skipped_by_user"
+        else:
+            status = "connector_save_failed"
+        outcome = getattr(handler, "last_outcome", "") if not ok else "attached"
+        # Items the streak holds or releases are logged through it;
+        # everything else is logged here, in order.
+        # `counter.queued` counts a background save at save time, so the
+        # streak measures saves Desktop took, not merges finished.
+        for held_item, held_status in streak.observe(
+            item, outcome if status == "connector_save_failed" else status,
+            saved_before=counter.ok + counter.queued,
+        ):
+            log_row(held_item, held_status)
+        if status and not (
+            status == "connector_save_failed" and outcome == "saved_nothing"
+        ):
+            log_row(item, status)
+        if streak.stalled:
+            print(
+                f"\n  STOPPED: {streak.limit} saves in a row produced nothing,\n"
+                f"  after {counter.ok + counter.queued} earlier saves worked. Zotero\n"
+                f"  Desktop has most likely stopped taking saves — check it for\n"
+                f"  an open dialog, or restart it — then re-run. Those items are\n"
+                f"  logged connector_desktop_stalled (not \"no access\"), and the\n"
+                f"  rest were not attempted, so the re-run picks them all up.",
+                flush=True,
+            )
+            break
+
+
 async def _drive_connector(
     handler,
     items: list[dict],
@@ -2211,8 +2326,6 @@ async def _drive_connector(
         wait_for_service_worker,
     )
     from fetchers.browser.base import (
-        BrowserGone,
-        is_browser_gone,
         normalise_setup_result,
     )
 
@@ -2389,8 +2502,16 @@ async def _drive_connector(
         )
 
         streak = _EmptySaveStreak()
+        # Rows now come from two threads: this loop and the background
+        # merger's `_on_background_done`.
+        log_writer = _SerialisedWriter(log_writer)
+        row_lock = threading.Lock()
 
         def _log_connector_row(item: dict, status: str) -> None:
+            with row_lock:
+                _log_connector_row_unlocked(item, status)
+
+        def _log_connector_row_unlocked(item: dict, status: str) -> None:
             log_writer.writerow({
                 "run_date": run_date, "item_key": item["item_key"],
                 "doi": item["doi"], "title": (item.get("title") or "")[:70],
@@ -2422,101 +2543,80 @@ async def _drive_connector(
                     ),
                 )
 
-        current_host = None
-        for item in items_sorted:
-            host = effective_host(item.get("resolver_target_url", ""))
-            if host != current_host:
-                current_host = host
-                remaining_on_host = sum(
-                    1 for it in items_sorted
-                    if effective_host(it.get("resolver_target_url", "")) == host
-                )
-                print(
-                    f"\n  ══ Batch: {host or '(unknown host)'} "
-                    f"({remaining_on_host} "
-                    f"item{'s' if remaining_on_host != 1 else ''}) ══\n"
-                    f"  Solve any login / reCAPTCHA once for this host; "
-                    f"subsequent items reuse the session.",
-                    flush=True,
-                )
+        merger = None
+        if (handler.pending is not None
+                and getattr(zot, "local_writes_enabled", False) is True
+                and not getattr(args, "connector_foreground_merge", False)):
+            from fetchers.browser.connector import BackgroundMerger
 
-            if handler.delay_s > 0:
-                await asyncio.sleep(handler.delay_s)
-            ok = await handler.download_and_attach(
-                page, ctx, service_worker, item, zot,
-                counter=counter, total=total, t_start=t_start,
+            def _on_background_done(row: dict, outcome: str, stats) -> None:
+                item = {"item_key": row["keeper"], "doi": row.get("doi", ""),
+                        "title": row.get("title", "")}
+                if outcome == "merged":
+                    new_pdfs = set((stats or {}).get("moved_pdf_keys") or [])
+                    if new_pdfs:
+                        # After `merge_saved_item` verified the move, never
+                        # before: that is what --replace's delete hangs on.
+                        _finish_replacement(
+                            zot, row["keeper"], keep=new_pdfs, provenance=[],
+                        )
+                    print(f"  ⤷ {row['keeper']}: ATTACHED "
+                          f"({(stats or {}).get('moved', 0)} moved from "
+                          f"{row['new_key']}).", flush=True)
+                    _log_connector_row(item, "attached_via_connector")
+                elif outcome == "no_pdf":
+                    print(f"  ⤷ {row['keeper']}: PARTIAL — the save "
+                          f"{row['new_key']} held no PDF.", flush=True)
+                    _log_connector_row(item, "connector_save_failed")
+                else:
+                    print(f"  ⤷ {row['keeper']}: no settled PDF under "
+                          f"{row['new_key']} yet; left queued for the "
+                          f"end-of-pass sweep.", flush=True)
+                    _log_connector_row(item, "connector_merge_pending")
+
+            merger = BackgroundMerger(
+                zot, handler.pending,
+                merge=lambda keeper, new: handler.merge_saved_item(
+                    zot, keeper, new,
+                ),
+                on_done=_on_background_done,
+                wait_s=handler.sync_timeout_s,
             )
-            if not ok and is_browser_gone(getattr(handler, "last_error", "")):
-                # Every later item would fail the same way, and each would
-                # be logged connector_save_failed — ACCESS_BLOCKED — for an
-                # article nobody looked at. Leave them unlogged instead.
-                raise BrowserGone(
-                    f"the browser closed during the Connector pass "
-                    f"(last: {handler.last_error[:80]})"
-                )
-            # Host-scoped skips (user pressed 's' at the first-item
-            # prompt on this host) are a distinct status from "the
-            # Connector tried to save but failed".
-            item_host = effective_host(item.get("resolver_target_url", ""))
-            skipped_by_user = item_host in getattr(
-                handler, "_skipped_hosts", set(),
+            handler.background = merger
+            print("  Merges run in the background while the next page "
+                  "loads (--connector-foreground-merge to turn off).",
+                  flush=True)
+
+        try:
+            await _connector_item_loop(
+                handler, items_sorted, page, ctx, service_worker, zot,
+                counter=counter, total=total, t_start=t_start, streak=streak,
+                log_row=_log_connector_row,
             )
-            if ok:
-                # Finish a --replace swap with the PDF that actually
-                # arrived. Only when one did: a merge that moved nothing
-                # (the keeper already held these bytes) must not delete
-                # the keeper's copy.
-                new_pdfs = set(
-                    getattr(handler, "last_merge", {}).get("moved_pdf_keys") or [],
-                )
-                if new_pdfs:
-                    _finish_replacement(
-                        zot, item["item_key"], keep=new_pdfs, provenance=[],
-                    )
-                status = "attached_via_connector"
-            elif getattr(handler, "last_outcome", "") == "merge_pending":
-                # Saved, not yet merged: neither a success nor a failure,
-                # and no failure-log entry. The merge queue finishes it.
-                status = "connector_merge_pending"
-            elif getattr(handler, "last_outcome", "") == "login_required":
-                # The proxy's sign-in page, not the article: nothing was
-                # learned about access, so no failure-log row (which would
-                # say ACCESS_BLOCKED). Not a done status either, so the
-                # re-run after signing in picks it up.
-                status = "connector_login_required"
-            elif skipped_by_user:
-                status = "skipped_by_user"
-            else:
-                status = "connector_save_failed"
-            outcome = getattr(handler, "last_outcome", "") if not ok else "attached"
-            # Items the streak holds or releases are logged through it;
-            # everything else is logged here, in order.
-            for held_item, held_status in streak.observe(
-                item, outcome if status == "connector_save_failed" else status,
-                saved_before=counter.ok + counter.queued,
-            ):
-                _log_connector_row(held_item, held_status)
-            if not (status == "connector_save_failed" and outcome == "saved_nothing"):
-                _log_connector_row(item, status)
-            if streak.stalled:
-                print(
-                    f"\n  STOPPED: {streak.limit} saves in a row produced nothing,\n"
-                    f"  after {counter.ok + counter.queued} earlier saves worked. Zotero\n"
-                    f"  Desktop has most likely stopped taking saves — check it for\n"
-                    f"  an open dialog, or restart it — then re-run. Those items are\n"
-                    f"  logged connector_desktop_stalled (not \"no access\"), and the\n"
-                    f"  rest were not attempted, so the re-run picks them all up.",
-                    flush=True,
-                )
-                break
+        finally:
+            if merger is not None:
+                if merger.in_flight():
+                    print(f"\n  Waiting for {merger.in_flight()} background "
+                          f"merge(s) to finish…", flush=True)
+                await asyncio.to_thread(merger.drain)
+                handler.background = None
         for held_item, held_status in streak.flush():
             _log_connector_row(held_item, held_status)
 
-        print(
-            f"\n  Total: {counter.ok} new, {counter.queued} queued for merge, "
-            f"{counter.failed} failed",
-            flush=True,
-        )
+        if merger is not None:
+            c = merger.counts
+            print(
+                f"\n  Total: {counter.queued} saved, merged in the background: "
+                f"{c['merged']} attached, {c['no_pdf']} without a PDF, "
+                f"{c['pending']} left queued; {counter.failed} failed",
+                flush=True,
+            )
+        else:
+            print(
+                f"\n  Total: {counter.ok} new, {counter.queued} queued for "
+                f"merge, {counter.failed} failed",
+                flush=True,
+            )
         logged_out = sorted(getattr(handler, "_logged_out_proxies", set()))
         if logged_out:
             print(
@@ -3613,6 +3713,7 @@ def _run_browser_in_process(
                       f"save(s) that were waiting for cloud sync…", flush=True)
                 settle_pending_merges(
                     zot, pending, wait_s=wait_s, on_merged=_on_merged,
+                    keeper_has_pdf=lambda keeper: _keeper_has_pdf(zot, keeper),
                     merge=lambda keeper, new: connector_handler.merge_saved_item(
                         zot, keeper, new,
                     ),
@@ -4341,6 +4442,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--connector-merge-wait", type=float, default=600, metavar="SECONDS",
         help="At the end of the Connector pass, how long to keep waiting "
              "for queued saves to sync and merging them (default 600).",
+    )
+    parser.add_argument(
+        "--connector-foreground-merge", action="store_true",
+        help="Merge each Connector save before opening the next page, as "
+             "before. By default, with Zotero local writes configured, the "
+             "merge runs on a background thread while the next page loads; "
+             "unfinished merges stay in connector_pending_merges.json.",
     )
     parser.add_argument(
         "--connector-keep-extras", action="store_true",
