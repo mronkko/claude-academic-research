@@ -8,7 +8,12 @@ match what Cloudflare expects.
 
 from __future__ import annotations
 
+import re
+
 from .base import PageNavigationHandler
+
+#: An ISBN-13 at the start of a DOI suffix: a book or chapter.
+_BOOK_SUFFIX = re.compile(r"97[89]-?\d")
 
 
 class TandfHandler(PageNavigationHandler):
@@ -26,3 +31,13 @@ class TandfHandler(PageNavigationHandler):
     direct_access_domains = ("tandfonline.com",)
     concurrency = 1
     delay_s = 1.0
+
+    def matches_doi(self, doi: str) -> bool:
+        """Not book DOIs: Routledge chapters (`10.4324/9781315224350-6`)
+        live on taylorfrancis.com, and /doi/pdf/ on tandfonline.com is a
+        404 for them (reported 2026-09-24). Left unclaimed they reach the
+        handler for their resolved host, or the Connector, which reads
+        taylorfrancis.com."""
+        if _BOOK_SUFFIX.match(doi.partition("/")[2]):
+            return False
+        return super().matches_doi(doi)

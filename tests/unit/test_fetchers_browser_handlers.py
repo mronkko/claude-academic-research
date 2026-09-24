@@ -89,6 +89,15 @@ def test_sage_url_template() -> None:
     )
 
 
+def test_tandf_leaves_routledge_book_dois_alone() -> None:
+    # tandfonline.com/doi/pdf/ 404s for these; they live on taylorfrancis.com.
+    h = TandfHandler()
+    assert not h.matches_doi("10.4324/9781315224350-6")
+    assert not h.matches_doi("10.4324/978-1-315-22435-0")
+    assert h.matches_doi("10.4324/0000000000")        # not ISBN-shaped
+    assert h.matches_doi("10.1080/08985626.2020.1727096")
+
+
 def test_tandf_url_template() -> None:
     url = TandfHandler().url_template.format(doi="10.1080/08985626.2020.1727096")
     assert url == (
