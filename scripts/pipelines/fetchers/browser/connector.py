@@ -685,22 +685,22 @@ class ZoteroConnectorHandler(PublisherHandler):
         found = await _find_block_page(ctx, page)
         if not found:
             return False
-        publisher, ref = found
-        self._blocked_families[family] = ref
-        if not after_save:
+        publisher, blocked, ref = found
+        self._blocked_families[blocked] = ref
+        if not after_save and blocked == family:
             self.last_outcome = "publisher_blocked"
-        lead = "│ " if after_save else "└─"
+        lead = "│ " if after_save or blocked != family else "└─"
         print(
             f"  {lead} BLOCKED: {publisher} served its \"problem providing the "
             f"content\" page\n"
             f"         ({item_host}{', reference ' + ref if ref else ''}). "
             f"That is a block on the\n"
-            f"         proxy's IP, not a paywall: every further {item_host} "
+            f"         proxy's IP, not a paywall: every further {publisher} "
             f"item this\n"
             f"         run is skipped, logged connector_publisher_blocked.",
             flush=True,
         )
-        return True
+        return blocked == family
 
     def merge_saved_item(
         self, zot, keeper: str, new_key: str, *, verify_s: float | None = None,
@@ -911,10 +911,11 @@ class ZoteroConnectorHandler(PublisherHandler):
             counter.failed += 1
             return False
 
-        family = host_family(item_host)
+        # By DOI prefix too: a doi.org route names no publisher.
+        family = item_family(item_host, doi)
         if family in self._blocked_families:
             self.last_outcome = "publisher_blocked"
-            print(f"  └─ NOT TRIED: {item_host} blocked this reader earlier "
+            print(f"  └─ NOT TRIED: {family} blocked this reader earlier "
                   f"this run.", flush=True)
             counter.failed += 1
             return False
@@ -922,7 +923,7 @@ class ZoteroConnectorHandler(PublisherHandler):
         if interval and family in self._last_load_at:
             wait = self._last_load_at[family] + interval - time.monotonic()
             if wait > 0:
-                print(f"  │  Pacing {item_host}: one article per "
+                print(f"  │  Pacing {family}: one article per "
                       f"{int(interval)}s, waiting {int(wait)}s…", flush=True)
                 await asyncio.sleep(wait)
         self._last_load_at[family] = time.monotonic()
@@ -985,6 +986,22 @@ class ZoteroConnectorHandler(PublisherHandler):
                     f"         window before \"Ready to start?\" and re-run.",
                     flush=True,
                 )
+                counter.failed += 1
+                return False
+
+        # Where the page landed decides the family when the DOI prefix did
+        # not (an Elsevier journal outside 10.1016, via doi.org): this
+        # load counts against its clock, and a blocked family stops here.
+        landed = host_family(urlparse(page.url or "").hostname or "")
+        if landed != family and (
+            landed in HOST_MIN_INTERVAL_S or landed in self._blocked_families
+        ):
+            family = landed
+            self._last_load_at[family] = time.monotonic()
+            if family in self._blocked_families:
+                self.last_outcome = "publisher_blocked"
+                print(f"  └─ NOT TRIED: landed on {family}, which blocked "
+                      f"this reader earlier this run.", flush=True)
                 counter.failed += 1
                 return False
 
@@ -1714,8 +1731,8 @@ def is_proxy_login_url(page_url: str, target_url: str) -> bool:
 #: was a problem providing the content you requested… Reference number
 #: a3fbeabfbd8fb606, IP 130.234.10.199". It opened as a second window,
 #: and every save after it was metadata-only.
-_PUBLISHER_BLOCK_MARKERS: tuple[tuple[str, re.Pattern], ...] = (
-    ("Elsevier", re.compile(
+_PUBLISHER_BLOCK_MARKERS: tuple[tuple[str, str, re.Pattern], ...] = (
+    ("Elsevier", "elsevier", re.compile(
         r"There was a problem providing the content you requested", re.I,
     )),
 )
@@ -1728,6 +1745,15 @@ _HOST_FAMILIES = {
     "sciencedirect.com": "elsevier", "elsevier.com": "elsevier",
 }
 
+#: The same families by DOI prefix, for items whose URL names neither
+#: publisher. On 2026-09-24 a JYU run routed 433 items as
+#: `ezproxy.jyu.fi/login?url=https://doi.org/10.1016/…`: keyed on the
+#: host, every one was family "doi.org", the 75 s clock never applied,
+#: and ScienceDirect blocked the IP after ~17 saves in ~4 min
+#: (reference a40123599f226999). The block then stopped every doi.org
+#: item, Elsevier or not.
+_DOI_PREFIX_FAMILIES = {"10.1016": "elsevier"}
+
 #: Minimum seconds between two Connector page loads in one family. The
 #: block above came through one proxy IP that the whole institution
 #: shares, so the cost of tripping it is not ours alone. Families not
@@ -1736,24 +1762,45 @@ HOST_MIN_INTERVAL_S: dict[str, float] = {"elsevier": 75.0}
 
 
 def host_family(host: str) -> str:
-    """`elsevier` for www.sciencedirect.com, else the host itself."""
+    """`elsevier` for www.sciencedirect.com, else the host itself.
+
+    Also for an EZproxy-rewritten host (`www-sciencedirect-com.ezproxy.
+    jyu.fi`), which is where a doi.org route actually lands.
+    """
     host = (host or "").lower()
+    first = host.split(".", 1)[0]
     for domain, family in _HOST_FAMILIES.items():
         if host == domain or host.endswith("." + domain):
+            return family
+        dashed = domain.replace(".", "-")
+        if first == dashed or first.endswith("-" + dashed):
             return family
     return host
 
 
-def publisher_block(text: str) -> tuple[str, str] | None:
-    """`(publisher, reference number)` when `text` is a block page."""
-    for publisher, marker in _PUBLISHER_BLOCK_MARKERS:
+def item_family(host: str, doi: str) -> str:
+    """The rate-limit family of an item before its page is opened: by
+    host when the host names a family, else by DOI prefix, else the
+    host (a doi.org route says nothing about the publisher)."""
+    family = host_family(host)
+    if family != (host or "").lower():
+        return family
+    prefix = (doi or "").strip().lower().split("/", 1)[0]
+    return _DOI_PREFIX_FAMILIES.get(prefix, family)
+
+
+def publisher_block(text: str) -> tuple[str, str, str] | None:
+    """`(publisher, family, reference number)` when `text` is a block
+    page. The family is the publisher's, not the item's host: the
+    block is scoped to it."""
+    for publisher, family, marker in _PUBLISHER_BLOCK_MARKERS:
         if marker.search(text or ""):
             m = _BLOCK_REFERENCE.search(text)
-            return publisher, (m.group(1) if m else "")
+            return publisher, family, (m.group(1) if m else "")
     return None
 
 
-async def _find_block_page(ctx, main_page) -> tuple[str, str] | None:
+async def _find_block_page(ctx, main_page) -> tuple[str, str, str] | None:
     """A block page in any window of `ctx`; closes it unless it is
     `main_page` (a second window held the Connector back until the user
     closed it). Best-effort: an unreadable page is skipped."""

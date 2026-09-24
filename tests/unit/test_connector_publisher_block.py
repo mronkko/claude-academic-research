@@ -18,6 +18,7 @@ from fetchers.browser import connector
 from fetchers.browser.connector import (
     PendingMerges,
     host_family,
+    item_family,
     publisher_block,
     settle_pending_merges,
 )
@@ -31,7 +32,7 @@ BLOCK_TEXT = (
 
 
 def test_the_block_page_is_recognised_with_its_reference() -> None:
-    assert publisher_block(BLOCK_TEXT) == ("Elsevier", "a3fbeabfbd8fb606")
+    assert publisher_block(BLOCK_TEXT) == ("Elsevier", "elsevier", "a3fbeabfbd8fb606")
     assert publisher_block("Journal of Business Venturing — Abstract") is None
 
 
@@ -40,6 +41,20 @@ def test_sciencedirect_and_linkinghub_share_one_clock() -> None:
     assert host_family("linkinghub.elsevier.com") == "elsevier"
     assert host_family("www.jstor.org") == "www.jstor.org"
     assert connector.HOST_MIN_INTERVAL_S["elsevier"] >= 60
+
+
+def test_a_doi_org_route_is_paced_by_its_elsevier_prefix() -> None:
+    # 2026-09-24, JYU: 433 items via ezproxy.jyu.fi/login?url=https://doi.org/…
+    # were family "doi.org", so the Elsevier clock never ran.
+    assert item_family("doi.org", "10.1016/j.addbeh.2018.10.018") == "elsevier"
+    assert item_family("doi.org", "10.4324/9781315224350-6") == "doi.org"
+    assert item_family("www.sciencedirect.com", "10.9999/x") == "elsevier"
+
+
+def test_a_proxy_rewritten_landing_host_is_elsevier() -> None:
+    assert host_family("www-sciencedirect-com.ezproxy.jyu.fi") == "elsevier"
+    assert host_family("linkinghub-elsevier-com.ezproxy.jyu.fi") == "elsevier"
+    assert host_family("www-tandfonline-com.ezproxy.jyu.fi") != "elsevier"
 
 
 class _Page:
@@ -58,7 +73,7 @@ def test_a_block_in_a_second_window_is_found_and_closed() -> None:
     ctx = MagicMock()
     ctx.pages = [main, popup]
     found = asyncio.run(connector._find_block_page(ctx, main))
-    assert found == ("Elsevier", "a3fbeabfbd8fb606")
+    assert found == ("Elsevier", "elsevier", "a3fbeabfbd8fb606")
     assert popup.closed and not main.closed
 
 
@@ -102,6 +117,37 @@ def test_pacing_waits_out_the_family_interval(monkeypatch) -> None:
                                       MagicMock(), counter=counter, total=1,
                                       t_start=0.0))
     assert slept and abs(slept[0] - 45.0) < 0.01
+
+
+def _opened(doi: str, blocked: dict) -> bool:
+    """Whether a doi.org-routed item reaches `page.goto`."""
+    h = connector.ZoteroConnectorHandler.__new__(connector.ZoteroConnectorHandler)
+    h._blocked_families, h._last_load_at = dict(blocked), {}
+    h._logged_out_proxies, h._skipped_hosts = set(), set()
+    h.last_outcome, h.last_error = "", ""
+    reached = []
+    page = MagicMock()
+
+    async def goto(*a, **k):
+        reached.append(True)
+        raise RuntimeError("stop here")
+
+    page.goto = goto
+    counter = MagicMock()
+    counter.done = 0
+    item = {"doi": doi, "title": "t", "item_key": "K",
+            "resolver_target_url":
+                f"http://ezproxy.jyu.fi/login?url=https://doi.org/{doi}"}
+    asyncio.run(h.download_and_attach(page, MagicMock(), MagicMock(), item,
+                                      MagicMock(), counter=counter, total=1,
+                                      t_start=0.0))
+    return bool(reached)
+
+
+def test_an_elsevier_block_stops_only_elsevier_doi_org_items() -> None:
+    blocked = {"elsevier": "a40123599f226999"}
+    assert not _opened("10.1016/j.addbeh.2018.10.018", blocked)
+    assert _opened("10.1093/cesifo/ifz020", blocked)
 
 
 # ---------------------------------------------------------------------------
