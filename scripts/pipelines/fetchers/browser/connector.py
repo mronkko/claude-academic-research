@@ -45,6 +45,7 @@ from .base import (
     PublisherHandler,
     _read_user_line,
 )
+from .interaction import ask_in_daemon
 
 if TYPE_CHECKING:
     from playwright.async_api import BrowserContext, Page, Worker
@@ -540,6 +541,12 @@ class BackgroundMerger:
     def in_flight(self) -> int:
         return sum(1 for f in self._futures if not f.done())
 
+    def abandon(self) -> None:
+        """Drop the merges not yet started (Ctrl-C). Their rows stay in
+        the pending file, so the next pass merges them; the one running
+        finishes, since a merge cut in half is worse than a wait."""
+        self._pool.shutdown(wait=False, cancel_futures=True)
+
     def drain(self) -> None:
         """Block until every submitted merge has finished."""
         for f in list(self._futures):
@@ -761,7 +768,7 @@ class ZoteroConnectorHandler(PublisherHandler):
 
         self._print_connector_banner()
 
-        answer = await asyncio.to_thread(
+        answer = await ask_in_daemon(
             _read_user_line,
             "\n>>> Ready to start? "
             "[Y]es = proceed, [n]o = skip Connector fallback: ",
@@ -961,7 +968,7 @@ class ZoteroConnectorHandler(PublisherHandler):
         # removed by hand.
         if proxy and await _proxy_login_page(page, target_url):
             if sys.stdin.isatty():
-                await asyncio.to_thread(
+                await ask_in_daemon(
                     _read_user_line,
                     f"  │  {proxy} is asking you to sign in. Sign in in the\n"
                     f"  │  Chromium window, wait for the article page, then\n"
@@ -1018,7 +1025,7 @@ class ZoteroConnectorHandler(PublisherHandler):
         #
         # Skipped on non-TTY runs (CI / piped stdin).
         if sys.stdin.isatty() and item_host not in self._confirmed_hosts:
-            answer = await asyncio.to_thread(
+            answer = await ask_in_daemon(
                 _read_user_line,
                 f"  │  First item on host {item_host!r}. In the Chromium\n"
                 "  │  window, solve any reCAPTCHA / login and wait for\n"
@@ -1186,8 +1193,12 @@ class ZoteroConnectorHandler(PublisherHandler):
                 stop=stop,
             ),
         ))
-        verdict = await _watch_save(service_worker, poll_task, stop)
-        new_key = await poll_task
+        try:
+            verdict = await _watch_save(service_worker, poll_task, stop)
+            new_key = await poll_task
+        except asyncio.CancelledError:
+            stop.set()               # Ctrl-C: end the poll thread now
+            raise
         if new_key is None and verdict in (
             "saved", "offered_nothing", "offered_nothing_unasked",
         ):

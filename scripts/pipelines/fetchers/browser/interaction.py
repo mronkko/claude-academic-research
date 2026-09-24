@@ -36,14 +36,52 @@ them all for a concern none of them should know about.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
 import tempfile
+import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
+
+
+async def ask_in_daemon(fn: Callable, *args):
+    """Await `fn(*args)` — a blocking prompt — run in a daemon thread.
+
+    Not `asyncio.to_thread`. On Ctrl-C, `asyncio.run` cancels the main
+    task and then waits for every default-executor thread before it
+    raises KeyboardInterrupt, and a thread blocked on `/dev/tty` never
+    returns: the run went on printing, or sat at the prompt, and only
+    SIGTERM ended it (reported 2026-09-23 and again 2026-09-24). A daemon
+    thread is abandoned on cancel and does not hold up exit.
+    """
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future()
+
+    def deliver(value, exc) -> None:
+        if fut.done():
+            return
+        if exc is not None:
+            fut.set_exception(exc)
+        else:
+            fut.set_result(value)
+
+    def run() -> None:
+        try:
+            value, exc = fn(*args), None
+        except BaseException as e:  # noqa: BLE001 — handed to the awaiter
+            value, exc = None, e
+        try:
+            loop.call_soon_threadsafe(deliver, value, exc)
+        except RuntimeError:
+            pass                     # the loop is gone: nobody is waiting
+
+    threading.Thread(target=run, name="prompt", daemon=True).start()
+    return await fut
+
 
 #: How often `ControlFileChannel` looks for a reply, and how long it
 #: waits before giving up. The timeout is generous because the thing

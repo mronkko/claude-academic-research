@@ -1567,6 +1567,7 @@ async def _drive_handler(
         is_transport_error,
         normalise_setup_result,
     )
+    from fetchers.browser.interaction import ask_in_daemon
 
     try:
         from playwright.async_api import async_playwright
@@ -1874,7 +1875,7 @@ async def _drive_handler(
                     # opened pages against a publisher just declined.
                     async with coord.prompting():
                         remaining = max(total - cursor, 0)
-                        answer = await asyncio.to_thread(
+                        answer = await ask_in_daemon(
                             _prompt_on_first_failure,
                             lane_handler, remaining, args,
                         )
@@ -2630,8 +2631,16 @@ async def _drive_connector(
                 counter=counter, total=total, t_start=t_start, streak=streak,
                 log_row=_log_connector_row,
             )
-        finally:
+        except asyncio.CancelledError:
+            # Ctrl-C. Draining would run every queued merge first (each up
+            # to --connector-sync-timeout), which read as the interrupt
+            # being ignored.
             if merger is not None:
+                merger.abandon()
+                handler.background = None
+            raise
+        finally:
+            if merger is not None and handler.background is not None:
                 if merger.in_flight():
                     print(f"\n  Waiting for {merger.in_flight()} background "
                           f"merge(s) to finish…", flush=True)
@@ -3810,6 +3819,11 @@ def _run_browser_in_process(
         except NetworkOutage as e:
             _report_outage(e)
             return 1
+        except KeyboardInterrupt:
+            print(f"\n  INTERRUPTED. {len(pending.rows())} saved item(s) not "
+                  f"yet merged stay queued in\n  {pending.path}; the next "
+                  f"Connector pass merges them first.", flush=True)
+            return 130
         _settle(float(getattr(args, "connector_merge_wait", 600)))
         if pending.rows():
             print(f"  {len(pending.rows())} saved item(s) still not on the "

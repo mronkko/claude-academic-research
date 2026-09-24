@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from . import interaction
+from .interaction import ask_in_daemon
 
 if TYPE_CHECKING:
     from playwright.async_api import BrowserContext, Page
@@ -844,7 +845,7 @@ class PublisherHandler(ABC):
                 return "proceed"
         self._print_setup_banner()
 
-        answer = await asyncio.to_thread(
+        answer = await ask_in_daemon(
             _read_user_line,
             "\n>>> Can you see/reach the PDF from this page?\n"
             "    [Y]es        — proceed with downloads\n"
