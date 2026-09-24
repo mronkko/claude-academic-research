@@ -1082,7 +1082,7 @@ class ZoteroConnectorHandler(PublisherHandler):
             flush=True,
         )
         translator_count = await _wait_for_translators(
-            service_worker, timeout_s=30,
+            service_worker, page, timeout_s=30,
         )
         if translator_count == 0:
             print(
@@ -1457,26 +1457,53 @@ async def wait_for_service_worker(
     return None
 
 
+#: The tab showing `pageUrl`: exact URL, then same host, then the active
+#: tab. Not the active tab first — that is the user's tab whenever they
+#: have opened one, e.g. to sign in to the proxy.
+_FIND_TAB_JS = """
+    async function findTab(pageUrl) {
+        let targetHost = '';
+        try { targetHost = new URL(pageUrl).host; } catch (_) {}
+        const allTabs = await chrome.tabs.query({});
+        let t = allTabs.find(x => x.url === pageUrl);
+        if (!t && targetHost) {
+            t = allTabs.find(x => {
+                try { return new URL(x.url).host === targetHost; }
+                catch (_) { return false; }
+            });
+        }
+        if (!t) {
+            t = (await chrome.tabs.query({active: true, currentWindow: true}))[0];
+        }
+        return t;
+    }
+"""
+
+
 async def _wait_for_translators(
-    service_worker: Worker, *, timeout_s: float = 30,
+    service_worker: Worker, page=None, *, timeout_s: float = 30,
 ) -> int:
-    """Poll the active tab's Connector translator list until non-empty.
+    """Poll the Connector's translator list for `page`'s tab until
+    non-empty.
 
     Returns the final translator count (0 means timed out). Polling
     is done inside the service worker because the Connector stores
-    per-tab state there.
+    per-tab state there. The tab is found by `page.url`, read afresh
+    each poll (redirects): on 2026-09-24 the first two items after the
+    user signed in to EZproxy in a new tab read that tab, the active
+    one, and were logged ACCESS_BLOCKED "no translator detected".
     """
     deadline = time.monotonic() + timeout_s
     last = 0
     while time.monotonic() < deadline:
         try:
+            page_url = (page.url if page is not None else "") or ""
+        except Exception:  # noqa: BLE001
+            page_url = ""
+        try:
             last = await service_worker.evaluate(
-                """
-                async () => {
-                    const tabs = await chrome.tabs.query({
-                        active: true, currentWindow: true,
-                    });
-                    const t = tabs[0];
+                "async (pageUrl) => {" + _FIND_TAB_JS + """
+                    const t = await findTab(pageUrl);
                     if (!t || typeof Zotero === 'undefined'
                         || !Zotero.Connector_Browser) return 0;
                     const info = Zotero.Connector_Browser.getTabInfo(t.id);
@@ -1484,6 +1511,7 @@ async def _wait_for_translators(
                         info.translators.length : 0;
                 }
                 """,
+                page_url,
             )
         except Exception:
             last = 0
