@@ -21,6 +21,7 @@ from scratch.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import time
 from abc import ABC, abstractmethod
@@ -639,6 +640,41 @@ class BrowserGone(NetworkOutage):
     """
 
 
+async def ask_while_open(page, fn, *args):
+    """`ask_in_daemon(fn, *args)`, abandoned with BrowserGone if `page`'s
+    browser closes first.
+
+    2026-09-24: Chrome for Testing 153 crashed on launch on macOS 27, and
+    the run went on to prompt about a window that no longer existed —
+    and, before `ask_in_daemon`, could not be interrupted there either.
+    """
+    # `is True` and the awaitable check: test doubles are MagicMocks.
+    try:
+        closed = page.is_closed() is True
+    except Exception:  # noqa: BLE001 — a dead page may raise here too
+        closed = False
+    if closed:
+        raise BrowserGone("the browser closed before the prompt")
+    try:
+        waiter = page.context.wait_for_event("close", timeout=0)
+    except Exception:  # noqa: BLE001
+        waiter = None
+    if not inspect.isawaitable(waiter):
+        return await ask_in_daemon(fn, *args)
+    prompt = asyncio.ensure_future(ask_in_daemon(fn, *args))
+    gone = asyncio.ensure_future(waiter)
+    try:
+        await asyncio.wait({prompt, gone}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for t in (prompt, gone):
+            if not t.done():
+                t.cancel()
+    if prompt.done() and not prompt.cancelled():
+        return prompt.result()
+    print("\n  The browser closed while waiting for your answer.", flush=True)
+    raise BrowserGone("the browser closed while waiting at a prompt")
+
+
 class PublisherHandler(ABC):
     """One handler per publisher. Subclasses set:
 
@@ -845,8 +881,8 @@ class PublisherHandler(ABC):
                 return "proceed"
         self._print_setup_banner()
 
-        answer = await ask_in_daemon(
-            _read_user_line,
+        answer = await ask_while_open(
+            page, _read_user_line,
             "\n>>> Can you see/reach the PDF from this page?\n"
             "    [Y]es        — proceed with downloads\n"
             "    [n]o         — skip this publisher this run\n"

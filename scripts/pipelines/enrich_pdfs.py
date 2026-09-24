@@ -1563,11 +1563,11 @@ async def _drive_handler(
     from fetchers.browser.base import (
         BrowserGone,
         NetworkOutage,
+        ask_while_open,
         is_browser_gone,
         is_transport_error,
         normalise_setup_result,
     )
-    from fetchers.browser.interaction import ask_in_daemon
 
     try:
         from playwright.async_api import async_playwright
@@ -1875,8 +1875,8 @@ async def _drive_handler(
                     # opened pages against a publisher just declined.
                     async with coord.prompting():
                         remaining = max(total - cursor, 0)
-                        answer = await ask_in_daemon(
-                            _prompt_on_first_failure,
+                        answer = await ask_while_open(
+                            lane_page, _prompt_on_first_failure,
                             lane_handler, remaining, args,
                         )
                         if answer == "always_skip":

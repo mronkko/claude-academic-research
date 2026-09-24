@@ -44,8 +44,8 @@ from .base import (
     Counter,
     PublisherHandler,
     _read_user_line,
+    ask_while_open,
 )
-from .interaction import ask_in_daemon
 
 if TYPE_CHECKING:
     from playwright.async_api import BrowserContext, Page, Worker
@@ -751,7 +751,7 @@ class ZoteroConnectorHandler(PublisherHandler):
         return stats
 
     async def setup(self, page: Page, first_doi: str) -> str:
-        del page, first_doi   # URL/DOI aren't needed for the intro banner
+        del first_doi   # the DOI isn't needed for the intro banner
         if self.extension_path is None:
             problem = connector_extension_problem(self._explicit_extension_path)
             if problem:
@@ -768,8 +768,8 @@ class ZoteroConnectorHandler(PublisherHandler):
 
         self._print_connector_banner()
 
-        answer = await ask_in_daemon(
-            _read_user_line,
+        answer = await ask_while_open(
+            page, _read_user_line,
             "\n>>> Ready to start? "
             "[Y]es = proceed, [n]o = skip Connector fallback: ",
         )
@@ -968,8 +968,8 @@ class ZoteroConnectorHandler(PublisherHandler):
         # removed by hand.
         if proxy and await _proxy_login_page(page, target_url):
             if sys.stdin.isatty():
-                await ask_in_daemon(
-                    _read_user_line,
+                await ask_while_open(
+                    page, _read_user_line,
                     f"  │  {proxy} is asking you to sign in. Sign in in the\n"
                     f"  │  Chromium window, wait for the article page, then\n"
                     f"  │  press [Enter]: ",
@@ -1025,8 +1025,8 @@ class ZoteroConnectorHandler(PublisherHandler):
         #
         # Skipped on non-TTY runs (CI / piped stdin).
         if sys.stdin.isatty() and item_host not in self._confirmed_hosts:
-            answer = await ask_in_daemon(
-                _read_user_line,
+            answer = await ask_while_open(
+                page, _read_user_line,
                 f"  │  First item on host {item_host!r}. In the Chromium\n"
                 "  │  window, solve any reCAPTCHA / login and wait for\n"
                 "  │  the article page to load.  Once the article is\n"

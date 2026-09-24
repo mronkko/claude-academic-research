@@ -103,3 +103,57 @@ def test_the_connector_driver_abandons_merges_and_reports_the_queue() -> None:
     assert "except KeyboardInterrupt" in src and "INTERRUPTED." in src
     save = inspect.getsource(connector.ZoteroConnectorHandler.download_and_attach)
     assert "except asyncio.CancelledError" in save and "stop.set()" in save
+
+
+# ---------------------------------------------------------------------------
+# A prompt about a browser that has died
+# ---------------------------------------------------------------------------
+
+
+class _Ctx:
+    def __init__(self, close_after: float | None):
+        self.close_after = close_after
+
+    async def wait_for_event(self, name, timeout=None):
+        assert name == "close"
+        if self.close_after is None:
+            await asyncio.sleep(3600)
+        await asyncio.sleep(self.close_after)
+
+
+class _LivePage:
+    def __init__(self, close_after=None, closed=False):
+        self.context, self._closed = _Ctx(close_after), closed
+
+    def is_closed(self):
+        return self._closed
+
+
+def test_a_prompt_ends_when_the_browser_closes() -> None:
+    # 2026-09-24: Chrome for Testing 153 crashed on launch (macOS 27) and
+    # the run still prompted about the dead window.
+    release = threading.Event()
+    t0 = time.monotonic()
+    try:
+        asyncio.run(base.ask_while_open(_LivePage(close_after=0.1),
+                                        release.wait, 30))
+    except base.BrowserGone:
+        pass
+    else:
+        raise AssertionError("the prompt outlived the browser")
+    finally:
+        release.set()
+    assert time.monotonic() - t0 < 2.0
+
+
+def test_a_closed_page_is_not_prompted_about() -> None:
+    asked = []
+    try:
+        asyncio.run(base.ask_while_open(_LivePage(closed=True), asked.append, 1))
+    except base.BrowserGone:
+        pass
+    assert asked == []
+
+
+def test_an_answer_with_the_browser_open_is_returned() -> None:
+    assert asyncio.run(base.ask_while_open(_LivePage(), lambda p: p, "y")) == "y"
