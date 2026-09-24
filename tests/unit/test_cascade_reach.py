@@ -74,7 +74,6 @@ def test_preprints_remain_opt_in() -> None:
     ("doi", "handler", "imprint"),
     [
         ("10.1023/A:1015630930326", "springer", "Kluwer Academic → Springer"),
-        ("10.4324/9780203806098", "tandf", "Routledge → T&F"),
         ("10.1300/J075v26n03_01", "tandf", "Haworth → T&F"),
         ("10.1207/s15327043hup1803_2", "tandf", "Lawrence Erlbaum → T&F"),
         ("10.2190/AG.80.1.a", "sage", "Baywood → Sage"),
@@ -90,6 +89,17 @@ def test_a_legacy_imprint_doi_reaches_its_current_publisher(
     found = resolve_by_doi(doi)
     assert found is not None, f"{imprint}: {doi} still matches no handler"
     assert found.name == handler, f"{imprint}: routed to {found.name}"
+
+
+def test_a_routledge_book_doi_is_not_sent_to_tandfonline() -> None:
+    """Routledge (10.4324) was added above as "same URL shape" without a
+    measurement; its DOIs are ISBN-prefixed books and chapters, which live
+    on taylorfrancis.com. tandfonline.com/doi/pdf/10.4324/9781315224350-6
+    was a 404 on a live run, 2026-09-24. Unclaimed, the resolved host or
+    the Connector takes them."""
+    for doi in ("10.4324/9780203806098", "10.4324/9781315224350-6"):
+        found = resolve_by_doi(doi)
+        assert found is None or found.name != "tandf", doi
 
 
 def test_the_wiley_api_source_and_its_browser_handler_agree() -> None:
