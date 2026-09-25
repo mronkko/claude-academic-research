@@ -203,3 +203,45 @@ def test_deferral_is_opt_in(fake_browser, tmp_path) -> None:
     _drive(handler, _items(2), _args(tmp_path), _Rows())
 
     assert handler.setup_calls, "defer_solve defaulted to on"
+
+
+def test_declining_at_deferred_setup_is_not_asked_again(
+    fake_browser, tmp_path, monkeypatch,
+) -> None:
+    """Live, Springer, 2 items: the operator answered n at the deferred
+    setup, was then asked the first-failure question about the same
+    item, answered k — and the k was silently overridden by the n, so
+    item 2 went to the retry bucket with no event. One failure, one
+    question."""
+    asked: list[str] = []
+    monkeypatch.setattr(
+        enrich_pdfs, "_prompt_on_first_failure",
+        lambda *a, **k: asked.append("x") or "keep",
+    )
+    handler = _Handler(setup_result="skip", succeeds_after_setup=False)
+    bucket: list[dict] = []
+    _drive(handler, _items(2), _args(tmp_path), _Rows(), defer_solve=True,
+           prompt_on_first_failure=True, on_failure="retry_bucket",
+           retry_bucket=bucket)
+
+    assert asked == [], "asked again after the operator declined at setup"
+    assert [i["doi"] for i in bucket] == ["10.1/0", "10.1/1"]
+
+
+def test_every_item_reports_an_outcome_even_when_skipped(
+    fake_browser, tmp_path, monkeypatch,
+) -> None:
+    """`publisher_done` after fewer `item` events than were queued reads
+    as a dropped item to anyone following the progress stream."""
+    import fetchers.browser as browser_pkg
+
+    events: list[dict] = []
+    monkeypatch.setattr(browser_pkg.interaction, "report_progress",
+                        events.append)
+    handler = _Handler(setup_result="skip", succeeds_after_setup=False)
+    _drive(handler, _items(3), _args(tmp_path), _Rows(), defer_solve=True,
+           on_failure="retry_bucket", retry_bucket=[])
+
+    items = [e for e in events if e["event"] == "item"]
+    assert [e["doi"] for e in items] == ["10.1/0", "10.1/1", "10.1/2"]
+    assert [e["outcome"] for e in items[1:]] == ["skipped", "skipped"]

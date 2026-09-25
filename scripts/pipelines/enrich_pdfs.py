@@ -1808,6 +1808,11 @@ async def _drive_handler(
                 )
                 if deferred_result in ("skip", "always_skip"):
                     coord.skip_remaining = True
+                    # The operator has just answered for this publisher.
+                    # Letting the same failure open the first-failure
+                    # prompt asked them again, and a "k" there was then
+                    # overridden by this "n" without a word.
+                    coord.claim_prompt()
                     if deferred_result == "always_skip" and on_always_skip:
                         try:
                             on_always_skip(lane_handler.name)
@@ -1983,6 +1988,14 @@ async def _drive_handler(
                     # User picked "skip remaining" for this publisher.
                     if on_failure == "retry_bucket" and retry_bucket is not None:
                         retry_bucket.append(item)
+                    # Still one event per item: a `publisher_done` after
+                    # fewer `item` events than were queued reads as a
+                    # dropped item to anyone following the stream.
+                    interaction.report_progress({
+                        "event": "item", "publisher": lane_handler.name,
+                        "doi": item["doi"], "outcome": "skipped",
+                        "done": counter.done, "queued": total,
+                    })
                     continue
                 try:
                     await _process(lane_handler, lane_page, item)
