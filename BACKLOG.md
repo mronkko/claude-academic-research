@@ -261,6 +261,43 @@ green**; item 4 is why, and it is not a defect in the fix.
 
 ---
 
+## Open — browser pass reads the page before asking: what is left (2026-09-25)
+
+Shipped: `classify_page` in `fetchers/browser/base.py` reads a publisher
+landing page for a per-publisher denial sentence (`denial_markers`,
+plus `recognised_markers` where a signed-out visitor sees the same
+words) or a 404/410 on the landing page. A conclusive page fails *that
+item* fast, skips the deferred setup, the retry, and the first-failure
+prompt, and appends to `<cache>/diagnostics/page_observations.jsonl`.
+It never skips the publisher. Markers exist for Sage, Cambridge,
+Springer and Emerald, copied from JYU no-access pages.
+
+1. **The markers are not yet checked against entitled pages.** Each one
+   is a full article-level sentence and none occurs in a script body,
+   but nobody has confirmed an entitled page lacks it. What that takes:
+   one saved entitled landing page per publisher (`page.content()` from
+   a live run), added as a negative case in
+   `tests/unit/test_page_classification.py`. The cost of a wrong match
+   is bounded to one item, logged ACCESS_BLOCKED with the matched words.
+2. **Taylor & Francis and OUP have no markers.** No no-access page was
+   saved for either, so those two still go through clearance, a retry
+   and the prompt (defect 4 of the 2026-09-25 report).
+3. **"Entitled, no PDF offered" has no class yet.** Emerald
+   10.1108/edi-07-2015-0056 is an HTML-only book review: accessible,
+   but with no PDF. `pdf_fetch_log.NO_PDF_OFFERED` exists for the
+   outcome, but the saved diagnostic landed on emerald.com's home page,
+   so there is no page text to derive a marker from.
+4. **"PDF link present" is deliberately not a text class.** Sage's and
+   Springer's no-access pages both contain "Download PDF" /
+   "Download preview PDF". A positive class needs a selector verified on
+   an entitled page, like `CambridgeHandler.pdf_link_selector`.
+
+*Files:* `scripts/pipelines/fetchers/browser/base.py`
+(`classify_page`, `PublisherHandler.observe`), the handler modules,
+`scripts/pipelines/enrich_pdfs.py` (`_process`, `_page_verdict`).
+
+---
+
 ## Open — two upstream fixes for `mronkko/zotero-mcp` (2026-08-20)
 
 Both found by adopting `zotero_mcp.citation_import.csl_json_to_zotero`

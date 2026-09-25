@@ -21,6 +21,7 @@ from scratch.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import json
 import time
@@ -504,6 +505,139 @@ async def wait_for_clearance(
         await asyncio.sleep(poll_interval_s)
 
 
+# ---------------------------------------------------------------------------
+# Reading the publisher's own page.
+# ---------------------------------------------------------------------------
+#
+# Requested from a live JYU run, 2026-09-25: the setup prompt asked "can
+# you see/reach the PDF from this page?" about pages that already said,
+# in a sentence, that the institution has no access. So the page is read
+# first, and the human is asked only when it says nothing conclusive.
+#
+# Two rules keep this from becoming the silent skip the clearance probe
+# above is forbidden to produce:
+#
+# - **A verdict is about one item.** A conclusive page fails *that* item
+#   fast, with the page's words attached; it never skips the publisher.
+#   One unentitled Sage journal says nothing about the next.
+# - **Markers are sentences, per publisher, about this article.** "Get
+#   access" and "Download PDF" are menu chrome on pages we *can* read —
+#   Sage's and Springer's no-access pages both contain "Download PDF".
+#   Where the sentence does not itself show the institution was
+#   recognised, `recognised_markers` must also match, or a signed-out
+#   session (which a sign-in would fix) reads as a verdict.
+#
+# There is deliberately no "PDF link present" class: text cannot tell
+# it apart, for the reason just given.
+
+PAGE_GONE = "gone"
+PAGE_NO_ENTITLEMENT = "no_entitlement"
+PAGE_UNKNOWN = "unknown"
+
+#: File, under the diagnostics dir, that collects every conclusive page
+#: so a later no-coverage verdict can cite what the publisher said.
+OBSERVATIONS_FILENAME = "page_observations.jsonl"
+
+
+@dataclass
+class PageObservation:
+    url: str
+    title: str
+    klass: str = PAGE_UNKNOWN
+    #: The matched sentence, or `HTTP <status>` for a gone page.
+    phrase: str = ""
+
+    @property
+    def conclusive(self) -> bool:
+        return self.klass in (PAGE_GONE, PAGE_NO_ENTITLEMENT)
+
+    def describe(self) -> str:
+        return f'{self.klass}: "{self.phrase}" at {self.url}'
+
+
+async def classify_page(
+    page: Page,
+    resp=None,
+    *,
+    denial_markers: tuple[str, ...] = (),
+    recognised_markers: tuple[str, ...] = (),
+) -> PageObservation:
+    """Classify a publisher *landing* page. Never raises.
+
+    `resp` is the navigation's response, for the 404/410 check. Pass it
+    only for a landing page: a 404 on a URL the handler built is about
+    the handler, not the article (see `setup`).
+
+    Reads `textContent`, not `innerText`: Sage's article-level sentence
+    ("Institution … does not have access to this article") sits in a
+    drawer that is hidden until opened.
+    """
+    import re
+
+    url = ""
+    title = ""
+    try:
+        url = page.url or ""
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        title = (await page.title()) or ""
+    except Exception:  # noqa: BLE001
+        pass
+    if (status := gone_status(resp)) is not None:
+        return PageObservation(url, title, PAGE_GONE, f"HTTP {status}")
+    if not denial_markers:
+        return PageObservation(url, title)
+    try:
+        # Scripts dropped: a sentence in a JS template is not the page
+        # saying it. (None of the saved pages had one; cheap insurance.)
+        text = await page.evaluate(
+            "() => { if (!document.body) return '';"
+            " const b = document.body.cloneNode(true);"
+            " b.querySelectorAll('script,style,noscript,template')"
+            ".forEach(e => e.remove());"
+            " return b.textContent; }"
+        )
+    except Exception:  # noqa: BLE001
+        return PageObservation(url, title)
+    text = " ".join(str(text or "").split())
+    for pattern in denial_markers:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if not m:
+            continue
+        if recognised_markers and not any(
+            re.search(r, text, re.IGNORECASE) for r in recognised_markers
+        ):
+            return PageObservation(url, title)
+        return PageObservation(url, title, PAGE_NO_ENTITLEMENT, m.group(0))
+    return PageObservation(url, title)
+
+
+def record_observation(
+    cache_dir: str | Path, *, handler: str, doi: str, obs: PageObservation,
+) -> None:
+    """Append one observation to the run's JSONL. Never raises."""
+    try:
+        path = Path(cache_dir) / DIAGNOSTICS_DIRNAME / OBSERVATIONS_FILENAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "handler": handler, "doi": doi, "class": obs.klass,
+                "phrase": obs.phrase, "url": obs.url, "title": obs.title,
+            }, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+class PageVerdict(RuntimeError):
+    """The publisher's page answered for this item; no download is coming."""
+
+    def __init__(self, obs: PageObservation) -> None:
+        super().__init__(f"the page says {obs.describe()}")
+        self.observation = obs
+
+
 def _wait_for_user(prompt: str) -> None:
     """Block until the user acknowledges the prompt.
 
@@ -705,6 +839,21 @@ class PublisherHandler(ABC):
     #: back so a lost connection is not filed as a missing article. Set
     #: on every failure path, cleared on entry.
     last_error: str = ""
+    #: Regexes for a sentence this publisher's page shows when *this
+    #: article* is not licensed to the recognised institution. Copied
+    #: from real pages, never guessed — see `classify_page`. Empty means
+    #: the page is never read for a verdict.
+    denial_markers: tuple[str, ...] = ()
+    #: Regexes, one of which must also match before a denial counts,
+    #: for publishers whose denial sentence does not itself show that
+    #: the institution was recognised.
+    recognised_markers: tuple[str, ...] = ()
+    #: The conclusive page behind the most recent failure, or None.
+    #: Cleared by the driver before each item, like `last_error`.
+    last_observation: PageObservation | None = None
+    #: Verdict string for the driver's classifier and retry note; set
+    #: from a conclusive `last_observation`. EBSCO sets its own.
+    last_verdict: str = ""
     # Optional: URL the setup phase opens in the browser. Defaults to
     # `url_template`. Override when the download URL would trigger an
     # immediate auto-download (e.g. Emerald's `?download=true` PDF URL),
@@ -783,6 +932,22 @@ class PublisherHandler(ABC):
     def matches_doi(self, doi: str) -> bool:
         return any(doi.startswith(p) for p in self.doi_prefixes)
 
+    async def observe(self, page: Page, resp=None) -> PageObservation:
+        """Classify `page` with this publisher's markers, and remember a
+        conclusive answer as this item's verdict."""
+        obs = await classify_page(
+            page, resp,
+            denial_markers=self.denial_markers,
+            recognised_markers=self.recognised_markers,
+        )
+        if obs.conclusive:
+            self.last_observation = obs
+            self.last_verdict = f"{obs.klass}: {obs.phrase}"
+            display = self.display_name or self.name
+            print(f"  {display}: the page answers for this item — "
+                  f"{obs.describe()}", flush=True)
+        return obs
+
     # ------------------------------------------------------------------
     # Default setup — open first URL, prompt user.
     # ------------------------------------------------------------------
@@ -858,6 +1023,7 @@ class PublisherHandler(ABC):
                 # The landing page may not fully load if it's a Cloudflare
                 # challenge — the user sees it anyway and solves it.
                 pass
+            landing_resp = resp
             if (status := gone_status(resp)) is not None:
                 # A built URL the publisher does not serve — Springer
                 # chapters opened at /article/ did this. Asking the user
@@ -874,6 +1040,7 @@ class PublisherHandler(ABC):
                     )
                 except Exception:
                     pass
+                landing_resp = fallback_resp
                 # Which side is wrong depends on the DOI's own landing
                 # page. Wiley 10.1111/j.1440-1835.2005.tb00363.x was a
                 # 404 at doi.org too, and calling that a plugin bug sent
@@ -893,6 +1060,13 @@ class PublisherHandler(ABC):
                         "plugin bug, not an access problem).",
                         flush=True,
                     )
+            if (await self.observe(page, landing_resp)).conclusive:
+                # Nothing for a human to add: the page has answered for
+                # this item. "proceed", not "skip" — the verdict is this
+                # item's, and every other item reads its own page.
+                print("  Not asking: the remaining items are each tried "
+                      "and read on their own.", flush=True)
+                return "proceed"
             if await self._cleared_without_asking(page):
                 return "proceed"
         self._print_setup_banner()
@@ -1183,6 +1357,19 @@ class PageNavigationHandler(PublisherHandler):
                     # waiting out the 30 s only to report a timeout hid
                     # what went wrong. Raising cancels the waiter.
                     raise RuntimeError(f"HTTP {status}: no page at {url}")
+                if resp is not None and self.denial_markers:
+                    # goto returned, so the PDF URL rendered a page
+                    # instead of starting a download — Sage and Emerald
+                    # redirect an unlicensed PDF to the abstract. Read it
+                    # rather than wait 30 s for an event that is not
+                    # coming. No `resp`: this URL is the handler's.
+                    with contextlib.suppress(Exception):
+                        await page.wait_for_load_state(
+                            "domcontentloaded", timeout=10000,
+                        )
+                    obs = await self.observe(page)
+                    if obs.conclusive:
+                        raise PageVerdict(obs)
             dl = await dl_info.value
             await dl.save_as(str(out))
         except Exception as e:
@@ -1280,6 +1467,13 @@ class PdfLinkNavigationHandler(PublisherHandler):
             try:
                 await page.goto(url, wait_until="domcontentloaded",
                                 timeout=30000)
+                # A denial on the landing page means no anchor is coming;
+                # without this the selector wait ran its full 15 s first.
+                # Text only, not the status: a 404 at doi.org is exactly
+                # what `fallback_pdf_urls` exists to route around.
+                obs = await self.observe(page)
+                if obs.conclusive:
+                    raise PageVerdict(obs)
                 await page.wait_for_selector(
                     self.pdf_link_selector, state="attached",
                     timeout=self.pdf_link_timeout_ms,
@@ -1289,6 +1483,8 @@ class PdfLinkNavigationHandler(PublisherHandler):
                 candidates.append(await page.locator(
                     self.pdf_link_selector,
                 ).first.evaluate("a => a.href"))
+            except PageVerdict:
+                raise
             except Exception:
                 # A dead landing page is not fatal when the platform's
                 # PDF URL can be derived; only the absence of *any*

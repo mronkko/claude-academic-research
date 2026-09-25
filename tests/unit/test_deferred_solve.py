@@ -245,3 +245,78 @@ def test_every_item_reports_an_outcome_even_when_skipped(
     items = [e for e in events if e["event"] == "item"]
     assert [e["doi"] for e in items] == ["10.1/0", "10.1/1", "10.1/2"]
     assert [e["outcome"] for e in items[1:]] == ["skipped", "skipped"]
+
+
+def _denied(doi: str):
+    from fetchers.browser.base import PAGE_NO_ENTITLEMENT, PageObservation
+    return PageObservation(url=f"https://pub/{doi}", title="T",
+                           klass=PAGE_NO_ENTITLEMENT,
+                           phrase="does not have access to this article")
+
+
+class _DeniedHandler(_Handler):
+    """Every page says no, and says so in words."""
+
+    async def download(self, page, ctx, item, cache_dir, *,
+                       counter, total, t_start):
+        self.download_calls.append(item["doi"])
+        self.last_observation = _denied(item["doi"])
+        self.last_verdict = "no_entitlement: …"
+        self.last_error = "the page says no_entitlement"
+        counter.failed += 1
+        return None
+
+
+def test_a_page_that_answered_needs_no_setup_and_no_question(
+    fake_browser, tmp_path, monkeypatch,
+) -> None:
+    """Live 2026-09-25 (T&F, Sage, OUP): the setup step waved itself
+    through on clearance and the item failed again — two 30 s timeouts
+    before the question. A page that already said "no access" leaves
+    nothing to solve and nothing to ask."""
+    import fetchers.browser as browser_pkg
+
+    asked: list[str] = []
+    monkeypatch.setattr(enrich_pdfs, "_prompt_on_first_failure",
+                        lambda *a, **k: asked.append("x") or "keep")
+    events: list[dict] = []
+    monkeypatch.setattr(browser_pkg.interaction, "report_progress",
+                        events.append)
+    handler = _DeniedHandler()
+    _drive(handler, _items(3), _args(tmp_path), _Rows(), defer_solve=True,
+           prompt_on_first_failure=True, on_failure="retry_bucket",
+           retry_bucket=[])
+
+    assert handler.setup_calls == []
+    assert asked == []
+    assert handler.download_calls == ["10.1/0", "10.1/1", "10.1/2"]
+    items = [e for e in events if e["event"] == "item"]
+    assert all("does not have access" in e["evidence"] for e in items)
+    log = tmp_path / "diagnostics" / "page_observations.jsonl"
+    assert len(log.read_text().splitlines()) == 3
+
+
+def test_setup_that_reads_a_verdict_does_not_retry_the_item(
+    fake_browser, tmp_path,
+) -> None:
+    """Wiley 10.1111/j.1440-1835.2005.tb00363.x: the PDF URL 404s, which
+    is not evidence — the setup step's landing page is. Once that page
+    has answered, a retry can only repeat the 404."""
+
+    class _GoneAtSetup(_Handler):
+        async def setup(self, page, doi):
+            from fetchers.browser.base import PAGE_GONE, PageObservation
+            self.setup_calls.append(doi)
+            self.last_observation = PageObservation(
+                url="https://doi.org/x", title="Error", klass=PAGE_GONE,
+                phrase="HTTP 404",
+            )
+            return "proceed"
+
+    handler = _GoneAtSetup(succeeds_after_setup=False)
+    _drive(handler, _items(2), _args(tmp_path), _Rows(), defer_solve=True)
+
+    assert handler.download_calls == ["10.1/0", "10.1/1"], (
+        f"retried an item its own landing page had answered for: "
+        f"{handler.download_calls}"
+    )

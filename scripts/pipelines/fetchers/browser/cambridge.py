@@ -48,6 +48,12 @@ class CambridgeHandler(PdfLinkNavigationHandler):
     direct_access_domains = ("cambridge.org",)
     concurrency = 1
     delay_s = 1.0
+
+    # Seen at JYU on four chapters, 2026-09-24/25. "We recognised you are
+    # associated with…" is itself the proof of recognition.
+    denial_markers = (
+        r"institutions that don.t have access to this content",
+    )
     # Measured 2026-08-23 against a cold profile on an institutional IP:
     # landing page and PDF both loaded with no challenge and no sign-in.
     needs_interactive_solve = False

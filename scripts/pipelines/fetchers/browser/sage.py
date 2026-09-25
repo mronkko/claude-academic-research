@@ -35,3 +35,9 @@ class SageHandler(PageNavigationHandler):
     direct_access_domains = ("sagepub.com",)
     concurrency = 1
     delay_s = 2.5
+
+    # Seen 2026-09-25 at JYU (10.1258/mlj.2011.011026 and two more). It
+    # sits in the sign-in drawer, hidden until opened, and names the
+    # recognised institution, so it needs no second marker. Not
+    # "Restricted access": Sage labels the article type with it.
+    denial_markers = (r"does not have access to this article",)

@@ -1567,6 +1567,7 @@ async def _drive_handler(
         is_browser_gone,
         is_transport_error,
         normalise_setup_result,
+        record_observation,
     )
 
     try:
@@ -1766,6 +1767,11 @@ async def _drive_handler(
                 await asyncio.sleep(lane_handler.delay_s)
             # Per item, or the last failure's reason is read as this one's.
             lane_handler.last_error = ""
+            if getattr(lane_handler, "last_observation", None) is not None:
+                # Only a page's verdict is cleared here; EBSCO owns its
+                # own `last_verdict` and resets it per download.
+                lane_handler.last_verdict = ""
+            lane_handler.last_observation = None
             result = await lane_handler.download(
                 lane_page, ctx, item, args.cache_dir,
                 counter=counter, total=total, t_start=t_start,
@@ -1795,6 +1801,9 @@ async def _drive_handler(
                 and not is_browser_gone(
                     getattr(lane_handler, "last_error", ""),
                 )
+                # The page already said why. Nothing for a human to
+                # solve, and a retry would only read the same page.
+                and _page_verdict(lane_handler) is None
             ):
                 deferred_setup_done = True
                 print(
@@ -1822,22 +1831,31 @@ async def _drive_handler(
                                 f"no_access += {lane_handler.name!r}: {e}",
                                 flush=True,
                             )
-                else:
+                elif _page_verdict(lane_handler) is None:
                     result = await lane_handler.download(
                         lane_page, ctx, item, args.cache_dir,
                         counter=counter, total=total, t_start=t_start,
                     )
             doi = item["doi"]
+            verdict = _page_verdict(lane_handler) if result is None else None
+            if verdict is not None:
+                record_observation(
+                    args.cache_dir, handler=lane_handler.name, doi=doi,
+                    obs=verdict,
+                )
             title = (item.get("title") or "")[:70]
             # A heartbeat per item, so an agent following the run knows
             # it is alive and how far along without parsing stdout.
             # "downloaded" rather than "attached": the upload happens
             # below and has its own row in the run log.
-            interaction.report_progress({
+            event = {
                 "event": "item", "publisher": lane_handler.name, "doi": doi,
                 "outcome": "failed" if result is None else "downloaded",
                 "done": counter.done, "queued": total,
-            })
+            }
+            if verdict is not None:
+                event["evidence"] = verdict.describe()
+            interaction.report_progress(event)
 
             if result is None:
                 # Per-item download failure. A network-layer error is a
@@ -1873,7 +1891,14 @@ async def _drive_handler(
                 else:
                     coord.note_other_outcome()
 
-                if prompt_on_first_failure and not transport and coord.claim_prompt():
+                if (
+                    prompt_on_first_failure
+                    and not transport
+                    # The page answered for this item; the question is
+                    # kept for a failure nobody can explain yet.
+                    and verdict is None
+                    and coord.claim_prompt()
+                ):
                     # Hold the other lanes at the gate while the human
                     # decides. Without this, an answer of "skip the rest"
                     # would arrive after the remaining lanes had already
@@ -2048,6 +2073,14 @@ async def _drive_handler(
             "failed": counter.failed,
         })
         await ctx.close()
+
+
+def _page_verdict(handler):
+    """The conclusive page observation behind the handler's last
+    failure, or None. `getattr` because test doubles and the Connector
+    handler predate the attribute."""
+    obs = getattr(handler, "last_observation", None)
+    return obs if obs is not None and getattr(obs, "conclusive", False) else None
 
 
 def _prompt_on_first_failure(

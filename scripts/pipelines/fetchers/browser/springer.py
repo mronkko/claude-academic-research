@@ -69,6 +69,13 @@ class SpringerHandler(PageNavigationHandler):
     concurrency = 1
     delay_s = 1.5
 
+    # Seen 2026-09-24/25 at JYU on three chapters. The same sentence is
+    # what a signed-out visitor sees, so it counts only beside the
+    # footer's recognised-institution line, whose business-partner ids
+    # read "University of Jyväskylä (2000617297)".
+    denial_markers = (r"This is a preview of subscription content",)
+    recognised_markers = (r"\(\d{10}\)",)
+
     def _setup_url_for(self, doi: str) -> str:
         """Book DOIs (ISBN-prefixed suffix) live at /chapter/ or /book/.
 

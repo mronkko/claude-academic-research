@@ -31,6 +31,12 @@ class EmeraldHandler(PageNavigationHandler):
     concurrency = 1
     delay_s = 1.0
 
+    # Seen 2026-09-24 at JYU (10.1108/eb044884, eb055113), on the
+    # abstract page an unlicensed PDF URL redirects to. Signed-out
+    # visitors see it too, hence the institution-menu marker.
+    denial_markers = (r"You do not currently have access to this content",)
+    recognised_markers = (r"Sign in as different institution",)
+
     setup_hint = (
         "Wait until you see the article landing page (abstract, journal\n"
         "masthead, 'Download as PDF' button). Solve any Cloudflare\n"
