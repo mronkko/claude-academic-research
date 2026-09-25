@@ -537,3 +537,30 @@ def test_setup_falls_back_to_doi_org_when_the_setup_page_is_a_404(
     assert visited == ["https://example.com/10.9998/x.pdf",
                        "https://doi.org/10.9998/x"]
     assert "HTTP 404" in capsys.readouterr().out
+
+
+def test_setup_does_not_blame_the_plugin_when_the_doi_itself_is_gone(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Live 2026-09-25, Wiley 10.1111/j.1440-1835.2005.tb00363.x: the
+    handler's URL was a 404 and so was the DOI's own landing page. The
+    run called that "a plugin bug, not an access problem" — the one
+    reading the evidence rules out."""
+
+    class _Page:
+        url = ""
+
+        async def goto(self, url, **kw):
+            del url, kw
+            resp = MagicMock()
+            resp.status = 404
+            return resp
+
+    monkeypatch.setattr("fetchers.browser.base._read_user_line",
+                        lambda prompt: "y")
+    h = _NavHandler()
+    h.clearance_timeout_s = 0
+    asyncio.run(h.setup(_Page(), "10.9998/x"))
+    out = capsys.readouterr().out
+    assert "plugin bug" not in out
+    assert "does not serve this DOI" in out

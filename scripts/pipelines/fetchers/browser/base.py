@@ -865,18 +865,34 @@ class PublisherHandler(ABC):
                 # makes them diagnose our URL, so say what happened and
                 # show them the DOI's real landing page instead.
                 fallback = f"https://doi.org/{first_doi}"
-                print(
-                    f"  HTTP {status} at {url} — the handler built a URL "
-                    f"this publisher does not serve for this DOI (a plugin "
-                    f"bug, not an access problem). Opening {fallback} "
-                    f"instead.",
-                    flush=True,
-                )
+                print(f"  HTTP {status} at {url} — opening {fallback} "
+                      f"instead.", flush=True)
+                fallback_resp = None
                 try:
-                    await page.goto(fallback, wait_until="domcontentloaded",
-                                    timeout=20000)
+                    fallback_resp = await page.goto(
+                        fallback, wait_until="domcontentloaded", timeout=20000,
+                    )
                 except Exception:
                     pass
+                # Which side is wrong depends on the DOI's own landing
+                # page. Wiley 10.1111/j.1440-1835.2005.tb00363.x was a
+                # 404 at doi.org too, and calling that a plugin bug sent
+                # the report to the wrong place.
+                if gone_status(fallback_resp) is not None:
+                    print(
+                        "  The DOI's own landing page is gone as well: the "
+                        "publisher does not serve this DOI at all. That is "
+                        "about this item, not about your access to the "
+                        "others.",
+                        flush=True,
+                    )
+                elif fallback_resp is not None:
+                    print(
+                        "  The DOI's landing page loads, so the handler "
+                        "built a URL this publisher does not use for it (a "
+                        "plugin bug, not an access problem).",
+                        flush=True,
+                    )
             if await self._cleared_without_asking(page):
                 return "proceed"
         self._print_setup_banner()
