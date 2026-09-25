@@ -180,6 +180,16 @@ DEFAULT_OUT_OF_SCOPE_TYPES = frozenset({
 })
 
 
+def out_of_scope_types(admitted) -> frozenset[str]:
+    """`DEFAULT_OUT_OF_SCOPE_TYPES` minus the item types a run admitted.
+
+    A run that opted book chapters in (`enrich_pdfs --item-types`) must
+    not log a missed chapter as OUT_OF_SCOPE, which reads as "exclude,
+    do not retry".
+    """
+    return DEFAULT_OUT_OF_SCOPE_TYPES - frozenset(admitted or ())
+
+
 def classify_failure(
     item_type: str = "",
     http_status: int | None = None,
@@ -255,6 +265,7 @@ def log_failure(
     cause: FailureCause | None = None,
     untried_browser_handler: str = "",
     browser_pass_untried: bool = False,
+    scope_types: frozenset[str] | None = None,
 ) -> FailureCause:
     """Append a row to `pdf_fetch_log.csv` describing why this fetch failed.
 
@@ -269,6 +280,7 @@ def log_failure(
         cause = classify_failure(
             item_type=item_type,
             http_status=http_status,
+            scope_types=scope_types,
             untried_browser_handler=untried_browser_handler,
             browser_pass_untried=browser_pass_untried,
         )

@@ -891,6 +891,14 @@ def _carrying_prior_attempt(
     return {**item, PRIOR_ATTEMPT_KEY: note}
 
 
+def _scope_types(args: argparse.Namespace) -> frozenset[str]:
+    """Out-of-scope item types for this run: the defaults minus
+    whatever `--item-types` admitted."""
+    return pdf_fetch_log.out_of_scope_types(
+        getattr(args, "item_types", ("journalArticle",)),
+    )
+
+
 def _log_browser_failure(
     args: argparse.Namespace,
     item: dict,
@@ -927,6 +935,7 @@ def _log_browser_failure(
             source=source,
             publisher=publisher,
             cause=cause,
+            scope_types=_scope_types(args),
         )
     except Exception as e:  # noqa: BLE001
         print(f"    [pdf_fetch_log write failed: {e}]", flush=True)
@@ -3974,6 +3983,7 @@ def _try_cascade(
     cache_dir: str,
     *,
     failure_log_path: str | None = None,
+    scope_types: frozenset[str] | None = None,
 ) -> tuple[Path, str] | None:
     """Try each PDF fetcher in priority order. Returns (path, source_name)
     on the first hit.
@@ -4045,7 +4055,9 @@ def _try_cascade(
         # covers the publisher. Anything less specific would relabel a
         # recoverable item as a transport fault.
         cause: pdf_fetch_log.FailureCause | None = None
-        if item_type in pdf_fetch_log.DEFAULT_OUT_OF_SCOPE_TYPES:
+        out_of_scope = (pdf_fetch_log.DEFAULT_OUT_OF_SCOPE_TYPES
+                        if scope_types is None else scope_types)
+        if item_type in out_of_scope:
             cause = pdf_fetch_log.FailureCause.OUT_OF_SCOPE
         elif raised_exception and last_status is None and not browser_handler:
             cause = pdf_fetch_log.FailureCause.NETWORK_ERROR
@@ -4061,6 +4073,7 @@ def _try_cascade(
                     publisher=publisher,
                     http_status=last_status,
                     cause=cause,
+                    scope_types=scope_types,
                     untried_browser_handler=browser_handler,
                     # This is the API cascade, and `main()` rejects
                     # --sources that mix the browser pass into it, so by
@@ -4135,6 +4148,7 @@ def _run_api_cascade(
             pool.submit(
                 _try_cascade, it, sources, args.cache_dir,
                 failure_log_path=args.failure_log_csv,
+                scope_types=_scope_types(args),
             ): it
             for it in to_process
         }
@@ -4381,6 +4395,7 @@ def _print_run_report(
 
 def select_requested_articles(
     fetched: list[dict], requested: set[str],
+    item_types: tuple[str, ...] = ("journalArticle",),
 ) -> tuple[list[dict], int]:
     """Split a `--filter-keys-file` fetch into articles and skipped keys.
 
@@ -4396,13 +4411,29 @@ def select_requested_articles(
     Only a key the caller actually asked for can be a scope decision, so
     the count is taken over those; the children are not an answer about
     anything and are ignored.
+
+    `item_types` is the run's `--item-types`: journal articles unless
+    the caller admitted more.
     """
     own = [it for it in fetched if it.get("key") in requested]
     articles = [
         it for it in own
-        if it.get("data", {}).get("itemType") == "journalArticle"
+        if it.get("data", {}).get("itemType") in item_types
     ]
     return articles, len(own) - len(articles)
+
+
+def _item_types_arg(raw: str) -> tuple[str, ...]:
+    """`--item-types` value: comma-separated Zotero item types."""
+    known = zotero_io.ZoteroClient.ABSTRACTABLE_ITEM_TYPES
+    types = tuple(t.strip() for t in raw.split(",") if t.strip())
+    unknown = [t for t in types if t not in known]
+    if not types or unknown:
+        raise argparse.ArgumentTypeError(
+            f"unknown item type(s) {', '.join(unknown) or '(none given)'}; "
+            f"choose from {', '.join(known)}"
+        )
+    return types
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -4476,6 +4507,14 @@ def _build_parser() -> argparse.ArgumentParser:
              "to restrict processing to.",
     )
     zotero_io.add_library_args(parser)
+    parser.add_argument(
+        "--item-types", type=_item_types_arg, default=("journalArticle",),
+        metavar="TYPES",
+        help="Comma-separated Zotero item types to fetch PDFs for "
+             "(default: journalArticle). E.g. "
+             "journalArticle,bookSection,book admits chapters and books, "
+             "and stops the failure log calling a missed one OUT_OF_SCOPE.",
+    )
     parser.add_argument(
         "--on-first-failure", default="",
         choices=("", "keep", "skip", "always_skip"),
@@ -4806,15 +4845,20 @@ def main() -> int:
             target = {line.strip() for line in f if line.strip()}
         print(f"Fetching {len(target)} Zotero items by key...", end=" ", flush=True)
         fetched = zot.items_by_keys(target)
-        all_items, not_articles = select_requested_articles(fetched, target)
-        print(f"{len(all_items)} journal articles.", flush=True)
+        all_items, not_articles = select_requested_articles(
+            fetched, target, args.item_types,
+        )
+        print(f"{len(all_items)} items of type {', '.join(args.item_types)}.",
+              flush=True)
         if not_articles:
             # Distinguished from "key not found": a book chapter that was
             # asked for and skipped is a scope decision, not a typo, and
             # reporting both as "matched no journal article" hid which.
             print(
-                f"  NOTE: {not_articles} key(s) resolved to non-journalArticle "
-                f"items and were skipped.",
+                f"  NOTE: {not_articles} key(s) resolved to item types "
+                f"outside --item-types ({', '.join(args.item_types)}) and "
+                f"were skipped. To include chapters and books, pass "
+                f"--item-types journalArticle,bookSection,book.",
                 flush=True,
             )
         missing = target - {it["key"] for it in fetched}
@@ -4829,8 +4873,12 @@ def main() -> int:
             )
     else:
         print("Fetching Zotero items...", end=" ", flush=True)
-        all_items = zot.journal_articles()
-        print(f"{len(all_items)} journal articles.", flush=True)
+        if tuple(args.item_types) == ("journalArticle",):
+            all_items = zot.journal_articles()
+        else:
+            all_items = zot.abstractable_items(args.item_types)
+        print(f"{len(all_items)} items of type {', '.join(args.item_types)}.",
+              flush=True)
 
     # Everything this invocation is accountable for — the report is
     # scoped to these so a filtered run doesn't dump the whole log.
