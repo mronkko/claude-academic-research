@@ -2648,6 +2648,10 @@ async def _drive_connector(
                           f"({(stats or {}).get('moved', 0)} moved from "
                           f"{row['new_key']}).", flush=True)
                     _log_connector_row(item, "attached_via_connector")
+                elif outcome == "refused":
+                    # The save was another work (a supplement under the
+                    # article's title). No verdict about the article.
+                    _log_connector_row(item, "connector_save_unmatched")
                 elif outcome == "no_pdf":
                     print(f"  ⤷ {row['keeper']}: PARTIAL — the save "
                           f"{row['new_key']} held no PDF.", flush=True)
@@ -3832,13 +3836,25 @@ def _run_browser_in_process(
                 cause=pdf_fetch_log.FailureCause.NO_PDF_OFFERED,
             )
 
+        def _on_refused(row: dict) -> None:
+            # The save was another work; nothing was learned about this
+            # article, so no failure row — and not a done status, so the
+            # keeper is tried again.
+            log_writer.writerow({
+                "run_date": run_date, "item_key": row["keeper"],
+                "doi": row.get("doi", ""), "title": "",
+                "status": "connector_save_unmatched",
+                "source": connector_handler.name,
+                "detail": f"queued save {row['new_key']} is another work",
+            })
+
         def _settle(wait_s: float) -> None:
             if pending.rows():
                 print(f"\n  Merging {len(pending.rows())} queued Connector "
                       f"save(s) that were waiting for cloud sync…", flush=True)
                 settle_pending_merges(
                     zot, pending, wait_s=wait_s, on_merged=_on_merged,
-                    on_given_up=_on_given_up,
+                    on_given_up=_on_given_up, on_refused=_on_refused,
                     keeper_has_pdf=lambda keeper: _keeper_has_pdf(zot, keeper),
                     merge=lambda keeper, new: connector_handler.merge_saved_item(
                         zot, keeper, new,

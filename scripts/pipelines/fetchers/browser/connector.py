@@ -40,6 +40,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+import doi_utils
+
 from .base import (
     Counter,
     PublisherHandler,
@@ -405,6 +407,7 @@ PENDING_GRACE_LOCAL_S = 30 * 60
 def settle_pending_merges(
     zot, pending: PendingMerges, *, merge, wait_s: float, on_merged,
     on_given_up=None, sweep_every_s: float = 15.0, keeper_has_pdf=None,
+    on_refused=None,
 ) -> None:
     """Merge every queued pair whose new item has reached the merge's
     surface (`_merge_surface`): Desktop when local writes are on, else
@@ -421,6 +424,10 @@ def settle_pending_merges(
     the pass all that time as "a saved copy is already queued", with no
     per-pair line to say why (WKC6FD4U and G5S5R2L7, 2026-09-23). The
     empty save is trashed; a save that holds any PDF child is kept.
+
+    A merge the library refuses (`zotero_io.MergeRefused`, a DOI
+    mismatch) leaves the queue and is handed to `on_refused(row)`; the
+    saved record stays where it is. Retrying cannot change the answer.
     """
     deadline = time.monotonic() + wait_s
     first = True
@@ -455,6 +462,12 @@ def settle_pending_merges(
             try:
                 stats = merge(row["keeper"], row["new_key"])
             except Exception as e:  # noqa: BLE001
+                if _is_refusal(e):
+                    pending.remove(row["new_key"])
+                    _say_refused(row, e)
+                    if on_refused is not None:
+                        on_refused(row)
+                    continue
                 print(f"  Queued merge {row['new_key']} → {row['keeper']} "
                       f"failed: {str(e)[:100]}; left queued.", flush=True)
                 continue
@@ -464,6 +477,22 @@ def settle_pending_merges(
             left = int(deadline - time.monotonic())
             print(f"  {len(pending.rows())} queued merge(s) still waiting for "
                   f"cloud sync (~{left}s left)…", flush=True)
+
+
+def _is_refusal(exc: BaseException) -> bool:
+    """True for `zotero_io.MergeRefused`: a permanent no, not a hiccup."""
+    try:
+        from zotero_io import MergeRefused
+    except ImportError:  # pragma: no cover — always importable in-pipeline
+        return False
+    return isinstance(exc, MergeRefused)
+
+
+def _say_refused(row: dict, exc: BaseException) -> None:
+    print(f"  Queued save {row['new_key']} is not {row['keeper']}'s article "
+          f"({str(exc)[:90]}). Dropped from the queue and left in the "
+          f"library for you to inspect; {row['keeper']} will be tried "
+          f"again.", flush=True)
 
 
 def _trash_if_pdfless(zot, new_key: str) -> str:
@@ -533,7 +562,7 @@ class BackgroundMerger:
         self._pool = ThreadPoolExecutor(max_workers=1,
                                         thread_name_prefix="connector-merge")
         self._futures: list = []
-        self.counts = {"merged": 0, "no_pdf": 0, "pending": 0}
+        self.counts = {"merged": 0, "no_pdf": 0, "pending": 0, "refused": 0}
 
     def submit(self, row: dict) -> None:
         self._futures.append(self._pool.submit(self._run, row))
@@ -572,6 +601,11 @@ class BackgroundMerger:
         try:
             stats = self.merge(keeper, new_key)
         except Exception as e:  # noqa: BLE001 — MergeNotVerified included
+            if _is_refusal(e):
+                self.pending.remove(new_key)
+                _say_refused(row, e)
+                self._finish(row, "refused", None)
+                return
             print(f"  ⤷ {keeper}: background merge of {new_key} failed "
                   f"({str(e)[:80]}); left queued.", flush=True)
             self._finish(row, "pending", None)
@@ -1652,7 +1686,7 @@ def _poll_for_new_item(
     `hint_every_s` seconds a reminder is printed so a quiet terminal
     doesn't look hung.
     """
-    needle = doi.strip().lower()
+    needle = doi_utils.doi_cache_key(doi.strip())
     want_title = _normalise_title(title)
     # A few seconds of slack: the local clock and Zotero's dateAdded
     # (UTC, second resolution) need not agree exactly, and losing the
@@ -1681,11 +1715,16 @@ def _poll_for_new_item(
             data = it.get("data", {})
             if data.get("itemType") in ("attachment", "note", "annotation"):
                 continue
-            it_doi = (data.get("DOI") or "").strip().lower()
+            it_doi = doi_utils.doi_cache_key((data.get("DOI") or "").strip())
             if needle and it_doi == needle:
                 return it["key"]
             if (
                 want_title
+                # A record that names another DOI is another work, title
+                # or not: a T&F article's figshare supplement carries
+                # the article's title (10.1080/0142159x.2022.2028751,
+                # 2026-09-25) and was reported as its save.
+                and not it_doi
                 and (data.get("dateAdded") or "") >= cutoff
                 and _normalise_title(data.get("title")) == want_title
             ):

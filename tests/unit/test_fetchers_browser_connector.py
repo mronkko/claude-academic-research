@@ -476,6 +476,36 @@ def test_poll_title_match_ignores_items_predating_the_poll() -> None:
     ) is None
 
 
+def test_poll_title_match_refuses_a_record_with_another_doi() -> None:
+    """Live 2026-09-25, 10.1080/0142159x.2022.2028751: the Connector
+    saved the article's figshare supplement (10.6084/m9.figshare.
+    19104646.v1, an 8-page reviewer appendix) under the article's title.
+    The title path took it and the item was reported SAVED; only the
+    merge's DOI check stopped it. The title path is for records with
+    *no* DOI — one that names a different DOI is a different work."""
+    zot = MagicMock()
+    zot.recent_items.return_value = [
+        {"key": "SUPP", "data": {
+            "DOI": "10.6084/m9.figshare.19104646.v1",
+            "title": "Scientific Specialties", "dateAdded": _recent()}},
+    ]
+    assert _poll_for_new_item(
+        zot, "10.1080/0142159x.2022.2028751", "KEEPER", timeout_s=0.2,
+        title="Scientific Specialties",
+    ) is None
+
+
+def test_poll_matches_a_doi_written_as_a_url() -> None:
+    zot = MagicMock()
+    zot.recent_items.return_value = [
+        {"key": "NEW", "data": {"DOI": "https://doi.org/10.1/X",
+                                "title": "T", "dateAdded": _recent()}},
+    ]
+    assert _poll_for_new_item(
+        zot, "10.1/x", "KEEPER", timeout_s=0.2, title="Another title",
+    ) == "NEW"
+
+
 def test_poll_doi_match_is_not_subject_to_the_recency_window() -> None:
     """A DOI identifies the article on its own; narrowing that path
     would change behaviour that was already correct."""

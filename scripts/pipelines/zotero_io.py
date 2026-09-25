@@ -284,6 +284,16 @@ def parse_slr_coding_note(note_html: str) -> dict | None:
         return None
 
 
+class MergeRefused(ValueError):
+    """`merge_duplicate_item` will not merge these two items, ever.
+
+    Its own type so a caller can tell this permanent answer from a
+    transient failure: a queued Connector merge that retried a DOI
+    mismatch on every sweep kept its keeper out of the pass indefinitely
+    (a figshare supplement saved for its article, 2026-09-25).
+    """
+
+
 class VersionConflictError(RuntimeError):
     """Raised by update_abstract when pyzotero returns HTTP 412.
 
@@ -2065,7 +2075,7 @@ class ZoteroClient:
         target_doi = (target_data.get("DOI") or "").strip().lower()
         dup_doi = (dup_data.get("DOI") or "").strip().lower()
         if target_doi and dup_doi and target_doi != dup_doi:
-            raise ValueError(
+            raise MergeRefused(
                 f"Refusing to merge: target DOI {target_doi!r} != "
                 f"duplicate DOI {dup_doi!r}",
             )

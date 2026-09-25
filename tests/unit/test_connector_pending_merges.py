@@ -480,3 +480,50 @@ def test_an_empty_save_is_retired_when_its_keeper_has_a_pdf(tmp_path) -> None:
         keeper_has_pdf=lambda keeper: True,
     )
     assert PendingMerges(tmp_path).new_keys() == {"UPLOADING"}
+
+
+def test_a_refused_merge_leaves_the_queue_and_the_record(
+    tmp_path, monkeypatch,
+) -> None:
+    """Live 2026-09-25: a figshare supplement (JX39M6HR) was queued for
+    the article GA3V2ET7, and the merge refused it on DOI mismatch —
+    correctly, and on every sweep after. Left queued, the keeper stays
+    barred from the pass as "a saved copy is already queued". The
+    refusal is permanent; the record holds a real PDF of another work,
+    so it is left in place rather than trashed."""
+    from zotero_io import MergeRefused
+
+    q = PendingMerges(tmp_path)
+    q.add(keeper="GA3V2ET7", new_key="JX39M6HR", doi="10.1080/x")
+    zot = MagicMock()
+    zot.cloud.item.return_value = {"key": "JX39M6HR"}
+    zot.cloud.children.return_value = [_pdf_child()]
+    from fetchers.browser import connector
+    monkeypatch.setattr(connector, "_pdf_child_settled", lambda zot, key: True)
+    refused = []
+    settle_pending_merges(
+        zot, q, wait_s=0, on_merged=lambda *a: None,
+        merge=MagicMock(side_effect=MergeRefused("DOI mismatch")),
+        on_refused=refused.append,
+    )
+    assert PendingMerges(tmp_path).rows() == []
+    assert [r["new_key"] for r in refused] == ["JX39M6HR"]
+    zot.trash_item.assert_not_called()
+
+
+def test_a_refused_background_merge_leaves_the_queue(tmp_path, monkeypatch) -> None:
+    from zotero_io import MergeRefused
+
+    m, q, done = _bg(tmp_path, monkeypatch,
+                     merge=MagicMock(side_effect=MergeRefused("DOI mismatch")))
+    _submit(m, q)
+    m.drain()
+    assert done == [("N1", "refused")]
+    assert PendingMerges(tmp_path).rows() == []
+
+
+def test_merge_refusal_is_its_own_type() -> None:
+    """Callers tell a permanent refusal from a transient failure by type;
+    ValueError kept as the base so existing handlers still catch it."""
+    from zotero_io import MergeRefused
+    assert issubclass(MergeRefused, ValueError)
