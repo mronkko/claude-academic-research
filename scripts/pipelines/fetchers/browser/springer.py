@@ -42,9 +42,15 @@ the two cannot drift apart on which DOIs count as Springer.
 
 from __future__ import annotations
 
+import re
+
 from fetchers.springer import _SPRINGER_PREFIXES
 
 from .base import PageNavigationHandler
+
+#: An ISBN-13 at the start of a DOI suffix, hyphenated or not: Springer
+#: writes `978-3-030-02053-8`, Palgrave (`10.1057`) `9780230522763`.
+_BOOK_SUFFIX = re.compile(r"^97[89]-?\d")
 
 
 class SpringerHandler(PageNavigationHandler):
@@ -72,7 +78,7 @@ class SpringerHandler(PageNavigationHandler):
         serves chapters too.
         """
         suffix = doi.partition("/")[2]
-        if suffix.startswith("978-"):
+        if _BOOK_SUFFIX.match(suffix):
             kind = "chapter" if "_" in suffix else "book"
             return f"https://link.springer.com/{kind}/{doi}"
         return super()._setup_url_for(doi)

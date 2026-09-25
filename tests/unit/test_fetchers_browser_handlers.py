@@ -335,3 +335,11 @@ def test_springer_setup_url_sends_book_dois_to_chapter_or_book() -> None:
     assert h._setup_url_for("10.1007/s10551-020-04567-8") == (
         "https://link.springer.com/article/10.1007/s10551-020-04567-8"
     )
+    # Palgrave (10.1057) writes the ISBN without hyphens. Live 2026-09-25:
+    # /article/ answered 404 for this chapter at JYU.
+    assert h._setup_url_for("10.1057/9780230522763_2") == (
+        "https://link.springer.com/chapter/10.1057/9780230522763_2"
+    )
+    assert h._setup_url_for("10.1057/9780230522763") == (
+        "https://link.springer.com/book/10.1057/9780230522763"
+    )
