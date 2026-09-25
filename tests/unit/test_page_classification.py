@@ -32,6 +32,7 @@ from fetchers.browser import (
 from fetchers.browser.base import (
     PAGE_GONE,
     PAGE_NO_ENTITLEMENT,
+    PAGE_NO_PDF,
     PAGE_UNKNOWN,
     PageObservation,
     classify_page,
@@ -110,16 +111,20 @@ ENTITLED_CHROME = (
 
 class _Page:
     def __init__(self, text: str, *, url: str = "https://pub/x",
-                 title: str = "T") -> None:
+                 title: str = "T", selectors: tuple[str, ...] = ()) -> None:
         self._text = text
         self.url = url
         self._title = title
+        #: CSS selectors present on the page.
+        self._selectors = selectors
 
     async def title(self) -> str:
         return self._title
 
-    async def evaluate(self, _js: str) -> str:
-        return self._text
+    async def evaluate(self, _js: str, arg=None):
+        if arg is None:
+            return self._text
+        return arg in self._selectors
 
 
 def _resp(status: int) -> MagicMock:
@@ -128,11 +133,14 @@ def _resp(status: int) -> MagicMock:
     return r
 
 
-def _classify(handler, text: str, resp=None) -> PageObservation:
+def _classify(handler, text: str, resp=None, *,
+              selectors: tuple[str, ...] = ()) -> PageObservation:
     return asyncio.run(classify_page(
-        _Page(text), resp,
+        _Page(text, selectors=selectors), resp,
         denial_markers=handler.denial_markers,
         recognised_markers=handler.recognised_markers,
+        pdf_control_selector=handler.pdf_control_selector,
+        pdf_link_selector=handler.pdf_offered_selector,
     ))
 
 
@@ -310,3 +318,70 @@ def test_a_404_on_the_handlers_own_pdf_url_is_not_a_verdict(tmp_path) -> None:
         counter=Counter(), total=1, t_start=0.0,
     ))
     assert h.last_observation is None
+
+
+# Emerald, JYU, 2026-09-25. 10.1108/edi-07-2015-0056 is an HTML-only
+# book review: recognised, readable, and no PDF. 10.1108/edi-01-2021-0021
+# is a research article with one. Both render the toolbar's PDF slot;
+# only the article has the anchor in it.
+EMERALD_READABLE = (
+    "University of Jyvaskyla FinELib Consortia Sign in as different "
+    "institution Book Review Twenty-four authors from institutions "
+    "located in 14 countries"
+)
+EMERALD_TOOLBAR = EmeraldHandler.pdf_control_selector
+EMERALD_ANCHOR = EmeraldHandler.pdf_offered_selector
+
+
+def test_a_readable_page_with_no_pdf_says_so() -> None:
+    obs = _classify(EmeraldHandler(), EMERALD_READABLE,
+                    selectors=(EMERALD_TOOLBAR,))
+    assert obs.klass == PAGE_NO_PDF
+    assert obs.conclusive
+
+
+def test_a_readable_page_with_its_pdf_link_is_not_a_verdict() -> None:
+    obs = _classify(EmeraldHandler(), EMERALD_READABLE,
+                    selectors=(EMERALD_TOOLBAR, EMERALD_ANCHOR))
+    assert obs.klass == PAGE_UNKNOWN
+
+
+def test_a_missing_link_counts_only_once_the_toolbar_rendered() -> None:
+    """Absence is evidence only on a page that got as far as drawing
+    its PDF control; Emerald's home page (a bad redirect) draws none."""
+    obs = _classify(EmeraldHandler(), EMERALD_READABLE, selectors=())
+    assert obs.klass == PAGE_UNKNOWN
+
+
+def test_a_missing_link_needs_a_recognised_institution() -> None:
+    obs = _classify(EmeraldHandler(), "Book Review Sign In",
+                    selectors=(EMERALD_TOOLBAR,))
+    assert obs.klass == PAGE_UNKNOWN
+
+
+def test_a_denial_outranks_a_missing_link() -> None:
+    obs = _classify(EmeraldHandler(), EMERALD_DENIED,
+                    selectors=(EMERALD_TOOLBAR,))
+    assert obs.klass == PAGE_NO_ENTITLEMENT
+
+
+def test_a_readable_page_without_a_pdf_is_logged_no_pdf_offered() -> None:
+    """Nobody refused access, so not ACCESS_BLOCKED; the text is right
+    there as HTML, so not UNAVAILABLE."""
+    import enrich_pdfs
+    import pdf_fetch_log
+
+    h = EmeraldHandler()
+    h.last_observation = PageObservation(
+        url="u", title="t", klass=PAGE_NO_PDF, phrase="p",
+    )
+    h.last_verdict = "no_pdf_offered: p"
+    assert enrich_pdfs._browser_failure_cause(h, False) == (
+        pdf_fetch_log.FailureCause.NO_PDF_OFFERED
+    )
+    h.last_observation = PageObservation(
+        url="u", title="t", klass=PAGE_NO_ENTITLEMENT, phrase="p",
+    )
+    assert enrich_pdfs._browser_failure_cause(h, False) == (
+        pdf_fetch_log.FailureCause.ACCESS_BLOCKED
+    )

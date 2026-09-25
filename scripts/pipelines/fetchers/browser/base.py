@@ -528,10 +528,17 @@ async def wait_for_clearance(
 #   session (which a sign-in would fix) reads as a verdict.
 #
 # There is deliberately no "PDF link present" class: text cannot tell
-# it apart, for the reason just given.
+# it apart, for the reason just given. Its converse, "readable but no
+# PDF offered", is a class, and rests on structure rather than text: the
+# page drew its PDF control (`pdf_control_selector`) with no link in it
+# (`pdf_link_selector`), to a recognised institution, and said no denial.
+# Emerald's HTML-only book reviews (10.1108/edi-07-2015-0056) are the
+# case. An absent link on a page that drew no control proves nothing —
+# it may not have rendered, or not be the article at all.
 
 PAGE_GONE = "gone"
 PAGE_NO_ENTITLEMENT = "no_entitlement"
+PAGE_NO_PDF = "no_pdf_offered"
 PAGE_UNKNOWN = "unknown"
 
 #: File, under the diagnostics dir, that collects every conclusive page
@@ -549,7 +556,7 @@ class PageObservation:
 
     @property
     def conclusive(self) -> bool:
-        return self.klass in (PAGE_GONE, PAGE_NO_ENTITLEMENT)
+        return self.klass in (PAGE_GONE, PAGE_NO_ENTITLEMENT, PAGE_NO_PDF)
 
     def describe(self) -> str:
         return f'{self.klass}: "{self.phrase}" at {self.url}'
@@ -561,6 +568,8 @@ async def classify_page(
     *,
     denial_markers: tuple[str, ...] = (),
     recognised_markers: tuple[str, ...] = (),
+    pdf_control_selector: str = "",
+    pdf_link_selector: str = "",
 ) -> PageObservation:
     """Classify a publisher *landing* page. Never raises.
 
@@ -586,7 +595,7 @@ async def classify_page(
         pass
     if (status := gone_status(resp)) is not None:
         return PageObservation(url, title, PAGE_GONE, f"HTTP {status}")
-    if not denial_markers:
+    if not denial_markers and not pdf_control_selector:
         return PageObservation(url, title)
     try:
         # Scripts dropped: a sentence in a JS template is not the page
@@ -601,16 +610,39 @@ async def classify_page(
     except Exception:  # noqa: BLE001
         return PageObservation(url, title)
     text = " ".join(str(text or "").split())
+    recognised = next(
+        (m.group(0) for r in recognised_markers
+         if (m := re.search(r, text, re.IGNORECASE))), "",
+    )
     for pattern in denial_markers:
         m = re.search(pattern, text, re.IGNORECASE)
         if not m:
             continue
-        if recognised_markers and not any(
-            re.search(r, text, re.IGNORECASE) for r in recognised_markers
-        ):
+        if recognised_markers and not recognised:
             return PageObservation(url, title)
         return PageObservation(url, title, PAGE_NO_ENTITLEMENT, m.group(0))
+    # Only with positive proof of recognition: signed out, a missing
+    # link is what an unlicensed page looks like too.
+    if pdf_control_selector and pdf_link_selector and recognised:
+        if (
+            await _has_selector(page, pdf_control_selector) is True
+            and await _has_selector(page, pdf_link_selector) is False
+        ):
+            return PageObservation(
+                url, title, PAGE_NO_PDF,
+                f"{recognised}; PDF control drawn, no PDF link in it",
+            )
     return PageObservation(url, title)
+
+
+async def _has_selector(page: Page, selector: str) -> bool | None:
+    """Whether `selector` matches in the DOM; None when it cannot tell."""
+    try:
+        return bool(await page.evaluate(
+            "(sel) => document.querySelector(sel) !== null", selector,
+        ))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def record_observation(
@@ -848,6 +880,11 @@ class PublisherHandler(ABC):
     #: for publishers whose denial sentence does not itself show that
     #: the institution was recognised.
     recognised_markers: tuple[str, ...] = ()
+    #: CSS for the slot a publisher draws its PDF control in, and for the
+    #: link inside it. Both set, plus a matching `recognised_markers`,
+    #: enables the "readable, no PDF offered" class — see `classify_page`.
+    pdf_control_selector: str = ""
+    pdf_offered_selector: str = ""
     #: The conclusive page behind the most recent failure, or None.
     #: Cleared by the driver before each item, like `last_error`.
     last_observation: PageObservation | None = None
@@ -939,6 +976,8 @@ class PublisherHandler(ABC):
             page, resp,
             denial_markers=self.denial_markers,
             recognised_markers=self.recognised_markers,
+            pdf_control_selector=self.pdf_control_selector,
+            pdf_link_selector=self.pdf_offered_selector,
         )
         if obs.conclusive:
             self.last_observation = obs

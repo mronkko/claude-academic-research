@@ -829,6 +829,11 @@ def _browser_failure_cause(
 
     if is_download_timeout(getattr(handler, "last_error", "")):
         return pdf_fetch_log.FailureCause.NETWORK_ERROR
+    obs = _page_verdict(handler)
+    if obs is not None and obs.klass == "no_pdf_offered":
+        # The page is readable and simply has no PDF (an HTML-only book
+        # review). Nobody refused access; the text is there as HTML.
+        return pdf_fetch_log.FailureCause.NO_PDF_OFFERED
     if getattr(handler, "last_verdict", ""):
         return pdf_fetch_log.FailureCause.ACCESS_BLOCKED
     # 4. **Everything else is ACCESS_BLOCKED, not UNAVAILABLE.** This

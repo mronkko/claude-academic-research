@@ -280,11 +280,11 @@ Springer, Emerald, T&F and OUP, copied from JYU no-access pages.
    `tests/unit/test_page_classification.py` (`ENTITLED`).
 2. ~~T&F and OUP have no markers~~ — done the same day, from those
    samples.
-3. **"Entitled, no PDF offered" has no class yet.** Emerald
-   10.1108/edi-07-2015-0056 is an HTML-only book review: accessible,
-   but with no PDF. `pdf_fetch_log.NO_PDF_OFFERED` exists for the
-   outcome, but the saved diagnostic landed on emerald.com's home page,
-   so there is no page text to derive a marker from.
+3. ~~"Entitled, no PDF offered" has no class~~ — done 2026-09-25 for
+   Emerald: the page drew its PDF control (`li.item-pdf`) with no link
+   in it (`a.article-pdfLink`), to a recognised institution, and no
+   denial. Logged NO_PDF_OFFERED. Other publishers need the same pair of
+   selectors from one readable no-PDF page and one with a PDF.
 4. **"PDF link present" is deliberately not a text class.** Sage's and
    Springer's no-access pages both contain "Download PDF" /
    "Download preview PDF". A positive class needs a selector verified on

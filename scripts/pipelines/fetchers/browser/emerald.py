@@ -36,6 +36,12 @@ class EmeraldHandler(PageNavigationHandler):
     # visitors see it too, hence the institution-menu marker.
     denial_markers = (r"You do not currently have access to this content",)
     recognised_markers = (r"Sign in as different institution",)
+    # Seen 2026-09-25 at JYU: both article pages draw the toolbar's PDF
+    # slot; only 10.1108/edi-01-2021-0021 (a research article) puts the
+    # link in it. 10.1108/edi-07-2015-0056, an HTML-only book review,
+    # leaves it empty.
+    pdf_control_selector = "li.item-pdf"
+    pdf_offered_selector = "a.article-pdfLink"
 
     setup_hint = (
         "Wait until you see the article landing page (abstract, journal\n"
