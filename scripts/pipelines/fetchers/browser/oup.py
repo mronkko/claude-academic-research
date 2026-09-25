@@ -24,3 +24,10 @@ class OupHandler(PdfLinkNavigationHandler):
     direct_access_domains = ("academic.oup.com", "oup.com")
     concurrency = 1
     delay_s = 1.0
+
+    # From JYU samples, 2026-09-25: 10.1093/cesifo/ifz020. The entitled
+    # 10.1093/esr/jcw006 lacks it, but carries "Available To Subscribers
+    # Only" and purchase boilerplate in its modals, so those are not
+    # markers. Signed-out visitors see this sentence too.
+    denial_markers = (r"You do not currently have access to this article",)
+    recognised_markers = (r"Signed in as",)

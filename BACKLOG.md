@@ -270,18 +270,16 @@ words) or a 404/410 on the landing page. A conclusive page fails *that
 item* fast, skips the deferred setup, the retry, and the first-failure
 prompt, and appends to `<cache>/diagnostics/page_observations.jsonl`.
 It never skips the publisher. Markers exist for Sage, Cambridge,
-Springer and Emerald, copied from JYU no-access pages.
+Springer, Emerald, T&F and OUP, copied from JYU no-access pages.
 
-1. **The markers are not yet checked against entitled pages.** Each one
-   is a full article-level sentence and none occurs in a script body,
-   but nobody has confirmed an entitled page lacks it. What that takes:
-   one saved entitled landing page per publisher (`page.content()` from
-   a live run), added as a negative case in
-   `tests/unit/test_page_classification.py`. The cost of a wrong match
-   is bounded to one item, logged ACCESS_BLOCKED with the matched words.
-2. **Taylor & Francis and OUP have no markers.** No no-access page was
-   saved for either, so those two still go through clearance, a retry
-   and the prompt (defect 4 of the 2026-09-25 report).
+1. ~~Markers unchecked against entitled pages~~ — done 2026-09-25:
+   the phase2 session saved one entitled and (for T&F, OUP) one
+   no-access landing page per publisher at JYU. All six entitled pages
+   classify `unknown`; every no-access page seen classifies
+   `no_entitlement`. Snippets are pinned in
+   `tests/unit/test_page_classification.py` (`ENTITLED`).
+2. ~~T&F and OUP have no markers~~ — done the same day, from those
+   samples.
 3. **"Entitled, no PDF offered" has no class yet.** Emerald
    10.1108/edi-07-2015-0056 is an HTML-only book review: accessible,
    but with no PDF. `pdf_fetch_log.NO_PDF_OFFERED` exists for the

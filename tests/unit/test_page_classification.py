@@ -23,8 +23,10 @@ import pytest
 from fetchers.browser import (
     CambridgeHandler,
     EmeraldHandler,
+    OupHandler,
     SageHandler,
     SpringerHandler,
+    TandfHandler,
     WileyHandler,
 )
 from fetchers.browser.base import (
@@ -66,6 +68,38 @@ EMERALD_SIGNED_OUT = (
     "Institutional Accounts Sign In This content is only available via "
     "PDF. You do not currently have access to this content."
 )
+TANDF_DENIED = (
+    "Access provided by Jyvaskylan Yliopisto Login | Register Cart Add to "
+    "Cart Log in Restore content access Purchase options Article PDF can be "
+    "downloaded EUR 48.00 Add to cart PDF download + Online access"
+)
+OUP_DENIED = (
+    "You do not currently have access to this article. Download all slides "
+    "Signed in as Institutional account This Feature Is Available To "
+    "Subscribers Only"
+)
+
+# Entitled landing pages, JYU, 2026-09-25 (captured by the phase2
+# session after the first markers shipped). Each is the chrome a naive
+# matcher trips on, beside what shows the page is readable.
+ENTITLED = {
+    "sage": (SageHandler(), "I have access via: University of Jyväskylä "
+             "you have access Purchase Access through your institution "
+             "Download PDF"),
+    "cambridge": (CambridgeHandler(), "Access through University of "
+                  "Jyväskylä View PDF Purchase"),
+    "springer": (SpringerHandler(), "Download PDF University of Jyväskylä "
+                 "(2000617297) Institutional subscriptions"),
+    "emerald": (EmeraldHandler(), "University of Jyvaskyla FinELib Consortia "
+                "Sign in as different institution References"),
+    "tandf": (TandfHandler(), "Access provided by Jyvaskylan Yliopisto Cart "
+              "Add to Cart Full access Download PDF Order Reprints"),
+    "oup": (OupHandler(), "Purchase This Feature Is Available To Subscribers "
+            "Only Sign In or Create an Account This PDF is available to "
+            "Subscribers Only View Article Abstract & Purchase Options For "
+            "full access to this pdf, sign in to an existing account"),
+}
+
 #: What an entitled page looks like to a naive "Get access" matcher:
 #: menus and banners carry it on pages we can read.
 ENTITLED_CHROME = (
@@ -107,6 +141,8 @@ def _classify(handler, text: str, resp=None) -> PageObservation:
     (CambridgeHandler(), CAMBRIDGE_DENIED),
     (SpringerHandler(), SPRINGER_DENIED),
     (EmeraldHandler(), EMERALD_DENIED),
+    (TandfHandler(), TANDF_DENIED),
+    (OupHandler(), OUP_DENIED),
 ])
 def test_denial_pages_classify_with_the_pages_own_words(handler, text) -> None:
     obs = _classify(handler, text)
@@ -121,6 +157,18 @@ def test_denial_pages_classify_with_the_pages_own_words(handler, text) -> None:
 ])
 def test_menu_chrome_on_an_entitled_page_is_not_a_denial(handler) -> None:
     assert _classify(handler, ENTITLED_CHROME).klass == PAGE_UNKNOWN
+
+
+@pytest.mark.parametrize("name", sorted(ENTITLED))
+def test_entitled_pages_are_not_denials(name) -> None:
+    handler, text = ENTITLED[name]
+    assert _classify(handler, text).klass == PAGE_UNKNOWN, name
+
+
+def test_tandf_without_the_access_banner_is_not_a_verdict() -> None:
+    assert _classify(
+        TandfHandler(), "Purchase options EUR 48.00 Add to cart",
+    ).klass == PAGE_UNKNOWN
 
 
 @pytest.mark.parametrize("handler,text", [

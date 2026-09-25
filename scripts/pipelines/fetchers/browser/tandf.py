@@ -32,6 +32,16 @@ class TandfHandler(PageNavigationHandler):
     concurrency = 1
     delay_s = 1.0
 
+    # From JYU samples, 2026-09-25: 10.1080/10852352.2018.1470423 shows
+    # "EUR 48.00 Add to cart" beside "Access provided by Jyvaskylan
+    # Yliopisto"; the entitled 10.1080/09585192.2010.516595 shows the
+    # same banner and no price. The word "purchase" is chrome on both,
+    # so the rule is on the priced cart widget, not the word.
+    denial_markers = (
+        r"(?:EUR|USD|GBP|€|£|\$)\s?\d[\d.,]*\s+Add to cart",
+    )
+    recognised_markers = (r"Access provided by",)
+
     def matches_doi(self, doi: str) -> bool:
         """Not book DOIs: Routledge chapters (`10.4324/9781315224350-6`)
         live on taylorfrancis.com, and /doi/pdf/ on tandfonline.com is a
