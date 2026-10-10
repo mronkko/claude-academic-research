@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-12-03
 checked: 2026-06-06
 orm_works_count: 1
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Rory Eckardt — SUNY Binghamton, USA
@@ -30,6 +30,6 @@ Strategic-HRM and human-capital scholar with a methodological line in multilevel
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2020 — Multilevel Methods and Statistics: The Next Frontier — _Social Capital and Networks_
+- 2020 — Multilevel Methods and Statistics: The Next Frontier — _Statistical Methods and Bayesian Inference_

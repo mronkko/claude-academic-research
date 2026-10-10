@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-04-01
 checked: 2026-06-06
 orm_works_count: 4
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Ernest O'Boyle — Indiana University Bloomington, USA
@@ -31,9 +31,9 @@ Quantitative methodologist focused on meta-analysis, multiverse/specification an
 
 ## ORM publications
 
-4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2022 — Assessment of Path Model Fit: Evidence of Effectiveness and Recommendations for use of the RMSEA-P — _Evaluation and Performance Assessment_
+- 2022 — Assessment of Path Model Fit: Evidence of Effectiveness and Recommendations for use of the RMSEA-P — _Psychometric Methodologies and Testing_
 - 2020 — Recommendations for Reviewing Meta-Analyses in Organizational Research — _Meta-analysis and systematic reviews_
-- 2017 — Condition 9 and 10 Tests of Model Confirmation: A Review of James, Mulaik, and Brett (1982) and Contemporary Alternatives — _Technology Adoption and User Behaviour_
-- 2010 — The Myth of Global Fit Indices and Alternatives for Assessing Latent Variable Relations — _Accounting and Organizational Management_
+- 2017 — Condition 9 and 10 Tests of Model Confirmation: A Review of James, Mulaik, and Brett (1982) and Contemporary Alternatives — _Psychometric Methodologies and Testing_
+- 2010 — The Myth of Global Fit Indices and Alternatives for Assessing Latent Variable Relations — _Psychometric Methodologies and Testing_

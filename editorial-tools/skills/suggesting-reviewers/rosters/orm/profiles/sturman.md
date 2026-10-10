@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-11-15
 checked: 2026-06-06
 orm_works_count: 6
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Michael C. Sturman — Rutgers University, USA
@@ -31,11 +31,11 @@ Senior HR/OB scholar with a strong, ongoing methodological program: common metho
 
 ## ORM publications
 
-6 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+6 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2023 — Real Research with Fake Data: A Tutorial on Conducting Computer Simulation for Research and Teaching — _Statistics Education and Methodologies_
-- 2009 — A Tale of Three Perspectives — _Survey Methodology and Nonresponse_
-- 2008 — Decimal Dust, Significant Digits, and the Search for Stars — _Statistics Education and Methodologies_
-- 2007 — Does the Measure of Dispersion Matter in Multilevel Research? A Comparison of the Relative Performance of Dispersion Indexes — _Behavioral Health and Interventions_
-- 2007 — Comparison of Three Meta-Analytic Procedures for Estimating Moderating Effects of Categorical Variables — _Psychometric Methodologies and Testing_
-- 2007 — Using a Random-Effects Model to Test Differing Conceptualizations of Multidimensional Constructs — _Cognitive and psychological constructs research_
+- 2023 — Real Research with Fake Data: A Tutorial on Conducting Computer Simulation for Research and Teaching — _Simulation Techniques and Applications_
+- 2009 — A Tale of Three Perspectives — _Psychometric Methodologies and Testing_
+- 2008 — Decimal Dust, Significant Digits, and the Search for Stars — _Meta-analysis and systematic reviews_
+- 2007 — Comparison of Three Meta-Analytic Procedures for Estimating Moderating Effects of Categorical Variables — _Meta-analysis and systematic reviews_
+- 2007 — Does the Measure of Dispersion Matter in Multilevel Research? A Comparison of the Relative Performance of Dispersion Indexes — _Reliability and Agreement in Measurement_
+- 2007 — Using a Random-Effects Model to Test Differing Conceptualizations of Multidimensional Constructs — _Psychometric Methodologies and Testing_

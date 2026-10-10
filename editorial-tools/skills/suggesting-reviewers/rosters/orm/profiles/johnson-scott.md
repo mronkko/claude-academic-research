@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-01-21
 checked: 2026-06-06
 orm_works_count: 0
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Scott Johnson — Iowa State University, USA
@@ -31,4 +31,4 @@ Strategy and corporate-governance scholar (full name Scott G. Johnson) whose met
 
 ## ORM publications
 
-No *Organizational Research Methods* articles found in the OpenAlex sweep (source S133599136, 2026-06-06). Board member without first-party ORM publications — eligibility and method fit rest on the profile above.
+No *Organizational Research Methods* articles found in the OpenAlex sweep (source S133599136, 2026-10-10). Board member without first-party ORM publications — eligibility and method fit rest on the profile above.

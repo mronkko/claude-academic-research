@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-02-04
 checked: 2026-06-06
 orm_works_count: 1
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Joseph Luchman — Fors Marsh Group LLC, USA
@@ -31,6 +31,6 @@ Applied quantitative methodologist (full name Joseph N. Luchman) best known for 
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2014 — Relative Importance Analysis With Multicategory Dependent Variables: — _Firm Innovation and Growth_
+- 2014 — Relative Importance Analysis With Multicategory Dependent Variables: — _Advanced Statistical Methods and Models_

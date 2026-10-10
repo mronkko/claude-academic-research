@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 1984, works_count: 235, h_index: 68 }
 built: 2026-06-06
 works_through: 2025-01-09
 checked: 2026-06-06
-orm_works_count: 4
-orm_swept: 2026-06-06
+orm_works_count: 5
+orm_swept: 2026-10-10
 ```
 
 # Francis Yammarino — SUNY Binghamton, USA
@@ -31,9 +31,10 @@ Eminent quantitative methodologist best known for levels-of-analysis theory and 
 
 ## ORM publications
 
-4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2022 — Using CATA and Machine Learning to Operationalize Old Constructs in New Ways: An Illustration Using U.S. Governors’ COVID-19 Press Briefings — _Terrorism, Counterterrorism, and Political Violence_
-- 2020 — Multilevel Methods and Statistics: The Next Frontier — _Social Capital and Networks_
-- 2010 — Dyads in Organizational Research: Conceptual Issues and Multilevel Analyses — _Job Satisfaction and Organizational Behavior_
-- 2003 — Modern Data Analytic Techniques for Multisource Feedback — _Job Satisfaction and Organizational Behavior_
+- 2022 — Using CATA and Machine Learning to Operationalize Old Constructs in New Ways: An Illustration Using U.S. Governors’ COVID-19 Press Briefings — _Computational and Text Analysis Methods_
+- 2020 — Multilevel Methods and Statistics: The Next Frontier — _Statistical Methods and Bayesian Inference_
+- 2012 — Retrospective Relatedness Reconstruction — _Complex Network Analysis Techniques_
+- 2010 — Dyads in Organizational Research: Conceptual Issues and Multilevel Analyses — _Statistical Methods and Bayesian Inference_
+- 2003 — Modern Data Analytic Techniques for Multisource Feedback — _Psychometric Methodologies and Testing_

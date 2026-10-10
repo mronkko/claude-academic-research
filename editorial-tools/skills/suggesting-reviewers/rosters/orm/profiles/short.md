@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-04-01
 checked: 2026-06-06
 orm_works_count: 5
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Jeremy C. Short — University of Oklahoma, USA
@@ -31,10 +31,10 @@ Senior entrepreneurship/strategy scholar (h=55) and a leading methodologist on c
 
 ## ORM publications
 
-5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2012 — Using Computer-Aided Text Analysis to Elevate Constructs — _Job Satisfaction and Organizational Behavior_
+- 2012 — Using Computer-Aided Text Analysis to Elevate Constructs — _Computational and Text Analysis Methods_
 - 2009 — Research Methods in Entrepreneurship — _Entrepreneurship Studies and Influences_
-- 2009 — Construct Validation Using Computer-Aided Text Analysis (CATA) — _Entrepreneurship Studies and Influences_
-- 2007 — The Application of DICTION to Content Analysis Research in Strategic Management — _Organizational Strategy and Culture_
-- 2006 — An Examination of Firm, Industry, and Time Effects on Performance Using Random Coefficients Modeling — _Corporate Finance and Governance_
+- 2009 — Construct Validation Using Computer-Aided Text Analysis (CATA) — _Computational and Text Analysis Methods_
+- 2007 — The Application of DICTION to Content Analysis Research in Strategic Management — _Computational and Text Analysis Methods_
+- 2006 — An Examination of Firm, Industry, and Time Effects on Performance Using Random Coefficients Modeling — _Statistical Methods and Bayesian Inference_

@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 2009, works_count: 277, h_index: 61 }
 built: 2026-06-06
 works_through: 2026-05-01
 checked: 2026-06-06
-orm_works_count: 12
-orm_swept: 2026-06-06
+orm_works_count: 13
+orm_swept: 2026-10-10
 ```
 
 # Louis Tay — Purdue University, USA
@@ -31,17 +31,18 @@ Senior quantitative psychologist (well-being, vocational behavior) and a promine
 
 ## ORM publications
 
-12 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+13 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2024 — One Size Does Not Fit All: Unraveling Item Response Process Heterogeneity Using the Mixture Dominance-Unfolding Model (MixDUM) — _Personality Traits and Psychology_
-- 2020 — Text Preprocessing for Text Mining in Organizational Research: Review and Recommendations — _Topic Modeling_
+- 2024 — One Size Does Not Fit All: Unraveling Item Response Process Heterogeneity Using the Mixture Dominance-Unfolding Model (MixDUM) — _Psychometric Methodologies and Testing_
+- 2023 — The Generalized Thurstonian Unfolding Model (GTUM): Advancing the Modeling of Forced-Choice Data — _Psychometric Methodologies and Testing_
+- 2020 — Text Preprocessing for Text Mining in Organizational Research: Review and Recommendations — _Computational and Text Analysis Methods_
 - 2019 — From Data to Causes II: Comparing Approaches to Panel Data Analysis — _Spatial and Panel Data Analysis_
-- 2019 — From Data to Causes I: Building A General Cross-Lagged Panel Model (GCLM) — _Psychological Well-being and Life Satisfaction_
-- 2018 — Putting the “Person” in the Center — _Mental Health Research Topics_
+- 2019 — From Data to Causes I: Building A General Cross-Lagged Panel Model (GCLM) — _Statistical Methods and Bayesian Inference_
+- 2018 — Putting the “Person” in the Center — _Psychometric Methodologies and Testing_
 - 2017 — Big Data Visualizations in Organizational Science — _Data Visualization and Analytics_
 - 2016 — Introduction to Time Series Analysis for Organizational Research — _Time Series Analysis and Forecasting_
 - 2014 — An Overview and Practical Guide to IRT Measurement Equivalence Analysis — _Psychometric Methodologies and Testing_
 - 2014 — A Conceptual and Methodological Framework for Psychometric Isomorphism — _Psychometric Methodologies and Testing_
-- 2012 — Theoretical, Statistical, and Substantive Issues in the Assessment of Construct Dimensionality — _Job Satisfaction and Organizational Behavior_
-- 2010 — Multilevel Mixed-Measurement IRT Analysis: An Explication and Application to Self-Reported Emotions Across the World — _Cultural Differences and Values_
+- 2012 — Theoretical, Statistical, and Substantive Issues in the Assessment of Construct Dimensionality — _Psychometric Methodologies and Testing_
+- 2010 — Multilevel Mixed-Measurement IRT Analysis: An Explication and Application to Self-Reported Emotions Across the World — _Psychometric Methodologies and Testing_
 - 2010 — Using Mixed-Measurement Item Response Theory With Covariates (MM-IRT-C) to Ascertain Observed and Unobserved Measurement Equivalence — _Psychometric Methodologies and Testing_

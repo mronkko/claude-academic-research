@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 2005, works_count: 208, h_index: 32 }
 built: 2026-06-06
 works_through: 2026-02-11
 checked: 2026-06-06
-orm_works_count: 3
-orm_swept: 2026-06-06
+orm_works_count: 5
+orm_swept: 2026-10-10
 ```
 
 # Gazi Islam — Grenoble Ecole de Management, France
@@ -30,8 +30,10 @@ Critical/interpretive organization and business-ethics scholar; mostly qualitati
 
 ## ORM publications
 
-3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2024 — Experimentation in Qualitative Organization Research: Determinacy and Indeterminacy Through Walking Ethnography — _Management and Organizational Studies_
-- 2016 — Modes of Knowing — _Management and Organizational Studies_
-- 2014 — Practitioners as Theorists — _Management and Organizational Studies_
+- 2026 — Field Philosophy: A Methodological Approach to Organizational Philosophy-in-Practice — _Qualitative Research Methods and Ethics_
+- 2026 — Rhythms of Organizational Life: Rhythmanalysis as an Organizational Research Method — _Management and Organizational Studies_
+- 2024 — Experimentation in Qualitative Organization Research: Determinacy and Indeterminacy Through Walking Ethnography — _Qualitative Research Methods and Ethics_
+- 2016 — Modes of Knowing — _Participatory Visual Research Methods_
+- 2014 — Practitioners as Theorists — _Qualitative Research Methods and Ethics_

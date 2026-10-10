@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-04-16
 checked: 2026-06-06
 orm_works_count: 2
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Hettie Richardson — Texas Christian University, USA
@@ -31,7 +31,7 @@ Quantitative methodologist best known for foundational work on common method var
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2014 — Marker Variable Choice, Reporting, and Interpretation in the Detection of Common Method Variance — _Quality and Supply Management_
-- 2009 — A Tale of Three Perspectives — _Survey Methodology and Nonresponse_
+- 2014 — Marker Variable Choice, Reporting, and Interpretation in the Detection of Common Method Variance — _Psychometric Methodologies and Testing_
+- 2009 — A Tale of Three Perspectives — _Psychometric Methodologies and Testing_

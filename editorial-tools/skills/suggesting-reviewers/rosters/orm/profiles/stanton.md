@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 1998, works_count: 161, h_index: 42 }
 built: 2026-06-16
 works_through: 2026-02-26
 checked: 2026-06-16
-orm_works_count: 2
-orm_swept: 2026-06-16
+orm_works_count: 3
+orm_swept: 2026-10-10
 ```
 
 # Jeffrey M. Stanton — Syracuse University, USA
@@ -32,6 +32,8 @@ Jeffrey M. Stanton is a quantitative methodologist and organizational data scien
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-16). Most recent shown.
-- 2020 — Evaluating Equivalence and Confirming the Null in the Organizational Sciences — _Organizational Research Methods_
-- 2007 — Introduction [Understanding and Dealing with Organizational Survey Nonresponse / N-BIAS] — _Organizational Research Methods_
+3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
+
+- 2020 — Evaluating Equivalence and Confirming the Null in the Organizational Sciences — _Statistical Methods and Bayesian Inference_
+- 2007 — Introduction — _Survey Methodology and Nonresponse_
+- 2001 — Using Internet/Intranet Web Pages to Collect Organizational Research Data — _Survey Methodology and Nonresponse_

@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-07-01
 checked: 2026-06-06
 orm_works_count: 1
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Paula O'Kane — University of Otago, New Zealand
@@ -38,6 +38,6 @@ here. Mid-career — a good "less-obvious" qualitative reviewer.
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
 - 2019 — Building Transparency and Trustworthiness in Inductive Research Through Computer-Aided Qualitative Data Analysis Software — _Qualitative Research Methods and Applications_

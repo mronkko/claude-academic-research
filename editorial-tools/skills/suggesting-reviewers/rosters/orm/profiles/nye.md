@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-04-20
 checked: 2026-06-06
 orm_works_count: 8
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Chris Nye — Michigan State University, USA
@@ -31,13 +31,13 @@ Quantitative psychometric methodologist. Central contributions are effect-size i
 
 ## ORM publications
 
-8 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+8 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2022 — Reviewer Resources: Confirmatory Factor Analysis — _Innovation Diffusion and Forecasting_
-- 2021 — A Review of Measurement Equivalence in Organizational Research: What's Old, What's New, What's Next? — _Behavioral and Psychological Studies_
-- 2019 — Though Forced, Still Valid: Psychometric Equivalence of Forced-Choice and Single-Statement Measures — _Social and Intergroup Psychology_
+- 2022 — Reviewer Resources: Confirmatory Factor Analysis — _Psychometric Methodologies and Testing_
+- 2021 — A Review of Measurement Equivalence in Organizational Research: What's Old, What's New, What's Next? — _Psychometric Methodologies and Testing_
+- 2019 — Though Forced, Still Valid: Psychometric Equivalence of Forced-Choice and Single-Statement Measures — _Psychometric Methodologies and Testing_
 - 2019 — Advancing and Evaluating IRT Model Data Fit Indices in Organizational Research — _Psychometric Methodologies and Testing_
 - 2018 — How Big Are My Effects? Examining the Magnitude of Effect Sizes in Studies of Measurement Equivalence — _Psychometric Methodologies and Testing_
-- 2016 — New Effect Sizes for Tests of Categorical Moderation and Differential Prediction — _Social and Intergroup Psychology_
-- 2010 — Assessing Goodness of Fit: Simple Rules of Thumb Simply Do Not Work — _Customer Service Quality and Loyalty_
-- 2009 — Never Say ‘‘Always’’? Extreme Item Wording Effects on Scalar Invariance and Item Response Curves — _Social and Intergroup Psychology_
+- 2016 — New Effect Sizes for Tests of Categorical Moderation and Differential Prediction — _Meta-analysis and systematic reviews_
+- 2010 — Assessing Goodness of Fit: Simple Rules of Thumb Simply Do Not Work — _Psychometric Methodologies and Testing_
+- 2009 — Never Say ‘‘Always’’? Extreme Item Wording Effects on Scalar Invariance and Item Response Curves — _Psychometric Methodologies and Testing_

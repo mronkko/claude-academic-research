@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-04-23
 checked: 2026-06-06
 orm_works_count: 1
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Bill Harley — University of Melbourne, Australia
@@ -30,6 +30,6 @@ Critical management/employment-relations scholar and a leading voice on qualitat
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2020 — Rigor With or Without Templates? The Pursuit of Methodological Rigor in Qualitative Research — _Management and Organizational Studies_
+- 2020 — Rigor With or Without Templates? The Pursuit of Methodological Rigor in Qualitative Research — _Qualitative Research Methods and Applications_

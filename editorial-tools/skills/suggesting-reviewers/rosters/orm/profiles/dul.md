@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-12-11
 checked: 2026-06-06
 orm_works_count: 2
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Jan Dul — RSM Erasmus University Rotterdam, Netherlands
@@ -31,7 +31,7 @@ Methodologist; originator of Necessary Condition Analysis (NCA) and a methods au
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
 - 2018 — A Statistical Significance Test for Necessary Condition Analysis — _Qualitative Comparative Analysis Research_
 - 2015 — Necessary Condition Analysis (NCA) — _Qualitative Comparative Analysis Research_

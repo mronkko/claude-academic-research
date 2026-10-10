@@ -12,7 +12,7 @@ built: 2026-06-16
 works_through: 2026-04-10
 checked: 2026-06-16
 orm_works_count: 0
-orm_swept: 2026-06-16
+orm_swept: 2026-10-10
 ```
 
 # Michael C. Withers — Texas A&M University, USA
@@ -32,4 +32,4 @@ Strategy and corporate-governance scholar (boards of directors, director selecti
 
 ## ORM publications
 
-No first-party ORM articles found in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-16).
+No *Organizational Research Methods* articles found in the OpenAlex sweep (source S133599136, 2026-10-10). Board member without first-party ORM publications — eligibility and method fit rest on the profile above.

@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-12-15
 checked: 2026-06-06
 orm_works_count: 5
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Donald D. Bergh — University of Denver, USA
@@ -31,10 +31,10 @@ Quantitative strategy methodologist; leading voice on MASEM, replication/reprodu
 
 ## ORM publications
 
-5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2017 — Mixed Methods in the Organizational Sciences — _Management and Organizational Studies_
-- 2013 — Constructs in Strategic Management — _Accounting and Organizational Management_
-- 2013 — Measuring and Testing Industry Effects in Strategic Management Research — _Innovation and Knowledge Management_
-- 2008 — Mediational Inferences in Organizational Research — _Conflict Management and Negotiation_
-- 2007 — Research Methodology in Strategic Management — _Innovation and Knowledge Management_
+- 2017 — Mixed Methods in the Organizational Sciences — _Business Strategies and Management Research_
+- 2013 — Constructs in Strategic Management — _Business Strategies and Management Research_
+- 2013 — Measuring and Testing Industry Effects in Strategic Management Research — _Business Strategies and Management Research_
+- 2008 — Mediational Inferences in Organizational Research — _Advanced Causal Inference Techniques_
+- 2007 — Research Methodology in Strategic Management — _Business Strategies and Management Research_

@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 2001, works_count: 53, h_index: 22 }
 built: 2026-06-06
 works_through: 2024-09-24
 checked: 2026-06-06
-orm_works_count: 2
-orm_swept: 2026-06-06
+orm_works_count: 4
+orm_swept: 2026-10-10
 ```
 
 # Arturs Kalnins — University of Iowa, USA
@@ -31,7 +31,9 @@ Strategy scholar turned regression methodologist. Substantive work on franchisin
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2023 — The VIF Score. What is it Good For? Absolutely Nothing — _Qualitative Comparative Analysis Research_
-- 2022 — Should Moderated Regressions Include or Exclude Quadratic Terms? Present Both! Then Apply Our Linear Algebraic Analysis to Identify the Preferable Specification — _Mental Health Research Topics_
+- 2026 — Interaction Effects May Indeed Be Artifacts of Common Method Variance — _Business Strategies and Management Research_
+- 2026 — The Case for Reporting Control Variable Coefficients — _Advanced Causal Inference Techniques_
+- 2023 — The VIF Score. What is it Good For? Absolutely Nothing — _Advanced Statistical Methods and Models_
+- 2022 — Should Moderated Regressions Include or Exclude Quadratic Terms? Present Both! Then Apply Our Linear Algebraic Analysis to Identify the Preferable Specification — _Statistical Methods and Applications_

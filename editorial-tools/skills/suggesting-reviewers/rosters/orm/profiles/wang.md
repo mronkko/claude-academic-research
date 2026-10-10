@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-12-18
 checked: 2026-06-06
 orm_works_count: 5
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Mo Wang — University of Florida, USA
@@ -31,10 +31,10 @@ Eminent OB/occupational-health scholar (retirement, aging at work) and a widely 
 
 ## ORM publications
 
-5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2019 — Intensive Longitudinal Data Analyses With Dynamic Structural Equation Modeling — _Spatial and Panel Data Analysis_
-- 2018 — Translating Informal Theories Into Formal Theories: The Case of the Dynamic Computational Model of the Integrated Model of Work Motivation — _Complex Systems and Decision Making_
-- 2010 — Latent Class Procedures: Applications to Organizational Research — _Firm Innovation and Growth_
-- 2010 — Mixture Latent Markov Modeling: Identifying and Predicting Unobserved Heterogeneity in Longitudinal Qualitative Status Change — _Migration and Labor Dynamics_
-- 2007 — Growth Mixture Modeling — _Intergenerational and Educational Inequality Studies_
+- 2019 — Intensive Longitudinal Data Analyses With Dynamic Structural Equation Modeling — _Statistical Methods and Bayesian Inference_
+- 2018 — Translating Informal Theories Into Formal Theories: The Case of the Dynamic Computational Model of the Integrated Model of Work Motivation — _Management Theory and Practice_
+- 2010 — Latent Class Procedures: Applications to Organizational Research — _Psychometric Methodologies and Testing_
+- 2010 — Mixture Latent Markov Modeling: Identifying and Predicting Unobserved Heterogeneity in Longitudinal Qualitative Status Change — _Bayesian Methods and Mixture Models_
+- 2007 — Growth Mixture Modeling — _Statistical Methods and Bayesian Inference_

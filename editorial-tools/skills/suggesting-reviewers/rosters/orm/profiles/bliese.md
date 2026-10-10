@@ -11,11 +11,11 @@ career_signals: { first_pub_year: 1995, works_count: 270, h_index: 71 }
 built: 2026-06-06
 works_through: 2026-02-10
 checked: 2026-06-06
-orm_works_count: 9
-orm_swept: 2026-06-06
+orm_works_count: 7
+orm_swept: 2026-10-10
 ```
 
-# Paul Bliese — University of South Carolina, USA
+# Paul Bliese — Walter Reed Army Institute of Research, USA
 
 Past editor of ORM and a leading quantitative methodologist in multilevel modeling for organizational data: within-group agreement and ICC estimation, random-coefficient/growth models, and the treatment of nonindependence in grouped data. Substantive work on military stress/PTSD underpins the methods record.
 
@@ -31,14 +31,12 @@ Past editor of ORM and a leading quantitative methodologist in multilevel modeli
 
 ## ORM publications
 
-9 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+7 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2019 — Detecting Consensus Emergence in Organizational Multilevel Data: Power Simulations — _Social and Intergroup Psychology_
-- 2016 — Understanding Relative and Absolute Change in Discontinuous Growth Models — _Labor market dynamics and wage inequality_
-- 2007 — Multilevel Methods — _Social Capital and Networks_
-- 2005 — Conceptual Framework and Statistical Procedures for Delineating and Testing Multilevel Theories of Homology — _Qualitative Comparative Analysis Research_
-- 2004 — Being Both Too Liberal and Too Conservative: The Perils of Treating Grouped Data as though They Were Independent — _Qualitative Comparative Analysis Research_
-- 2003 — Book Review: Modeling Longitudinal and Multilevel Data: Practical Issues, Applied Approaches, and Specific Examples, edited by T. D. Little, K. U. Schnabel, and J. Baumert (2000). Mahwah, Nj: Lawrence Erlbaum. — _Urban, Neighborhood, and Segregation Studies_
-- 2003 — Book Review
+- 2019 — Detecting Consensus Emergence in Organizational Multilevel Data: Power Simulations — _Statistical Methods and Bayesian Inference_
+- 2016 — Understanding Relative and Absolute Change in Discontinuous Growth Models — _Statistical Methods and Bayesian Inference_
+- 2007 — Multilevel Methods — _Statistical Methods and Bayesian Inference_
+- 2005 — Conceptual Framework and Statistical Procedures for Delineating and Testing Multilevel Theories of Homology — _Business Strategies and Management Research_
+- 2004 — Being Both Too Liberal and Too Conservative: The Perils of Treating Grouped Data as though They Were Independent — _Statistical Methods and Bayesian Inference_
 - 2002 — Growth Modeling Using Random Coefficient Models: Model Building, Testing, and Illustrations — _Statistical Methods and Bayesian Inference_
-- 1998 — Group Size, ICC Values, and Group-Level Correlations: A Simulation — _Customer Service Quality and Loyalty_
+- 1998 — Group Size, ICC Values, and Group-Level Correlations: A Simulation — _Reliability and Agreement in Measurement_

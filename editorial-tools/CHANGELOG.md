@@ -4,6 +4,22 @@ Versioned independently from the `academic-research` plugin in this
 same marketplace. See the root [CHANGELOG.md](../CHANGELOG.md) for
 that plugin's history.
 
+## [Unreleased]
+
+- Refreshed the ORM roster against the live SAGE board page
+  (snapshot 2026-10-10): 15 new Editorial Board members with
+  OpenAlex-grounded profiles (Baluch, Bowling, Cornelissen, Elias,
+  Harrison, Hoon, Langley, Lee, Lonati, Mees-Buss, Nguyen, Rockmann,
+  Rolfing, Sheep, Whittle); 24 departed members' profiles removed;
+  the Outreach Officer role is gone from the page and from the index.
+  Affiliations updated for J. M. Cortina, Oswald, Schoen and Bliese.
+- Re-ran the ORM-journal sweep for all 129 members. Counts drop for
+  some senior members because OpenAlex now types their editorials
+  and book reviews as such, and the sweep keeps only
+  `article`/`review`. Authorships whose OpenAlex author ID went null
+  (Hernandez, Hansen, Busenbark, Nguyen) are recovered by exact
+  first/last-name match.
+
 ## [0.2.0] — 2026-06-16
 
 - Added an associate-editor suggestion mode to `suggesting-reviewers`.

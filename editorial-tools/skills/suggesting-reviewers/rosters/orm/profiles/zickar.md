@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-05-21
 checked: 2026-06-06
 orm_works_count: 6
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Michael J. Zickar — Bowling Green State University, USA
@@ -31,11 +31,11 @@ Quantitative psychometrician in industrial-organizational psychology, best known
 
 ## ORM publications
 
-6 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+6 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
 - 2017 — Review of Item Response Theory Practices in Organizational Research — _Psychometric Methodologies and Testing_
 - 2011 — Some Common Myths About Centering Predictor Variables in Moderated Multiple Regression and Polynomial Regression — _Advanced Statistical Methods and Models_
 - 2010 — Using Mixed-Model Item Response Theory to Analyze Organizational Survey Responses: An Illustration Using the Job Descriptive Index — _Psychometric Methodologies and Testing_
-- 2010 — Reconnecting With the Spirit of Workplace Ethnography — _Management and Organizational Studies_
-- 2004 — Uncovering Faking Samples in Applicant, Incumbent, and Experimental Data Sets: An Application of Mixed-Model Item Response Theory — _Behavioral and Psychological Studies_
-- 2000 — Effects of Item Context Specificity on the Measurement Equivalence of a Personality Inventory — _Personality Traits and Psychology_
+- 2010 — Reconnecting With the Spirit of Workplace Ethnography — _Qualitative Research Methods and Ethics_
+- 2004 — Uncovering Faking Samples in Applicant, Incumbent, and Experimental Data Sets: An Application of Mixed-Model Item Response Theory — _Psychometric Methodologies and Testing_
+- 2000 — Effects of Item Context Specificity on the Measurement Equivalence of a Personality Inventory — _Psychometric Methodologies and Testing_

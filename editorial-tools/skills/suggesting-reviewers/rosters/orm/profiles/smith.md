@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 1996, works_count: 99, h_index: 22 }
 built: 2026-06-06
 works_through: 2025-07-01
 checked: 2026-06-06
-orm_works_count: 11
-orm_swept: 2026-06-06
+orm_works_count: 9
+orm_swept: 2026-10-10
 ```
 
 # Anne D. Smith — University of Tennessee, USA
@@ -31,16 +31,14 @@ Senior qualitative methodologist in management/organization studies. A leading v
 
 ## ORM publications
 
-11 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+9 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2025 — Feature Topic for ORM: Advanced Analytic Approaches to Theorize From Qualitative Research — _Information Systems Theories and Implementation_
+- 2025 — Feature Topic for ORM: Advanced Analytic Approaches to Theorize From Qualitative Research — _Qualitative Research Methods and Applications_
 - 2024 — From Textual Data to Theoretical Insights: Introducing and Applying the Word-Text-Topic Extraction Approach — _Computational and Text Analysis Methods_
-- 2023 — Resisting the Objectification of Qualitative Research: The Unsilencing of Context, Researchers, and Noninterview Data — _Management and Organizational Studies_
-- 2021 — Templates in Qualitative Research Methods: Origins, Limitations, and New Directions — _Management and Organizational Studies_
-- 2020 — Tracing Ideas From Langley (1999): Exemplars, Adaptations, Considerations, and Overlooked — _Management and Organizational Studies_
+- 2023 — Resisting the Objectification of Qualitative Research: The Unsilencing of Context, Researchers, and Noninterview Data — _Qualitative Research Methods and Applications_
+- 2021 — Templates in Qualitative Research Methods: Origins, Limitations, and New Directions — _Qualitative Research Methods and Applications_
+- 2020 — Tracing Ideas From Langley (1999): Exemplars, Adaptations, Considerations, and Overlooked — _Qualitative Research Methods and Applications_
 - 2019 — Building Transparency and Trustworthiness in Inductive Research Through Computer-Aided Qualitative Data Analysis Software — _Qualitative Research Methods and Applications_
-- 2018 — Feature Topic for <i>ORM</i> : “Templates in Qualitative Research Methods” — _Management and Organizational Studies_
-- 2015 — Autobiographies in Organizational Research — _Management and Organizational Studies_
-- 2015 — Introduction
+- 2018 — Feature Topic for ORM : “Templates in Qualitative Research Methods” — _Qualitative Research Methods and Applications_
+- 2015 — Autobiographies in Organizational Research — _Autobiographical and Biographical Writing_
 - 2011 — Using Photographs to Research Organizations: Evidence, Considerations, and Application in a Field Study — _Participatory Visual Research Methods_
-- 2005 — Book Review: Interactive Qualitative Analysis: A Systems Method for Qualitative Research — _Management and Organizational Studies_

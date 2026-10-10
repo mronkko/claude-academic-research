@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 2004, works_count: 119, h_index: 35 }
 built: 2026-06-06
 works_through: 2026-01-01
 checked: 2026-06-06
-orm_works_count: 12
-orm_swept: 2026-06-06
+orm_works_count: 11
+orm_swept: 2026-10-10
 ```
 
 # Adam W. Meade — North Carolina State University, USA
@@ -31,17 +31,16 @@ Psychometric methodologist whose work defines best practice in measurement invar
 
 ## ORM publications
 
-12 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+11 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2018 — Rapid Response Measurement: Development of a Faking-Resistant Assessment Method for Personality — _Behavioral and Psychological Studies_
+- 2018 — Rapid Response Measurement: Development of a Faking-Resistant Assessment Method for Personality — _Psychometric Methodologies and Testing_
 - 2014 — An Overview and Practical Guide to IRT Measurement Equivalence Analysis — _Psychometric Methodologies and Testing_
-- 2014 — General Mental Ability as a Source of Differential Functioning in Personality Scales — _Personality Traits and Psychology_
-- 2009 — Test Bias, Differential Prediction, and a Revised Approach for Determining the Suitability of a Predictor in a Selection Context — _Social and Intergroup Psychology_
+- 2014 — General Mental Ability as a Source of Differential Functioning in Personality Scales — _Psychometric Methodologies and Testing_
+- 2009 — Test Bias, Differential Prediction, and a Revised Approach for Determining the Suitability of a Predictor in a Selection Context — _Psychometric Methodologies and Testing_
 - 2008 — Examining Question and Context Effects in Organization Survey Data Using Item Response Theory — _Psychometric Methodologies and Testing_
 - 2007 — Case Study — _Psychometric Methodologies and Testing_
-- 2007 — Are Internet and Paper-and-Pencil Personality Tests Truly Comparable? — _Employer Branding and e-HRM_
-- 2007 — Using Indices of Group Agreement in Multilevel Construct Validation — _Customer Service Quality and Loyalty_
-- 2006 — Book Review: A Beginner’s Guide to Structural Equation Modeling — _Technology Adoption and User Behaviour_
-- 2006 — Problems With Item Parceling for Confirmatory Factor Analytic Tests of Measurement Invariance — _Advanced Statistical Modeling Techniques_
+- 2007 — Are Internet and Paper-and-Pencil Personality Tests Truly Comparable? — _Psychometric Methodologies and Testing_
+- 2007 — Using Indices of Group Agreement in Multilevel Construct Validation — _Psychometric Methodologies and Testing_
+- 2006 — Problems With Item Parceling for Confirmatory Factor Analytic Tests of Measurement Invariance — _Psychometric Methodologies and Testing_
 - 2004 — A Comparison of Item Response Theory and Confirmatory Factor Analytic Methodologies for Establishing Measurement Equivalence/Invariance — _Psychometric Methodologies and Testing_
 - 1999 — The Development of an Individual-Level Teamwork Expectations Measure and the Application of a Within-Group Agreement Statistic to Assess Shared Expectations for Teamwork — _Team Dynamics and Performance_

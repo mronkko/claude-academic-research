@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-05-19
 checked: 2026-06-06
 orm_works_count: 10
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Jeffrey R. Edwards — University of North Carolina, Chapel Hill, USA
@@ -31,15 +31,15 @@ Eminent quantitative methodologist. Foundational work on congruence/fit modeling
 
 ## ORM publications
 
-10 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+10 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2017 — On the Use of Spline Regression in the Study of Congruence in Organizational Research — _Social and Intergroup Psychology_
-- 2016 — Improving Our Understanding of Moderation and Mediation in Strategic Management Research — _Job Satisfaction and Organizational Behavior_
+- 2017 — On the Use of Spline Regression in the Study of Congruence in Organizational Research — _Statistical Methods and Applications_
+- 2016 — Improving Our Understanding of Moderation and Mediation in Strategic Management Research — _Advanced Causal Inference Techniques_
 - 2014 — Reflections on Partial Least Squares Path Modeling — _Psychometric Methodologies and Testing_
-- 2010 — The Presence of Something or the Absence of Nothing: Increasing Theoretical Precision in Management Research — _Management and Organizational Studies_
-- 2010 — Reconsidering Theoretical Progress in Organizational and Management Research — _Management and Organizational Studies_
-- 2010 — The Fallacy of Formative Measurement — _Accounting and Organizational Management_
-- 2007 — Latent Variable Modeling in Congruence Research — _Behavioral and Psychological Studies_
+- 2010 — The Presence of Something or the Absence of Nothing: Increasing Theoretical Precision in Management Research — _Business Strategies and Management Research_
+- 2010 — Reconsidering Theoretical Progress in Organizational and Management Research — _Business Strategies and Management Research_
+- 2010 — The Fallacy of Formative Measurement — _Psychometric Methodologies and Testing_
+- 2007 — Latent Variable Modeling in Congruence Research — _Psychometric Methodologies and Testing_
 - 2001 — Ten Difference Score Myths — _Psychometric Methodologies and Testing_
-- 2001 — Multidimensional Constructs in Organizational Behavior Research: An Integrative Analytical Framework — _Job Satisfaction and Organizational Behavior_
-- 1998 — A General Approach for Representing Constructs in Organizational Research — _Job Satisfaction and Organizational Behavior_
+- 2001 — Multidimensional Constructs in Organizational Behavior Research: An Integrative Analytical Framework — _Psychometric Methodologies and Testing_
+- 1998 — A General Approach for Representing Constructs in Organizational Research — _Psychometric Methodologies and Testing_

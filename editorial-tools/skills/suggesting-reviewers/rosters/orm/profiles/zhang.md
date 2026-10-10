@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-09-10
 checked: 2026-06-06
 orm_works_count: 7
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Bo Zhang — University of Illinois at Urbana-Champaign, USA
@@ -31,12 +31,12 @@ Quantitative psychometrician (industrial-organizational psychology) specializing
 
 ## ORM publications
 
-7 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+7 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2024 — One Size Does Not Fit All: Unraveling Item Response Process Heterogeneity Using the Mixture Dominance-Unfolding Model (MixDUM) — _Personality Traits and Psychology_
-- 2024 — Mixed-Keying or Desirability-Matching in the Construction of Forced-Choice Measures? An Empirical Investigation and Practical Recommendations — _Decision-Making and Behavioral Economics_
-- 2023 — The Generalized Thurstonian Unfolding Model (GTUM): Advancing the Modeling of Forced-Choice Data — _Consumer Market Behavior and Pricing_
-- 2021 — Faking Detection Improved: Adopting a Likert Item Response Process Tree Model — _Personality Traits and Psychology_
-- 2020 — Using Bifactor Models to Examine the Predictive Validity of Hierarchical Constructs: Pros, Cons, and Solutions — _Mental Health Research Topics_
-- 2019 — Though Forced, Still Valid: Psychometric Equivalence of Forced-Choice and Single-Statement Measures — _Social and Intergroup Psychology_
+- 2024 — One Size Does Not Fit All: Unraveling Item Response Process Heterogeneity Using the Mixture Dominance-Unfolding Model (MixDUM) — _Psychometric Methodologies and Testing_
+- 2024 — Mixed-Keying or Desirability-Matching in the Construction of Forced-Choice Measures? An Empirical Investigation and Practical Recommendations — _Psychometric Methodologies and Testing_
+- 2023 — The Generalized Thurstonian Unfolding Model (GTUM): Advancing the Modeling of Forced-Choice Data — _Psychometric Methodologies and Testing_
+- 2021 — Faking Detection Improved: Adopting a Likert Item Response Process Tree Model — _Psychometric Methodologies and Testing_
+- 2020 — Using Bifactor Models to Examine the Predictive Validity of Hierarchical Constructs: Pros, Cons, and Solutions — _Psychometric Methodologies and Testing_
+- 2019 — Though Forced, Still Valid: Psychometric Equivalence of Forced-Choice and Single-Statement Measures — _Psychometric Methodologies and Testing_
 - 2019 — Advancing and Evaluating IRT Model Data Fit Indices in Organizational Research — _Psychometric Methodologies and Testing_

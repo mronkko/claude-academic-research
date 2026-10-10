@@ -11,11 +11,11 @@ career_signals: { first_pub_year: 1992, works_count: 146, h_index: 42 }
 built: 2026-06-06
 works_through: 2026-03-02
 checked: 2026-06-06
-orm_works_count: 20
-orm_swept: 2026-06-06
+orm_works_count: 17
+orm_swept: 2026-10-10
 ```
 
-# José M. Cortina — Virginia Commonwealth University, USA
+# José M. Cortina — The Ohio State University, USA
 
 Past editor of ORM and an eminent quantitative methodologist; author of the canonical paper on coefficient alpha and a long line of work on interaction effects, moderated SEM, meta-analysis, effect sizes, and scale construction.
 
@@ -31,20 +31,22 @@ Past editor of ORM and an eminent quantitative methodologist; author of the cano
 
 ## ORM publications
 
-20 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06). 15 most recent shown.
+17 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
 - 2026 — I Gotta Feeling: Advancing Sentiment Analysis in Organizational Science — _Sentiment Analysis and Opinion Mining_
 - 2023 — Heterogeneity in Meta-Analytic Effect Sizes: An Assessment of the Current State of the Literature — _Meta-analysis and systematic reviews_
-- 2022 — Endogenous Moderator Models: What They are, What They Aren’t, and Why it Matters — _Child and Adolescent Psychosocial and Emotional Development_
-- 2019 — The Man Who Changed the field (Again and Again): Introduction to the Larry James Feature Topic — _Psychological Testing and Assessment_
-- 2019 — How Are We Testing Interactions in Latent Variable Models? Surging Forward or Fighting Shy? — _Qualitative Comparative Analysis Research_
+- 2022 — Endogenous Moderator Models: What They are, What They Aren’t, and Why it Matters — _Advanced Causal Inference Techniques_
+- 2019 — The Man Who Changed the field (Again and Again): Introduction to the Larry James Feature Topic — _Management and Organizational Studies_
+- 2019 — How Are We Testing Interactions in Latent Variable Models? Surging Forward or Fighting Shy? — _Psychometric Methodologies and Testing_
 - 2019 — Introducing Continuous Time Meta-Analysis (CoTiMA) — _Meta-analysis and systematic reviews_
-- 2016 — Big Data Methods — _Big Data and Business Intelligence_
-- 2016 — Degrees of Freedom in SEM — _Job Satisfaction and Organizational Behavior_
-- 2016 — Review and Recommendations for Integrating Mediation and Moderation — _Job Satisfaction and Organizational Behavior_
-- 2016 — Getting Through the Gate — _Auditing, Earnings Management, Governance_
-- 2015 — Are We Correcting Correctly? — _Job Satisfaction and Organizational Behavior_
-- 2014 — Introduction to the Point/Counterpoint on Partial Least Squares — _Advanced Statistical Methods and Models_
-- 2013 — Introduction to the Research Design Feature Topic — _Qualitative Research Methods and Applications_
-- 2013 — Announcement From the Editor — _Human auditory perception and evaluation_
-- 2012 — Introduction to the Feature Topic — _Psychological Testing and Assessment_
+- 2016 — Big Data Methods — _Big Data Technologies and Applications_
+- 2016 — Degrees of Freedom in SEM — _Psychometric Methodologies and Testing_
+- 2016 — Review and Recommendations for Integrating Mediation and Moderation — _Advanced Causal Inference Techniques_
+- 2016 — Getting Through the Gate — _Psychology Research and Bibliometrics_
+- 2015 — Are We Correcting Correctly? — _Meta-analysis and systematic reviews_
+- 2014 — Introduction to the Point/Counterpoint on Partial Least Squares — _Statistical Methods and Applications_
+- 2012 — Introduction to the Feature Topic — __
+- 2010 — The Earth Is Not Round ( p = .00) — _Meta-analysis and systematic reviews_
+- 2003 — Apples and Oranges (and Pears, Oh My!): The Search for Moderators in Meta-Analysis — _Meta-analysis and systematic reviews_
+- 2001 — Testing Interaction Effects in LISREL: Examination and Illustration of Available Procedures — _Psychometric Methodologies and Testing_
+- 1998 — When is it Acceptable to Accept a Null Hypothesis: No Way, Jose? — _Statistical Methods and Bayesian Inference_

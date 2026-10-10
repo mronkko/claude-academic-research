@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-03-23
 checked: 2026-06-06
 orm_works_count: 2
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Nathan Podsakoff — University of Arizona, USA
@@ -31,7 +31,7 @@ Quantitative methodologist best known for foundational work on common method bia
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
 - 2018 — Experience Sampling Methods: A Discussion of Critical Trends and Considerations for Scholarly Advancement — _Mental Health Research Topics_
-- 2016 — Recommendations for Creating Better Concept Definitions in the Organizational, Behavioral, and Social Sciences — _Behavioral Health and Interventions_
+- 2016 — Recommendations for Creating Better Concept Definitions in the Organizational, Behavioral, and Social Sciences — _Business Strategies and Management Research_

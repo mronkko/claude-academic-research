@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-04-27
 checked: 2026-06-06
 orm_works_count: 3
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Louis Hickman — Virginia Tech, USA
@@ -39,8 +39,8 @@ submissions that training data alone would likely overlook.
 
 ## ORM publications
 
-3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2026 — Textual Similarity in Organizational Research: Review of Applications, Consistency of Methods, and Best Practice Recommendations — _Authorship Attribution and Profiling_
-- 2024 — The Effects of the Training Sample Size, Ground Truth Reliability, and NLP Method on Language-Based Automatic Interview Scores’ Psychometric Properties — _Computational and Text Analysis Methods_
-- 2020 — Text Preprocessing for Text Mining in Organizational Research: Review and Recommendations — _Topic Modeling_
+- 2026 — Textual Similarity in Organizational Research: Review of Applications, Consistency of Methods, and Best Practice Recommendations — _Computational and Text Analysis Methods_
+- 2024 — The Effects of the Training Sample Size, Ground Truth Reliability, and NLP Method on Language-Based Automatic Interview Scores’ Psychometric Properties — _Psychometric Methodologies and Testing_
+- 2020 — Text Preprocessing for Text Mining in Organizational Research: Review and Recommendations — _Computational and Text Analysis Methods_

@@ -12,10 +12,10 @@ built: 2026-06-06
 works_through: 2026-03-15
 checked: 2026-06-06
 orm_works_count: 4
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
-# Jeremy L. Schoen — University of Auckland, New Zealand
+# Jeremy L. Schoen — Tennessee Tech University, USA
 
 Quantitative I-O methods researcher specializing in conditional-reasoning / implicit personality measurement, test development and validation, and data-quality issues. Multiple ORM publications.
 
@@ -28,13 +28,13 @@ Quantitative I-O methods researcher specializing in conditional-reasoning / impl
 
 **Would referee well:** conditional-reasoning and implicit-personality measurement, test development/validation, insufficient-effort responding, meta-analysis interpretation, variance-partitioning methods.
 
-**Notes:** DISAMBIGUATION UNCERTAIN — assigned affiliation is University of Auckland; OpenAlex shows Auckland in 2020 affiliations but the most recent (2022–2026) last-known institution is Tennessee Technological University. Research-area fit (ORM methods author) is unambiguous; only the current institution string differs. Quantitative, not qualitative.
+**Notes:** Disambiguation resolved 2026-10-10 — the board page now lists Tennessee Tech University, matching the OpenAlex last-known institution (Auckland appears only in 2020 affiliations). Research-area fit (ORM methods author) is unambiguous. Quantitative, not qualitative.
 
 ## ORM publications
 
-4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
 - 2019 — Conditional Reasoning: A Review and Suggestions for Future Test Development and Validation — _Psychological Testing and Assessment_
-- 2018 — Insufficient Effort Responding as a Partial Function of Implicit Aggression — _Social and Intergroup Psychology_
-- 2018 — If It Were Only That Easy: The Use of Meta-Analytic Research by Organizational Scholars — _Auditing, Earnings Management, Governance_
-- 2010 — Exploring Joint Variance Between Independent Variables and a Criterion — _Behavioral Health and Interventions_
+- 2018 — Insufficient Effort Responding as a Partial Function of Implicit Aggression — _Psychometric Methodologies and Testing_
+- 2018 — If It Were Only That Easy: The Use of Meta-Analytic Research by Organizational Scholars — _Meta-analysis and systematic reviews_
+- 2010 — Exploring Joint Variance Between Independent Variables and a Criterion — _Statistical Methods and Applications_

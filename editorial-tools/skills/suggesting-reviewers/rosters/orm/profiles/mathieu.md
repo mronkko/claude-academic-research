@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-05-28
 checked: 2026-06-06
 orm_works_count: 5
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # John E. Mathieu — University of Connecticut, USA
@@ -31,10 +31,10 @@ Eminent teams scholar with deep, widely cited contributions to multilevel resear
 
 ## ORM publications
 
-5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
 - 2019 — The Development and Construct Validity of a Team Processes Survey Measure — _Team Dynamics and Performance_
-- 2017 — A Fitting Approach to Construct and Measurement Alignment — _Complex Systems and Decision Making_
-- 2017 — Understanding “It Depends” in Organizational Research — _Job Satisfaction and Organizational Behavior_
-- 2008 — Mediational Inferences in Organizational Research — _Conflict Management and Negotiation_
-- 2005 — Conceptual Framework and Statistical Procedures for Delineating and Testing Multilevel Theories of Homology — _Qualitative Comparative Analysis Research_
+- 2017 — A Fitting Approach to Construct and Measurement Alignment — _Psychometric Methodologies and Testing_
+- 2017 — Understanding “It Depends” in Organizational Research — _Business Strategies and Management Research_
+- 2008 — Mediational Inferences in Organizational Research — _Advanced Causal Inference Techniques_
+- 2005 — Conceptual Framework and Statistical Procedures for Delineating and Testing Multilevel Theories of Homology — _Business Strategies and Management Research_

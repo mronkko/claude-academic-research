@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-05-07
 checked: 2026-06-06
 orm_works_count: 7
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # Scott Tonidandel — University of North Carolina at Charlotte, USA
@@ -31,12 +31,12 @@ Senior quantitative methodologist best known for relative importance / relative 
 
 ## ORM publications
 
-7 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+7 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
 - 2026 — I Gotta Feeling: Advancing Sentiment Analysis in Organizational Science — _Sentiment Analysis and Opinion Mining_
-- 2021 — The Use and Misuse of <i>Organizational Research Methods</i> ‘Best Practice’ Articles — _Meta-analysis and systematic reviews_
-- 2019 — Meta-Analyses as a Multi-Level Model — _Motivation and Self-Concept in Sports_
-- 2016 — Big Data Methods — _Big Data and Business Intelligence_
-- 2016 — Getting Through the Gate — _Auditing, Earnings Management, Governance_
+- 2021 — The Use and Misuse of Organizational Research Methods ‘Best Practice’ Articles — _Business Strategies and Management Research_
+- 2019 — Meta-Analyses as a Multi-Level Model — _Meta-analysis and systematic reviews_
+- 2016 — Big Data Methods — _Big Data Technologies and Applications_
+- 2016 — Getting Through the Gate — _Psychology Research and Bibliometrics_
 - 2013 — Residualized Relative Importance Analysis — _Advanced Statistical Methods and Models_
 - 2009 — Determining the Relative Importance of Predictors in Logistic Regression: An Extension of Relative Weight Analysis — _Advanced Statistical Methods and Models_

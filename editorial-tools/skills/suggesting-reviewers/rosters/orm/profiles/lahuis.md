@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-01-01
 checked: 2026-06-06
 orm_works_count: 7
-orm_swept: 2026-06-06
+orm_swept: 2026-10-10
 ```
 
 # David M. LaHuis — Wright State University, USA
@@ -31,12 +31,12 @@ Quantitative psychometric methodologist specializing in multilevel modeling and 
 
 ## ORM publications
 
-7 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+7 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2018 — Applying Item Response Trees to Personality Data in the Selection Context — _Personality Traits and Psychology_
-- 2014 — Explained Variance Measures for Multilevel Models — _Occupational Health and Safety Research_
+- 2018 — Applying Item Response Trees to Personality Data in the Selection Context — _Psychometric Methodologies and Testing_
+- 2014 — Explained Variance Measures for Multilevel Models — _Statistical Methods and Bayesian Inference_
 - 2011 — An Examination of Power and Type I Errors for Two Differential Item Functioning Indices Using the Graded Response Model — _Psychometric Methodologies and Testing_
 - 2009 — An Examination of Item Response Theory Item Fit Indices for the Graded Response Model — _Psychometric Methodologies and Testing_
-- 2007 — The Accuracy of Significance Tests for Slope Variance Components in Multilevel Random Coefficient Models — _Forest ecology and management_
-- 2007 — Investigating Faking Using a Multilevel Logistic Regression Approach to Measuring Person Fit — _Personality Traits and Psychology_
-- 2007 — Using Multilevel Random Coefficient Modeling to Investigate Rater Effects in Performance Ratings — _Customer Service Quality and Loyalty_
+- 2007 — The Accuracy of Significance Tests for Slope Variance Components in Multilevel Random Coefficient Models — _Statistical Methods and Bayesian Inference_
+- 2007 — Investigating Faking Using a Multilevel Logistic Regression Approach to Measuring Person Fit — _Psychometric Methodologies and Testing_
+- 2007 — Using Multilevel Random Coefficient Modeling to Investigate Rater Effects in Performance Ratings — _Psychometric Methodologies and Testing_

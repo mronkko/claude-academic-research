@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 2013, works_count: 60, h_index: 16 }
 built: 2026-06-06
 works_through: 2026-04-02
 checked: 2026-06-06
-orm_works_count: 2
-orm_swept: 2026-06-06
+orm_works_count: 3
+orm_swept: 2026-10-10
 ```
 
 # Michael J. Gill — University of Oxford, UK
@@ -30,7 +30,8 @@ Qualitative/interpretive methodologist. Authoritative on phenomenological method
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2017 — Reconsidering the Value of Covert Research — _Management and Organizational Studies_
-- 2014 — The Possibilities of Phenomenology for Organizational Research — _Management and Organizational Studies_
+- 2026 — “How Many Interviews Do I Need?” An Examination of Interview Numbers and Sampling Moves in Qualitative Research — _Qualitative Research Methods and Applications_
+- 2017 — Reconsidering the Value of Covert Research — _Qualitative Research Methods and Ethics_
+- 2014 — The Possibilities of Phenomenology for Organizational Research — _Qualitative Research Methods and Ethics_

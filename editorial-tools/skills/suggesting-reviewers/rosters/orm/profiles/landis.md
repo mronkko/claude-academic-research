@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 2000, works_count: 108, h_index: 32 }
 built: 2026-06-06
 works_through: 2026-03-16
 checked: 2026-06-06
-orm_works_count: 6
-orm_swept: 2026-06-06
+orm_works_count: 3
+orm_swept: 2026-10-10
 ```
 
 # Ronald S. Landis — Millan Chicago LLC, USA
@@ -31,11 +31,8 @@ Quantitative methodologist working across SEM, meta-analysis, and the methodolog
 
 ## ORM publications
 
-6 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2010 — The Earth Is <i>Not</i> Round ( <i>p</i> = .00) — _Meta-analysis and systematic reviews_
-- 2004 — Book Review: A Primer on Regression Artifacts — _Neural Networks and Applications_
-- 2003 — Book Review
-- 2003 — Book Review
-- 2000 — Moderated Multiple Regression Tests are Criterion Specific — _Customer Service Quality and Loyalty_
-- 2000 — A Comparison of Approaches to Forming Composite Measures in Structural Equation Models — _Behavioral and Psychological Studies_
+- 2010 — The Earth Is Not Round ( p = .00) — _Meta-analysis and systematic reviews_
+- 2000 — Moderated Multiple Regression Tests are Criterion Specific — _Advanced Causal Inference Techniques_
+- 2000 — A Comparison of Approaches to Forming Composite Measures in Structural Equation Models — _Psychometric Methodologies and Testing_

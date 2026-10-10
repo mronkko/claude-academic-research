@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 1993, works_count: 357, h_index: 93 }
 built: 2026-06-06
 works_through: 2026-04-24
 checked: 2026-06-06
-orm_works_count: 29
-orm_swept: 2026-06-06
+orm_works_count: 25
+orm_swept: 2026-10-10
 ```
 
 # Herman Aguinis — George Washington University, USA
@@ -31,20 +31,30 @@ Past editor of ORM and a prolific, highly cited quantitative methodologist known
 
 ## ORM publications
 
-29 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06). 15 most recent shown.
+25 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
 
-- 2025 — Using Markov Chains to Detect Careless Responding in Survey Research — _Social and Intergroup Psychology_
-- 2020 — Best-Practice Recommendations for Producers, Evaluators, and Users of Methodological Literature Reviews — _Management and Organizational Studies_
-- 2019 — Best Practices in Data Collection and Preparation: Recommendations for Reviewers, Editors, and Authors — _Big Data and Business Intelligence_
-- 2018 — The First 20 Years of <i>Organizational Research Methods</i> : Trajectory, Impact, and Predictions for the Future — _Management and Organizational Studies_
-- 2017 — Using Theory Elaboration to Make Theoretical Advancements — _Complex Systems and Decision Making_
-- 2016 — Improving Our Understanding of Moderation and Mediation in Strategic Management Research — _Job Satisfaction and Organizational Behavior_
-- 2015 — An Expanded Decision-Making Procedure for Examining Cross-Level Interaction Effects With Multilevel Modeling — _Job Satisfaction and Organizational Behavior_
-- 2014 — Best Practice Recommendations for Designing and Implementing Experimental Vignette Methodology Studies — _Social Power and Status Dynamics_
-- 2013 — Best-Practice Recommendations for Defining, Identifying, and Handling Outliers — _Forecasting Techniques and Applications_
+- 2025 — Using Markov Chains to Detect Careless Responding in Survey Research — _Survey Methodology and Nonresponse_
+- 2020 — Best-Practice Recommendations for Producers, Evaluators, and Users of Methodological Literature Reviews — _Meta-analysis and systematic reviews_
+- 2019 — Best Practices in Data Collection and Preparation: Recommendations for Reviewers, Editors, and Authors — _Business Strategies and Management Research_
+- 2018 — The First 20 Years of Organizational Research Methods : Trajectory, Impact, and Predictions for the Future — _Psychology Research and Bibliometrics_
+- 2017 — Using Theory Elaboration to Make Theoretical Advancements — _Business Strategies and Management Research_
+- 2016 — Improving Our Understanding of Moderation and Mediation in Strategic Management Research — _Advanced Causal Inference Techniques_
+- 2015 — An Expanded Decision-Making Procedure for Examining Cross-Level Interaction Effects With Multilevel Modeling — _Statistical Methods and Bayesian Inference_
+- 2014 — Best Practice Recommendations for Designing and Implementing Experimental Vignette Methodology Studies — _Economic and Environmental Valuation_
+- 2013 — Best-Practice Recommendations for Defining, Identifying, and Handling Outliers — _Advanced Statistical Methods and Models_
 - 2013 — Measurement Malaise in Strategic Management Studies — _Corporate Finance and Governance_
-- 2012 — The Time Has Come — _Sports Analytics and Performance_
-- 2010 — Debunking Myths and Urban Legends About Meta-Analysis — _Accounting and Organizational Management_
-- 2010 — R is for Revolution — _Technology Adoption and User Behaviour_
-- 2009 — Using Experience Sampling Methodology to Advance Entrepreneurship Theory and Research — _Mental Health Research Topics_
+- 2012 — The Time Has Come — _Statistical Methods and Bayesian Inference_
+- 2010 — Debunking Myths and Urban Legends About Meta-Analysis — _Meta-analysis and systematic reviews_
+- 2010 — R is for Revolution — _Data Analysis with R_
+- 2009 — Using Experience Sampling Methodology to Advance Entrepreneurship Theory and Research — _Entrepreneurship Studies and Influences_
 - 2009 — Customer-Centric Science: Reporting Significant Research Results With Rigor, Relevance, and Practical Impact in Mind — _Meta-analysis and systematic reviews_
+- 2008 — Scale Coarseness as a Methodological Artifact — _Psychometric Methodologies and Testing_
+- 2007 — First Decade of Organizational Research Methods — _Business Strategies and Management Research_
+- 2007 — Comparison of Three Meta-Analytic Procedures for Estimating Moderating Effects of Categorical Variables — _Meta-analysis and systematic reviews_
+- 2007 — Organizational Research Methods Yearly Update — __
+- 2007 — Update: New Editor Appointed — __
+- 2002 — Estimation of Interaction Effects in Organization Studies — _Business Strategies and Management Research_
+- 2002 — Estimation of Interaction Effects in Organization Studies — _Job Satisfaction and Organizational Behavior_
+- 2001 — A Generalized Solution for Approximating the Power to Detect Effects of Categorical Moderator Variables Using Multiple Regression — _Statistical Methods and Bayesian Inference_
+- 1999 — Appraisal of the Homogeneity of Error Variance Assumption and Alternatives to Multiple Regression for Estimating Moderating Effects of Categorical Variables — _Advanced Statistical Methods and Models_
+- 1998 — Heterogeneity of Error Variance and the Assessment of Moderating Effects of Categorical Variables: A Conceptual Review — _Advanced Statistical Methods and Models_

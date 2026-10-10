@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 2004, works_count: 51, h_index: 20 }
 built: 2026-06-16
 works_through: 2025-01-31
 checked: 2026-06-16
-orm_works_count: 2
-orm_swept: 2026-06-16
+orm_works_count: 3
+orm_swept: 2026-10-10
 ```
 
 # Thomas Greckhamer — Louisiana State University, USA
@@ -32,6 +32,8 @@ Greckhamer is a leading methodologist of qualitative comparative analysis (QCA) 
 
 ## ORM publications
 
-2 article(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-16). Most recent shown. (A 2025 ORM "Feature Topic" call-for-papers editorial is excluded as paratext.)
-- 2020 — Methodological Socialization and Identity: A Bricolage Study of Pathways Toward Qualitative Research in Doctoral Education — _Organizational Research Methods_
-- 2007 — Using Qualitative Comparative Analysis in Strategic Management Research — _Organizational Research Methods_
+3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-10).
+
+- 2025 — Feature Topic for ORM: Advanced Analytic Approaches to Theorize From Qualitative Research — _Qualitative Research Methods and Applications_
+- 2020 — Methodological Socialization and Identity: A Bricolage Study of Pathways Toward Qualitative Research in Doctoral Education — _Qualitative Research Methods and Applications_
+- 2007 — Using Qualitative Comparative Analysis in Strategic Management Research — _Qualitative Comparative Analysis Research_
