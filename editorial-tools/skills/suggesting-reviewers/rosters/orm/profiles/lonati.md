@@ -37,8 +37,7 @@ observational data.
 **Notes:** Quantitative orientation. Recent AOM 2025–2026 papers on IV
 estimation under effect heterogeneity/LATE (one with Mikko Rönkkö) and on the
 ITCV with robust standard errors signal ongoing causal-inference work not yet in
-journals. Conflict-of-interest flag: co-author of Mikko Rönkkö (2024
-*Psychological Methods*; 2026 AOM paper).
+journals.
 
 ## ORM publications
 
