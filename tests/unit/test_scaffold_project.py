@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -145,6 +146,11 @@ def test_update_gitignore_respects_commented_entries(
 
 # ---------------------------------------------------------------------------
 # CLI integration — exercise the script end-to-end via subprocess.
+#
+# `sys.executable`, not `python3` from PATH: on Windows `python3` is often
+# the Microsoft Store stub, and elsewhere it may be an interpreter other
+# than the one running the suite — so the test checked whichever Python
+# the machine happened to put first.
 # ---------------------------------------------------------------------------
 
 
@@ -152,7 +158,7 @@ def test_cli_sr_layout_creates_full_project(tmp_path: Path) -> None:
     """End-to-end: invoke the script as a subprocess (CI-equivalent)
     and verify the standard SLR layout lands."""
     rc = subprocess.run(
-        ["python3", str(SCAFFOLD), "--target", str(tmp_path), "--kind", "sr"],
+        [sys.executable, str(SCAFFOLD), "--target", str(tmp_path), "--kind", "sr"],
         check=False,
         env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
         capture_output=True,
@@ -168,7 +174,7 @@ def test_cli_sr_layout_creates_full_project(tmp_path: Path) -> None:
 def test_cli_manuscript_layout_omits_screening_dirs(tmp_path: Path) -> None:
     """Manuscript-only kind should NOT create screening/ pilot/ analysis/."""
     rc = subprocess.run(
-        ["python3", str(SCAFFOLD), "--target", str(tmp_path), "--kind", "manuscript"],
+        [sys.executable, str(SCAFFOLD), "--target", str(tmp_path), "--kind", "manuscript"],
         check=False,
         env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
         capture_output=True,
@@ -183,7 +189,7 @@ def test_cli_manuscript_layout_omits_screening_dirs(tmp_path: Path) -> None:
 def test_cli_idempotent_on_rerun(tmp_path: Path) -> None:
     """Running twice must not error; user customisations survive."""
     rc1 = subprocess.run(
-        ["python3", str(SCAFFOLD), "--target", str(tmp_path), "--kind", "sr"],
+        [sys.executable, str(SCAFFOLD), "--target", str(tmp_path), "--kind", "sr"],
         check=False, env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
         capture_output=True,
     )
@@ -191,7 +197,7 @@ def test_cli_idempotent_on_rerun(tmp_path: Path) -> None:
     config_path = tmp_path / "screening_config.py"
     config_path.write_text("USER EDIT", encoding="utf-8")
     rc2 = subprocess.run(
-        ["python3", str(SCAFFOLD), "--target", str(tmp_path), "--kind", "sr"],
+        [sys.executable, str(SCAFFOLD), "--target", str(tmp_path), "--kind", "sr"],
         check=False, env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
         capture_output=True,
     )
@@ -201,7 +207,7 @@ def test_cli_idempotent_on_rerun(tmp_path: Path) -> None:
 
 def test_cli_exits_on_missing_target(tmp_path: Path) -> None:
     rc = subprocess.run(
-        ["python3", str(SCAFFOLD),
+        [sys.executable, str(SCAFFOLD),
          "--target", str(tmp_path / "does-not-exist")],
         check=False, env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
         capture_output=True,
