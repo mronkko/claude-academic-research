@@ -1396,9 +1396,11 @@ class PageNavigationHandler(PublisherHandler):
                 resp = None
                 try:
                     resp = await page.goto(url, wait_until="commit", timeout=15000)
-                except Exception:
+                except Exception as nav_exc:
                     # Expected — the download event interrupts navigation.
-                    pass
+                    # A dead connection or browser is not; raising now
+                    # beats a 30 s wait for a download that cannot come.
+                    _raise_if_transport_or_gone(nav_exc)
                 if (status := gone_status(resp)) is not None:
                     # No download is coming from a "Page not found";
                     # waiting out the 30 s only to report a timeout hid
@@ -1449,6 +1451,18 @@ class PageNavigationHandler(PublisherHandler):
             flush=True,
         )
         return out, url
+
+
+def _raise_if_transport_or_gone(exc: BaseException) -> None:
+    """Re-raise `exc` when it says the network or the browser is gone.
+
+    For the `except Exception` blocks that tolerate one failed page in a
+    multi-step flow: a single dead page is survivable, a dead connection
+    is not, and swallowing it hides it from both breakers.
+    """
+    text = str(exc)
+    if is_transport_error(text) or is_browser_gone(text):
+        raise exc
 
 
 # ---------------------------------------------------------------------------
@@ -1532,11 +1546,15 @@ class PdfLinkNavigationHandler(PublisherHandler):
                 ).first.evaluate("a => a.href"))
             except PageVerdict:
                 raise
-            except Exception:
+            except Exception as landing_exc:
                 # A dead landing page is not fatal when the platform's
                 # PDF URL can be derived; only the absence of *any*
-                # candidate is.
-                pass
+                # candidate is. A dead *network* or browser is: those
+                # must reach `report_failure` in their own words, or the
+                # outage breaker and BrowserGone (both read `last_error`)
+                # never fire and an outage is logged item by item as
+                # "PDF link not found".
+                _raise_if_transport_or_gone(landing_exc)
             for extra in self.fallback_pdf_urls(doi):
                 if extra and extra not in candidates:
                     candidates.append(extra)
@@ -1555,12 +1573,16 @@ class PdfLinkNavigationHandler(PublisherHandler):
                         try:
                             await page.goto(cand, wait_until="commit",
                                             timeout=15000)
-                        except Exception:
-                            pass  # download event interrupts navigation
+                        except Exception as nav_exc:
+                            # The download event interrupts navigation
+                            # (net::ERR_ABORTED) — expected. A dead
+                            # connection is not.
+                            _raise_if_transport_or_gone(nav_exc)
                     dl = await dl_info.value
                     pdf_href = cand
                     break
-                except Exception:
+                except Exception as cand_exc:
+                    _raise_if_transport_or_gone(cand_exc)
                     continue
             if dl is None:
                 raise RuntimeError(
