@@ -132,7 +132,7 @@ def test_openalex_raises_when_retries_are_exhausted(monkeypatch) -> None:
 
     monkeypatch.setattr(http_client, "get_json", lambda *a, **k: None)
     with pytest.raises(RuntimeError, match="OpenAlex"):
-        OpenAlexSearch()._fetch_page("q", "filter", 1, _ctx())
+        OpenAlexSearch()._fetch_page("q", "filter", "*", _ctx())
 
 
 def test_wos_raises_when_retries_are_exhausted(monkeypatch) -> None:
