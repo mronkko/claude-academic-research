@@ -5047,7 +5047,7 @@ def main() -> int:
     pdf_map = zot.pdf_map()
     if not args.replace:
         candidates += _logged_done_without_pdf(all_items, done_items, pdf_map)
-    md5_map =zot.real_pdf_md5_map() if args.replace else {}
+    md5_map = zot.real_pdf_md5_map() if args.replace else {}
     real_map = {parent: list(atts) for parent, atts in md5_map.items()}
     to_process, stub_keys, replace_targets = _partition_by_attachment(
         candidates, pdf_map, real_map, replace=args.replace,

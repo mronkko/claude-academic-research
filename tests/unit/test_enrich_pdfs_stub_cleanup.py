@@ -52,9 +52,13 @@ def test_stubs_are_trashed_not_deleted(zot, capsys) -> None:
     zot.delete_item.assert_not_called()
 
 
-@pytest.mark.parametrize("flag", ["--dry-run", "--plan"])
-def test_read_only_runs_leave_stubs_alone(zot, flag, capsys) -> None:
-    sys.argv.append(flag)
+@pytest.mark.parametrize("flags", [
+    ["--dry-run"],
+    # --plan alone is a usage error (it only plans the browser pass).
+    ["--plan", "--sources", "browser"],
+])
+def test_read_only_runs_leave_stubs_alone(zot, flags, capsys) -> None:
+    sys.argv.extend(flags)
     assert enrich_pdfs.main() == 0
     zot.trash_item.assert_not_called()
     zot.delete_item.assert_not_called()
