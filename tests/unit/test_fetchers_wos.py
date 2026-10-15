@@ -359,3 +359,61 @@ def test_surnames_match_across_accents() -> None:
     rec = _expanded_record("Resistance to change and innovativeness", "u" * 80,
                            year=2019, author="Roth", source="J BUS RES")
     assert _fallback("Resistance to change and innovativeness", meta, rec)[0]
+
+
+# ---------------------------------------------------------------------------
+# SICI DOIs — query syntax inside the DOI
+# ---------------------------------------------------------------------------
+
+SICI = "10.1002/(sici)1097-0266(199701)18:1<1::aid-smj894>3.0.co;2-d"
+
+
+def test_the_doi_query_is_quoted() -> None:
+    """Unescaped, a SICI DOI's parentheses are query syntax to WoS."""
+    sess, calls = _http_returning(_expanded_response(0))
+    src = WosSource(http=sess, config=_Config(extended="KEY"))
+    src.fetch_abstract(SICI)
+    assert calls[0]["usrQuery"] == f'DO=("{SICI}")'
+
+
+def test_a_rejected_doi_query_falls_through_to_the_title() -> None:
+    """WoS answered HTTP 400 to the DOI query; `answered()` raised, so
+    the title fallback never ran and the item was lookup_failed forever."""
+    text = "A study of resource-based strategy and competitive advantage " * 3
+    title = "Resource Based Strategy and Competitive Advantage Revisited"
+    responses = iter([
+        (400, {}),
+        (200, _expanded_response(1, [_expanded_record(title, text.strip())])),
+    ])
+    queries = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        queries.append(params["usrQuery"])
+        status, body = next(responses)
+        resp = MagicMock()
+        resp.status_code = status
+        resp.json.return_value = body
+        return resp
+
+    sess = MagicMock()
+    sess.get.side_effect = fake_get
+    src = WosSource(http=sess, config=_Config(extended="KEY"))
+    result = src.fetch_abstract(SICI, title=title, meta=ANNALS_2014)
+    assert result is not None and "resource" in result.lower()
+    assert queries[1].startswith("TI=(")
+
+
+def test_a_400_on_the_title_query_still_raises() -> None:
+    """Only the DOI query is tolerated: a title-query 400 has no fallback
+    behind it, and must stay visible as lookup_failed."""
+    def fake_get(url, params=None, headers=None, timeout=None):
+        resp = MagicMock()
+        resp.status_code = 400 if params["usrQuery"].startswith("TI=") else 200
+        resp.json.return_value = _expanded_response(0)
+        return resp
+
+    sess = MagicMock()
+    sess.get.side_effect = fake_get
+    src = WosSource(http=sess, config=_Config(extended="KEY"))
+    with pytest.raises(RuntimeError):
+        src.fetch_abstract("10.1/x", title="Resource Based Strategy and Advantage")

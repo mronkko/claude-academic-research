@@ -1,7 +1,7 @@
 """Web of Science — abstract retrieval via the WoS Expanded or Starter API.
 
 Two-phase lookup strategy:
-  1. Query by DOI (`DO=(<doi>)`). Most papers resolve here.
+  1. Query by DOI (`DO=("<doi>")`). Most papers resolve here.
   2. Fallback by title (`TI=(<cleaned title>)`) when DOI lookup misses
      but a title is available. WoS sometimes indexes a paper under a
      different publisher DOI than the one in Zotero — common for AoM
@@ -71,6 +71,16 @@ def _query_title(title: str, *, drop_operators: bool) -> str:
     return " ".join(words)
 
 
+def _doi_query(doi: str) -> str:
+    """`DO=("<doi>")`: quoted so WoS reads the DOI as one literal term.
+
+    SICI DOIs carry parentheses, `<>`, `;` and `:` — all query syntax to
+    WoS. A `"` cannot be escaped inside the phrase, and no registered DOI
+    needs one, so it is dropped.
+    """
+    return f'DO=("{doi.replace(chr(34), "")}")'
+
+
 #: A title with fewer content words than this is not searched for.
 #: "Erratum", "Introduction", "Discrimination", "COMMENTARY", "Time to
 #: get tough": `TI=` matches thousands of records, `matches()` accepts
@@ -135,7 +145,14 @@ class WosSource(AbstractFetcher):
         headers = {"X-ApiKey": key, "Accept": "application/json"}
 
         # Phase 1: DOI.
-        hits, withheld = self._expanded_query(f"DO=({doi})", headers, count=1)
+        # Quoted, so a SICI DOI's own parentheses and `<>` are not read
+        # as query syntax; and a 400 here falls through to the title
+        # fallback. Unescaped, `DO=(10.1002/(sici)…)` drew HTTP 400,
+        # which `answered()` raises on — so these items never reached the
+        # title query and were logged lookup_failed on every run.
+        hits, withheld = self._expanded_query(
+            _doi_query(doi), headers, count=1, bad_query_ok=True,
+        )
         text = self._expanded_abstract(hits[0]) if hits else None
         if text:
             return text
@@ -195,6 +212,7 @@ class WosSource(AbstractFetcher):
 
     def _expanded_query(
         self, query: str, headers: dict, *, count: int,
+        bad_query_ok: bool = False,
     ) -> tuple[list[dict], bool]:
         """(viewable records, whether a found record was withheld)."""
         # A failed request raises: returning "no hits" logs the item
@@ -212,6 +230,12 @@ class WosSource(AbstractFetcher):
             },
             timeout=30,
         )
+        if bad_query_ok and resp.status_code == 400:
+            # WoS rejected the *query*, not the request: a statement
+            # about our syntax, never about the record. The caller has
+            # another way to ask.
+            logger.info("wos: query %r rejected (HTTP 400)", query[:120])
+            return [], False
         if not answered(resp, "wos"):
             return [], False
         data = resp.json() or {}
