@@ -75,6 +75,7 @@ key value is ever printed.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import sys
@@ -168,6 +169,16 @@ def _rule_command(rule: str) -> str | None:
     return Path(head).name or None
 
 
+def _covers(head: str, commands: tuple[str, ...]) -> bool:
+    """Whether a rule's command position, `head`, matches any of `commands`.
+
+    `head` may itself be a wildcard pattern: `Bash(ssh*)` and `Bash(s*)`
+    both allow `ssh`, and comparing them for equality missed exactly the
+    hand-written rules this detector exists to catch.
+    """
+    return any(fnmatch.fnmatchcase(cmd, head) for cmd in commands)
+
+
 def scan_permissions(paths: list[Path]) -> dict[str, object]:
     """Read the settings files and report what they allow.
 
@@ -203,9 +214,9 @@ def scan_permissions(paths: list[Path]) -> dict[str, object]:
             cmd = _rule_command(rule)
             if cmd is None:
                 continue
-            if cmd == "*" or cmd in GATED_COMMANDS:
+            if cmd == "*" or _covers(cmd, GATED_COMMANDS):
                 gated.append((rule, path))
-            elif cmd in QUERY_COMMANDS:
+            elif _covers(cmd, QUERY_COMMANDS):
                 queries.append((rule, path))
     return {
         "gated": gated,

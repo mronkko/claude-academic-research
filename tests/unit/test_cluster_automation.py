@@ -255,6 +255,24 @@ def test_a_read_only_scheduler_query_is_reported_but_does_not_promote(
     assert ccc.effective_level("confirm", perms) == ("confirm", [])
 
 
+@pytest.mark.parametrize("rule", ["Bash(ssh*)", "Bash(s*)", "Bash(rsy*:*)", "Bash(sb?tch *)"])
+def test_a_wildcard_in_the_command_position_is_caught(ccc, tmp_path: Path, rule) -> None:
+    """G8: `Bash(ssh*)` allows ssh just as surely as `Bash(ssh:*)`, but
+    an equality check on the command name let it through."""
+    home = tmp_path / "home"
+    _write_settings(home / ".claude" / "settings.json", {"allow": [rule]})
+    perms = ccc.scan_permissions(ccc.settings_paths(tmp_path / "p", home))
+    assert [r for r, _ in perms["gated"]] == [rule]
+
+
+def test_a_wildcard_matching_only_queries_does_not_promote(ccc, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _write_settings(home / ".claude" / "settings.json", {"allow": ["Bash(sq*)"]})
+    perms = ccc.scan_permissions(ccc.settings_paths(tmp_path / "p", home))
+    assert perms["gated"] == []
+    assert [r for r, _ in perms["queries"]] == ["Bash(sq*)"]
+
+
 def test_a_blanket_bash_rule_counts_as_gating_everything(ccc, tmp_path: Path) -> None:
     home = tmp_path / "home"
     _write_settings(home / ".claude" / "settings.json", {"allow": ["Bash(*)"]})
