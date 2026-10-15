@@ -132,6 +132,21 @@ STATUS_INFO: dict[str, tuple[str, str]] = {
         "lower `min_version` for this project (PDF_MIN_VERSION in "
         "screening_config.py) if that version is good enough.",
     ),
+    "skipped_consent_needed": (
+        "Automated download not attempted: no consent recorded for the site",
+        "Nothing was learned about access. This run could not ask "
+        "(--no-prompt, --control-file, unattended). Record an answer for "
+        "the site — `pdf_consent.py set --site <site> --automated allow` "
+        "with the user's say-so, or run the pass in a terminal and answer "
+        "its prompt — then re-run `--sources browser` over "
+        "retry.consent_needed.keys; or download these by hand.",
+    ),
+    "skipped_consent_denied": (
+        "Automated download denied for the site ([publisher_consent] deny)",
+        "Download these by hand: `enrich_pdfs.py --manual next` opens them "
+        "first. To allow automation after all, change the answer "
+        "(`pdf_consent.py set`, or /setup).",
+    ),
     "skipped_no_library_coverage": (
         "Library link-resolver reported no licensed full-text route",
         "Verify against your library's own journal listing before "

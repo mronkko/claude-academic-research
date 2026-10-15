@@ -365,9 +365,11 @@ def _report_retrieval_failures(
     # about it.
     cause_order = [
         pdf_fetch_log.FailureCause.BROWSER_REQUIRED.value,
+        pdf_fetch_log.FailureCause.CONSENT_NEEDED.value,
         pdf_fetch_log.FailureCause.UPLOAD_FAILED.value,
         pdf_fetch_log.FailureCause.CORRUPT_DOWNLOAD.value,
         pdf_fetch_log.FailureCause.NO_PDF_OFFERED.value,
+        pdf_fetch_log.FailureCause.CONSENT_DENIED.value,
         pdf_fetch_log.FailureCause.VERSION_BELOW_POLICY.value,
         pdf_fetch_log.FailureCause.ACCESS_BLOCKED.value,
         pdf_fetch_log.FailureCause.NETWORK_ERROR.value,
@@ -455,6 +457,8 @@ def _write_retry_keys(pdf_fetch_log, verdicts: dict, stem: Path) -> dict[str, Pa
         "retry.reattach": [],
         "retry.manual": [],
         "retry.below_policy": [],
+        "retry.consent_needed": [],
+        "retry.consent_denied": [],
         "true_negative": [],
         "out_of_scope": [],
     }
@@ -474,6 +478,12 @@ def _write_retry_keys(pdf_fetch_log, verdicts: dict, stem: Path) -> dict[str, Pa
         # `retry.manual`: the fix may equally be a policy decision, and
         # the manual-download mode wants to know which items are these.
         cause.VERSION_BELOW_POLICY.value: "retry.below_policy",
+        # Automated download skipped for want of a consent answer: record
+        # it and re-run the browser pass over exactly these.
+        cause.CONSENT_NEEDED.value: "retry.consent_needed",
+        # Denied: the manual queue opens these first. Own set, not
+        # `retry.manual` — see `FailureCause.CONSENT_DENIED`.
+        cause.CONSENT_DENIED.value: "retry.consent_denied",
         cause.UNAVAILABLE.value: "true_negative",
         cause.OUT_OF_SCOPE.value: "out_of_scope",
     }
@@ -548,6 +558,7 @@ def main() -> int:
             "of the items that still have no PDF, says how many are "
             "recoverable rather than genuinely unavailable, and writes "
             "retry key-files (retry.browser[.<publisher>], retry.ill, retry.manual, "
+            "retry.consent_needed, retry.consent_denied, "
             "retry.network, true_negative, out_of_scope) for "
             "--filter-keys-file. Pass an empty string to skip."
         ),

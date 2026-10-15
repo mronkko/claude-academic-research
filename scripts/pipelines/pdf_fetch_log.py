@@ -138,6 +138,31 @@ class FailureCause(StrEnum):
     by another route (browser pass, a manual download), or a deliberate
     decision to lower `min_version` for this project."""
 
+    CONSENT_NEEDED = "CONSENT_NEEDED"
+    """Automated download from this item's site (a browser handler, or
+    the page the Zotero Connector would save from) was skipped because
+    no consent to automate it is recorded and nobody could be asked —
+    `--no-prompt`, an agent-driven `--control-file` run, an unattended
+    run. A missing answer never means yes (`core/publisher_consent.py`).
+
+    Nothing was attempted, so nothing was learned about access: never an
+    exclusion and never an ILL candidate. Record the user's answer
+    (`pdf_consent.py set`, the `pdf_consent_set` tool, the run's own
+    prompt in a terminal, or `/setup`) and re-run the browser pass over
+    `retry.consent_needed.keys` — or download those items by hand."""
+
+    CONSENT_DENIED = "CONSENT_DENIED"
+    """The user has recorded `automated = "deny"` for the site this item
+    would be downloaded from, so the browser pass did not open it. The
+    item falls through to manual download (mode 3), not to nothing: the
+    audit writes `retry.consent_denied.keys` and the manual queue opens
+    those items first (`manual_pdfs.PRIORITY_RETRY_SETS`).
+
+    Its own set rather than folded into `retry.manual`: those items were
+    opened and offered no PDF, these were never opened — and if the user
+    later changes the answer to `allow`, this key file is exactly what a
+    browser pass should be re-run over. Not an exclusion."""
+
     UPLOAD_FAILED = "UPLOAD_FAILED"
     """The PDF was fetched successfully but could not be attached to
     Zotero. Categorically different from the four above: the full text
@@ -162,11 +187,38 @@ class FailureCause(StrEnum):
 # `--sources browser --publisher core` for 428 recoverable items. Two
 # columns, two questions. `csv_io.upsert_by_item_key` empty-fills this
 # for rows written before it existed, so old logs still read.
+#
+# `network` is the library (link-resolver institution) whose network the
+# run was on — `--library` / `LIBRARY_ACTIVE`, or every configured one
+# when none was chosen; empty with no resolver configured. A 403 from
+# home and a 403 on campus are different findings, and a summary cannot
+# tell a network failure from a real lack of access without it (plan
+# `pdf-retrieval.md` §4). Appended last, so `csv_io.upsert_by_item_key`
+# migrates an older log on its next write (old rows read as empty: not
+# recorded) — the same append-only rule as `log_schemas`.
 FAILURE_FIELDS: list[str] = [
     "timestamp", "item_key", "doi", "item_type",
     "attempt", "source", "publisher", "http_status", "cause",
-    "untried_handler",
+    "untried_handler", "network",
 ]
+
+#: The `network` value a row gets when its writer does not pass one —
+#: set once per run by `enrich_pdfs` (`set_run_network`). Process-global
+#: for the reason `fetchers.browser.interaction`'s channel is: the five
+#: writers sit in helpers several of which never see the run's argparse
+#: namespace, and threading one string through all of them would touch
+#: every signature for a value that cannot differ within a run.
+_RUN_NETWORK = ""
+
+
+def set_run_network(label: str) -> None:
+    """Record which library's network this run is on (see `network`)."""
+    global _RUN_NETWORK
+    _RUN_NETWORK = label or ""
+
+
+def run_network() -> str:
+    return _RUN_NETWORK
 
 # Keyed by (item_key, source): one row per item *per attempt*.
 #
@@ -278,6 +330,7 @@ def log_failure(
     untried_browser_handler: str = "",
     browser_pass_untried: bool = False,
     scope_types: frozenset[str] | None = None,
+    network: str | None = None,
 ) -> FailureCause:
     """Append a row to `pdf_fetch_log.csv` describing why this fetch failed.
 
@@ -307,6 +360,7 @@ def log_failure(
         "http_status": "" if http_status is None else str(http_status),
         "cause": cause.value,
         "untried_handler": untried_browser_handler,
+        "network": _RUN_NETWORK if network is None else network,
     }
     csv_io.upsert_by_item_key(
         log_path, row, FAILURE_FIELDS, key_field=FAILURE_KEY_FIELDS,
@@ -386,9 +440,14 @@ def group_by_cause(failures: list[dict[str, str]]) -> dict[str, list[dict[str, s
 CAUSE_PRECEDENCE: tuple[str, ...] = (
     FailureCause.OUT_OF_SCOPE.value,
     FailureCause.BROWSER_REQUIRED.value,
+    # Consent rows outrank the API cascade's 403s and misses for the same
+    # item: they say why the route that could have answered was never
+    # taken, which is the actionable part.
+    FailureCause.CONSENT_NEEDED.value,
     FailureCause.UPLOAD_FAILED.value,
     FailureCause.CORRUPT_DOWNLOAD.value,
     FailureCause.NO_PDF_OFFERED.value,
+    FailureCause.CONSENT_DENIED.value,
     FailureCause.VERSION_BELOW_POLICY.value,
     FailureCause.ACCESS_BLOCKED.value,
     FailureCause.NETWORK_ERROR.value,
@@ -496,6 +555,13 @@ SUGGESTED_FE_CODE: dict[str, str] = {
     FailureCause.VERSION_BELOW_POLICY.value:
         "NOT an exclusion — only a copy below [pdf] min_version was found; "
         "get the published version another way, or lower min_version",
+    FailureCause.CONSENT_NEEDED.value:
+        "NOT an exclusion — automated download not attempted: no consent "
+        "recorded for the site; record it (pdf_consent.py set) and re-run "
+        "--sources browser, or download by hand",
+    FailureCause.CONSENT_DENIED.value:
+        "NOT an exclusion — automated download denied for the site; "
+        "download by hand (enrich_pdfs.py --manual next)",
 }
 
 #: Causes that must never be adjudicated as a full-text exclusion —
@@ -517,4 +583,14 @@ RECOVERABLE_CAUSES: frozenset[str] = frozenset({
     FailureCause.UPLOAD_FAILED.value,
     FailureCause.NO_PDF_OFFERED.value,
     FailureCause.VERSION_BELOW_POLICY.value,
+    FailureCause.CONSENT_NEEDED.value,
+    FailureCause.CONSENT_DENIED.value,
+})
+
+#: Causes that record a route the browser pass *chose not to take*
+#: (consent), as opposed to one it took. A planner must not read their
+#: rows as "the browser pass has answered for this item".
+NOT_ATTEMPTED_CAUSES: frozenset[str] = frozenset({
+    FailureCause.CONSENT_NEEDED.value,
+    FailureCause.CONSENT_DENIED.value,
 })

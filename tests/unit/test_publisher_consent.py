@@ -15,8 +15,8 @@ import datetime as dt
 import tomllib
 
 import pytest
-
-from core import config_loader, config_writer, publisher_consent as pc
+from core import config_loader, config_writer
+from core import publisher_consent as pc
 
 
 def _cfg() -> dict:
