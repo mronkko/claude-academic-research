@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import csv
 import os
+import sys
 import tempfile
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -132,10 +134,46 @@ def upsert_by_item_key(
             for r in out_rows:
                 # Empty-fill any historical row that's missing newer schema cols.
                 writer.writerow({col: r.get(col, "") for col in schema})
-        os.replace(tmp_path, csv_path)
+        _replace_with_retry(tmp_path, csv_path)
     except Exception:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
         raise
+
+
+#: Waits between attempts to replace a CSV another program holds open.
+#: ~30 s in all: long enough to switch to Excel and close the file.
+REPLACE_RETRY_DELAYS = (0.5, 1, 2, 4, 8, 15)
+
+
+def _replace_with_retry(src: str | Path, dst: Path) -> None:
+    """`os.replace`, retried while the destination is locked.
+
+    On Windows a CSV open in Excel cannot be replaced — `os.replace`
+    raises PermissionError — and a screening run that dies on that loses
+    its place mid-corpus over a spreadsheet someone was glancing at. So
+    the write waits, says why once, and only gives up (with the reason
+    spelled out) if the file stays locked.
+    """
+    for attempt, delay in enumerate((*REPLACE_RETRY_DELAYS, None)):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError as e:
+            if delay is None:
+                raise PermissionError(
+                    f"{dst} stayed locked for "
+                    f"{sum(REPLACE_RETRY_DELAYS):.0f}s — is it open in Excel "
+                    f"or another program? Close it and re-run; screening "
+                    f"resumes from the Zotero tags. ({e})"
+                ) from e
+            if attempt == 0:
+                print(
+                    f"  WARNING: cannot write {dst} — it looks open in "
+                    f"another program (Excel?). Close it; retrying for up to "
+                    f"{sum(REPLACE_RETRY_DELAYS):.0f}s.",
+                    file=sys.stderr, flush=True,
+                )
+            time.sleep(delay)
