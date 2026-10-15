@@ -31,6 +31,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
+from fetchers.doi_url import doi_path
+
 from . import interaction
 from .interaction import ask_in_daemon
 
@@ -1015,7 +1017,7 @@ class PublisherHandler(ABC):
         Falls back to `url_template` when `setup_url_template` isn't set.
         """
         tmpl = self.setup_url_template or self.url_template
-        return tmpl.format(doi=doi) if tmpl else ""
+        return tmpl.format(doi=doi_path(doi)) if tmpl else ""
 
     def needs_solve_for(self, items: list[dict]) -> bool:
         """Whether *this* queue needs an interactive solve before lanes open.
@@ -1077,7 +1079,7 @@ class PublisherHandler(ABC):
                 # whether they can reach the PDF from a "Page not found"
                 # makes them diagnose our URL, so say what happened and
                 # show them the DOI's real landing page instead.
-                fallback = f"https://doi.org/{first_doi}"
+                fallback = f"https://doi.org/{doi_path(first_doi)}"
                 print(f"  HTTP {status} at {url} — opening {fallback} "
                       f"instead.", flush=True)
                 fallback_resp = None
@@ -1297,7 +1299,7 @@ class RequestHandler(PublisherHandler):
         if is_cached(out):
             counter.cached += 1
             return out, f"cache://{out}"
-        url = self.url_template.format(doi=doi)
+        url = self.url_template.format(doi=doi_path(doi))
         try:
             resp = await ctx.request.get(url, timeout=60000)
             body = await resp.body()
@@ -1390,7 +1392,7 @@ class PageNavigationHandler(PublisherHandler):
         if is_cached(out):
             counter.cached += 1
             return out, f"cache://{out}"
-        url = self.url_template.format(doi=doi)
+        url = self.url_template.format(doi=doi_path(doi))
         try:
             async with page.expect_download(timeout=30000) as dl_info:
                 resp = None
@@ -1522,7 +1524,7 @@ class PdfLinkNavigationHandler(PublisherHandler):
             counter.cached += 1
             return out, f"cache://{out}"
 
-        url = self.url_template.format(doi=doi)
+        url = self.url_template.format(doi=doi_path(doi))
         try:
             candidates: list[str] = []
             try:

@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from fetchers.doi_url import doi_path
+
 from .base import (
     Counter,
     PublisherHandler,
@@ -66,7 +68,7 @@ class InformsHandler(PublisherHandler):
             counter.cached += 1
             return out, f"cache://{out}"
 
-        url = self.url_template.format(doi=doi)
+        url = self.url_template.format(doi=doi_path(doi))
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(2000)

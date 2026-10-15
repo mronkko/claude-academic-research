@@ -58,6 +58,7 @@ import re
 from urllib.parse import parse_qs, quote, urlparse, urlunparse
 
 from fetchers import _pdf_validate
+from fetchers.doi_url import doi_path
 from fetchers.resolvers.base import needs_interactive_login
 
 from .base import PublisherHandler, cache_path_for, is_cached, progress_tag
@@ -353,7 +354,7 @@ class EbscoHandler(PublisherHandler):
         The DOI form remains a fallback for the unrouted case, where
         `setup()` is not called anyway.
         """
-        return self.pending_solve_url or f"https://doi.org/{doi}"
+        return self.pending_solve_url or f"https://doi.org/{doi_path(doi)}"
 
     def solve_url_for(self, items: list[dict]) -> str:
         """First queued route that goes through a signing-in proxy."""

@@ -23,6 +23,7 @@ from pathlib import Path
 
 from fetchers import _pdf_validate, cache_names
 from fetchers.base import AbstractFetcher, PdfFetcher, answered
+from fetchers.doi_url import doi_path
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,7 @@ class SemanticScholarSource(AbstractFetcher, PdfFetcher):
         # A failed request, or a status other than 200/404, raises: S2's
         # 429s are common enough that reading them as "no abstract"
         # would fill the log with false not_found rows.
-        url = f"{_API_BASE}/paper/DOI:{doi}?fields=abstract"
+        url = f"{_API_BASE}/paper/DOI:{doi_path(doi)}?fields=abstract"
         resp = self._get(url)
         if answered(resp, "semantic_scholar"):
             abstract = (resp.json() or {}).get("abstract")
@@ -124,7 +125,7 @@ class SemanticScholarSource(AbstractFetcher, PdfFetcher):
         downloadable copy, so an empty answer here is a real negative
         rather than a lookup that needs retrying elsewhere.
         """
-        url = f"{_API_BASE}/paper/DOI:{doi}?fields=openAccessPdf"
+        url = f"{_API_BASE}/paper/DOI:{doi_path(doi)}?fields=openAccessPdf"
         try:
             resp = self._get(url)
         except Exception as e:

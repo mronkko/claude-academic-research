@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import re
 
+from fetchers.doi_url import doi_path
 from fetchers.springer import _SPRINGER_PREFIXES
 
 from .base import PageNavigationHandler
@@ -87,5 +88,5 @@ class SpringerHandler(PageNavigationHandler):
         suffix = doi.partition("/")[2]
         if _BOOK_SUFFIX.match(suffix):
             kind = "chapter" if "_" in suffix else "book"
-            return f"https://link.springer.com/{kind}/{doi}"
+            return f"https://link.springer.com/{kind}/{doi_path(doi)}"
         return super()._setup_url_for(doi)
