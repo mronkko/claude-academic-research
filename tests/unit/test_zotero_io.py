@@ -169,14 +169,17 @@ def test_pdf_map_groups_real_vs_stub_attachments() -> None:
     fake = MagicMock()
     fake.everything.return_value = [
         {"key": "ATT1", "data": {"contentType": "application/pdf",
+                                  "linkMode": "imported_file",
                                   "parentItem": "PARENT_A",
                                   "md5": "deadbeef",
                                   "dateAdded": "2020-01-01T00:00:00Z"}},
         {"key": "ATT2", "data": {"contentType": "application/pdf",
+                                  "linkMode": "imported_file",
                                   "parentItem": "PARENT_A",
                                   "md5": None,
                                   "dateAdded": "2020-01-01T00:00:00Z"}},
         {"key": "ATT3", "data": {"contentType": "application/pdf",
+                                  "linkMode": "imported_file",
                                   "parentItem": "PARENT_B",
                                   "md5": "",
                                   "dateAdded": "2020-01-01T00:00:00Z"}},
@@ -210,6 +213,7 @@ def test_pdf_map_grace_window_protects_recent_attachments() -> None:
     fake.everything.return_value = [
         {"key": "RECENT_STUB",
          "data": {"contentType": "application/pdf",
+                  "linkMode": "imported_file",
                   "parentItem": "PARENT_X",
                   "md5": "",
                   "dateAdded": now_iso}},
@@ -232,6 +236,7 @@ def test_pdf_map_unparseable_dateadded_protects_attachment() -> None:
     fake.everything.return_value = [
         {"key": "WEIRD",
          "data": {"contentType": "application/pdf",
+                  "linkMode": "imported_file",
                   "parentItem": "PARENT_Y",
                   "md5": None,
                   "dateAdded": "not-a-timestamp"}},
@@ -242,6 +247,51 @@ def test_pdf_map_unparseable_dateadded_protects_attachment() -> None:
 
     assert result["PARENT_Y"][0] is True
     assert result["PARENT_Y"][1] == []
+
+
+def _old_pdf(key: str, parent: str, link_mode: str, md5=None) -> dict:
+    """An attachment as Zotero's API returns it: a linked file carries no
+    md5 at all, whatever its age."""
+    return {"key": key, "data": {
+        "contentType": "application/pdf", "parentItem": parent,
+        "linkMode": link_mode, "md5": md5,
+        "dateAdded": "2020-01-01T00:00:00Z",
+    }}
+
+
+def test_a_linked_file_pdf_is_never_a_stub() -> None:
+    """A4. Linked files have no md5, so an md5-only test made every
+    linked PDF older than an hour a "stub", and enrich_pdfs permanently
+    deleted them along with their annotations."""
+    zc = _client()
+    fake = MagicMock()
+    fake.everything.return_value = [
+        _old_pdf("LINKED", "PARENT_L", "linked_file"),
+        _old_pdf("WEBLINK", "PARENT_U", "linked_url"),
+        _old_pdf("STUB_URL", "PARENT_I", "imported_url"),
+        _old_pdf("STUB_FILE", "PARENT_I", "imported_file"),
+    ]
+    zc._local = fake
+
+    result = zc.pdf_map()
+
+    assert result["PARENT_L"] == (True, [])        # has a PDF, nothing to delete
+    assert "PARENT_U" not in result                # a URL link: no bytes, no stub
+    assert result["PARENT_I"] == (False, ["STUB_URL", "STUB_FILE"])
+
+
+def test_a_linked_file_is_never_offered_for_replacement() -> None:
+    """`real_pdf_map` feeds the attachments `--replace` deletes."""
+    zc = _client()
+    fake = MagicMock()
+    fake.everything.return_value = [
+        _old_pdf("LINKED", "PARENT_L", "linked_file"),
+        _old_pdf("STORED", "PARENT_S", "imported_file", md5="cafe"),
+    ]
+    zc._local = fake
+
+    assert zc.real_pdf_map() == {"PARENT_S": ["STORED"]}
+    assert zc.real_pdf_md5_map() == {"PARENT_S": {"STORED": "cafe"}}
 
 
 def test_a_server_id_mismatch_is_not_retried_as_a_version_conflict() -> None:

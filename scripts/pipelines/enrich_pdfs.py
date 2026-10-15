@@ -4908,13 +4908,22 @@ def main() -> int:
         key: {md5 for md5 in md5_map.get(key, {}).values() if md5}
         for key in replace_targets
     })
+    # Stubs (stored attachments that never received their bytes; see
+    # `ZoteroClient.pdf_map`) go to the trash, never a permanent delete:
+    # this once deleted linked-file PDFs, annotations and all, and the
+    # trash is where a misjudgement stays recoverable. Neither --plan nor
+    # --dry-run writes anything, so neither touches them.
     stubs_deleted = 0
-    for stub_key in stub_keys:
-        try:
-            zot.delete_item(stub_key)
-            stubs_deleted += 1
-        except Exception as e:
-            print(f"  stub delete {stub_key} failed: {e}", flush=True)
+    if stub_keys and (args.plan or args.dry_run):
+        print(f"  {len(stub_keys)} stub attachment(s) would be moved to "
+              f"the trash (not under --plan / --dry-run).", flush=True)
+    else:
+        for stub_key in stub_keys:
+            try:
+                zot.trash_item(stub_key)
+                stubs_deleted += 1
+            except Exception as e:
+                print(f"  stub trash {stub_key} failed: {e}", flush=True)
     print(_attachment_summary(
         to_process=len(to_process), to_replace=len(replace_targets),
         stubs_deleted=stubs_deleted,

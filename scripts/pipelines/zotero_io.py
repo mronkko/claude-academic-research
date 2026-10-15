@@ -564,6 +564,11 @@ _IMPORTED_FILE_TEMPLATE: dict = {
 }
 
 
+#: Attachment link modes whose bytes Zotero stores (and hashes). Only
+#: these can be "stubs"; see `ZoteroClient.pdf_map`.
+_STORED_LINK_MODES = frozenset({"imported_file", "imported_url"})
+
+
 class ZoteroClient:
     """Thin pyzotero wrapper used by every pipeline script.
 
@@ -1020,7 +1025,7 @@ class ZoteroClient:
         )
         return {
             parent: [a["key"] for a in real]
-            for parent, (real, _stubs) in by_parent.items() if real
+            for parent, (real, _stubs, _linked) in by_parent.items() if real
         }
 
     def real_pdf_md5_map(
@@ -1037,7 +1042,7 @@ class ZoteroClient:
         )
         return {
             parent: {a["key"]: a["data"].get("md5") or "" for a in real}
-            for parent, (real, _stubs) in by_parent.items() if real
+            for parent, (real, _stubs, _linked) in by_parent.items() if real
         }
 
     def pdf_map(
@@ -1049,6 +1054,15 @@ class ZoteroClient:
         metadata-only attachment with no bytes (left behind by
         earlier failed uploads).
 
+        Only *stored* attachments (`linkMode` imported_file /
+        imported_url) can be stubs. A linked file lives on the user's
+        disk and never carries an md5 in the API, so judging it by md5
+        made every linked PDF older than an hour a "stub" — and
+        enrich_pdfs deleted them, annotations and all. A linked-file PDF
+        counts as the parent having a PDF here; it is never in a stub
+        list, nor in `real_pdf_map`, whose keys `--replace` deletes. A
+        linked URL is neither: there are no bytes in the library.
+
         Grace window: attachments whose `dateAdded` is within the
         last `stub_grace_seconds` (default 1h) are NOT classified
         as stubs — their md5 may just not have populated yet because
@@ -1058,20 +1072,21 @@ class ZoteroClient:
         a failed upload.
         """
         return {
-            k: (bool(real), [s["key"] for s in stubs])
-            for k, (real, stubs) in self._pdf_attachments_by_parent(
+            k: (bool(real or linked), [s["key"] for s in stubs])
+            for k, (real, stubs, linked) in self._pdf_attachments_by_parent(
                 stub_grace_seconds=stub_grace_seconds,
             ).items()
         }
 
     def _pdf_attachments_by_parent(
         self, *, stub_grace_seconds: int = 3600,
-    ) -> dict[str, tuple[list, list]]:
-        """{parent_key: ([real attachments], [stub attachments])}, full dicts.
+    ) -> dict[str, tuple[list, list, list]]:
+        """{parent_key: ([real], [stubs], [linked files])}, full dicts.
 
         The shared walk behind `pdf_map` and `real_pdf_map`; see
-        `pdf_map` for what separates a real attachment from a stub and
-        why the grace window exists.
+        `pdf_map` for what separates a real attachment from a stub, why
+        only stored attachments can be either, and why the grace window
+        exists. Linked URLs are left out altogether.
         """
         import datetime
         pdfs = [a for a in self.all_attachments()
@@ -1081,11 +1096,21 @@ class ZoteroClient:
         now = datetime.datetime.now(datetime.UTC)
         grace = datetime.timedelta(seconds=stub_grace_seconds)
 
-        by_parent: dict[str, tuple[list, list]] = defaultdict(lambda: ([], []))
+        by_parent: dict[str, tuple[list, list, list]] = defaultdict(
+            lambda: ([], [], []),
+        )
         for pdf in pdfs:
             parent = pdf["data"]["parentItem"]
+            link_mode = pdf["data"].get("linkMode")
+            if link_mode == "linked_file":
+                by_parent[parent][2].append(pdf)
+                continue
             if pdf["data"].get("md5"):
                 by_parent[parent][0].append(pdf)
+                continue
+            if link_mode not in _STORED_LINK_MODES:
+                # linked_url, or no/unknown link mode: no bytes in the
+                # library to be missing, so never a stub of ours.
                 continue
             # No md5 — might be a stub, OR an in-flight upload.
             # Check dateAdded: if the attachment was added within
