@@ -100,6 +100,26 @@ CONSTANT_FOR_STAGE: dict[str, str] = {
 
 DEFAULT_CONFIG = Path("screening_config.py")
 
+#: What a model ID may look like. The pin is written into a Python file
+#: that the pipeline later imports, so `--model` is code-adjacent input:
+#: an ID with a quote in it would end the string literal and the rest
+#: would run as Python. Real IDs across every provider fit this —
+#: `claude-haiku-4-5`, `models/gemini-2.5-flash`, `llama3:8b`,
+#: `openai/gpt-oss-120b`, `anthropic/claude-haiku-4.5:batch`,
+#: `hf.co/org/Model-GGUF:Q4_K_M` — and nothing that could escape a
+#: literal does.
+MODEL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+=-]{0,199}")
+
+
+def validate_model_id(model: str) -> str:
+    """`model` unchanged if it is a plausible model ID; else ValueError."""
+    if not isinstance(model, str) or not MODEL_ID_RE.fullmatch(model):
+        raise ValueError(
+            f"{model!r} does not look like a model ID (letters, digits and "
+            f". _ : / @ + = - only, starting with a letter or digit)."
+        )
+    return model
+
 
 def _credentials(spec: ProviderSpec) -> tuple[str, str]:
     """`(api_key, base_url)` for `spec`, from env or config.toml.
@@ -232,10 +252,23 @@ def _print_catalog_fallback(spec: ProviderSpec, reason: str) -> int:
 
 def pin_line(constant: str, model: str, provider: str, tier: str,
              today: str = "") -> str:
-    """The replacement source line, with its provenance comment."""
+    """The replacement source line, with its provenance comment.
+
+    The ID is validated and written with `repr()`, so the line is a
+    single string literal whatever was passed. Rendered with double
+    quotes to match the template's style; `MODEL_ID_RE` admits neither
+    quote character, so swapping the delimiters is exact.
+    """
+    validate_model_id(model)
+    literal = repr(model)
+    if literal.startswith("'"):
+        literal = '"' + literal[1:-1] + '"'
     stamp = today or date.today().isoformat()
+    for label, value in (("provider", provider), ("tier", tier)):
+        if not re.fullmatch(r"[A-Za-z0-9_.-]*", value):
+            raise ValueError(f"{label} {value!r} is not a plain name")
     return (
-        f'{constant} = "{model}"'
+        f"{constant} = {literal}"
         f"  # provider={provider} · tier={tier} · pinned {stamp}"
     )
 
@@ -362,6 +395,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--model pins one stage; pass --stage as well.")
     if args.tier and not args.model:
         parser.error("--tier labels a pin; it does nothing without --model.")
+    if args.model:
+        try:
+            validate_model_id(args.model)
+        except ValueError as e:
+            parser.error(str(e))
 
     provider_name = args.provider or get(
         "llm", "provider", env=providers.PROVIDER_ENV,

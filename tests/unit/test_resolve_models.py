@@ -176,12 +176,49 @@ def test_rewrite_replaces_an_existing_pin_without_stacking_comments(
     assert "a-2" in text and "a-1" not in text
 
 
-def test_rewrite_handles_a_model_id_with_a_backslash(resolve) -> None:
+def test_rewrite_handles_a_replacement_with_a_backslash(resolve) -> None:
     """A regex-special replacement string must be inserted literally."""
-    line = resolve.pin_line("M", r"weird\1model", "openrouter", "fast")
+    line = r'M = "weird\1model"'
     out, n = resolve.rewrite_pin('M = ""\n', "M", line)
     assert n == 1
     assert r"weird\1model" in out
+
+
+@pytest.mark.parametrize("model", [
+    "claude-haiku-4-5", "models/gemini-2.5-flash", "llama3:8b",
+    "openai/gpt-oss-120b", "anthropic/claude-haiku-4.5:batch",
+    "hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M",
+])
+def test_pin_line_accepts_real_model_ids(resolve, model) -> None:
+    import ast
+    line = resolve.pin_line("M", model, "openrouter", "fast", today="2026-01-01")
+    assert ast.literal_eval(line.split("=", 1)[1].split("#", 1)[0].strip()) == model
+
+
+@pytest.mark.parametrize("model", [
+    'x"; import os; os.system("echo pwned"); y="',
+    "x'\nimport os",
+    "a\\b",
+    "",
+    " leading-space",
+    "-starts-with-dash",
+    "a" * 201,
+])
+def test_pin_line_rejects_ids_that_could_escape_the_literal(resolve, model) -> None:
+    with pytest.raises(ValueError):
+        resolve.pin_line("M", model, "openrouter", "fast")
+
+
+def test_main_rejects_a_hostile_model_and_writes_nothing(resolve, project) -> None:
+    cfg = project
+    before = cfg.read_bytes()
+    with pytest.raises(SystemExit) as exc:
+        resolve.main([
+            "--config", str(cfg), "--stage", "abstract_screening",
+            "--model", 'x"\nimport os\n#', "--no-check",
+        ])
+    assert exc.value.code == 2
+    assert cfg.read_bytes() == before
 
 
 # ---------------------------------------------------------------------------
