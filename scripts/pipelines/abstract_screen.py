@@ -56,9 +56,11 @@ from __future__ import annotations
 import argparse
 import csv
 import random
+import re
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -126,6 +128,72 @@ STAGE_TAG_FAMILY = "abstract"
 STAGE_TAG_SUFFIX = f"{STAGE_TAG_FAMILY}:"
 
 
+#: `DECISION: …` / `REASON: …` after markdown noise is stripped. Models
+#: wrap the label in bold (`**DECISION:** include`), indent it, bullet it,
+#: or put the colon outside the bold (`**Decision**: include`); none of
+#: that changes what the model said.
+_LABEL_LINE = re.compile(r"^\s*(decision|reason)\s*[:：]\s*(.*)$", re.IGNORECASE)
+#: Markdown emphasis / code markers, removed before matching.
+_MARKDOWN_NOISE = re.compile(r"[*_`]")
+#: Characters that may trail or wrap the decision word without changing it:
+#: `Include.`, `"exclude"`, `(borderline)`.
+_DECISION_WRAP = " \t.!,;:\"'()[]"
+
+#: The reason a fallback `borderline` carries, followed by the raw reply.
+PARSE_ERROR_PREFIX = "PARSE ERROR — raw:"
+
+#: How many times the synchronous path re-asks the model when its reply
+#: cannot be parsed, before falling back to `borderline`. Bounded because
+#: a model that cannot follow the format twice in a row is unlikely to on
+#: the tenth try, and each try is paid for.
+PARSE_REASK_LIMIT = 2
+
+#: Appended to the user message on a re-ask. The original message is kept
+#: verbatim so the model is answering the same question.
+REASK_SUFFIX = (
+    "\n\nYour previous reply could not be read. Answer again in exactly "
+    "this format, two lines, nothing else:\n"
+    "DECISION: include|borderline|exclude\n"
+    "REASON: <one sentence>"
+)
+
+
+def _clean_decision_word(value: str) -> str:
+    """`include` from `Include.`, `**include**`, `include (meets all)`."""
+    value = value.strip().strip(_DECISION_WRAP).lower()
+    if value in VALID_DECISIONS:
+        return value
+    first = re.match(r"[a-z]+", value)
+    if first and first.group(0) in VALID_DECISIONS:
+        return first.group(0)
+    return value
+
+
+def try_parse_decision(text: str) -> tuple[str, str] | None:
+    """`(decision, reason)`, or None when the reply carries no valid decision.
+
+    Tolerant of formatting, strict about content: bold markers, bullets,
+    case and trailing punctuation are ignored, but the decision word must
+    still be one of `VALID_DECISIONS` — `DECISION: inc` is unparseable,
+    not a guess at `include`.
+    """
+    decision = ""
+    reason = ""
+    for raw in (text or "").splitlines():
+        line = _MARKDOWN_NOISE.sub("", raw).strip().lstrip("-#>•").strip()
+        m = _LABEL_LINE.match(line)
+        if not m:
+            continue
+        label, value = m.group(1).lower(), m.group(2)
+        if label == "decision" and not decision:
+            decision = _clean_decision_word(value)
+        elif label == "reason" and not reason:
+            reason = value.strip()
+    if decision not in VALID_DECISIONS:
+        return None
+    return decision, reason or (text or "").strip()
+
+
 def parse_decision(text: str) -> tuple[str, str]:
     """`(decision, reason)` from the model's two-line reply.
 
@@ -135,22 +203,26 @@ def parse_decision(text: str) -> tuple[str, str]:
     about clearly belongs in the read pile. The raw text is kept as the
     reason so the failure is still visible in the log.
 
+    The synchronous path reaches this fallback only after re-asking the
+    model (`PARSE_REASK_LIMIT`); the batch applier has one reply per
+    request and no model to ask, so it falls back at once. Both paths
+    end in this function, so the same final reply means the same row.
+
     Shared by the synchronous path and the batch applier on purpose. It
     is the single most consequential rule in this file, and a second
     copy is exactly how the two paths would come to disagree about what
     a given model output means.
     """
-    decision = "error"
-    reason = text
-    for line in (text or "").splitlines():
-        if line.upper().startswith("DECISION:"):
-            decision = line.split(":", 1)[1].strip().lower()
-        if line.upper().startswith("REASON:"):
-            reason = line.split(":", 1)[1].strip()
-    if decision not in VALID_DECISIONS:
-        decision = "borderline"
-        reason = f"PARSE ERROR — raw: {(text or '')[:200]}"
-    return decision, reason
+    parsed = try_parse_decision(text)
+    if parsed is not None:
+        return parsed
+    return "borderline", f"{PARSE_ERROR_PREFIX} {(text or '')[:200]}"
+
+
+def is_parse_fallback(reason: str) -> bool:
+    """True for a row whose `borderline` came from `parse_decision`'s
+    fallback rather than from the model."""
+    return (reason or "").startswith(PARSE_ERROR_PREFIX)
 
 
 def screening_row(
@@ -383,6 +455,7 @@ def apply_responses(
     counts: dict[str, int] = {}
     tag_buffer: list[tuple[str, dict]] = []
     model_seen = ""
+    parse_fallbacks = 0
     for req, resp in paired:
         if skip_already_tagged and req["item_key"] in tagged_since:
             counts["skipped"] = counts.get("skipped", 0) + 1
@@ -394,6 +467,10 @@ def apply_responses(
                 resp.get("response_text") or "",
             )
             decision, reason = parse_decision(answer)
+            # No model to re-ask here — one reply per request — so the
+            # fallback applies at once. Counted, so a run full of them is
+            # visible rather than a quiet pile of borderlines.
+            parse_fallbacks += int(is_parse_fallback(reason))
         elif status == "truncated":
             # A cut-off answer is a run defect, not a verdict. Recording
             # it as `error` keeps the item untagged and re-runnable.
@@ -452,6 +529,10 @@ def apply_responses(
         print(f"  {k}: {counts[k]}")
     if unanswered:
         print(f"  unanswered: {len(unanswered)}")
+    if parse_fallbacks:
+        print(
+            f"  unparseable reply, tagged borderline: {parse_fallbacks}"
+        )
     print(f"Log: {output_path}")
     return 0
 
@@ -484,6 +565,87 @@ def _flush_tag_buffer(zot, buffer: list[tuple[str, dict]]) -> dict[str, int]:
         )
     buffer.clear()
     return stats
+
+
+@dataclass
+class ScreenResult:
+    """What one synchronous screening call produced."""
+
+    key: str
+    query: str
+    decision: str
+    reason: str
+    #: Extra calls made because a reply could not be parsed.
+    reasks: int = 0
+    #: True when every reply was unparseable and `borderline` is the
+    #: fallback, not the model's verdict.
+    parse_fallback: bool = False
+    #: A non-retryable provider failure (spent quota, bad key): the run
+    #: should stop rather than fail every remaining item the same way.
+    fatal: object | None = None
+
+
+def screen_item(
+    item: dict,
+    *,
+    client,
+    model: str,
+    system_prompt: str,
+    doi_to_query: dict[str, str],
+    reask_limit: int = PARSE_REASK_LIMIT,
+) -> ScreenResult:
+    """Screen one item synchronously, re-asking on an unparseable reply.
+
+    An unparseable reply is formatting noise far more often than a model
+    that cannot decide, and `borderline` from noise is permanent — the
+    tag marks the item done. So the model is asked again, up to
+    `reask_limit` times, with a reminder of the format; only if every
+    reply is unparseable does `parse_decision`'s deliberate `borderline`
+    apply, judged on the last reply.
+
+    Never raises: a provider failure becomes an `error` result carrying
+    the classified verdict, so the caller can stop on a fatal one.
+    """
+    d = item.get("data", {})
+    key = d.get("key", item.get("key", ""))
+    doi = (d.get("DOI") or "").strip()
+    query = doi_to_query.get(doi.lower(), "")
+    msg = _format_user_message(
+        d.get("title", ""), d.get("abstractNote", "") or "",
+        d.get("publicationTitle", "") or "", query,
+    )
+    reasks = 0
+    text = ""
+    try:
+        while True:
+            text = client.generate(
+                model=model,
+                max_tokens=200,
+                temperature=0.0,
+                system=system_prompt,
+                prompt=msg if reasks == 0 else msg + REASK_SUFFIX,
+            )
+            parsed = try_parse_decision(text)
+            if parsed is not None:
+                return ScreenResult(key, query, *parsed, reasks=reasks)
+            if reasks >= reask_limit:
+                break
+            reasks += 1
+    except Exception as e:
+        # Classify rather than stringify. A run that hits a spent quota
+        # fails every remaining item the same way, and the useful output
+        # is one clear diagnosis, not N copies of an SDK repr.
+        verdict = llm_provider.classify_failure(e)
+        return ScreenResult(
+            key, query, "error",
+            f"{verdict.status.value}: {verdict.detail}"[:200],
+            reasks=reasks,
+            fatal=None if verdict.retryable else verdict,
+        )
+    decision, reason = parse_decision(text)
+    return ScreenResult(
+        key, query, decision, reason, reasks=reasks, parse_fallback=True,
+    )
 
 
 def _load_doi_to_query(search_csv: Path | None) -> dict[str, str]:
@@ -744,43 +906,20 @@ def main() -> int:
     #: rejected key fails every remaining item identically, so the run
     #: stops and says so once instead of grinding out N error rows.
     fatal: list = []
+    #: Re-asks after an unparseable reply, and items still unparseable
+    #: after them (`borderline` by fallback). Both printed in the summary:
+    #: a model that needs re-asking often is a prompt or model problem.
+    reasks = 0
+    parse_fallbacks = 0
 
-    def screen_one(item: dict) -> tuple[str, str, str, str, str, str, str]:
-        d = item.get("data", {})
-        key = d.get("key", item.get("key", ""))
-        doi = (d.get("DOI") or "").strip()
-        title = (d.get("title") or "")[:100]
-        source = d.get("publicationTitle", "") or ""
-        abstract = d.get("abstractNote", "") or ""
-        query = doi_to_query.get(doi.lower(), "")
-
-        msg = _format_user_message(d.get("title", ""), abstract, source, query)
-
-        try:
-            text = client.generate(
-                model=model,
-                max_tokens=200,
-                temperature=0.0,
-                system=system_prompt,
-                prompt=msg,
-            )
-            decision, reason = parse_decision(text)
-        except Exception as e:
-            # Classify rather than stringify. A run that hits a spent
-            # quota fails every remaining item the same way, and the
-            # useful output is one clear diagnosis, not N copies of an
-            # SDK repr.
-            verdict = llm_provider.classify_failure(e)
-            decision = "error"
-            reason = f"{verdict.status.value}: {verdict.detail}"[:200]
-            if not verdict.retryable:
-                fatal.append(verdict)
-
-        # The stage tag is applied by the main loop, batched (R6). The
-        # CSV row is written first there, so a tag write that never lands
-        # is recoverable: Zotero tags are the resume source of truth and a
-        # re-run re-screens any item left untagged.
-        return key, doi, title, source, query, decision, reason
+    def screen_one(item: dict) -> ScreenResult:
+        result = screen_item(
+            item, client=client, model=model, system_prompt=system_prompt,
+            doi_to_query=doi_to_query,
+        )
+        if result.fatal is not None:
+            fatal.append(result.fatal)
+        return result
 
     print(f"Screening with {args.workers} parallel workers (model={model})...",
           flush=True)
@@ -798,9 +937,15 @@ def main() -> int:
         futures = {pool.submit(screen_one, item): item for item in to_screen}
         try:
             for future in as_completed(futures):
-                key, doi, title, source, query, decision, reason = future.result()
+                res = future.result()
+                key, query, decision, reason = (
+                    res.key, res.query, res.decision, res.reason,
+                )
+                title = (by_key[key].get("data", {}).get("title") or "")[:100]
                 done_count += 1
                 counts[decision] = counts.get(decision, 0) + 1
+                reasks += res.reasks
+                parse_fallbacks += int(res.parse_fallback)
 
                 row = screening_row(
                     by_key[key], decision=decision, reason=reason,
@@ -844,6 +989,11 @@ def main() -> int:
     print(f"Done. Screened {done_count} of {total} items.")
     for k in (*VALID_DECISIONS, "error"):
         print(f"  {k}: {counts.get(k, 0)}")
+    if reasks or parse_fallbacks:
+        print(
+            f"  re-asked after an unparseable reply: {reasks} call(s); "
+            f"still unparseable, tagged borderline: {parse_fallbacks}"
+        )
     print(f"Log: {output_path}")
     # A run cut short by a dead provider must not exit 0 — the caller is
     # usually a skill, and a zero here reads as "screening complete".
