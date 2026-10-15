@@ -169,6 +169,23 @@ def test_cli_sr_layout_creates_full_project(tmp_path: Path) -> None:
     assert (tmp_path / "critic-reviews").is_dir()
     assert (tmp_path / "CLAUDE.md").is_file()
     assert (tmp_path / "screening_config.py").is_file()
+    # Where the template and manuscript.qmd say it lives.
+    assert (tmp_path / "analysis" / "manuscript_stats.py").is_file()
+    assert not (tmp_path / "manuscript" / "manuscript_stats.py").exists()
+    assert (tmp_path / "analysis" / "results").is_dir()
+
+
+def test_cli_no_claude_md_leaves_claude_md_alone(tmp_path: Path) -> None:
+    rc = subprocess.run(
+        [sys.executable, str(SCAFFOLD), "--target", str(tmp_path), "--kind", "sr",
+         "--no-claude-md"],
+        check=False,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+        capture_output=True,
+    )
+    assert rc.returncode == 0, rc.stderr.decode()
+    assert not (tmp_path / "CLAUDE.md").exists()
+    assert (tmp_path / "screening_config.py").is_file()
 
 
 def test_cli_manuscript_layout_omits_screening_dirs(tmp_path: Path) -> None:

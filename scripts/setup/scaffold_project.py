@@ -45,6 +45,7 @@ SR_DIRS = (
     "screening",
     "pilot",
     "analysis",
+    "analysis/results",  # manuscript_stats.json; empirical-integrity guards it
     "manuscript",
     "scripts",
     "output",
@@ -70,7 +71,9 @@ SR_TEMPLATE_COPIES = (
     ("screening_config.py",      "screening_config.py"),
     ("manuscript.qmd",           "manuscript/manuscript.qmd"),
     ("apa.csl",                  "manuscript/apa.csl"),
-    ("manuscript_stats.py",      "manuscript/manuscript_stats.py"),
+    # analysis/, where the template's own docstring and manuscript.qmd
+    # say it lives (the qmd also searches manuscript/, which hid this).
+    ("manuscript_stats.py",      "analysis/manuscript_stats.py"),
     ("manuscript_tables.py",     "manuscript/manuscript_tables.py"),
     ("test_systematic_review.py", "scripts/test_systematic_review.py"),
     ("test_citations.py",        "scripts/test_citations.py"),
@@ -195,6 +198,14 @@ def main() -> int:
             "pilot / analysis directories."
         ),
     )
+    parser.add_argument(
+        "--no-claude-md", action="store_true",
+        help=(
+            "Do not install the template CLAUDE.md. A project's CLAUDE.md "
+            "is the user's file; an agent passes this unless the user has "
+            "agreed to the template."
+        ),
+    )
     args = parser.parse_args()
 
     target = Path(args.target).resolve()
@@ -207,6 +218,8 @@ def main() -> int:
     else:
         dirs = SR_DIRS
         copies = SR_TEMPLATE_COPIES
+    if args.no_claude_md:
+        copies = tuple(c for c in copies if c[1] != "CLAUDE.md")
 
     print(f"Scaffolding {args.kind!r} project at {target}", flush=True)
     print(f"  templates source: {TEMPLATES_DIR}", flush=True)

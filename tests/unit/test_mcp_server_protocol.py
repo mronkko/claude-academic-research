@@ -220,7 +220,8 @@ def test_default_mode_and_project_default(project, stub, tmp_path) -> None:
              _env(project, [sys.executable, str(stub)], record))
     plan, scaffold, bib = _records(record)
     assert plan["argv"][1:] == ["--plan", "--sources", "browser"]
-    assert scaffold["argv"][1:] == ["--kind", "sr", "--target", str(project.resolve())]
+    assert scaffold["argv"][1:] == ["--kind", "sr", "--target", str(project.resolve()),
+                                    "--no-claude-md"]
     assert bib["argv"][1:] == [str(project.resolve())]
 
 
@@ -354,12 +355,17 @@ def test_real_scaffold_project(project, tmp_path) -> None:
     )
     p1, p2 = _payload(first), _payload(second)
     assert "manuscript/" in p1["summary"]["created_dirs"]
-    assert "CLAUDE.md" in p1["summary"]["copied_templates"]
+    # CLAUDE.md is the user's: the tool installs it only when asked.
+    assert "CLAUDE.md" not in p1["summary"]["copied_templates"]
+    assert not (project / "CLAUDE.md").exists()
     assert p1["artifacts"] == p1["summary"]["copied_templates"]
     assert (project / "manuscript" / "manuscript.qmd").is_file()
     # Re-running is a no-op that overwrites nothing.
     assert p2["summary"]["copied_templates"] == []
     assert p2["summary"]["kept_existing"] == len(p1["summary"]["copied_templates"])
+    [third] = _session([_call(3, "scaffold_project",
+                              {"kind": "manuscript", "claude_md": "install"})], env)
+    assert _payload(third)["summary"]["copied_templates"] == ["CLAUDE.md"]
 
 
 # --- manual PDF download tools ----------------------------------------------

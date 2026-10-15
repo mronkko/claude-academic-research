@@ -455,7 +455,8 @@ SCAFFOLD_PROJECT = Tool(
     effect=WRITES_PROJECT,
     description=(
         "Creates the standard project directories and copies the plugin's "
-        "templates into the project. Never overwrites an existing file, so "
+        "templates into the project (regression tests, search and screening "
+        "configs, manuscript files). Never overwrites an existing file, so "
         "re-running is safe; adds .claude/ and output/ to .gitignore inside "
         "a git repo."
     ),
@@ -468,6 +469,11 @@ SCAFFOLD_PROJECT = Tool(
         Param("target", "Project-relative directory to scaffold. Default: "
               "the project root.", kind="option", flag="--target",
               path=True, default=PROJECT),
+        Param("claude_md", "`skip` (default) or `install` the template "
+              "CLAUDE.md. CLAUDE.md is the user's file: install it only "
+              "once the user has agreed to the template.", kind="map",
+              default="skip",
+              choices={"skip": ("--no-claude-md",), "install": ()}),
     ),
     read_only=False,
     summarise=summarise_scaffold,
