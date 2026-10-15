@@ -508,6 +508,67 @@ async def wait_for_clearance(
 
 
 # ---------------------------------------------------------------------------
+# Is the session still good? — the unattended run's re-check.
+# ---------------------------------------------------------------------------
+#
+# An unattended run (`enrich_pdfs.py --unattended run`) has nobody to solve
+# a challenge or sign in, so before each publisher — and every few minutes
+# within one — it re-opens the page `setup()` would open and asks the
+# browser, never a person, whether the session solved in the setup phase
+# still holds. Only the two walls a person clears are detected, from the
+# evidence the attended flow already trusts: an unsolved Cloudflare
+# challenge (`_challenge_is_showing` / `wait_for_clearance`), and a sign-in
+# page reached by redirect (`looks_like_login`). Anything else — including
+# a page that cannot be read — counts as fine: the downloads that follow
+# answer for themselves, and an unexplained failure re-runs this check.
+
+#: `probe_session` / `probe_page` results. "" means the session looks fine.
+SESSION_CHALLENGE = "challenge"
+SESSION_LOGIN = "login"
+
+#: Host labels and URL fragments of a sign-in page. Wider than the
+#: Connector's proxy test (`connector.is_proxy_login_url`) because a
+#: publisher's own sign-in redirect counts here too; applied only to a page
+#: the browser was *redirected* to, never to the URL that was asked for.
+_LOGIN_LABELS = frozenset({"login", "idp", "sso", "shibboleth", "auth", "wayf"})
+_LOGIN_MARKERS = ("/login", "showlogin", "/signin", "/sign-in", "/sso", "/saml",
+                  "/idp/", "/shibboleth", "/wayf")
+
+
+def looks_like_login(page_url: str, target_url: str) -> bool:
+    """Whether `page_url`, reached by opening `target_url`, is a sign-in
+    page rather than what was asked for."""
+    from .connector import is_proxy_login_url  # lazy: connector imports this module
+
+    if not page_url:
+        return False
+    if target_url and is_proxy_login_url(page_url, target_url):
+        return True
+    if page_url == target_url:
+        return False
+    parsed = urlparse(page_url)
+    labels = set((parsed.hostname or "").lower().split("."))
+    rest = f"{parsed.path or ''}?{parsed.query or ''}".lower()
+    return bool(_LOGIN_LABELS & labels or any(m in rest for m in _LOGIN_MARKERS))
+
+
+async def probe_page(page: Page, target_url: str, *,
+                     clearance_timeout_s: float = 12.0) -> str:
+    """`SESSION_CHALLENGE`, `SESSION_LOGIN` or "" for the page as it stands
+    after opening `target_url`. A challenge gets `clearance_timeout_s` to
+    clear itself (a non-interactive JS challenge does) before it counts."""
+    if await _challenge_is_showing(page) and not await wait_for_clearance(
+        page, timeout_s=max(clearance_timeout_s, 5.0),
+    ):
+        return SESSION_CHALLENGE
+    try:
+        current = page.url or ""
+    except Exception:  # noqa: BLE001
+        current = ""
+    return SESSION_LOGIN if looks_like_login(current, target_url) else ""
+
+
+# ---------------------------------------------------------------------------
 # Reading the publisher's own page.
 # ---------------------------------------------------------------------------
 #
@@ -1143,6 +1204,26 @@ class PublisherHandler(ABC):
         if a.lower() in ("n", "no", "s", "skip"):
             return "skip"
         return "proceed"
+
+    async def probe_session(self, page: Page, first_doi: str) -> str:
+        """The unattended run's session re-check: open the page `setup()`
+        would and return "" when the session looks fine, else
+        `SESSION_CHALLENGE` or `SESSION_LOGIN`. Never asks and never
+        raises; a transport error reads as fine — it is the outage
+        breaker's to judge, on the downloads that follow."""
+        url = self._setup_url_for(first_doi)
+        if not url:
+            return ""
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+        except Exception as e:  # noqa: BLE001
+            if is_transport_error(str(e)) or is_browser_gone(str(e)):
+                return ""
+        try:
+            return await probe_page(page, url,
+                                    clearance_timeout_s=self.clearance_timeout_s)
+        except Exception:  # noqa: BLE001
+            return ""
 
     async def _cleared_without_asking(self, page: Page) -> bool:
         """True when this publisher's session needs nothing from the user.

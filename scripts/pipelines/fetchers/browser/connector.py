@@ -43,10 +43,12 @@ from urllib.parse import urlparse
 import doi_utils
 
 from .base import (
+    SESSION_CHALLENGE,
     Counter,
     PublisherHandler,
     _read_user_line,
     ask_while_open,
+    probe_page,
 )
 
 if TYPE_CHECKING:
@@ -664,6 +666,8 @@ class ZoteroConnectorHandler(PublisherHandler):
     # spacing keeps the connector server from queueing up saves.
     delay_s = 2.0
     attaches_directly = True
+    #: Class default so instances built without `__init__` (tests) read it.
+    unattended = False
 
     def __init__(self, extension_path: str | Path | None = None) -> None:
         """`extension_path` overrides auto-detection. Defaults to the
@@ -690,8 +694,18 @@ class ZoteroConnectorHandler(PublisherHandler):
         # Hosts the user has already confirmed in this run — once a
         # host is here, subsequent items on the same host fire
         # automatically (session stays authenticated, so the first
-        # item's login / reCAPTCHA carries over).
+        # item's login / reCAPTCHA carries over). An unattended run
+        # starts with the hosts confirmed in its setup phase.
         self._confirmed_hosts: set[str] = set()
+        #: `enrich_pdfs.py --unattended run`: never ask. A host not in
+        #: `_confirmed_hosts` is not opened (`host_unconfirmed`), a proxy
+        #: sign-in page is not waited on, and a Cloudflare challenge that
+        #: does not clear itself stops its host (`challenge`). The driver
+        #: defers those items (DEFERRED_NEEDS_USER) instead of logging
+        #: them as failures.
+        self.unattended = False
+        #: Hosts that showed an unsolved challenge this (unattended) run.
+        self._challenged_hosts: set[str] = set()
         # Hosts the user asked to skip entirely (e.g. a platform
         # they know they have no access to).
         self._skipped_hosts: set[str] = set()
@@ -807,6 +821,11 @@ class ZoteroConnectorHandler(PublisherHandler):
             return "skip"
 
         self._print_connector_banner()
+        if self.unattended:
+            print("  Unattended run: not asking \"Ready to start?\" — hosts "
+                  "confirmed in the setup phase are saved; the rest are "
+                  "deferred.", flush=True)
+            return "proceed"
 
         answer = await ask_while_open(
             page, _read_user_line,
@@ -958,6 +977,21 @@ class ZoteroConnectorHandler(PublisherHandler):
             counter.failed += 1
             return False
 
+        if self.unattended and item_host not in self._confirmed_hosts:
+            # Nobody confirmed this host in the setup phase, and nobody is
+            # here to: not opened, deferred by the driver.
+            self.last_outcome = "host_unconfirmed"
+            print(f"  └─ DEFERRED: host {item_host!r} was not confirmed in "
+                  f"the setup phase.", flush=True)
+            counter.failed += 1
+            return False
+        if self.unattended and item_host in getattr(self, "_challenged_hosts", ()):
+            self.last_outcome = "challenge"
+            print(f"  └─ DEFERRED: {item_host!r} showed an unsolved challenge "
+                  f"earlier this run.", flush=True)
+            counter.failed += 1
+            return False
+
         # By DOI prefix too: a doi.org route names no publisher.
         family = item_family(item_host, doi)
         if family in self._blocked_families:
@@ -1007,7 +1041,7 @@ class ZoteroConnectorHandler(PublisherHandler):
         # restarted run wrote such rows (6, then 2), which had to be
         # removed by hand.
         if proxy and await _proxy_login_page(page, target_url):
-            if sys.stdin.isatty():
+            if sys.stdin.isatty() and not self.unattended:
                 await ask_while_open(
                     page, _read_user_line,
                     f"  │  {proxy} is asking you to sign in. Sign in in the\n"
@@ -1035,6 +1069,16 @@ class ZoteroConnectorHandler(PublisherHandler):
                 )
                 counter.failed += 1
                 return False
+
+        if self.unattended and await probe_page(page, target_url) == SESSION_CHALLENGE:
+            # A challenge the profile's clearance no longer covers. Every
+            # further item on the host would meet it too.
+            self.__dict__.setdefault("_challenged_hosts", set()).add(item_host)
+            self.last_outcome = "challenge"
+            print(f"  └─ DEFERRED: unsolved Cloudflare challenge on "
+                  f"{item_host!r}; its remaining items are deferred.", flush=True)
+            counter.failed += 1
+            return False
 
         # Where the page landed decides the family when the DOI prefix did
         # not (an Elsevier journal outside 10.1016, via doi.org): this
@@ -1064,7 +1108,8 @@ class ZoteroConnectorHandler(PublisherHandler):
         # across the rest of that host's items — no more prompts.
         #
         # Skipped on non-TTY runs (CI / piped stdin).
-        if sys.stdin.isatty() and item_host not in self._confirmed_hosts:
+        if (sys.stdin.isatty() and not self.unattended
+                and item_host not in self._confirmed_hosts):
             answer = await ask_while_open(
                 page, _read_user_line,
                 f"  │  First item on host {item_host!r}. In the Chromium\n"

@@ -95,6 +95,7 @@ import manual_pdfs  # noqa: E402
 import pdf_fetch_log  # noqa: E402
 import pdf_plan  # noqa: E402
 import pdf_run_report  # noqa: E402
+import pdf_unattended  # noqa: E402
 import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
 from core import pdf_policy  # noqa: E402
@@ -208,8 +209,20 @@ class LaneCoordinator:
     the event loop cannot interleave them and no lock is needed.
     """
 
-    def __init__(self, *, outage_threshold: int = _OUTAGE_THRESHOLD) -> None:
+    def __init__(self, *, outage_threshold: int = _OUTAGE_THRESHOLD,
+                 recheck_s: float = 0.0, clock=time.monotonic) -> None:
         self._outage_threshold = outage_threshold
+        #: Unattended run (`--unattended run`) only. Once set, every lane
+        #: defers its remaining items with this reason instead of trying
+        #: them — the unattended counterpart of `skip_remaining`.
+        self.defer_reason = ""
+        #: Unexplained failures in a row (no page verdict, no transport
+        #: error, session probe fine) — see `pdf_unattended.FAILURE_LIMIT`.
+        self.unexplained = 0
+        #: Seconds between session re-checks within the lane; 0 = never.
+        self.recheck_s = float(recheck_s or 0.0)
+        self._clock = clock
+        self.last_check = clock()
         self._gate = asyncio.Event()
         self._gate.set()
         self.skip_remaining = False
@@ -280,6 +293,17 @@ class LaneCoordinator:
     def note_other_outcome(self) -> None:
         """Any non-transport outcome clears the breaker."""
         self.consecutive_transport = 0
+
+    def claim_recheck(self) -> bool:
+        """True for exactly one lane once `recheck_s` has passed since the
+        last session check, which this call then counts as done."""
+        if self.recheck_s <= 0:
+            return False
+        now = self._clock()
+        if now - self.last_check < self.recheck_s:
+            return False
+        self.last_check = now
+        return True
 
     def claim_prompt(self) -> bool:
         """True for exactly one lane — the one that gets to ask."""
@@ -1924,10 +1948,41 @@ async def _drive_handler(
         # Deferring is only safe on one lane; `lanes` itself is computed
         # further down, after setup has already run, so ask
         # `effective_lanes` here — it is pure.
-        defer_solve = defer_solve and effective_lanes(
+        unattended = bool(getattr(args, "unattended", False))
+        defer_solve = defer_solve and not unattended and effective_lanes(
             handler, int(getattr(args, "browser_workers", 1) or 1),
         ) == 1
-        if needs_solve and defer_solve:
+        if unattended:
+            # Nobody to ask. The setup phase solved this publisher (or
+            # declined it); re-check that the session it left still holds,
+            # and defer the whole queue — never block — when it does not.
+            prior = pdf_unattended.site_result(_unattended_state(args), handler.name)
+            if prior in (pdf_unattended.SKIPPED, pdf_unattended.ALWAYS_SKIP):
+                print(f"  {display}: declined in the setup phase — handled as "
+                      f"an attended 'skip'.", flush=True)
+                setup_result = "skip"
+            elif needs_solve:
+                if hasattr(handler, "solve_url_for"):
+                    handler.pending_solve_url = handler.solve_url_for(items)
+                reason = await _probe_session(handler, page, items[0]["doi"])
+                if reason:
+                    print(f"  {display}: session check before the run failed "
+                          f"({reason}) — deferring all {len(items)} item(s).",
+                          flush=True)
+                    for it in items:
+                        _defer_item(args, it, source=handler.name,
+                                    publisher=handler.display_name, reason=reason,
+                                    log_writer=log_writer, run_date=run_date)
+                    interaction.report_progress({
+                        "event": "publisher_deferred", "publisher": handler.name,
+                        "queued": len(items), "reason": reason,
+                    })
+                    await ctx.close()
+                    return
+                setup_result = "proceed"
+            else:
+                setup_result = "proceed"
+        elif needs_solve and defer_solve:
             print(
                 f"  {display}: not asking upfront — trying the first item "
                 f"first. If it fails, the setup step opens then.",
@@ -2027,7 +2082,13 @@ async def _drive_handler(
         # in order, on the page `setup()` was solved on.
         requested_lanes = int(getattr(args, "browser_workers", 1) or 1)
         lanes = effective_lanes(handler, requested_lanes)
-        coord = LaneCoordinator()
+        coord = LaneCoordinator(
+            # The periodic re-check only guards a session someone solved;
+            # a publisher that needs no solve has none to lose.
+            recheck_s=float(getattr(args, "unattended_recheck_s", 0.0) or 0.0)
+            if unattended and needs_solve else 0.0,
+            clock=_monotonic,
+        )
         if requested_lanes > lanes:
             # Say so rather than quietly honouring a smaller number —
             # a user who asked for 10 and got 1 should be told which
@@ -2068,12 +2129,16 @@ async def _drive_handler(
             return item
 
         async def _process(lane_handler, lane_page, item: dict) -> None:
+            # Unattended: wider spacing — nobody is waiting, and a rate
+            # limit tripped mid-run costs the rest of it.
+            delay = lane_handler.delay_s * (
+                pdf_unattended.PACE_FACTOR if unattended else 1.0)
             if lanes > 1:
                 # Spaced across lanes rather than within one, or four
                 # lanes sleep in lockstep and fire together.
-                await coord.pace(lane_handler.delay_s)
-            elif lane_handler.delay_s > 0:
-                await asyncio.sleep(lane_handler.delay_s)
+                await coord.pace(delay)
+            elif delay > 0:
+                await asyncio.sleep(delay)
             # Per item, or the last failure's reason is read as this one's.
             lane_handler.last_error = ""
             if getattr(lane_handler, "last_observation", None) is not None:
@@ -2166,6 +2231,11 @@ async def _drive_handler(
                 event["evidence"] = verdict.describe()
             interaction.report_progress(event)
 
+            if result is not None or verdict is not None:
+                # A success, or a failure the page explained: the run of
+                # unexplained failures is broken.
+                coord.unexplained = 0
+
             if result is None:
                 # Per-item download failure. A network-layer error is a
                 # different animal from "this publisher has nothing":
@@ -2200,8 +2270,34 @@ async def _drive_handler(
                 else:
                     coord.note_other_outcome()
 
+                if unattended and not transport and verdict is None:
+                    # Where an attended run asks "keep trying?", ask the
+                    # browser instead: is the session still there? If not,
+                    # this item and the rest are deferred, not failed.
+                    async with coord.prompting():
+                        reason = await _probe_session(
+                            lane_handler, lane_page, item["doi"])
+                    coord.last_check = _monotonic()
+                    if reason:
+                        if not coord.defer_reason:
+                            coord.defer_reason = reason
+                            print(f"  {display}: session lost ({reason}) — "
+                                  f"deferring this item and the rest.", flush=True)
+                        _defer_item(args, item, source=lane_handler.name,
+                                    publisher=lane_handler.display_name,
+                                    reason=reason, log_writer=log_writer,
+                                    run_date=run_date)
+                        return
+                    coord.unexplained += 1
+                    if (coord.unexplained >= pdf_unattended.FAILURE_LIMIT
+                            and not coord.defer_reason):
+                        coord.defer_reason = pdf_unattended.REPEATED_FAILURES
+                        print(f"  {display}: {coord.unexplained} unexplained "
+                              f"failures in a row — deferring the rest for a "
+                              f"person to look at.", flush=True)
                 if (
                     prompt_on_first_failure
+                    and not unattended
                     and not transport
                     # The page answered for this item; the question is
                     # kept for a failure nobody can explain yet.
@@ -2325,6 +2421,30 @@ async def _drive_handler(
                         # Nothing to warm on — do not strand the others.
                         coord.mark_warm()
                     return
+                if not coord.skip_remaining and not coord.defer_reason and (
+                        coord.claim_recheck()):
+                    # Periodic re-check within a long lane (unattended only;
+                    # `recheck_s` is 0 otherwise). Other lanes hold at the
+                    # gate so none opens a page on a lost session meanwhile.
+                    async with coord.prompting():
+                        reason = await _probe_session(
+                            lane_handler, lane_page, item["doi"])
+                    if reason:
+                        coord.defer_reason = reason
+                        print(f"  {display}: periodic session check failed "
+                              f"({reason}) — deferring the remaining items.",
+                              flush=True)
+                if coord.defer_reason and not coord.skip_remaining:
+                    _defer_item(args, item, source=lane_handler.name,
+                                publisher=lane_handler.display_name,
+                                reason=coord.defer_reason, log_writer=log_writer,
+                                run_date=run_date)
+                    interaction.report_progress({
+                        "event": "item", "publisher": lane_handler.name,
+                        "doi": item["doi"], "outcome": "deferred",
+                        "done": counter.done, "queued": total,
+                    })
+                    continue
                 if coord.skip_remaining:
                     # User picked "skip remaining" for this publisher.
                     if on_failure == "retry_bucket" and retry_bucket is not None:
@@ -2389,6 +2509,344 @@ async def _drive_handler(
             "failed": counter.failed,
         })
         await ctx.close()
+
+
+# --- The unattended run (`--unattended setup|run`, plan step 6) --------------
+#
+# The pure half — state file, deferral reasons, re-check interval,
+# summary — is `pdf_unattended`. What is here touches the browser pass.
+
+#: Clock for the session re-check interval; a module global so a test can
+#: move time without sleeping.
+_monotonic = time.monotonic
+
+
+def _unattended_phase(args: argparse.Namespace) -> str:
+    """"setup", "run" or "" (not an unattended invocation)."""
+    return getattr(args, "unattended_phase", "") or ""
+
+
+def _unattended_state(args: argparse.Namespace) -> dict:
+    """The setup phase's record (`pdf_unattended.STATE_PATH`), loaded once
+    per run and kept on `args`."""
+    state = getattr(args, "_unattended_state", None)
+    if state is None:
+        state = pdf_unattended.load_state(_unattended_state_path(args))
+        args._unattended_state = state
+    return state
+
+
+def _unattended_state_path(args: argparse.Namespace) -> Path:
+    return Path(getattr(args, "unattended_state", "") or pdf_unattended.STATE_PATH)
+
+
+async def _probe_session(handler, page, doi: str) -> str:
+    """`handler.probe_session` — "" (fine), "challenge" or "login" — or ""
+    for a handler without one. Never raises: a probe that breaks must not
+    end an unattended run; the downloads that follow answer for it."""
+    probe = getattr(handler, "probe_session", None)
+    if probe is None:
+        return ""
+    try:
+        return await probe(page, doi) or ""
+    except Exception as e:  # noqa: BLE001
+        print(f"  [session check failed to run: {str(e)[:80]}]", flush=True)
+        return ""
+
+
+def _defer_item(
+    args: argparse.Namespace, item: dict, *, source: str, publisher: str = "",
+    reason: str, log_writer, run_date: str,
+) -> None:
+    """Set one item aside for a person (unattended run): a run-log row
+    `deferred_needs_user` whose detail names the reason, a failure-log row
+    DEFERRED_NEEDS_USER (the audit's `retry.deferred.keys`, the manual
+    queue's first items), and a progress event. Not a done status, so any
+    later run picks the item up again."""
+    log_writer.writerow({
+        "run_date": run_date, "item_key": item.get("item_key", ""),
+        "doi": item.get("doi", ""), "title": (item.get("title") or "")[:70],
+        "status": pdf_unattended.DEFERRED_STATUS, "source": source,
+        "detail": pdf_unattended.detail(reason),
+    })
+    _log_browser_failure(args, item, source=source, publisher=publisher,
+                         cause=pdf_fetch_log.FailureCause.DEFERRED_NEEDS_USER)
+    from fetchers.browser import interaction
+    interaction.report_progress({"event": "deferred", "source": source,
+                                 "doi": item.get("doi", ""), "reason": reason})
+
+
+class _RowRecorder:
+    """Pass-through log writer that keeps a copy of every row, so the
+    unattended run's summary is exactly what this run wrote."""
+
+    def __init__(self, writer) -> None:
+        self._writer = writer
+        self.rows: list[dict] = []
+        self._lock = threading.Lock()
+
+    def writerow(self, row) -> None:
+        with self._lock:
+            self.rows.append(dict(row))
+        self._writer.writerow(row)
+
+
+class _NullWriter:
+    """The setup phase writes no run-log rows: it fetches nothing."""
+
+    def writerow(self, row) -> None:
+        pass
+
+
+def _consent_stored_allow(site: str) -> bool:
+    """Whether `site` has a *recorded* allow — what the unattended run
+    needs. An answer of "once" in the setup phase allowed the setup only."""
+    from core import publisher_consent as pc
+
+    try:
+        return pc.lookup(site).automated == pc.ALLOW
+    except pc.ConsentError:
+        return False
+
+
+def _record_setup_consent(args, gate, site: str, mode: str, items: int, *,
+                          kind: str) -> None:
+    """Setup phase: note a site the consent gate kept closed, so the
+    summary says why its items will not run."""
+    from fetchers.browser import consent
+
+    decision = gate.decide(site, mode=mode, items=items)   # cached: asks nothing
+    pdf_unattended.record_site(
+        _unattended_state(args), site,
+        pdf_unattended.CONSENT_DENIED if decision == consent.DENY
+        else pdf_unattended.CONSENT_NEEDED,
+        kind=kind, items=items,
+    )
+
+
+def _once_only(args, site: str, items: int, *, kind: str) -> bool:
+    """True (and recorded as consent_needed) when the setup phase was told
+    "once" for `site`: the run, which never asks, would skip it anyway, so
+    there is nothing to solve."""
+    if _consent_stored_allow(site):
+        return False
+    print(f"  {site}: allowed for this setup only (\"once\"); the unattended "
+          f"run needs a recorded allow, so it will skip these {items} item(s) "
+          f"as CONSENT_NEEDED. Not solving it now.", flush=True)
+    state = _unattended_state(args)
+    pdf_unattended.record_site(state, site, pdf_unattended.CONSENT_NEEDED,
+                               kind=kind, items=items)
+    pdf_unattended.save_state(state, _unattended_state_path(args))
+    return True
+
+
+async def _unattended_setup_handler(handler, items: list[dict], args) -> str:
+    """Setup phase, one publisher (or EBSCOhost): open its page and let the
+    user clear the Cloudflare challenge / sign in, exactly as an attended
+    run's `handler.setup()` does — it also proceeds without asking when the
+    profile's clearance already holds. Downloads nothing. Returns a
+    `pdf_unattended` site result."""
+    needs_solve = (
+        handler.needs_solve_for(items) if hasattr(handler, "needs_solve_for")
+        else getattr(handler, "needs_interactive_solve", True)
+    )
+    if not needs_solve:
+        return pdf_unattended.NO_SOLVE_NEEDED
+    from fetchers.browser import launch_context
+    from fetchers.browser.base import normalise_setup_result
+
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        print(_PLAYWRIGHT_MISSING_MSG, file=sys.stderr)
+        return pdf_unattended.UNAVAILABLE
+    display = handler.display_name or handler.name
+    print(f"\n{'=' * 60}\nSetup: {display} ({len(items)} item(s) in the run)\n"
+          f"{'=' * 60}", flush=True)
+    os.makedirs(args.cache_dir, exist_ok=True)
+    async with async_playwright() as p:
+        ctx = await launch_context(p, args.cache_dir)
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        try:
+            if hasattr(handler, "solve_url_for"):
+                handler.pending_solve_url = handler.solve_url_for(items)
+            result = normalise_setup_result(await handler.setup(page, items[0]["doi"]))
+        finally:
+            with contextlib.suppress(Exception):
+                await ctx.close()
+    return {"proceed": pdf_unattended.SOLVED,
+            "always_skip": pdf_unattended.ALWAYS_SKIP}.get(result, pdf_unattended.SKIPPED)
+
+
+async def _unattended_setup_handlers(pubs, args, *, on_always_skip=None) -> None:
+    """Setup phase for the publisher handlers: one solve per publisher, in
+    queue order, each recorded in the state file as it is answered (so an
+    interrupted setup keeps what it did)."""
+    state = _unattended_state(args)
+    for handler, items in pubs:
+        if _once_only(args, handler.name, len(items), kind="handler"):
+            continue
+        result = await _unattended_setup_handler(handler, items, args)
+        if result == pdf_unattended.ALWAYS_SKIP and on_always_skip is not None:
+            try:
+                on_always_skip(handler.name)
+            except Exception as e:  # noqa: BLE001
+                print(f"  WARN: could not persist [library] no_access += "
+                      f"{handler.name!r}: {e}", flush=True)
+        pdf_unattended.record_site(state, handler.name, result, kind="handler",
+                                   items=len(items))
+        pdf_unattended.save_state(state, _unattended_state_path(args))
+        print(f"  {handler.display_name or handler.name}: {result}.", flush=True)
+
+
+def _connector_host_prompt(host: str, n: int) -> str:
+    return (
+        f"\n>>> Connector host {host!r} — {n} item{'' if n == 1 else 's'} in "
+        f"the unattended run.\n"
+        f"    In the Chromium window (Zotero Connector profile), solve any\n"
+        f"    reCAPTCHA / Cloudflare challenge / sign-in until the article page\n"
+        f"    shows. Then:\n"
+        f"    [Enter] confirm — the run saves this host's items unattended\n"
+        f"    s       skip this host — its items are deferred to manual download\n"
+        f"> "
+    )
+
+
+async def _unattended_setup_connector(items: list[dict], args) -> dict[str, str]:
+    """Setup phase for the Connector: per effective host, open the first
+    item's library route in the Connector's own Chromium profile and ask the
+    user to clear whatever is in the way and confirm. That is the
+    attended run's per-host confirmation, given in advance; the run opens
+    only confirmed hosts. Returns {host: result}. Nothing is saved, so
+    Zotero Desktop need not be running yet."""
+    from fetchers.browser import ZoteroConnectorHandler, launch_context
+    from fetchers.browser.base import _read_user_line, ask_while_open
+    from fetchers.library_resolver import effective_host
+
+    by_host: dict[str, list[dict]] = {}
+    for it in items:
+        by_host.setdefault(effective_host(it.get("resolver_target_url", "")),
+                           []).append(it)
+    handler = ZoteroConnectorHandler(extension_path=get(
+        "zotero_connector", "extension_dir", env="ZOTERO_CONNECTOR_DIR") or None)
+    if handler.extension_path is None:
+        from fetchers.browser.connector import connector_extension_problem
+        print(f"  Connector setup not possible: "
+              f"{connector_extension_problem(None) or 'extension not found'}. "
+              f"Its {len(items)} item(s) will be deferred in the run.", flush=True)
+        return {}
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        print(_PLAYWRIGHT_MISSING_MSG, file=sys.stderr)
+        return {}
+    state = _unattended_state(args)
+    out: dict[str, str] = {}
+    print(f"\n{'=' * 60}\nSetup: Zotero Connector — {len(by_host)} host(s), "
+          f"{len(items)} item(s)\n{'=' * 60}", flush=True)
+    os.makedirs(args.cache_dir, exist_ok=True)
+    async with async_playwright() as p:
+        ctx = await launch_context(p, args.cache_dir,
+                                   extensions=[handler.extension_path])
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        try:
+            for host, its in sorted(by_host.items()):
+                url = its[0].get("resolver_target_url", "")
+                print(f"\n  Opening {url}", flush=True)
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                except Exception as e:  # noqa: BLE001 — the user sees the page
+                    print(f"  (page load: {str(e)[:80]})", flush=True)
+                answer = (await ask_while_open(
+                    page, _read_user_line, _connector_host_prompt(host, len(its)),
+                ) or "").strip().lower()
+                result = (pdf_unattended.HOST_SKIPPED
+                          if answer in ("s", "skip", "n", "no")
+                          else pdf_unattended.CONFIRMED)
+                out[host] = result
+                pdf_unattended.record_host(state, host, result, items=len(its))
+                pdf_unattended.save_state(state, _unattended_state_path(args))
+        finally:
+            with contextlib.suppress(Exception):
+                await ctx.close()
+    return out
+
+
+def _finish_unattended_setup(args, ebsco_items: list[dict],
+                             connector_items: list[dict]) -> int:
+    """Setup phase, after the handlers: EBSCOhost and the Connector hosts,
+    then the record and its summary. Returns the exit code."""
+    state = _unattended_state(args)
+    if ebsco_items and not _once_only(args, "ebsco", len(ebsco_items), kind="ebsco"):
+        from fetchers.browser import EbscoHandler
+        result = asyncio.run(_unattended_setup_handler(EbscoHandler(), ebsco_items, args))
+        pdf_unattended.record_site(state, "ebsco", result, kind="ebsco",
+                                   items=len(ebsco_items))
+    if connector_items:
+        sites = {it.get("consent_site") or "doi.org" for it in connector_items}
+        once = {s for s in sites if not _consent_stored_allow(s)}
+        for site in sorted(once):
+            n = sum(1 for it in connector_items
+                    if (it.get("consent_site") or "doi.org") == site)
+            _once_only(args, site, n, kind="connector")
+        connector_items = [it for it in connector_items
+                           if (it.get("consent_site") or "doi.org") not in once]
+    if connector_items:
+        asyncio.run(_unattended_setup_connector(connector_items, args))
+    state.setdefault("setup", {})["finished"] = pdf_unattended.now()
+    pdf_unattended.save_state(state, _unattended_state_path(args))
+    return _print_setup_summary(args, state)
+
+
+def _print_setup_summary(args, state: dict) -> int:
+    sites = state.get("sites") or {}
+    hosts = state.get("connector_hosts") or {}
+    started = (state.get("setup") or {}).get("started", "")
+
+    def this_setup(entry: dict) -> bool:
+        return (entry.get("at") or "") >= started
+
+    cur_sites = {k: v for k, v in sites.items() if this_setup(v)}
+    cur_hosts = {k: v for k, v in hosts.items() if this_setup(v)}
+    count = {r: sum(1 for v in cur_sites.values() if v.get("result") == r)
+             for r in (pdf_unattended.SOLVED, pdf_unattended.NO_SOLVE_NEEDED,
+                       pdf_unattended.SKIPPED, pdf_unattended.ALWAYS_SKIP,
+                       pdf_unattended.CONSENT_NEEDED, pdf_unattended.CONSENT_DENIED,
+                       pdf_unattended.UNAVAILABLE)}
+    print(f"\n{'=' * 60}\nUnattended setup — done\n{'=' * 60}", flush=True)
+    for site, v in sorted(cur_sites.items()):
+        print(f"  {site:<24} {v.get('result')}  ({v.get('items', 0)} item(s))",
+              flush=True)
+    for host, v in sorted(cur_hosts.items()):
+        print(f"  Connector {host:<14} {v.get('result')}  ({v.get('items', 0)} item(s))",
+              flush=True)
+    if count[pdf_unattended.CONSENT_NEEDED]:
+        print("  Sites marked consent_needed are skipped by the run "
+              "(CONSENT_NEEDED) until an allow is recorded (pdf_consent_set).",
+              flush=True)
+    print(
+        f"  Recorded in {_unattended_state_path(args)}. Start the run with "
+        f"`--unattended run` (no prompts). The run re-checks each session "
+        f"before every publisher and every "
+        f"{getattr(args, 'unattended_recheck_s', 0) / 60:.0f} min; an expired "
+        f"one defers that publisher's rest (DEFERRED_NEEDS_USER). Session "
+        f"lifetimes were not measured — run soon after this setup; EZproxy "
+        f"logins do not survive a browser relaunch.",
+        flush=True,
+    )
+    summary = {
+        "phase": "setup", "sites": len(cur_sites),
+        "solved": count[pdf_unattended.SOLVED] + count[pdf_unattended.NO_SOLVE_NEEDED],
+        "skipped": count[pdf_unattended.SKIPPED] + count[pdf_unattended.ALWAYS_SKIP],
+        "consent_needed": count[pdf_unattended.CONSENT_NEEDED],
+        "consent_denied": count[pdf_unattended.CONSENT_DENIED],
+        "hosts_confirmed": sum(1 for v in cur_hosts.values()
+                               if v.get("result") == pdf_unattended.CONFIRMED),
+        "hosts_skipped": sum(1 for v in cur_hosts.values()
+                             if v.get("result") == pdf_unattended.HOST_SKIPPED),
+    }
+    print(pdf_unattended.summary_line(summary), flush=True)
+    return 0
 
 
 def _page_verdict(handler):
@@ -2581,14 +3039,27 @@ def _keeper_has_pdf(zot, keeper: str) -> bool:
     return _has_pdf_child(_merge_surface(zot).children(keeper) or [])
 
 
+#: Connector outcomes an unattended run defers (DEFERRED_NEEDS_USER) —
+#: walls a person clears, not findings about the article.
+_UNATTENDED_DEFER_OUTCOMES: dict[str, str] = {
+    "host_unconfirmed": pdf_unattended.HOST_UNCONFIRMED,
+    "challenge": pdf_unattended.CHALLENGE,
+    "login_required": pdf_unattended.LOGIN,
+}
+
+
 async def _connector_item_loop(
     handler, items_sorted: list[dict], page, ctx, service_worker, zot, *,
-    counter, total: int, t_start: float, streak, log_row,
+    counter, total: int, t_start: float, streak, log_row, defer=None,
 ) -> None:
     """The per-item Connector loop of `_drive_connector`.
 
     Its own function so the driver can wrap it in the `try/finally` that
     drains background merges (`BackgroundMerger`) however it exits.
+
+    `defer(item, reason)` is the unattended run's: an item the handler
+    did not open, or stopped at a wall only a person clears
+    (`_UNATTENDED_DEFER_OUTCOMES`), is deferred rather than logged.
     """
     from fetchers.browser.base import BrowserGone, is_browser_gone
     from fetchers.library_resolver import effective_host
@@ -2625,6 +3096,11 @@ async def _connector_item_loop(
                 f"the browser closed during the Connector pass "
                 f"(last: {handler.last_error[:80]})"
             )
+        reason = _UNATTENDED_DEFER_OUTCOMES.get(getattr(handler, "last_outcome", ""))
+        if (not ok and reason and defer is not None
+                and getattr(handler, "unattended", False)):
+            defer(item, reason)
+            continue
         # Host-scoped skips (user pressed 's' at the first-item
         # prompt on this host) are a distinct status from "the
         # Connector tried to save but failed".
@@ -2740,7 +3216,19 @@ async def _drive_connector(
     # connection five times with 1-16 s backoff, turning the common
     # answer ("Zotero is not open") into a half-minute stall.
     import requests as _requests
+    unattended = bool(getattr(handler, "unattended", False))
+
+    def _defer_all(reason: str) -> None:
+        for it in items:
+            _defer_item(args, it, source=handler.name, reason=reason,
+                        log_writer=log_writer, run_date=run_date)
+
     if not ping_zotero_desktop(_requests.Session()):
+        if unattended:
+            print(f"  Zotero Desktop is not running — deferring {len(items)} "
+                  f"Connector item(s) (the run cannot start it).", flush=True)
+            _defer_all(pdf_unattended.ZOTERO_UNAVAILABLE)
+            return
         print(
             "  ERROR: Zotero Desktop is not running (or its connector\n"
             "  server on localhost:23119 is disabled).  Logging "
@@ -2804,6 +3292,11 @@ async def _drive_connector(
                 f"  unless you fix this.",
                 flush=True,
             )
+            if unattended:
+                print(f"  Unattended: not saving into the wrong library — "
+                      f"deferring {len(items)} item(s).", flush=True)
+                _defer_all(pdf_unattended.ZOTERO_WRONG_LIBRARY)
+                return
             if sys.stdin.isatty():
                 confirm = input(
                     f"  Save to {lib_name!r} anyway? [y/N] "
@@ -3000,6 +3493,9 @@ async def _drive_connector(
                 handler, items_sorted, page, ctx, service_worker, zot,
                 counter=counter, total=total, t_start=t_start, streak=streak,
                 log_row=_log_connector_row,
+                defer=lambda it, reason: _defer_item(
+                    args, it, source=handler.name, reason=reason,
+                    log_writer=log_writer, run_date=run_date),
             )
         except asyncio.CancelledError:
             # Ctrl-C. Draining would run every queued merge first (each up
@@ -3119,6 +3615,14 @@ def _install_interaction_channel(args: argparse.Namespace) -> None:
         print(f"Progress events go to {args.progress_json} (one JSON object "
               f"per line).", flush=True)
 
+    if getattr(args, "unattended", False):
+        # `--unattended run`: nothing may wait for a person. Every place
+        # one would be asked defers instead; this channel only catches
+        # (and counts) a prompt that slipped through.
+        interaction.set_channel(interaction.UnattendedChannel())
+        print("Unattended run: no prompts — anything that needs a person is "
+              "deferred (DEFERRED_NEEDS_USER).", flush=True)
+        return
     if getattr(args, "control_file", ""):
         interaction.set_channel(
             interaction.ControlFileChannel(
@@ -3518,6 +4022,7 @@ def _run_browser_in_process(
         not getattr(args, "no_prompt", False)
         and not getattr(args, "plan", False)
         and not getattr(args, "control_file", "")
+        and not getattr(args, "unattended", False)   # never asks
         and not _has_interactive_surface()
     ):
         _exit_no_interactive_surface(args)
@@ -3597,9 +4102,12 @@ def _run_browser_in_process(
     #: ask of me"); fetching is not, because a preview that mutates is
     #: not a preview.
     plan_only = bool(getattr(args, "plan", False))
+    #: The unattended setup phase fetches nothing either: it solves
+    #: sessions and records answers, and the run does the downloading.
+    setup_phase = _unattended_phase(args) == "setup"
     pass2_api_sources: list = []
     if (not connector_only and session is not None and config is not None
-            and not plan_only):
+            and not plan_only and not setup_phase):
         try:
             policy = getattr(args, "pdf_policy", None)
             pass2_api_sources = [
@@ -4005,6 +4513,8 @@ def _run_browser_in_process(
             )
     else:
         print("\nNothing to do via the browser path.", flush=True)
+        if setup_phase:
+            return _finish_unattended_setup(args, [], [])
         return 0
 
     if plan_only:
@@ -4027,6 +4537,7 @@ def _run_browser_in_process(
     consent_gate = _consent_gate(args)
     if not connector_only:
         for name in list(items_by_pub):
+            n_items = len(items_by_pub[name])
             kept = _consent_filter(
                 consent_gate, items_by_pub[name], site=name, mode=MODE_BROWSER,
                 source=name, args=args, log_writer=log_writer, run_date=run_date,
@@ -4035,6 +4546,9 @@ def _run_browser_in_process(
                 items_by_pub[name] = kept
             else:
                 del items_by_pub[name]
+                if setup_phase:
+                    _record_setup_consent(args, consent_gate, name, MODE_BROWSER,
+                                          n_items, kind="handler")
 
     # ------------------------------------------------------------------
     # Pass 2 — drive direct handlers, collect Connector retries.
@@ -4058,7 +4572,14 @@ def _run_browser_in_process(
                 ),
             )
 
-    if items_by_pub and not connector_only:
+    if setup_phase and items_by_pub and not connector_only:
+        # Setup phase: one solve per publisher, nothing downloaded.
+        asyncio.run(_unattended_setup_handlers(
+            [(handler_by_name[n], its) for n, its in items_by_pub.items()], args,
+            on_always_skip=lambda n: config_writer.append_to_list(
+                "library", "no_access", n),
+        ))
+    elif items_by_pub and not connector_only:
         try:
             asyncio.run(_run_direct())
         except NetworkOutage as e:
@@ -4232,20 +4753,31 @@ def _run_browser_in_process(
     # Consent for the EBSCOhost handler and the Connector, per site the
     # saves would come from. Gated before Pass 4a, so an EBSCO failure
     # handed on to the Connector below carries an EBSCO answer already.
+    n_ebsco = len(ebsco_items)
     ebsco_items = _consent_filter(
         consent_gate, ebsco_items, site="ebsco", mode=MODE_BROWSER,
         source="ebsco", args=args, log_writer=log_writer, run_date=run_date,
     )
+    if setup_phase and n_ebsco and not ebsco_items:
+        _record_setup_consent(args, consent_gate, "ebsco", MODE_BROWSER, n_ebsco,
+                              kind="ebsco")
     by_site: dict[str, list[dict]] = {}
     for it in connector_items:
         by_site.setdefault(it.get("consent_site") or "doi.org", []).append(it)
     connector_items = []
     for site, site_items in by_site.items():
-        connector_items += _consent_filter(
+        kept = _consent_filter(
             consent_gate, site_items, site=site, mode=MODE_CONNECTOR,
             source="connector", args=args, log_writer=log_writer,
             run_date=run_date,
         )
+        if setup_phase and not kept:
+            _record_setup_consent(args, consent_gate, site, MODE_CONNECTOR,
+                                  len(site_items), kind="connector")
+        connector_items += kept
+
+    if setup_phase:
+        return _finish_unattended_setup(args, ebsco_items, connector_items)
 
     # ------------------------------------------------------------------
     # Pass 4a — EBSCOhost items, driven directly from their resolver
@@ -4288,6 +4820,12 @@ def _run_browser_in_process(
             ) or None,
         )
         connector_handler.keep_extras = getattr(args, "connector_keep_extras", False)
+        if getattr(args, "unattended", False):
+            # Only the hosts the user confirmed in the setup phase are
+            # opened; the rest are deferred, never asked about.
+            connector_handler.unattended = True
+            connector_handler._confirmed_hosts = pdf_unattended.confirmed_hosts(
+                _unattended_state(args))
         connector_handler.sync_timeout_s = float(
             getattr(args, "connector_sync_timeout", 30),
         )
@@ -5200,6 +5738,7 @@ def _check_manual_args(args: argparse.Namespace) -> int:
         ("--all", args.all), ("--sources", bool(args.sources)),
         ("--plan", args.plan), ("--replace", args.replace),
         ("--auto-publishers", args.auto_publishers),
+        ("--unattended", bool(args.unattended_phase)),
     ) if on]
     if clash:
         print(f"ERROR: --manual is its own mode; drop {', '.join(clash)}.",
@@ -5217,6 +5756,88 @@ def _check_manual_args(args: argparse.Namespace) -> int:
     return 0
 
 
+def _check_unattended_args(args: argparse.Namespace) -> int:
+    """0, or 2 after saying why `--unattended` cannot run with these flags.
+    Sets the run's derived attributes: `unattended` (True for the run
+    phase only — the consent gate and every prompt read it),
+    `unattended_recheck_s`, and `--sources browser` when none was given."""
+    phase = args.unattended_phase
+    clash = [flag for flag, on in (
+        ("--all", args.all), ("--plan", args.plan),
+        ("--plan-strategy", args.plan_strategy), ("--manual", bool(args.manual)),
+        ("--report", args.report), ("--replace", args.replace),
+        ("--auto-publishers", args.auto_publishers),
+        ("--on-first-failure", bool(args.on_first_failure)),
+    ) if on]
+    if phase == "run":
+        clash += [flag for flag, on in (
+            ("--control-file", bool(args.control_file)),
+            ("--no-prompt", args.no_prompt),
+        ) if on]
+    if clash:
+        print(f"ERROR: --unattended {phase} is its own mode; drop "
+              f"{', '.join(clash)}." + (
+                  " The run never asks, so it takes no control file and needs "
+                  "no --no-prompt." if phase == "run" else ""),
+              file=sys.stderr)
+        return 2
+    sources = [s.strip().lower() for s in (args.sources or "").split(",") if s.strip()]
+    if sources not in ([], ["browser"], ["connector"]):
+        print("ERROR: --unattended drives the browser pass: --sources browser "
+              "(the default) or --sources connector only.", file=sys.stderr)
+        return 2
+    if not sources:
+        args.sources = "browser"
+    try:
+        args.unattended_recheck_s, where = pdf_unattended.recheck_seconds(
+            args.recheck_minutes,
+            get("pdf", "unattended_recheck_minutes",
+                env="PDF_UNATTENDED_RECHECK_MINUTES"),
+        )
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    args.unattended = phase == "run"
+    if phase == "run":
+        print(f"Unattended run: session re-check every "
+              f"{args.unattended_recheck_s / 60:g} min within a publisher "
+              f"({where}; 0 = only before each publisher and after an "
+              f"unexplained failure).", flush=True)
+    return 0
+
+
+def _finish_unattended_run(args: argparse.Namespace, rows: list[dict], since: str,
+                           *, rc: int) -> None:
+    """Phase 3: the summary — attached, deferred by reason, failures split by
+    the failure log's `network` column — recorded in the state file and
+    ended with the machine-readable `UNATTENDED:` line."""
+    from fetchers.browser import interaction
+
+    log = getattr(args, "failure_log_csv", "") or ""
+    failures = pdf_fetch_log.read_failures(log) if log and os.path.isfile(log) else []
+    summary = pdf_unattended.summarise(
+        rows, failures, network=pdf_fetch_log.run_network(), since=since)
+    summary["stopped_by_outage"] = rc == 1
+    asked = list(getattr(interaction.get_channel(), "asked", []) or [])
+    summary["prompts_reached"] = len(asked)
+    print(pdf_unattended.format_summary(summary), flush=True)
+    if rc == 1:
+        print("  The run stopped early (network outage or a closed browser); the "
+              "items it had not reached were not logged and stay queued.", flush=True)
+    if asked:
+        print(f"  WARNING: {len(asked)} prompt(s) reached the unattended channel "
+              f"and were answered 'skip' — a bug: report it with the run log.",
+              flush=True)
+    state = _unattended_state(args)
+    pdf_unattended.add_run(state, {k: v for k, v in summary.items()
+                                   if k != "deferred_keys"})
+    pdf_unattended.save_state(state, _unattended_state_path(args))
+    interaction.report_progress({"event": "unattended_done",
+                                 **{k: v for k, v in summary.items()
+                                    if k != "deferred_keys"}})
+    print(pdf_unattended.summary_line(summary), flush=True)
+
+
 def _check_plan_strategy_args(args: argparse.Namespace) -> int:
     """0, or 2 after saying why `--plan-strategy` cannot run with these
     flags: it plans every mode, so it takes no mode of its own."""
@@ -5226,6 +5847,7 @@ def _check_plan_strategy_args(args: argparse.Namespace) -> int:
         ("--manual", bool(args.manual)), ("--report", args.report),
         ("--auto-publishers", args.auto_publishers),
         ("--publisher", bool(args.publisher)),
+        ("--unattended", bool(args.unattended_phase)),
     ) if on]
     if clash:
         print(f"ERROR: --plan-strategy plans every mode; drop {', '.join(clash)}.",
@@ -6165,6 +6787,31 @@ def _build_parser() -> argparse.ArgumentParser:
         help="--manual assign: the Zotero item key the file belongs to.",
     )
     parser.add_argument(
+        "--unattended", dest="unattended_phase", default="",
+        choices=pdf_unattended.PHASES,
+        help="The long unattended browser run, in two invocations. 'setup' "
+             "(you are present; a terminal or --control-file): records "
+             "consent where none is stored (terminal only), solves each "
+             "publisher's Cloudflare challenge / sign-in once and confirms "
+             "each Zotero Connector host — downloads nothing. 'run' (nobody "
+             "needed): the browser pass with no prompts at all; an expired "
+             "clearance, a login page, an unconfirmed Connector host or "
+             "repeated unexplained failures defer the item "
+             "(DEFERRED_NEEDS_USER) instead of waiting, and the summary hands "
+             "those to --manual. Implies --sources browser unless --sources "
+             "connector. State: .claude/pdf/unattended.json.",
+    )
+    parser.add_argument(
+        "--recheck-minutes", type=float, default=None, metavar="MIN",
+        help="--unattended run: minutes between session re-checks within one "
+             "publisher (default: [pdf] unattended_recheck_minutes, else "
+             f"{pdf_unattended.DEFAULT_RECHECK_MINUTES:g}; 0 = only before "
+             "each publisher and after an unexplained failure). A guess, not "
+             "a measurement: session lifetimes were not measured.",
+    )
+    parser.set_defaults(unattended=False, unattended_recheck_s=0.0,
+                        unattended_state="")
+    parser.add_argument(
         "--no-check-text", action="store_true",
         help="Skip the post-attach text check. By default each attached "
              "PDF is checked for extractable text, so a file that is "
@@ -6189,6 +6836,14 @@ def main() -> int:
             return rc
     elif args.plan_lookups != "none":
         print("ERROR: --plan-lookups goes with --plan-strategy.", file=sys.stderr)
+        return 2
+
+    if args.unattended_phase:
+        rc = _check_unattended_args(args)
+        if rc:
+            return rc
+    elif args.recheck_minutes is not None:
+        print("ERROR: --recheck-minutes goes with --unattended run.", file=sys.stderr)
         return 2
 
     if args.adopt_legacy_resolver_cache:
@@ -6398,9 +7053,11 @@ def main() -> int:
     # trash is where a misjudgement stays recoverable. Neither --plan nor
     # --dry-run writes anything, so neither touches them.
     stubs_deleted = 0
-    if stub_keys and (args.plan or args.dry_run):
+    setup_phase = _unattended_phase(args) == "setup"
+    if stub_keys and (args.plan or args.dry_run or setup_phase):
         print(f"  {len(stub_keys)} stub attachment(s) would be moved to "
-              f"the trash (not under --plan / --dry-run).", flush=True)
+              f"the trash (not under --plan / --dry-run / --unattended "
+              f"setup).", flush=True)
     else:
         for stub_key in stub_keys:
             try:
@@ -6434,7 +7091,7 @@ def main() -> int:
     #
     # Never under --plan: this uploads (and under --replace, trashes the
     # old attachment), and --plan is documented read-only.
-    if not args.dry_run and not args.plan:
+    if not args.dry_run and not args.plan and not setup_phase:
         log_fh, log_writer = _open_log(args.log_csv, replace=args.replace)
         try:
             recovered = _attach_from_cache(
@@ -6453,9 +7110,32 @@ def main() -> int:
     # `sources` list is ignored here — handlers are picked per-publisher.
     # `--sources connector` skips Pass 1/2 and sends every item
     # directly to the Connector (useful for targeted validation).
+    if browser_modes and setup_phase:
+        # Setup phase: no Zotero write, no run-log or failure-log row — it
+        # solves sessions and records answers in the state file.
+        _install_interaction_channel(args)
+        state = _unattended_state(args)
+        state["library"] = zot.describe_library()
+        state["setup"] = {"started": pdf_unattended.now(), "finished": ""}
+        args.failure_log_csv = ""
+        return _run_browser_in_process(
+            to_process, zot, _NullWriter(), args, run_date,
+            connector_only=(browser_modes == ["connector"]),
+            session=session, config=config,
+        )
+
     if browser_modes:
         _install_interaction_channel(args)
         log_fh, log_writer = _open_log(args.log_csv, replace=args.replace)
+        recorder = None
+        since = pdf_unattended.now()
+        if args.unattended:
+            if not pdf_unattended.setup_done(_unattended_state(args)):
+                print("NOTE: no finished --unattended setup is recorded "
+                      f"({_unattended_state_path(args)}). Publishers whose "
+                      "session is not already valid, and every Connector host, "
+                      "will be deferred.", flush=True)
+            recorder = log_writer = _RowRecorder(log_writer)
         try:
             rc = _run_browser_in_process(
                 to_process, zot, log_writer, args, run_date,
@@ -6466,6 +7146,8 @@ def main() -> int:
             log_fh.close()
         if not args.plan:
             _print_run_report(args, zot, scope_keys)
+        if recorder is not None:
+            _finish_unattended_run(args, recorder.rows, since, rc=rc)
         return rc
 
     # --all: run API cascade first, then re-read pdf_map for residuals

@@ -21,6 +21,7 @@ implementations:
     TtyChannel          read /dev/tty (what a real terminal does)
     ControlFileChannel  write the prompt to a file, poll for a reply
     AutoSkipChannel     never ask; answer with the configured default
+    UnattendedChannel   AutoSkipChannel that records any prompt (a bug)
 
 `ControlFileChannel` is what makes the pass agent-drivable. The script
 writes `{"state": "awaiting_user", "prompt": …}` and waits; the agent
@@ -161,6 +162,27 @@ class AutoSkipChannel(InteractionChannel):
 
     def read_line(self, prompt: str) -> str:
         print(f"{prompt}\n[--no-prompt: answering {self.answer!r}]", flush=True)
+        return self.answer
+
+
+class UnattendedChannel(AutoSkipChannel):
+    """Backs `enrich_pdfs.py --unattended run`: nobody is there, so nothing
+    may wait. Answers like `AutoSkipChannel` but records every prompt that
+    reached it, because in an unattended run that is a bug — each place a
+    person would be asked is meant to defer the item instead, before any
+    prompt is built. The run reports a non-empty `asked`."""
+
+    def __init__(self) -> None:
+        super().__init__("skip")
+        self.asked: list[str] = []
+
+    def wait_for_user(self, prompt: str) -> None:
+        self.asked.append(prompt)
+        print(f"{prompt}\n[unattended: not waiting]", flush=True)
+
+    def read_line(self, prompt: str) -> str:
+        self.asked.append(prompt)
+        print(f"{prompt}\n[unattended: not asking — answering 'skip']", flush=True)
         return self.answer
 
 
