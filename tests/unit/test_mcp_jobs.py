@@ -367,3 +367,21 @@ def test_a_job_survives_its_server_and_a_fresh_server_reads_it(
     [cancel] = _session([_tool_call(3, "cancel_job", {"job_id": job_id})], env)
     assert json.loads(cancel["result"]["content"][0]["text"])["cancel_requested"]
     assert _wait(job_id)["status"] == "cancelled"
+
+
+def test_the_pdf_plan_job_runs_beside_a_zotero_writer(project: Path, monkeypatch) -> None:
+    """Planning never writes to Zotero, so the one-writer rule does not
+    hold it back — and it gets the resolver sweep's argv."""
+    monkeypatch.setenv("FAKE_MODE", "hang")
+    markers = Path(os.environ["FAKE_MARKERS"])
+    writer = _call("start_import", {"collection": "Review"})["job_id"]
+    _wait_for_file(markers / "started")
+    plan = _call("start_pdf_plan", {"group": "12"})["job_id"]
+    job = json.loads((project / ".claude" / "jobs" / plan / "job.json")
+                     .read_text(encoding="utf-8"))
+    argv = job["argv"]
+    assert argv[argv.index("--plan-strategy"):argv.index("--progress-json")] == [
+        "--plan-strategy", "--plan-lookups", "all", "--group", "12"]
+    for job_id in (writer, plan):
+        _call("cancel_job", {"job_id": job_id})
+        assert _wait(job_id)["status"] == "cancelled"

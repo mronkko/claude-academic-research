@@ -352,6 +352,68 @@ def summarise_pdf_manual(out: str, rc: int, project: Path) -> tuple[dict, list[s
     return summary, artifacts
 
 
+PLAN_JSON = ".claude/pdf/plan.json"
+STRATEGY_TOML = ".claude/pdf/strategy.toml"
+
+
+def _key_values(line: str) -> dict:
+    out: dict = {}
+    for pair in line.split():
+        key, _, value = pair.partition("=")
+        out[key] = int(value) if value.isdigit() else value
+    return out
+
+
+def summarise_retrieval_plan(out: str, rc: int, project: Path) -> tuple[dict, list[str]]:
+    """The fixed `PLAN: key=value …` line `pdf_plan.format_summary` ends
+    with, regrouped, plus the plan's publisher and paid sections from
+    plan.json (both small). The per-item rows stay in the file."""
+    m = re.search(r"^PLAN: (.+)$", out, re.MULTILINE)
+    if not m:
+        return {}, []
+    flat = _key_values(m.group(1))
+    summary: dict = {
+        "routes": {k[len("route_"):]: v for k, v in flat.items()
+                   if k.startswith("route_")},
+        "fallback_routes": {k[len("fallback_"):]: v for k, v in flat.items()
+                            if k.startswith("fallback_")},
+        **{k: v for k, v in flat.items()
+           if not k.startswith(("route_", "fallback_"))},
+    }
+    artifacts: list[str] = []
+    path = project / PLAN_JSON
+    if rc == 0 and path.is_file():
+        try:
+            plan = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            plan = {}
+        for key in ("browser_publishers", "paid_openalex", "policy", "audit",
+                    "unknown", "manual_queue"):
+            if key in plan:
+                summary[key] = plan[key]
+        artifacts.append(PLAN_JSON)
+        artifacts += sorted((plan.get("keys_files") or {}).values())
+    return summary, artifacts
+
+
+def summarise_strategy(out: str, rc: int, project: Path) -> tuple[dict, list[str]]:
+    """The `STRATEGY_JSON: {…}` line `pdf_strategy.py` prints last."""
+    lines = re.findall(r"^STRATEGY_JSON: (.+)$", out, re.MULTILINE)
+    if not lines:
+        return {}, []
+    try:
+        summary = json.loads(lines[-1])
+    except ValueError:
+        return {}, []
+    artifacts = [STRATEGY_TOML] if (project / STRATEGY_TOML).is_file() else []
+    return summary, artifacts
+
+
+def summarise_policy_write(out: str, rc: int, project: Path) -> tuple[dict, list[str]]:
+    written = re.findall(r"^  \S+: (PDF_[A-Z_]+ = .+)$", out, re.MULTILINE)
+    return ({"written": written} if written else {}), []
+
+
 # ---------------------------------------------------------------------------
 # The tools
 # ---------------------------------------------------------------------------
@@ -402,9 +464,11 @@ ENRICH_PDFS_PLAN = Tool(
     title="Plan the browser PDF pass",
     effect=READ_ONLY,
     description=(
-        "Dry plan of the browser PDF pass: classifies items without a PDF and "
-        "lists the publisher queue, including which publishers will need an "
-        "interactive Cloudflare / SSO solve. Fetches and attaches nothing. "
+        "Dry plan of the browser PDF pass only — run it just before that "
+        "step; for the overall retrieval plan use pdf_plan. Classifies items "
+        "without a PDF and lists the publisher queue, including which "
+        "publishers will need an interactive Cloudflare / SSO solve, and how "
+        "many go to EBSCOhost or the Connector. Fetches and attaches nothing. "
         "Queries the library link resolver (~2 s per uncached item), so a "
         "large uncached library can exceed this tool's 10-minute limit; run "
         "it from a terminal then."
@@ -454,6 +518,165 @@ ENRICH_PDFS_REPORT = Tool(
     ),
     fixed=("--report",),
     summarise=summarise_pdf_report,
+)
+
+PDF_PLAN = Tool(
+    name="pdf_plan",
+    title="Plan PDF retrieval",
+    effect=READ_ONLY,
+    description=(
+        "The planning step of PDF retrieval: for every item without a PDF, "
+        "the route most likely to get it — API cascade, paid OpenAlex (with "
+        "the cost), a publisher browser handler, the library route to "
+        "EBSCOhost or the Zotero Connector, or manual download — plus where "
+        "each would go if the API sources fail it, items below the [pdf] "
+        "policy and audit flags. Never writes to Zotero; writes "
+        ".claude/pdf/plan.json and a keys file per route. lookups=none uses "
+        "caches only (seconds); lookups=openalex adds a keyless OpenAlex "
+        "metadata query per 50 items for the exact paid count (free — no "
+        "key is sent). For the link-resolver lookups use start_pdf_plan."
+    ),
+    script="scripts/pipelines/enrich_pdfs.py",
+    params=(
+        Param("lookups", "`none` (default; caches and logs only) or "
+              "`openalex` (+ keyless OpenAlex metadata).", kind="option",
+              flag="--plan-lookups", enum=("none", "openalex"), default="none"),
+        *LIBRARY_ARGS,
+        FILTER_KEYS,
+        Param("institution", "Follow only this institution's link-resolver "
+              "routes (a label from the run banner); repeatable. Maps to "
+              "--library.", kind="repeat", flag="--library"),
+    ),
+    fixed=("--plan-strategy",),
+    timeout=600,
+    open_world=True,
+    exclusive=(("group", "user"),),
+    summarise=summarise_retrieval_plan,
+)
+
+STRATEGY_MODES = r"(api|paid|browser|connector|manual)"
+YES_NO = ("yes", "no")
+
+PDF_STRATEGY_SHOW = Tool(
+    name="pdf_strategy_show",
+    title="Show the PDF retrieval strategy",
+    effect=READ_ONLY,
+    description=(
+        "Reads .claude/pdf/strategy.toml: the agreed order of retrieval "
+        "modes, each step's status and result, whether the user is present, "
+        "the policy, and the next step with its exact command or MCP tool "
+        "(exists=false when there is no strategy yet). Use it to resume."
+    ),
+    script="scripts/pipelines/pdf_strategy.py",
+    fixed=("show",),
+    summarise=summarise_strategy,
+)
+
+PDF_STRATEGY_WRITE = Tool(
+    name="pdf_strategy_write",
+    title="Write the PDF retrieval strategy",
+    effect=WRITES_PROJECT,
+    description=(
+        "Records the retrieval strategy agreed with the user in "
+        ".claude/pdf/strategy.toml: the mode order, whether they are present "
+        "now, whether an unattended run is possible, and the policy (taken "
+        "from the last pdf_plan unless given). Only what the user agreed to. "
+        "Refuses to replace an existing strategy unless force is set."
+    ),
+    script="scripts/pipelines/pdf_strategy.py",
+    params=(
+        Param("order", "Comma-separated modes in order, from api, paid, "
+              "browser, connector, manual — e.g. `api,paid,manual`.",
+              kind="option", flag="--order", required=True,
+              pattern=rf"^{STRATEGY_MODES}(,{STRATEGY_MODES})*$"),
+        Param("present", "Is the user at the keyboard now.", kind="option",
+              flag="--present", enum=YES_NO, required=True),
+        Param("unattended", "Could a run be left going unattended.",
+              kind="option", flag="--unattended", enum=YES_NO),
+        Param("library", "`user` or `group:<id>` (default: the plan's).",
+              kind="option", flag="--library", pattern=r"^(user|group:[0-9]+)$"),
+        Param("institution", "Link-resolver library label every browser / "
+              "manual step follows.", kind="option", flag="--institution"),
+        Param("scope_keys_file", "Project-relative keys file every step is "
+              "restricted to.", kind="option", flag="--scope-keys-file",
+              path=True),
+        Param("min_version", "Agreed min_version.", kind="option",
+              flag="--min-version", enum=("published", "accepted", "preprint")),
+        Param("reconstructed", "Agreed reconstructed.", kind="option",
+              flag="--reconstructed", enum=YES_NO),
+        Param("paid", "Agreed paid position.", kind="option", flag="--paid",
+              enum=("off", "prefer", "last_resort")),
+        Param("policy_where", "Where runs read the policy: project, global, "
+              "default, or strategy (this retrieval only; steps pass it as "
+              "flags).", kind="option", flag="--policy-where",
+              enum=("project", "global", "default", "strategy")),
+        Param("notes", "Anything the next session should know.",
+              kind="option", flag="--notes"),
+        Param("force", "Replace an existing strategy.", kind="switch",
+              flag="--force", type="boolean"),
+    ),
+    fixed=("init",),
+    read_only=False,
+    idempotent=False,
+    summarise=summarise_strategy,
+)
+
+PDF_STRATEGY_UPDATE = Tool(
+    name="pdf_strategy_update",
+    title="Update the PDF retrieval strategy",
+    effect=WRITES_PROJECT,
+    description=(
+        "Records a step's status (running when it starts; done, skipped or "
+        "failed when it ends, with a one-line result) or whether the user is "
+        "present, in .claude/pdf/strategy.toml. Returns the next step."
+    ),
+    script="scripts/pipelines/pdf_strategy.py",
+    params=(
+        Param("mode", "The step.", kind="option", flag="--mode",
+              enum=("api", "paid", "browser", "connector", "manual")),
+        Param("status", "Its new status.", kind="option", flag="--status",
+              enum=("pending", "running", "done", "skipped", "failed")),
+        Param("result", "One-line outcome, e.g. `attached 212, 40 left`.",
+              kind="option", flag="--result"),
+        Param("present", "Is the user at the keyboard now.", kind="option",
+              flag="--present", enum=YES_NO),
+        Param("unattended", "Could a run be left going unattended.",
+              kind="option", flag="--unattended", enum=YES_NO),
+    ),
+    fixed=("update",),
+    read_only=False,
+    idempotent=False,
+    summarise=summarise_strategy,
+)
+
+PDF_POLICY_WRITE = Tool(
+    name="pdf_policy_write",
+    title="Write the project's PDF policy",
+    effect=WRITES_PROJECT,
+    description=(
+        "Writes the agreed [pdf] policy into the project's "
+        "screening_config.py as PDF_MIN_VERSION / PDF_RECONSTRUCTED / "
+        "PDF_PAID (replacing the template's commented lines), which every "
+        "enrich_pdfs run in the project then reads. Only with the user's "
+        "agreement. Fails when the project has no screening_config.py: the "
+        "library-wide default is set with /setup in a terminal instead."
+    ),
+    script="scripts/pipelines/pdf_strategy.py",
+    params=(
+        Param("min_version", "published, accepted or preprint.", kind="option",
+              flag="--min-version", enum=("published", "accepted", "preprint")),
+        Param("reconstructed", "Attach text-only PDFs rebuilt from publisher "
+              "XML.", kind="option", flag="--reconstructed", enum=YES_NO),
+        Param("paid", "off, prefer or last_resort.", kind="option",
+              flag="--paid", enum=("off", "prefer", "last_resort")),
+        Param("config", "Project-relative config file (default: "
+              "screening_config.py).", kind="option", flag="--config",
+              path=True),
+    ),
+    fixed=("policy",),
+    read_only=False,
+    idempotent=True,
+    summarise=summarise_policy_write,
 )
 
 MANUAL_NOTE = (
@@ -900,6 +1123,35 @@ START_FULLTEXT_CODE = Tool(
     artifacts=("screening/fulltext_screening.csv",),
 )
 
+START_PDF_PLAN = Tool(
+    name="start_pdf_plan",
+    title="Plan PDF retrieval (full lookups)",
+    effect=READ_ONLY,
+    description=(
+        "pdf_plan with every lookup: also asks Crossref and the library link "
+        "resolver about each uncached item (~2 s each; the estimate is the "
+        "first lines of the log), so the browser / EBSCOhost / Connector / "
+        "no-route split is exact. Never writes to Zotero; the answers are "
+        "cached, so the browser pass afterwards starts warm. Writes "
+        ".claude/pdf/plan.json." + JOB_NOTE
+    ),
+    script="scripts/pipelines/enrich_pdfs.py",
+    params=(
+        Param("lookups", "`all` (default) or `openalex`.", kind="option",
+              flag="--plan-lookups", enum=("all", "openalex"), default="all"),
+        *LIBRARY_ARGS,
+        FILTER_KEYS,
+        INSTITUTION,
+    ),
+    fixed=("--plan-strategy",),
+    job=True,
+    # enrich_pdfs takes --control-file; the planning mode never asks.
+    control=True,
+    open_world=True,
+    exclusive=LIBRARY_PAIR,
+    artifacts=(PLAN_JSON,),
+)
+
 JOB_ID = Param(
     "job_id", "The job_id a start_* tool returned (see list_jobs).",
     kind="option", required=True, pattern=r"^[a-z_]+-[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$",
@@ -965,6 +1217,7 @@ LIST_JOBS = Tool(
 )
 
 JOB_TOOLS: tuple[Tool, ...] = (
+    START_PDF_PLAN,
     START_SEARCH,
     START_IMPORT,
     START_ENRICH_ABSTRACTS,
@@ -977,6 +1230,11 @@ JOB_CONTROL_TOOLS: tuple[Tool, ...] = (JOB_STATUS, JOB_ANSWER, CANCEL_JOB, LIST_
 TOOLS: tuple[Tool, ...] = (
     CHECK_SETUP,
     SCAFFOLD_PROJECT,
+    PDF_PLAN,
+    PDF_STRATEGY_SHOW,
+    PDF_STRATEGY_WRITE,
+    PDF_STRATEGY_UPDATE,
+    PDF_POLICY_WRITE,
     ENRICH_PDFS_PLAN,
     ENRICH_PDFS_REPORT,
     PDF_MANUAL_NEXT,

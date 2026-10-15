@@ -123,11 +123,13 @@ def test_initialize_then_tools_list(project, stub, tmp_path) -> None:
     tools = replies[1]["result"]["tools"]
     names = [t["name"] for t in tools]
     assert names == [
-        "check_setup", "scaffold_project", "enrich_pdfs_plan",
+        "check_setup", "scaffold_project", "pdf_plan", "pdf_strategy_show",
+        "pdf_strategy_write", "pdf_strategy_update", "pdf_policy_write",
+        "enrich_pdfs_plan",
         "enrich_pdfs_report", "pdf_manual_next", "pdf_manual_collect",
         "pdf_manual_assign", "pdf_manual_ignore", "screening_report", "audit_library",
         "export_coded_includes", "generate_bib",
-        "start_search", "start_import", "start_enrich_abstracts",
+        "start_pdf_plan", "start_search", "start_import", "start_enrich_abstracts",
         "start_enrich_dois", "start_abstract_screen", "start_fulltext_code",
         "job_status", "job_answer", "cancel_job", "list_jobs",
     ]
@@ -407,3 +409,86 @@ def test_pdf_manual_batch_size_must_be_a_number(project, stub, tmp_path) -> None
     [reply] = _session([_call(1, "pdf_manual_next", {"batch_size": "lots"})],
                        _env(project, [sys.executable, str(stub)], tmp_path / "rec"))
     assert "does not match" in json.dumps(reply)
+
+
+# --- PDF retrieval planning and strategy (retrieving-pdfs skill) ------------
+
+PLAN_OUTPUT = (
+    "PDF retrieval plan — group:123 (lookups: none)\n"
+    "PLAN: queue=40 with_pdf=60 no_doi=2 route_api=10 route_api_untried=5 "
+    "route_browser=12 route_manual=11 route_no_doi=2 fallback_browser=20 "
+    "fallback_manual=18 fallback_no_doi=2 paid_items=0 paid_known=0 "
+    "below_policy=1 lookups=none\n"
+)
+
+
+def test_pdf_plan_argv_and_summary(project, stub, tmp_path) -> None:
+    record = tmp_path / "rec"
+    plan = project / ".claude" / "pdf" / "plan.json"
+    plan.parent.mkdir(parents=True)
+    plan.write_text(json.dumps({
+        "browser_publishers": {"sage": {"display": "Sage", "items": 12,
+                                        "needs_solve": True}},
+        "paid_openalex": {"known": False, "unchecked": 38},
+        "manual_queue": 38,
+        "keys_files": {"browser": ".claude/pdf/plan.browser.keys"},
+        "items": [{"key": "X"}],
+    }), encoding="utf-8")
+    [reply] = _session(
+        [_call(1, "pdf_plan", {"group": "123", "lookups": "openalex"})],
+        _env(project, [sys.executable, str(stub)], record, output=PLAN_OUTPUT))
+    [run] = _records(record)
+    assert run["argv"][0].endswith("enrich_pdfs.py")
+    assert run["argv"][1:] == ["--plan-strategy", "--plan-lookups", "openalex",
+                               "--group", "123"]
+    summary = _payload(reply)["summary"]
+    assert summary["routes"] == {"api": 10, "api_untried": 5, "browser": 12,
+                                 "manual": 11, "no_doi": 2}
+    assert summary["fallback_routes"]["manual"] == 18
+    assert summary["queue"] == 40 and summary["lookups"] == "none"
+    assert summary["browser_publishers"]["sage"]["items"] == 12
+    assert "items" not in summary, "per-item rows stay in the file"
+    assert _payload(reply)["artifacts"] == [".claude/pdf/plan.json",
+                                           ".claude/pdf/plan.browser.keys"]
+
+
+def test_pdf_plan_refuses_the_resolver_sweep(project, stub, tmp_path) -> None:
+    """The short tool has a 10-minute limit; `all` is start_pdf_plan's."""
+    [reply] = _session([_call(1, "pdf_plan", {"lookups": "all"})],
+                       _env(project, [sys.executable, str(stub)], tmp_path / "rec"))
+    assert "one of" in _payload(reply)["summary"]["error"]
+
+
+def test_real_pdf_strategy_round_trip(project, tmp_path) -> None:
+    """The stdlib strategy helper end to end: write, update, show."""
+    (project / "screening_config.py").write_text(
+        '# PDF_MIN_VERSION = "accepted"\n', encoding="utf-8")
+    env = _env(project, [sys.executable], tmp_path / "rec")
+    replies = _session([
+        _call(1, "pdf_strategy_show", {}),
+        _call(2, "pdf_strategy_write", {"order": "api,paid,manual",
+                                        "present": "yes", "library": "group:5"}),
+        _call(3, "pdf_strategy_update", {"mode": "api", "status": "done",
+                                         "result": "attached 7"}),
+        _call(4, "pdf_policy_write", {"min_version": "published"}),
+        _call(5, "pdf_strategy_show", {}),
+        _call(6, "pdf_strategy_write", {"order": "manual", "present": "no"}),
+    ], env)
+    first, written, updated, policy, shown, again = map(_payload, replies)
+    assert first["summary"] == {"exists": False}
+    assert written["summary"]["next"]["mode"] == "api"
+    assert written["artifacts"] == [".claude/pdf/strategy.toml"]
+    assert updated["summary"]["next"]["mode"] == "paid"
+    assert policy["summary"]["written"] == ['PDF_MIN_VERSION = "published"']
+    assert shown["summary"]["policy"]["where"] == "project"
+    assert shown["summary"]["steps"][0] == {"mode": "api", "status": "done",
+                                            "result": "attached 7"}
+    assert again["ok"] is False   # an existing strategy is not replaced silently
+    assert (project / ".claude" / "pdf" / "strategy.toml").is_file()
+
+
+def test_pdf_strategy_write_validates_the_order(project, stub, tmp_path) -> None:
+    [reply] = _session([_call(1, "pdf_strategy_write",
+                              {"order": "api;rm", "present": "yes"})],
+                       _env(project, [sys.executable, str(stub)], tmp_path / "rec"))
+    assert "does not match" in _payload(reply)["summary"]["error"]
