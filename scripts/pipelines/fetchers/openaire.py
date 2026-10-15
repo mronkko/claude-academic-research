@@ -39,7 +39,7 @@ import logging
 import urllib.parse
 from pathlib import Path
 
-from fetchers import _pdf_validate
+from fetchers import _pdf_validate, cache_names
 from fetchers.base import PdfFetcher
 from fetchers.core import REPOSITORY_COPY_TAG  # noqa: F401  (re-export intent)
 
@@ -61,7 +61,7 @@ _PREPRINT_HOSTS = (
 
 
 def _doi_safe(doi: str) -> str:
-    return doi.replace("/", "_").replace(":", "_")
+    return cache_names.doi_safe(doi)
 
 
 def _cache_pdf_path(cache_dir: str | Path, doi: str) -> Path:

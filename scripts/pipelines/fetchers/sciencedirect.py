@@ -35,7 +35,7 @@ import urllib.parse
 import zlib
 from pathlib import Path
 
-from fetchers import _pdf_validate
+from fetchers import _pdf_validate, cache_names
 from fetchers.base import (
     AbstractFetcher,
     PdfFetcher,
@@ -66,7 +66,7 @@ TDM_RECOVERED_TAG = "pdf:tdm-recovered"
 
 
 def _doi_safe(doi: str) -> str:
-    return doi.replace("/", "_").replace(":", "_")
+    return cache_names.doi_safe(doi)
 
 
 def _cache_pdf_path(cache_dir: str | Path, doi: str, *, recovered: bool = False) -> Path:

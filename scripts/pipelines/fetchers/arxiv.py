@@ -45,7 +45,8 @@ def arxiv_pdf_url(doi: str) -> str | None:
 
 
 def _cache_pdf_path(cache_dir: str | Path, doi: str) -> Path:
-    return Path(cache_dir) / f"{doi.lower().replace('/', '_').replace(':', '_')}.pdf"
+    from fetchers.cache_names import cache_pdf_path
+    return cache_pdf_path(cache_dir, doi.lower())
 
 
 class ArxivSource(PdfFetcher):

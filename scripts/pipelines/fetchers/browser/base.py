@@ -80,8 +80,8 @@ def progress_tag(counter: Counter, total: int, t_start: float) -> str:
 
 
 def cache_path_for(cache_dir: str | Path, doi: str) -> Path:
-    safe = doi.replace("/", "_").replace(":", "_")
-    return Path(cache_dir) / f"{safe}.pdf"
+    from fetchers.cache_names import cache_pdf_path
+    return cache_pdf_path(cache_dir, doi)
 
 
 def is_cached(path: Path) -> bool:
@@ -182,8 +182,8 @@ def _diagnostic_stem(handler: str, doi: str) -> str:
     Same slash/colon escaping as `cache_path_for`, prefixed by handler so
     two publishers can never collide on a shared DOI suffix.
     """
-    safe = doi.replace("/", "_").replace(":", "_") or "unknown-doi"
-    return f"{handler or 'browser'}_{safe}"
+    from fetchers.cache_names import doi_safe
+    return f"{doi_safe(handler or 'browser')}_{doi_safe(doi) or 'unknown-doi'}"
 
 
 async def capture_page_diagnostics(

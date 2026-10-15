@@ -3808,6 +3808,18 @@ def _run_browser_in_process(
     # Pass 4b — single Connector session for whatever is left.
     # ------------------------------------------------------------------
 
+    if connector_items and getattr(args, "dry_run", False):
+        # The Connector's whole mechanism is a save *into Zotero* (then a
+        # merge and a trash), so there is no dry form of it. --dry-run
+        # promises no Zotero writes; skipping is the only way to keep it.
+        print(
+            f"\n  --dry-run: skipping the Zotero Connector for "
+            f"{len(connector_items)} item(s) — it saves into Zotero by "
+            f"design. Re-run without --dry-run to try them.",
+            flush=True,
+        )
+        connector_items = []
+
     if connector_items:
         connector_handler = ZoteroConnectorHandler(
             extension_path=get(

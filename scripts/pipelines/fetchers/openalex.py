@@ -50,7 +50,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fetchers import _pdf_validate
+from fetchers import _pdf_validate, cache_names
 from fetchers._title_match import content_words
 from fetchers.base import (
     AbstractFetcher,
@@ -98,7 +98,7 @@ def coerce_paid_opt_in(value, *, default: bool | None = None) -> bool | None:
 
 
 def _doi_safe(doi: str) -> str:
-    return doi.replace("/", "_").replace(":", "_")
+    return cache_names.doi_safe(doi)
 
 
 def _cache_pdf_path(cache_dir: str | Path, doi: str) -> Path:

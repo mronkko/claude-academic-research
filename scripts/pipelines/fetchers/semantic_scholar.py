@@ -21,7 +21,7 @@ import os
 import urllib.parse
 from pathlib import Path
 
-from fetchers import _pdf_validate
+from fetchers import _pdf_validate, cache_names
 from fetchers.base import AbstractFetcher, PdfFetcher, answered
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ _API_BASE = "https://api.semanticscholar.org/graph/v1"
 
 
 def _doi_safe(doi: str) -> str:
-    return doi.replace("/", "_").replace(":", "_")
+    return cache_names.doi_safe(doi)
 
 
 def _cache_pdf_path(cache_dir: str | Path, doi: str) -> Path:
