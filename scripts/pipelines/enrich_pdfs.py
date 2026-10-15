@@ -827,7 +827,13 @@ def _browser_failure_cause(
     # the API-cascade paths must not need.
     from fetchers.browser.base import is_download_timeout
 
-    if is_download_timeout(getattr(handler, "last_error", "")):
+    # Only for a handler whose timeouts come after entitlement was shown
+    # (EBSCO). On a page-navigation handler the timeout is the download
+    # event that never fired — the paywall case — and must stay with the
+    # ACCESS_BLOCKED fall-through below so the item reaches ILL.
+    if getattr(handler, "timeout_proves_reachable", False) is True and (
+        is_download_timeout(getattr(handler, "last_error", ""))
+    ):
         return pdf_fetch_log.FailureCause.NETWORK_ERROR
     obs = _page_verdict(handler)
     if obs is not None and obs.klass == "no_pdf_offered":

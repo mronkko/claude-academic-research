@@ -260,6 +260,9 @@ class EbscoHandler(PublisherHandler):
     # non-empty value here would let `resolve_by_host` pull this handler
     # into Pass 1, where it has no resolver target to work from.
     direct_access_domains = ()
+    # The signed CDN URL is issued only after the viewer loads, so a
+    # timeout fetching it means slow, not refused. See the base attribute.
+    timeout_proves_reachable = True
     # No Cloudflare/Imperva interstitial was observed — IP auth is
     # silent — so a run needs no human at the keyboard for this platform.
     # True of the library this was measured against, and not of every

@@ -891,6 +891,14 @@ class PublisherHandler(ABC):
     #: Verdict string for the driver's classifier and retry note; set
     #: from a conclusive `last_observation`. EBSCO sets its own.
     last_verdict: str = ""
+    #: True only where a timeout can happen *after* the platform has
+    #: shown we are entitled — EBSCO hands over its signed CDN URL once
+    #: the viewer has loaded, so a timeout fetching it means "slow, retry".
+    #: Everywhere else a timeout is `expect_download` waiting for a
+    #: download the publisher never started, which is what a paywall
+    #: looks like from the browser; reading that as NETWORK_ERROR filed
+    #: every paywalled item under "retry next run" and none under ILL.
+    timeout_proves_reachable: bool = False
     # Optional: URL the setup phase opens in the browser. Defaults to
     # `url_template`. Override when the download URL would trigger an
     # immediate auto-download (e.g. Emerald's `?download=true` PDF URL),

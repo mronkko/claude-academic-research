@@ -391,10 +391,29 @@ def test_a_download_timeout_is_not_a_missing_article() -> None:
     handler = MagicMock(
         last_verdict=ebsco.VERDICT_UNKNOWN,
         last_error="fetch APIRequestContext.get: Timeout 60000ms exceeded.",
+        timeout_proves_reachable=ebsco.EbscoHandler.timeout_proves_reachable,
     )
 
     assert enrich_pdfs._browser_failure_cause(handler, transport=False) is (
         pdf_fetch_log.FailureCause.NETWORK_ERROR)
+
+
+def test_a_download_event_timeout_on_a_publisher_page_is_a_paywall() -> None:
+    """Everywhere but EBSCO, a timeout is `expect_download` waiting for a
+    download the publisher never started — what a paywall looks like from
+    the browser. Filing it NETWORK_ERROR sent every paywalled item to
+    "retry next run" and none to ILL."""
+    from fetchers.browser.base import PageNavigationHandler
+
+    class _Handler(PageNavigationHandler):
+        name = "pubx"
+        doi_prefixes = ("10.9999/",)
+
+    h = _Handler()
+    h.last_error = 'Timeout 30000ms exceeded while waiting for event "download"'
+
+    assert enrich_pdfs._browser_failure_cause(h, transport=False) is (
+        pdf_fetch_log.FailureCause.ACCESS_BLOCKED)
 
 
 def test_silence_reads_as_blocked_access_not_as_absence() -> None:
