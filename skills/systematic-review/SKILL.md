@@ -175,10 +175,6 @@ missing helper to `zotero_io.py` rather than working around it
 inline. The full rule lives in [skills/zotero-operations/SKILL.md](../zotero-operations/SKILL.md)
 under "IRON RULE — Zotero access goes through the plugin's surface".
 
-The CI guard at `tests/unit/test_no_direct_localhost_zotero.py`
-fails the build if a direct-HTTP call slips into a pipeline file
-that isn't `zotero_io.py` or `bbt_client.py`.
-
 **Never compose item metadata yourself.** New items come from a
 pipeline script importing database-retrieved rows, or from an
 identifier-based add (`mcp__zotero__zotero_add_item` with a DOI/ISBN/
@@ -894,9 +890,12 @@ compute counts), one of two things must be true:
 
 **Why this rule is hard:**
 
-- Heredoc invocations are not covered by the wizard's allow rules
-  (`Bash(python3 ${CLAUDE_PLUGIN_ROOT:-.}/scripts/**)` matches paths,
-  not heredocs). Every heredoc triggers a permission prompt.
+- A shipped script is code the user can audit once and trust every
+  session; a heredoc is new code they have to read and approve on the
+  spot, and nobody reviews it after the session ends.
+- Shipped scripts are tested on Windows, macOS and Linux. A heredoc,
+  `python -c` one-liner or POSIX pipeline is not, and fails on the
+  first platform it was not written for.
 - Improvised code is composed mid-session — the user has to read
   and approve fresh logic in real time, instead of pre-audited
   shipped code.
@@ -911,7 +910,7 @@ compute counts), one of two things must be true:
 | Filter / trim a search CSV (top-N by year, year range) | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/filter_search_results.py --input <csv> --output <csv> [--year-min Y] [--year-max Y] [--top-n N]` |
 | Summarise screening decisions across passes (last-row-wins, decision counts, list re-screened items) | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/screening_report.py <log.csv> [--list <decision>] [--list-rescreened]` |
 | Inspect tag state for one item | Use `mcp__zotero__zotero_get_item_metadata` directly — single MCP call, no Python needed. |
-| Read a CSV row count | `wc -l <path>` — already a one-liner. |
+| Count the records in a screening log | `screening_report.py <log.csv>` prints them. Not `wc -l`: quoted fields with line breaks (abstracts) make it overcount, and Windows shells do not have it. |
 
 **Self-check before any Bash heredoc / inline `python -c`
 exceeding one line:** is this task in the Pipeline-scripts table or
@@ -1817,7 +1816,8 @@ manuscript's bibliography.
 The mechanism (`mcp__zotero__scite_check_retractions`, the
 `retracted:flag` tag convention, "flag — don't silently drop")
 lives in `zotero-operations` — see its *Optional: retraction check*
-section. The SR-specific twist is **scope** and **timing**:
+section, including what to do when the tool is missing because the
+server was registered without the `scite` toolset. The SR-specific twist is **scope** and **timing**:
 
 - **Scope.** Narrow the check to items already tagged
   `<prefix>/fulltext:include` so it runs against papers that matter for the

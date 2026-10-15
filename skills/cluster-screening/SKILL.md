@@ -30,8 +30,8 @@ is a statement about how much of a shared facility account — somebody
 else's allocation, on hardware the user is accountable for — the user
 has agreed to hand over. If the level blocks what you were asked to do,
 say so and print the commands; do not set a level to get past a
-permission prompt, and do not suggest `--automation auto` as a fix for
-one.
+permission prompt, and do not suggest raising the level to `auto` as a
+fix for one.
 
 The block looks like this:
 
@@ -54,7 +54,7 @@ headless session reads as a hang.
 To change it, the user decides and this writes it:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/set_cluster_automation.py <level>
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/set_cluster_automation.py" <level>
 ```
 
 ### What each level permits you to do
@@ -72,9 +72,8 @@ every path already filled in, and stop. That block is the deliverable —
 make it copy-pasteable, not illustrative.
 
 Under `confirm`, the permission prompt **is** the approval step. The
-plugin never allow-lists `ssh`/`scp`/`rsync`/`sbatch` (pinned by
-`tests/unit/test_cluster_automation.py`), so each call surfaces to the
-user. Do not try to reduce the number of prompts by chaining commands
+plugin writes no permission rules at all, so unless the user has allowed
+`ssh`/`scp`/`rsync`/`sbatch` themselves, each call surfaces to them. Do not try to reduce the number of prompts by chaining commands
 into one `ssh` invocation — that converts several approvals into one and
 is exactly the erosion the level exists to prevent.
 

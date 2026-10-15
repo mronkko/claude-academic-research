@@ -20,8 +20,8 @@ python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/check_configured.py"
 If the result is `NOT CONFIGURED`, stop immediately and tell the user:
 
 > The academic-research project has not been set up on this machine
-> yet. Run the setup skill or setup wizard first to configure API keys, MCP servers, and
-> permission rules. Do not attempt Zotero operations before that.
+> yet. Run the setup skill (`/setup`) first to configure API keys and
+> MCP servers. Do not attempt Zotero operations before that.
 
 Do not call MCP tools, run scripts, or proceed with the procedure.
 Running the setup skill/wizard is the required first step.
@@ -306,6 +306,11 @@ problem — citing a retracted paper is a fact-check failure mode the
 author almost certainly wants to catch. Scite exposes a free
 retraction-watch endpoint that the Zotero MCP server wraps as
 `mcp__zotero__scite_check_retractions` (no Scite account required).
+The tool exists only when the Zotero MCP server runs with `scite` in its
+`ZOTERO_MCP_TOOLSETS` environment variable; the setup wizard registers it
+that way. If the tool is not in your tool list, the server was
+registered some other way: tell the user and suggest re-running `/setup`
+rather than silently skipping the step.
 
 **Offer the check as a post-audit step** when any of the following
 is true: the library is being prepared for submission, the user
@@ -346,8 +351,9 @@ If the user's request does not clearly map to one of the rows above,
 If you truly need an operation the table above does not cover, tell
 the user which operation is missing and propose adding a new shipped
 script to the plugin. A one-off improvised script has no place here —
-it breaks the security model (API keys flow through your context)
-and sidesteps pre-approved permissions.
+it breaks the security model (API keys flow through your context),
+is code the user has to audit on the spot instead of once, and is
+untested on the platforms the shipped scripts run on.
 
 ## IRON RULE — Zotero access goes through the plugin's surface
 
@@ -419,12 +425,6 @@ A direct-HTTP call by the agent bypasses retries, schema versioning,
 cross-project reuse, and the one-line definition-of-Zotero-shape
 that other consumers rely on. Inline urllib also drives the agent back
 into improvising pipeline code, which the standing rule forbids.
-
-**Implementation note for plugin contributors.** The CI guard at
-`tests/unit/test_no_direct_localhost_zotero.py` greps every file
-under `scripts/pipelines/` for `127.0.0.1:23119` or `localhost:23119`
-and fails the build on a match outside `zotero_io.py` and
-`bbt_client.py`. New code must route through those modules.
 
 ## IRON RULE — never compose item metadata yourself
 
@@ -547,7 +547,10 @@ must handle all three:
    merge into the already-queued item, not create a new one.
 
 3. **Post-import.** Always run `mcp__zotero__zotero_find_duplicates` at
-   the end of the import. Pre-existing library items with incomplete
+   the end of the import. (It and `zotero_merge_duplicates` exist only
+   when `duplicates` is in the server's `ZOTERO_MCP_TOOLSETS`, as the
+   setup wizard registers it; if they are missing, say so and fall back
+   to `zotero-cli duplicates find` rather than skipping the check.) Pre-existing library items with incomplete
    metadata can slip past the first two checks; the post-check is the
    safety net. To merge what it finds, use `mcp__zotero__zotero_merge_duplicates`
    or, equivalently, `zotero-cli duplicates find` / `zotero-cli
