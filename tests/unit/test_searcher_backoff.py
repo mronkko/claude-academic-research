@@ -186,10 +186,12 @@ _ALLOWED_FILES = {"http_client.py"}
 #: still fails, and fixing one fails `test_allow_list_has_no_stale_entries`
 #: until the count is lowered.
 _KNOWN_SITES: dict[tuple[str, str], tuple[int, str]] = {
-    ("enrich_pdfs.py", "requests.Session"): (3, (
-        "bare sessions for the Zotero-desktop ping, the resolver config "
-        "load and the resolver session — resolver traffic with no retry "
-        "adapter; should be http_client.build_session()"
+    ("enrich_pdfs.py", "requests.Session"): (2, (
+        "deliberately bare, each with a comment at the call site: the "
+        "Zotero-desktop ping (a 3 s localhost probe the retry policy would "
+        "turn into a ~30 s stall when Zotero is closed) and the serial "
+        "resolver pre-flight (retries would turn one resolver outage into "
+        "hours; a failed query already falls back to trying the item)"
     )),
     ("zotero_io.py", "urllib.request.urlopen"): (3, (
         "api.zotero.org group listing (from_config) plus two local Zotero "
