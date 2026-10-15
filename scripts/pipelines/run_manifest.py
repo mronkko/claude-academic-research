@@ -54,6 +54,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
 import batch_manifest  # noqa: E402
+import worker_pool  # noqa: E402
 from core import llm_provider  # noqa: E402
 from core.models import effective_model, model_flag_help  # noqa: E402
 
@@ -165,7 +166,8 @@ def main() -> int:
     fatal: list[str] = []
     lock = threading.Lock()
     started = time.time()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
+    # Cancels queued calls on any exception or Ctrl+C (worker_pool).
+    with worker_pool.cancelling_pool(args.workers) as pool:
         futures = {pool.submit(execute_one, r, client, model): r for r in requests}
         for fut in concurrent.futures.as_completed(futures):
             row = fut.result()

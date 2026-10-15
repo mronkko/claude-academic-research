@@ -59,7 +59,7 @@ import random
 import re
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -73,6 +73,7 @@ import batch_manifest  # noqa: E402
 import csv_io  # noqa: E402
 import screening_common  # noqa: E402
 import tag_prefix  # noqa: E402
+import worker_pool  # noqa: E402
 import zotero_io  # noqa: E402
 from core import llm_provider  # noqa: E402
 from core.config_loader import require  # noqa: E402
@@ -941,9 +942,11 @@ def main() -> int:
     tag_batch_size = max(1, args.tag_batch_size)
     tag_buffer: list[tuple[str, dict]] = []
 
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = {pool.submit(screen_one, item): item for item in to_screen}
-        try:
+    # Cancelling pool: an exception or Ctrl+C in this loop stops queued
+    # calls instead of letting the pool run (and bill) every one of them.
+    try:
+        with worker_pool.cancelling_pool(args.workers) as pool:
+            futures = {pool.submit(screen_one, item): item for item in to_screen}
             for future in as_completed(futures):
                 res = future.result()
                 key, query, decision, reason = (
@@ -988,10 +991,10 @@ def main() -> int:
                         file=sys.stderr, flush=True,
                     )
                     break
-        finally:
-            # Flush whatever is left, including on Ctrl+C — partial progress
-            # gets tagged so a resume doesn't re-screen already-decided items.
-            _flush_tag_buffer(zot, tag_buffer)
+    finally:
+        # Flush whatever is left, including on Ctrl+C — partial progress
+        # gets tagged so a resume doesn't re-screen already-decided items.
+        _flush_tag_buffer(zot, tag_buffer)
 
     print(f"\n{'=' * 60}")
     print(f"Done. Screened {done_count} of {total} items.")

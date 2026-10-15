@@ -93,6 +93,7 @@ import csv_io  # noqa: E402
 import pdf_text_cache  # noqa: E402
 import screening_common  # noqa: E402
 import tag_prefix  # noqa: E402
+import worker_pool  # noqa: E402
 import zotero_io  # noqa: E402
 from core import llm_provider  # noqa: E402
 from core.config_loader import require  # noqa: E402
@@ -2145,9 +2146,8 @@ def main() -> int:
                 ns=ns,
             )
 
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=args.workers
-        ) as pool:
+        # Cancels queued calls on any exception or Ctrl+C (worker_pool).
+        with worker_pool.cancelling_pool(args.workers) as pool:
             futures = {pool.submit(update_worker, it): it for it in to_update}
             update_fatal: list[str] = []
             for fut in concurrent.futures.as_completed(futures):
@@ -2220,7 +2220,8 @@ def main() -> int:
           flush=True)
 
     fatal: list[str] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
+    # Cancels queued calls on any exception or Ctrl+C (worker_pool).
+    with worker_pool.cancelling_pool(args.workers) as pool:
         futures = {pool.submit(worker, it): it for it in to_code}
         for fut in concurrent.futures.as_completed(futures):
             row = fut.result()
