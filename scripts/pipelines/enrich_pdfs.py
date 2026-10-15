@@ -91,6 +91,7 @@ for _p in (str(SCRIPT_DIR), str(SCRIPTS_ROOT)):
 import doi_utils  # noqa: E402
 import fetchers  # noqa: E402
 import http_client  # noqa: E402
+import manual_pdfs  # noqa: E402
 import pdf_fetch_log  # noqa: E402
 import pdf_run_report  # noqa: E402
 import shared_orchestrators  # noqa: E402
@@ -429,6 +430,10 @@ def _load_config() -> Config:
 
 
 # --- The [pdf] retrieval policy (core/pdf_policy.py) --------------------------
+
+#: `--manual` actions (see `manual_pdfs`).
+MANUAL_ACTIONS = ("next", "collect", "assign", "ignore")
+MANUAL_DEFAULT_BATCH = manual_pdfs.DEFAULT_BATCH_SIZE
 
 #: The project file a run reads `PDF_*` overrides from when `--config` is
 #: not given and it exists in the working directory.
@@ -1520,6 +1525,7 @@ _PROVENANCE_TAGS = (
     fetchers.REPOSITORY_COPY_TAG,
     fetchers.PREPRINT_VERSION_TAG,
     *pdf_version.VERSION_TAGS,
+    manual_pdfs.MANUAL_TAG,
 )
 
 
@@ -1648,8 +1654,12 @@ def _attach_and_log(
     item_type: str = "",
     check_text: bool = True,
     min_version: str | None = None,
+    extra_tags: tuple[str, ...] = (),
 ) -> bool:
     """Attach one fetched PDF to Zotero and log the outcome. True on success.
+
+    `extra_tags` are added with the provenance tags after a successful
+    upload (the manual mode's `pdf:manual`).
 
     `min_version` is the `[pdf]` policy's last line of defence: a file
     whose recorded version is below it is refused here, whichever route
@@ -1770,7 +1780,7 @@ def _attach_and_log(
     # back here from the cache sidecar, so the cache-recovery pass — which
     # knows only a path — tags as precisely as the cascade did.
     version_add, version_remove = _version_tag_op(version)
-    provenance_tags += version_add
+    provenance_tags += version_add + list(extra_tags)
     _finish_replacement(
         zot, item_key, keep={new_attachment_key}, provenance=provenance_tags,
     )
@@ -3278,6 +3288,47 @@ def _warn_legacy_resolver_cache(resolver_cfg) -> None:
     )
 
 
+def _resolver_config(args: argparse.Namespace):
+    """The run's `LibraryResolverConfig` (None when no `[library]
+    openurl_base` is configured). Raises ValueError on a bad `--library`.
+    Shared by the browser pass and the manual mode (`manual_pdfs`), which
+    open the same routes."""
+    # Resolver session — no Crossref mailto, and deliberately *not*
+    # `http_client.build_session()`. The pre-flight is serial over the
+    # whole queue (thousands of items at ~0.5/s); that session's retry
+    # policy (5 tries, 1-16 s backoff on 429/5xx and refused connections)
+    # turns one resolver outage into ~30 s per item — hours of apparent
+    # hang. And retrying buys nothing here: a failed query is "could not
+    # ask", which fails open (the item proceeds as 1a-unknown), so a lost
+    # answer costs one unfiltered attempt, not a wrong exclusion.
+    import requests as _requests
+    from fetchers.library_resolver import load_from_config
+
+    resolver_session = _requests.Session()
+    # `--refresh-resolver-cache` sets the miss TTL to zero, so every
+    # cached "no route" is re-asked while cached routes are kept. The
+    # alternative used to be deleting `resolver_cache.json`, which by
+    # default sits in a directory that also holds the PDF cache and both
+    # Chromium profiles — a blunt instrument for re-checking one
+    # library's answer.
+    #
+    # `--resolver-cache-dir` separates the two directories outright, for
+    # the opposite need: keeping the answers *across* runs that partition
+    # everything else per-pass. Defaulting to `--cache-dir` keeps the
+    # documented "delete that directory and this goes too" property for
+    # anyone who does not set it.
+    #
+    # `--library` chooses whose links this run opens; every configured
+    # library is still consulted. See `LibraryResolverConfig.active_ids`.
+    return load_from_config(
+        resolver_session,
+        getattr(args, "resolver_cache_dir", None) or args.cache_dir,
+        miss_ttl_s=0 if getattr(args, "refresh_resolver_cache", False)
+        else None,
+        active=getattr(args, "library", None),
+    )
+
+
 def _run_browser_in_process(
     to_process: list[dict],
     zot,
@@ -3355,10 +3406,7 @@ def _run_browser_in_process(
     )
     from fetchers.browser.base import NetworkOutage
     from fetchers.doi_resolver import DoiResolverCache, resolve_doi
-    from fetchers.library_resolver import (
-        load_from_config,
-        lookup_dual,
-    )
+    from fetchers.library_resolver import lookup_dual
 
     # Plain hostname test, used on URLs we synthesize ourselves from a
     # Crossref-resolved host. Distinct from `targets_match_domains`,
@@ -3377,39 +3425,8 @@ def _run_browser_in_process(
     )
     doi_cache = DoiResolverCache(args.cache_dir)
 
-    # Resolver session — no Crossref mailto, and deliberately *not*
-    # `http_client.build_session()`. The pre-flight is serial over the
-    # whole queue (thousands of items at ~0.5/s); that session's retry
-    # policy (5 tries, 1-16 s backoff on 429/5xx and refused connections)
-    # turns one resolver outage into ~30 s per item — hours of apparent
-    # hang. And retrying buys nothing here: a failed query is "could not
-    # ask", which fails open (the item proceeds as 1a-unknown), so a lost
-    # answer costs one unfiltered attempt, not a wrong exclusion.
-    import requests as _requests
-    resolver_session = _requests.Session()
-    # `--refresh-resolver-cache` sets the miss TTL to zero, so every
-    # cached "no route" is re-asked while cached routes are kept. The
-    # alternative used to be deleting `resolver_cache.json`, which by
-    # default sits in a directory that also holds the PDF cache and both
-    # Chromium profiles — a blunt instrument for re-checking one
-    # library's answer.
-    #
-    # `--resolver-cache-dir` separates the two directories outright, for
-    # the opposite need: keeping the answers *across* runs that partition
-    # everything else per-pass. Defaulting to `--cache-dir` keeps the
-    # documented "delete that directory and this goes too" property for
-    # anyone who does not set it.
-    #
-    # `--library` chooses whose links this run opens; every configured
-    # library is still consulted. See `LibraryResolverConfig.active_ids`.
     try:
-        resolver_cfg = load_from_config(
-            resolver_session,
-            getattr(args, "resolver_cache_dir", None) or args.cache_dir,
-            miss_ttl_s=0 if getattr(args, "refresh_resolver_cache", False)
-            else None,
-            active=getattr(args, "library", None),
-        )
+        resolver_cfg = _resolver_config(args)
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
@@ -4912,6 +4929,62 @@ def _print_run_report(
     print(pdf_run_report.format_report(rows, metadata=lookup))
 
 
+def _fetch_scope_items(args: argparse.Namespace, zot) -> list[dict] | None:
+    """The items this run is accountable for: `--filter-keys-file`'s
+    keys, else every item of `--item-types`. None (after printing why)
+    when the keys file is missing."""
+    if args.filter_keys_file:
+        # Fetch only what was asked for. Walking the whole library and
+        # filtering in Python costs a full paginated sweep per invocation
+        # — repeated on every backoff retry — and a live run against a
+        # ~10,000-item library was rate-limited during that enumeration
+        # and never reached the retrieval it was invoked for.
+        if not os.path.isfile(args.filter_keys_file):
+            print(f"ERROR: --filter-keys-file not found: {args.filter_keys_file}",
+                  file=sys.stderr)
+            return None
+        with open(args.filter_keys_file) as f:
+            target = {line.strip() for line in f if line.strip()}
+        print(f"Fetching {len(target)} Zotero items by key...", end=" ", flush=True)
+        fetched = zot.items_by_keys(target)
+        all_items, not_articles = select_requested_articles(
+            fetched, target, args.item_types,
+        )
+        print(f"{len(all_items)} items of type {', '.join(args.item_types)}.",
+              flush=True)
+        if not_articles:
+            # Distinguished from "key not found": a book chapter that was
+            # asked for and skipped is a scope decision, not a typo, and
+            # reporting both as "matched no journal article" hid which.
+            print(
+                f"  NOTE: {not_articles} key(s) resolved to item types "
+                f"outside --item-types ({', '.join(args.item_types)}) and "
+                f"were skipped. To include chapters and books, pass "
+                f"--item-types journalArticle,bookSection,book.",
+                flush=True,
+            )
+        missing = target - {it["key"] for it in fetched}
+        if missing:
+            # Silence here used to hide typo'd keys and non-journalArticle
+            # items, which then looked identical to "nothing to do".
+            print(
+                f"  WARN: {len(missing)} key(s) in the file do not exist in "
+                f"this library: {', '.join(sorted(missing)[:5])}"
+                + (" …" if len(missing) > 5 else ""),
+                flush=True,
+            )
+    else:
+        print("Fetching Zotero items...", end=" ", flush=True)
+        if tuple(args.item_types) == ("journalArticle",):
+            all_items = zot.journal_articles()
+        else:
+            all_items = zot.abstractable_items(args.item_types)
+        print(f"{len(all_items)} items of type {', '.join(args.item_types)}.",
+              flush=True)
+
+    return all_items
+
+
 def select_requested_articles(
     fetched: list[dict], requested: set[str],
     item_types: tuple[str, ...] = ("journalArticle",),
@@ -4953,6 +5026,137 @@ def _item_types_arg(raw: str) -> tuple[str, ...]:
             f"choose from {', '.join(known)}"
         )
     return types
+
+
+def _check_manual_args(args: argparse.Namespace) -> int:
+    """0, or 2 after saying why `--manual` cannot run with these flags."""
+    clash = [flag for flag, on in (
+        ("--all", args.all), ("--sources", bool(args.sources)),
+        ("--plan", args.plan), ("--replace", args.replace),
+        ("--auto-publishers", args.auto_publishers),
+    ) if on]
+    if clash:
+        print(f"ERROR: --manual is its own mode; drop {', '.join(clash)}.",
+              file=sys.stderr)
+        return 2
+    if args.manual in ("assign", "ignore") and not args.assign_file:
+        print(f"ERROR: --manual {args.manual} needs --assign-file.", file=sys.stderr)
+        return 2
+    if args.manual == "assign" and not args.assign_item:
+        print("ERROR: --manual assign needs --assign-item ITEM_KEY.", file=sys.stderr)
+        return 2
+    if args.batch_size is not None and args.batch_size < 1:
+        print("ERROR: --batch-size must be at least 1.", file=sys.stderr)
+        return 2
+    return 0
+
+
+def _manual_settings(args: argparse.Namespace) -> tuple[Path, int]:
+    """(downloads folder, batch size): flag > [pdf] config > default."""
+    raw_dir = args.downloads_dir or get(
+        "pdf", "downloads_dir", env="PDF_DOWNLOADS_DIR",
+    )
+    downloads = Path(raw_dir).expanduser() if raw_dir else Path.home() / "Downloads"
+    size = args.batch_size
+    if size is None:
+        raw = get("pdf", "manual_batch_size", env="PDF_MANUAL_BATCH_SIZE")
+        try:
+            size = int(raw) if str(raw).strip() else MANUAL_DEFAULT_BATCH
+        except ValueError:
+            print(f"  [pdf] manual_batch_size {raw!r} is not a number; using "
+                  f"{MANUAL_DEFAULT_BATCH}.", flush=True)
+            size = MANUAL_DEFAULT_BATCH
+    return downloads, max(1, size)
+
+
+def _manual_route_lookup(resolver_cfg):
+    """`(doi, item data) -> (url, target)` over the library resolver, the
+    same lookup Pass 3 uses (`_pass3_target`). (None, None) when there is
+    no route this run may follow — the caller opens doi.org instead."""
+    if resolver_cfg is None:
+        return None
+
+    def lookup(doi: str, data: dict):
+        res = _pass3_target({
+            "doi": doi,
+            "issn": _first_issn(data.get("ISSN", "")),
+            "pub_date": _year_from_zotero_date(data.get("date", "")),
+            "volume": (data.get("volume") or "").strip() or None,
+        }, resolver_cfg)
+        if res.url and not res.deferred:
+            return res.url, res.target
+        return None, None
+
+    return lookup
+
+
+def _run_manual(args: argparse.Namespace, zot, all_items: list[dict], run_date: str) -> int:
+    """`--manual next|collect|assign|ignore` (see `manual_pdfs`)."""
+    from fetchers.doi_resolver import DoiResolverCache
+
+    downloads, batch_size = _manual_settings(args)
+    library = f"{getattr(zot, 'library_type', 'group')}:{getattr(zot, 'group_id', '')}"
+    print(f"Manual download: Downloads folder {downloads}; batch size {batch_size}.",
+          flush=True)
+    print("Checking for existing PDF attachments...", flush=True)
+    pdf_map = zot.pdf_map()
+
+    resolver_cfg = None
+    if args.manual == "next":
+        try:
+            resolver_cfg = _resolver_config(args)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
+        if resolver_cfg is not None:
+            print(f"Library routes: {resolver_cfg.describe()}", flush=True)
+
+    doi_cache = DoiResolverCache(args.cache_dir)
+
+    def cached_url(doi: str) -> str:
+        hit = doi_cache.get(doi)
+        return hit.url if hit else ""
+
+    min_version = _run_min_version(args)
+    log_fh, log_writer = _open_log(args.log_csv)
+
+    def attach(item, path) -> str:
+        below = not _version_allowed(
+            min_version, pdf_version.version_of(path, doi=item.doi), item.doi,
+        )
+        ok = _attach_and_log(
+            zot, log_writer, run_date=run_date, item_key=item.key, doi=item.doi,
+            title=item.title[:70], source=manual_pdfs.SOURCE, pdf_path=path,
+            failure_log_path=args.failure_log_csv,
+            item_type=item.data.get("itemType", ""),
+            check_text=not args.no_check_text, min_version=min_version,
+            extra_tags=(manual_pdfs.MANUAL_TAG,),
+        )
+        if ok:
+            return manual_pdfs.ATTACHED
+        return manual_pdfs.BELOW_POLICY if below else manual_pdfs.FAILED
+
+    ctx = manual_pdfs.Context(
+        library=library,
+        scope_items=all_items,
+        has_pdf=lambda key: pdf_map.get(key, (False, []))[0],
+        attach=attach,
+        downloads=downloads,
+        batch_size=batch_size,
+        route_lookup=_manual_route_lookup(resolver_cfg),
+        priority=manual_pdfs.priority_keys(AUDIT_KEYS_STEM, args.log_csv),
+        cached_url=cached_url,
+        dry_run=args.dry_run,
+    )
+    try:
+        if args.manual == "assign":
+            return manual_pdfs.assign(ctx, args.assign_file, args.assign_item)
+        if args.manual == "ignore":
+            return manual_pdfs.ignore(ctx, args.assign_file)
+        rc, _ = manual_pdfs.run_cycle(ctx, args.manual)
+        return rc
+    finally:
+        log_fh.close()
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -5239,6 +5443,38 @@ def _build_parser() -> argparse.ArgumentParser:
              "[library] direct_access in config.toml.",
     )
     parser.add_argument(
+        "--manual", default=None, choices=MANUAL_ACTIONS,
+        help="Manual download mode, one command per cycle. 'next' opens the "
+             "next batch of items without a PDF in your default browser "
+             "(library route, else doi.org), then moves the PDFs you "
+             "downloaded for the previous batch from your Downloads folder "
+             "into output/pdf_staging/ and attaches those it can match "
+             "(DOI or title on the first page, Elsevier / DOI file names). "
+             "'collect' does the move-match-attach without opening tabs. "
+             "Files it cannot match are listed, never guessed: 'assign' "
+             "attaches one (--assign-file, --assign-item), 'ignore' sets one "
+             "aside (--assign-file). State: .claude/pdf/manual_state.json.",
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=None, metavar="N",
+        help="--manual next: tabs per batch (default: [pdf] "
+             f"manual_batch_size, else {MANUAL_DEFAULT_BATCH}).",
+    )
+    parser.add_argument(
+        "--downloads-dir", default=None, metavar="PATH",
+        help="--manual: the folder your browser downloads into (default: "
+             "[pdf] downloads_dir, else ~/Downloads).",
+    )
+    parser.add_argument(
+        "--assign-file", default=None, metavar="FILE",
+        help="--manual assign / ignore: a staged file, by path or by the "
+             "name the unmatched list shows.",
+    )
+    parser.add_argument(
+        "--assign-item", default=None, metavar="ITEM_KEY",
+        help="--manual assign: the Zotero item key the file belongs to.",
+    )
+    parser.add_argument(
         "--no-check-text", action="store_true",
         help="Skip the post-attach text check. By default each attached "
              "PDF is checked for extractable text, so a file that is "
@@ -5299,6 +5535,11 @@ def main() -> int:
         return 2
     args.pdf_policy = policy
     allow_preprints = policy.min_version == "preprint"
+
+    if args.manual:
+        rc = _check_manual_args(args)
+        if rc:
+            return rc
 
     source_names = [
         _SOURCE_ALIASES.get(s.strip().lower(), s.strip().lower())
@@ -5411,54 +5652,11 @@ def main() -> int:
     else:
         zot = zotero_io.ZoteroClient.from_args(args)
 
-    if args.filter_keys_file:
-        # Fetch only what was asked for. Walking the whole library and
-        # filtering in Python costs a full paginated sweep per invocation
-        # — repeated on every backoff retry — and a live run against a
-        # ~10,000-item library was rate-limited during that enumeration
-        # and never reached the retrieval it was invoked for.
-        if not os.path.isfile(args.filter_keys_file):
-            print(f"ERROR: --filter-keys-file not found: {args.filter_keys_file}",
-                  file=sys.stderr)
-            return 2
-        with open(args.filter_keys_file) as f:
-            target = {line.strip() for line in f if line.strip()}
-        print(f"Fetching {len(target)} Zotero items by key...", end=" ", flush=True)
-        fetched = zot.items_by_keys(target)
-        all_items, not_articles = select_requested_articles(
-            fetched, target, args.item_types,
-        )
-        print(f"{len(all_items)} items of type {', '.join(args.item_types)}.",
-              flush=True)
-        if not_articles:
-            # Distinguished from "key not found": a book chapter that was
-            # asked for and skipped is a scope decision, not a typo, and
-            # reporting both as "matched no journal article" hid which.
-            print(
-                f"  NOTE: {not_articles} key(s) resolved to item types "
-                f"outside --item-types ({', '.join(args.item_types)}) and "
-                f"were skipped. To include chapters and books, pass "
-                f"--item-types journalArticle,bookSection,book.",
-                flush=True,
-            )
-        missing = target - {it["key"] for it in fetched}
-        if missing:
-            # Silence here used to hide typo'd keys and non-journalArticle
-            # items, which then looked identical to "nothing to do".
-            print(
-                f"  WARN: {len(missing)} key(s) in the file do not exist in "
-                f"this library: {', '.join(sorted(missing)[:5])}"
-                + (" …" if len(missing) > 5 else ""),
-                flush=True,
-            )
-    else:
-        print("Fetching Zotero items...", end=" ", flush=True)
-        if tuple(args.item_types) == ("journalArticle",):
-            all_items = zot.journal_articles()
-        else:
-            all_items = zot.abstractable_items(args.item_types)
-        print(f"{len(all_items)} items of type {', '.join(args.item_types)}.",
-              flush=True)
+    all_items = _fetch_scope_items(args, zot)
+    if all_items is None:
+        return 2
+    if args.manual:
+        return _run_manual(args, zot, all_items, run_date)
 
     # Everything this invocation is accountable for — the report is
     # scoped to these so a filtered run doesn't dump the whole log.

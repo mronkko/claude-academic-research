@@ -47,7 +47,7 @@ LIVE_MARKERS = ("live", "live_browser", "live_slr", "live_cluster")
 #: listed one by one so a new key is covered the day it is added.
 #: `tests/unit/test_env_isolation.py` greps `scripts/` for every variable
 #: name the code reads and fails if one escapes these rules.
-ISOLATED_ENV_PREFIXES = ("ZOTERO_", "ACADEMIC_RESEARCH_", "LIBRARY_", "SLURM")
+ISOLATED_ENV_PREFIXES = ("ZOTERO_", "ACADEMIC_RESEARCH_", "LIBRARY_", "SLURM", "PDF_")
 ISOLATED_ENV_SUFFIXES = ("_API_KEY", "_API_KEY_EXTENDED", "_TOKEN", "_BASE_URL", "_MAILTO")
 ISOLATED_ENV_NAMES = frozenset({
     "ABSTRACT_EXCLUDE_SOURCES",

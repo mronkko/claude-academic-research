@@ -320,8 +320,10 @@ def test_the_resolver_cache_dir_reaches_load_from_config() -> None:
 
     import enrich_pdfs
 
-    src = inspect.getsource(enrich_pdfs._run_browser_in_process)
-    call = src.split("resolver_cfg = load_from_config(")[1].split("\n    )")[0]
+    assert "_resolver_config(args)" in inspect.getsource(
+        enrich_pdfs._run_browser_in_process)
+    src = inspect.getsource(enrich_pdfs._resolver_config)
+    call = src.split("return load_from_config(")[1].split("\n    )")[0]
     assert 'getattr(args, "resolver_cache_dir", None) or args.cache_dir' in call
 
 
@@ -333,8 +335,10 @@ def test_the_library_selection_reaches_load_from_config() -> None:
 
     import enrich_pdfs
 
-    src = inspect.getsource(enrich_pdfs._run_browser_in_process)
-    call = src.split("resolver_cfg = load_from_config(")[1].split("\n    )")[0]
+    assert "_resolver_config(args)" in inspect.getsource(
+        enrich_pdfs._run_browser_in_process)
+    src = inspect.getsource(enrich_pdfs._resolver_config)
+    call = src.split("return load_from_config(")[1].split("\n    )")[0]
     assert 'active=getattr(args, "library", None)' in call
     args = enrich_pdfs._build_parser().parse_args(
         ["--library", "aalto", "--library", "jyu"])
