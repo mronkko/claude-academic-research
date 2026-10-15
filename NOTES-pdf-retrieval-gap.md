@@ -786,3 +786,20 @@ Remaining, honestly categorised:
 
 `ILL-candidates.csv` (728 rows: key, DOI, year, journal, title) is the
 worksheet for the first two groups.
+
+## 2026-10-15 — Elsevier's entitlement endpoint does not predict PDF access
+
+Reported from the methods-misuse session. On the JYU network (Funet / CSC,
+AS1741), `ELSEVIER_API_KEY` alone — no institutional token — returned the
+full PDF (17 pages) for `10.1016/j.jbusvent.2020.106022`, while Elsevier's
+entitlement endpoint (`/content/article/entitlement/doi/…`) answered the same
+request with `AUTHENTICATION_ERROR` "Requestor configuration settings
+insufficient". So the entitlement endpoint is **not** a predictor of PDF
+access: a "no" from it says nothing about whether the PDF endpoint will serve
+the article.
+
+Nothing in the plugin gates on that endpoint (verified 2026-10-15: no call to
+it anywhere under `scripts/`, `mcp/` or `skills/`). The only per-article
+entitlement signal `ScienceDirectSource` reads is the PDF response's own
+`x-els-status` header, which marks a first-page preview. Keep it that way —
+probe with the PDF request itself, never with the entitlement endpoint.
