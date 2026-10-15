@@ -86,9 +86,14 @@ def _args(tmp_path: Path) -> argparse.Namespace:
 
 
 def test_items_no_selected_source_covers_are_not_logged(
-    tmp_path, capsys,
+    tmp_path, capsys, monkeypatch,
 ) -> None:
     """The live case: a Wiley-only run over a mixed queue."""
+    # With a real token the Wiley item is fetched for real; without one
+    # the source declines it locally. Stated here, not left to the
+    # suite-wide isolation, because this test once picked up a developer's
+    # token and reached the network.
+    monkeypatch.delenv("WILEY_TDM_TOKEN", raising=False)
     rows = _Rows()
     items = [
         _item("W1", "10.1111/j.1467-8543.1982.tb00100.x"),

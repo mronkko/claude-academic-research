@@ -110,6 +110,10 @@ def test_from_config_raises_when_no_user_id_and_no_group(monkeypatch) -> None:
     })
     monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
     monkeypatch.delenv("ZOTERO_GROUP", raising=False)
+    # Stated rather than left to the suite-wide env isolation: with a user
+    # id in the environment, from_config lists that user's groups over the
+    # network — which this test once did, swallowed the failure, and passed.
+    monkeypatch.delenv("ZOTERO_USER_ID", raising=False)
 
     import pytest
     with pytest.raises(zotero_io.GroupSelectionRequired) as exc_info:

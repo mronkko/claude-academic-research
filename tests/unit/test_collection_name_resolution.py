@@ -62,11 +62,16 @@ def test_an_unknown_name_raises_with_an_actionable_message() -> None:
     """A 404 from the API said "Collection not found" and named nothing
     the user had typed."""
     zc = _client([_coll("QCN49MPI", "SLR")])
+    # The message names the library, and `describe_library` looks the
+    # group's name up over the network — swallowing the failure, which
+    # is how this test used to reach api.zotero.org and still pass.
+    zc.group_name = lambda: "Test group"  # type: ignore[method-assign]
     with pytest.raises(ValueError) as exc:
         zc.collection_items("Screening")
     message = str(exc.value)
     assert "Screening" in message
     assert "SLR" in message, "the message should name what does exist"
+    assert "Test group" in message, "the message should name the library"
 
 
 def test_an_ambiguous_name_refuses_rather_than_guessing() -> None:
