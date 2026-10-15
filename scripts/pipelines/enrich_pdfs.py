@@ -938,17 +938,21 @@ def _log_browser_failure(
     if not log_path or not item_key:
         return
     try:
-        pdf_fetch_log.log_failure(
-            log_path,
-            item_key=item_key,
-            doi=item.get("doi", "") or "",
-            item_type=item.get("item_type", "") or "journalArticle",
-            attempt=2,
-            source=source,
-            publisher=publisher,
-            cause=cause,
-            scope_types=_scope_types(args),
-        )
+        # Under the same lock as `_attach_and_log`, which writes this file
+        # from lane threads: the upsert is read-modify-replace, so two
+        # unserialised writers lose one another's rows.
+        with _FAILURE_LOG_LOCK:
+            pdf_fetch_log.log_failure(
+                log_path,
+                item_key=item_key,
+                doi=item.get("doi", "") or "",
+                item_type=item.get("item_type", "") or "journalArticle",
+                attempt=2,
+                source=source,
+                publisher=publisher,
+                cause=cause,
+                scope_types=_scope_types(args),
+            )
     except Exception as e:  # noqa: BLE001
         print(f"    [pdf_fetch_log write failed: {e}]", flush=True)
 
