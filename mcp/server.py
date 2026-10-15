@@ -539,14 +539,28 @@ def _artifacts(tool: reg.Tool | None, job: dict, project: Path) -> list[str]:
     return found
 
 
-def _live_zotero_writers(project: Path) -> list[str]:
-    writers = []
+def _live_jobs(project: Path, holds) -> list[str]:
+    """Running jobs whose tool and arguments satisfy `holds`."""
+    found = []
     for job_dir, job in _iter_jobs(project):
         tool = reg.TOOLS_BY_NAME.get(job.get("tool", ""))
-        if (tool is not None and _writes_zotero(tool, job.get("arguments") or {})
+        if (tool is not None and holds(tool, job.get("arguments") or {})
                 and _job_state(job_dir, job)[0] in ("running", "awaiting_user")):
-            writers.append(job_dir.name)
-    return writers
+            found.append(job_dir.name)
+    return found
+
+
+def _live_zotero_writers(project: Path) -> list[str]:
+    return _live_jobs(project, _writes_zotero)
+
+
+def _uses_browser(tool: reg.Tool, arguments: dict) -> bool:
+    # A dry run still opens Chromium, so it is not exempt here.
+    return tool.browser
+
+
+def _live_browser_jobs(project: Path) -> list[str]:
+    return _live_jobs(project, _uses_browser)
 
 
 def _writes_zotero(tool: reg.Tool, arguments: dict) -> bool:
@@ -564,6 +578,18 @@ def start_job(tool: reg.Tool, arguments: dict, project: Path) -> dict:
         if busy:
             raise ToolInputError(
                 f"job {busy[0]} is still writing to Zotero; wait for it "
+                "(job_status) or stop it (cancel_job) before starting another"
+            )
+    if _uses_browser(tool, arguments):
+        # One Playwright Chromium profile per project (under
+        # output/pdf_cache/): a second browser job would open the same
+        # profile directory, which Chromium refuses or corrupts, and the
+        # user can attend only one challenge window anyway.
+        busy = _live_browser_jobs(project)
+        if busy:
+            raise ToolInputError(
+                f"job {busy[0]} is using the plugin's browser (one Playwright "
+                "profile, one browser job at a time); wait for it "
                 "(job_status) or stop it (cancel_job) before starting another"
             )
     job_id = _new_job_id(tool)

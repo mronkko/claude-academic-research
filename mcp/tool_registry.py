@@ -129,6 +129,11 @@ class Tool:
     artifacts: tuple[str, ...] = ()
     #: A server-side tool (job_status, …) with no script of its own.
     internal: bool = False
+    #: The job drives Playwright Chromium on the project's one browser
+    #: profile (`output/pdf_cache/.chrome-profile*`), so the server runs
+    #: at most one such job at a time.
+    #: Manual download (the user's own browser via `webbrowser`) is not one.
+    browser: bool = False
 
     def full_description(self) -> str:
         return f"[{self.effect}] {self.description}"
@@ -1334,6 +1339,7 @@ START_PDF_UNATTENDED_SETUP = Tool(
     params=(BROWSER_PASS, *LIBRARY_ARGS, FILTER_KEYS, INSTITUTION),
     fixed=("--unattended", "setup"),
     job=True,
+    browser=True,
     control=True,
     read_only=False,
     idempotent=False,
@@ -1364,6 +1370,7 @@ START_PDF_UNATTENDED_RUN = Tool(
             DRY_RUN_PDF),
     fixed=("--unattended", "run", "--browser-workers", "4"),
     job=True,
+    browser=True,
     # The guard pairs --control-file with control=True; the run accepts the
     # file and never writes a question to it.
     control=True,

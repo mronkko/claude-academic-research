@@ -440,6 +440,63 @@ def test_paid_and_unattended_run_are_zotero_writers_and_setup_is_not(
         assert _wait(job_id)["status"] == "cancelled"
 
 
+def test_a_second_browser_job_is_refused_while_one_runs(
+    project: Path, monkeypatch,
+) -> None:
+    """One Playwright profile per project: while the unattended setup holds
+    the browser, neither another setup nor the run may start — not even a
+    dry run, which still opens Chromium. A job with no browser (the API
+    cascade) is not held back by it."""
+    monkeypatch.setenv("FAKE_MODE", "hang")
+    markers = Path(os.environ["FAKE_MARKERS"])
+    setup = _call("start_pdf_unattended_setup", {"group": "12"})["job_id"]
+    _wait_for_file(markers / "started")
+    for tool, extra in (("start_pdf_unattended_setup", {}),
+                        ("start_pdf_unattended_run", {}),
+                        ("start_pdf_unattended_run", {"dry_run": True})):
+        with pytest.raises(server.ToolInputError, match=f"{setup}.*browser"):
+            _call(tool, {"group": "12", **extra})
+    api = _call("start_enrich_pdfs", {"group": "12"})["job_id"]
+    for job_id in (setup, api):
+        _call("cancel_job", {"job_id": job_id})
+        assert _wait(job_id)["status"] == "cancelled"
+    # Once it has ended the browser is free again.
+    monkeypatch.setenv("FAKE_MODE", "ok")
+    run = _call("start_pdf_unattended_run", {"group": "12"})["job_id"]
+    assert _wait(run)["status"] == "succeeded"
+
+
+def test_the_browser_flag_marks_exactly_the_playwright_jobs() -> None:
+    """Derived from argv, so a new tool that reaches the browser pass
+    (`--unattended`, `--sources browser|connector`, `--all`) cannot ship
+    without the one-browser-job guard. Manual download opens the user's
+    own browser and is deliberately not one."""
+    import tool_registry as reg
+
+    def reaches_browser(tool: reg.Tool) -> bool:
+        if "--plan" in tool.fixed:
+            return False       # plans the browser pass; launches nothing
+        tokens = [list(tool.fixed)]
+        for p in tool.params:
+            tokens += [list(c) for c in p.choices.values()]
+        for seq in tokens:
+            if "--unattended" in seq or "--all" in seq:
+                return True
+            for i, tok in enumerate(seq[:-1]):
+                if tok == "--sources" and seq[i + 1] in ("browser", "connector"):
+                    return True
+        return False
+
+    for tool in reg.TOOLS:
+        if tool.script.endswith("enrich_pdfs.py"):
+            assert tool.browser == reaches_browser(tool), tool.name
+        else:
+            assert not tool.browser, tool.name
+    assert {t.name for t in reg.TOOLS if t.browser} == {
+        "start_pdf_unattended_setup", "start_pdf_unattended_run"}
+    assert all(t.job for t in reg.TOOLS if t.browser)
+
+
 def test_paying_says_so_in_its_effect_class() -> None:
     import tool_registry as reg
     paid = reg.TOOLS_BY_NAME["start_enrich_pdfs_paid"]
