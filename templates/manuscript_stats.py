@@ -118,6 +118,7 @@ def _search_stats() -> dict:
     run = (json.loads(SEARCH_RUN_PATH.read_text(encoding="utf-8"))
            if SEARCH_RUN_PATH.exists() else {})
     by_stream = meta.get("unique_records_by_discovery_source", {}) or {}
+    by_doctype = meta.get("unique_records_by_doctype", {}) or {}
     return {
         "search.from_year": meta.get("from_year"),
         "search.to_year": meta.get("to_year"),
@@ -134,6 +135,13 @@ def _search_stats() -> dict:
         "search.citation_seeds": ", ".join(meta.get("citation_seeds", []) or []),
         "search.n_from_databases": by_stream.get("keyword_search", 0),
         "search.n_from_citation_search": by_stream.get("citation_search", 0),
+        # Supplements, front matter and notices: in the corpus, skipped
+        # at screening — PRISMA's "removed before screening". All 0 when
+        # search_metadata.json predates the count.
+        "search.n_removed_not_research": sum(by_doctype.values()),
+        "search.n_removed_supplement": by_doctype.get("supplement", 0),
+        "search.n_removed_front_matter": by_doctype.get("front-matter", 0),
+        "search.n_removed_notice": by_doctype.get("notice", 0),
     }
 
 

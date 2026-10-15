@@ -71,3 +71,33 @@ def test_main_prints_summary_and_lists(tmp_path: Path, capsys) -> None:
 def test_main_returns_2_on_missing_log(tmp_path: Path) -> None:
     rc = mod.main([str(tmp_path / "missing.csv")])
     assert rc == 2
+
+
+def _write(path: Path, header: str, *lines: str) -> Path:
+    path.write_text("\n".join((header, *lines)) + "\n", encoding="utf-8")
+    return path
+
+
+def test_search_csv_reports_removed_before_screening(tmp_path: Path,
+                                                     capsys) -> None:
+    log_csv = _write(tmp_path / "log.csv", "item_key,decision", "A,include")
+    search_csv = _write(
+        tmp_path / "search.csv", "doi,title,doctype",
+        "10.1037/apl0000550,Paper,",
+        "10.1037/apl0000550.supp,Supplemental Material for Paper,supplement",
+        "10.1002/job.2525,Issue Information,front-matter",
+        "10.1016/x,Editorial Board,front-matter",
+    )
+    assert mod.main([str(log_csv), "--search-csv", str(search_csv)]) == 0
+    out = capsys.readouterr().out
+    assert "Search records:     4" in out
+    assert ("Removed before screening (not research articles): 3 "
+            "(supplement 1, front-matter 2)") in out
+
+
+def test_search_csv_without_doctype_column_says_unknown(tmp_path: Path,
+                                                        capsys) -> None:
+    log_csv = _write(tmp_path / "log.csv", "item_key,decision", "A,include")
+    search_csv = _write(tmp_path / "s.csv", "doi,title", "10.1/x,Paper")
+    assert mod.main([str(log_csv), "--search-csv", str(search_csv)]) == 0
+    assert "Removed before screening: unknown" in capsys.readouterr().out

@@ -22,6 +22,13 @@ Usage:
         --list include
     uv run screening_report.py screening/abstract_screening.csv \\
         --list-rescreened
+    uv run screening_report.py screening/abstract_screening.csv \\
+        --search-csv search_results.csv   # + removed-before-screening
+
+`--search-csv` adds the PRISMA "removed before screening" line: records
+the search returned that are supplements, front matter or notices (the
+`doctype` column `search.py` writes). Screening skips those, so they are
+absent from the log and cannot be counted from it.
 """
 from __future__ import annotations
 
@@ -30,6 +37,8 @@ import csv
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
+
+import doctype
 
 
 def collapse_last_row_wins(rows: list[dict]) -> dict[str, dict]:
@@ -59,6 +68,17 @@ def find_rescreened(rows: list[dict]) -> set[str]:
     return {k for k, n in counts.items() if n > 1}
 
 
+def doctype_counts(search_rows: list[dict]) -> dict[str, int] | None:
+    """Count per `doctype` value; None if the CSV predates the column."""
+    if search_rows and "doctype" not in search_rows[0]:
+        return None
+    counts: Counter[str] = Counter(
+        (r.get("doctype") or "").strip() for r in search_rows
+    )
+    counts.pop("", None)
+    return dict(counts)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("log_csv",
@@ -73,6 +93,11 @@ def main(argv: list[str] | None = None) -> int:
         "--list-rescreened", action="store_true",
         help="After the summary, list every item_key that appears "
              "more than once in the log (re-screened items).",
+    )
+    parser.add_argument(
+        "--search-csv", default="",
+        help="search_results.csv from search.py; adds the count of records "
+             "removed before screening as not research articles.",
     )
     args = parser.parse_args(argv)
 
@@ -103,6 +128,27 @@ def main(argv: list[str] | None = None) -> int:
         print("  Other / unrecognised:")
         for k, v in sorted(other.items()):
             print(f"    {k!r:<11} {v}")
+
+    if args.search_csv:
+        search_path = Path(args.search_csv)
+        if not search_path.is_file():
+            print(f"ERROR: search CSV not found: {search_path}",
+                  file=sys.stderr)
+            return 2
+        with search_path.open(newline="", encoding="utf-8") as f:
+            search_rows = list(csv.DictReader(f))
+        removed = doctype_counts(search_rows)
+        print()
+        print(f"  Search records:     {len(search_rows)}")
+        if removed is None:
+            print("  Removed before screening: unknown — this search CSV "
+                  "has no `doctype` column (re-run search.py, or tag the "
+                  "library with tag_doctypes.py).")
+        else:
+            total = sum(removed.values())
+            detail = f" ({doctype.format_counts(removed)})" if total else ""
+            print(f"  Removed before screening (not research articles): "
+                  f"{total}{detail}")
 
     if args.list_decision:
         decision = args.list_decision.strip().lower()
