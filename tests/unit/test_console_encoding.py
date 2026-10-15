@@ -18,6 +18,7 @@ this testable at all — the bug is about the encoding, not about Windows.
 
 from __future__ import annotations
 
+import ast
 import os
 import subprocess
 import sys
@@ -107,6 +108,43 @@ def test_entry_point_survives_a_cp1252_pipe(script: str) -> None:
     )
 
 
+#: Entry points that print cp1252-unencodable text but are deliberately
+#: not protected yet, with the reason. Each is a known gap for the owning
+#: workstream; listing it here keeps the scan below strict for new code.
+KNOWN_UNPROTECTED: dict[str, str] = {
+    "scripts/core/llm.py": (
+        "its `__main__` smoke test prints \u2713/\u2717 marks; a developer "
+        "self-check, but it still dies under a cp1252 pipe — needs "
+        "enable_utf8_output() (owned by the screening workstream)"
+    ),
+}
+
+
+def _unencodable_strings(source: str) -> list[str]:
+    """String literals in `source` that cp1252 cannot encode.
+
+    Walks every string constant (f-string parts included) rather than
+    lines containing `print(`: the first version missed core/llm.py,
+    whose \u2713 sits in `ok = "\u2713" if ...` and reaches print() through
+    a variable. Docstrings count too — argparse prints `__doc__` as the
+    `--help` description. Comments are not strings and are ignored.
+    """
+    found: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            try:
+                node.value.encode("cp1252")
+            except UnicodeEncodeError:
+                found.append(node.value)
+    return found
+
+
+def test_the_scan_sees_a_mark_assigned_before_printing() -> None:
+    src = 'ok = "\u2713" if True else "x"\nprint(f"  {ok} done")\n'
+    assert _unencodable_strings(src) == ["\u2713"]
+    assert _unencodable_strings("# \u2192 only in a comment\nprint('ascii')\n") == []
+
+
 def test_the_list_of_affected_entry_points_is_still_accurate() -> None:
     """A new script that prints an arrow must be added above rather than
     silently going unprotected. Scans for characters cp1252 cannot
@@ -118,18 +156,25 @@ def test_the_list_of_affected_entry_points_is_still_accurate() -> None:
         if "\nif __name__ ==" not in text:
             continue
         rel = path.relative_to(REPO).as_posix()
-        if rel in NON_ASCII_ENTRY_POINTS:
+        if rel in NON_ASCII_ENTRY_POINTS or rel in KNOWN_UNPROTECTED:
             continue
-        for line in text.splitlines():
-            if "print(" not in line and 'f"' not in line:
-                continue
-            try:
-                line.encode("cp1252")
-            except UnicodeEncodeError:
-                missing.append(rel)
-                break
+        if _unencodable_strings(text):
+            missing.append(rel)
     assert not missing, (
         f"entry point(s) print characters cp1252 cannot encode but are not "
         f"listed in NON_ASCII_ENTRY_POINTS: {missing}. Add the "
         f"enable_utf8_output() call and list them."
+    )
+
+
+def test_known_unprotected_entries_are_still_unprotected() -> None:
+    """Once a listed gap is fixed, move it to NON_ASCII_ENTRY_POINTS so
+    the subprocess check above covers it."""
+    fixed = [
+        rel for rel in KNOWN_UNPROTECTED
+        if "enable_utf8_output" in (REPO / rel).read_text(encoding="utf-8")
+    ]
+    assert not fixed, (
+        f"{fixed} now call enable_utf8_output(); move them from "
+        f"KNOWN_UNPROTECTED to NON_ASCII_ENTRY_POINTS."
     )

@@ -11,10 +11,18 @@ reuse, and steers Claude into improvising pipeline code.
 
 This test is the regression guard. Adding a new direct-HTTP call
 fails the build until it is moved into one of the allowed modules.
+
+The first version grepped each line for the literal URL, so a URL
+assembled from parts — `f"http://{host}:{PORT}/api/..."`, or a port held
+as the integer `23119` — passed. The scan now parses each file: f-strings
+are rendered with `{}` for their placeholders before matching, an integer
+`23119` is flagged on its own, and an `/api/` or `/better-bibtex/` path
+fragment is flagged in any file that also names the port.
 """
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -37,8 +45,67 @@ ALLOWED_FILES = {
 # are a separate browser-bridge surface and are out of scope for this
 # guard.
 LOCALHOST_PATTERN = re.compile(
-    r"(?:127\.0\.0\.1|localhost):23119/(?:api|better-bibtex)/",
+    r"(?:127\.0\.0\.1|localhost|\{\}):(?:23119|\{\})/(?:api|better-bibtex)/",
 )
+ZOTERO_PORT = 23119
+PATH_FRAGMENT = re.compile(r"^/?(?:api|better-bibtex)/")
+
+
+def _rendered_strings(tree: ast.AST) -> list[tuple[int, str]]:
+    """(line, text) for every string literal, f-strings rendered with
+    `{}` in place of each interpolation."""
+    out: list[tuple[int, str]] = []
+    in_fstring: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.JoinedStr):
+            text = "".join(
+                v.value if isinstance(v, ast.Constant) and isinstance(v.value, str) else "{}"
+                for v in node.values
+            )
+            out.append((node.lineno, text))
+            in_fstring.update(id(v) for v in node.values)
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and id(node) not in in_fstring):
+            out.append((node.lineno, node.value))
+    return out
+
+
+def _offences(source: str) -> list[tuple[int, str]]:
+    tree = ast.parse(source)
+    strings = _rendered_strings(tree)
+    found = [(line, text) for line, text in strings if LOCALHOST_PATTERN.search(text)]
+    port_ints = [
+        (node.lineno, "23119 (integer port)")
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and node.value == ZOTERO_PORT
+        and not isinstance(node.value, bool)
+    ]
+    found += port_ints
+    names_port = bool(port_ints) or any(str(ZOTERO_PORT) in text for _, text in strings)
+    if names_port:
+        found += [(line, text) for line, text in strings if PATH_FRAGMENT.match(text)]
+    return sorted(set(found))
+
+
+def test_the_scan_sees_assembled_urls() -> None:
+    caught = [
+        'URL = "http://127.0.0.1:23119/api/users/0/items"',
+        'u = f"http://localhost:{port}/api/users/0/items"',
+        'u = f"http://{host}:23119/better-bibtex/json-rpc"',
+        'PORT = 23119\nu = "http://127.0.0.1:" + str(PORT) + "/api/"',
+        'BASE = "http://127.0.0.1:23119"\nPATH = "/api/users/0"',
+    ]
+    for src in caught:
+        assert _offences(src), f"missed: {src!r}"
+    allowed = [
+        'PING = "http://127.0.0.1:23119/connector/ping"',
+        'msg = "the local server on localhost:23119 is disabled"',
+        'u = "https://api.zotero.org/users/1/items"',
+        '# http://localhost:23119/api/ in a comment\nx = 1',
+    ]
+    for src in allowed:
+        assert not _offences(src), f"false positive: {src!r}"
 
 
 def _walk_pipeline_files() -> list[Path]:
@@ -60,10 +127,8 @@ def test_no_direct_localhost_zotero_outside_canonical_modules() -> None:
     """
     offenders: list[tuple[Path, int, str]] = []
     for path in _walk_pipeline_files():
-        text = path.read_text(encoding="utf-8")
-        for lineno, line in enumerate(text.splitlines(), start=1):
-            if LOCALHOST_PATTERN.search(line):
-                offenders.append((path.relative_to(REPO_ROOT), lineno, line.strip()))
+        for lineno, snippet in _offences(path.read_text(encoding="utf-8")):
+            offenders.append((path.relative_to(REPO_ROOT), lineno, snippet.strip()))
 
     if offenders:
         formatted = "\n".join(
