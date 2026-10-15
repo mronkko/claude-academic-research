@@ -125,7 +125,7 @@ def test_initialize_then_tools_list(project, stub, tmp_path) -> None:
     assert names == [
         "check_setup", "scaffold_project", "pdf_plan", "pdf_strategy_show",
         "pdf_strategy_write", "pdf_strategy_update", "pdf_policy_write",
-        "enrich_pdfs_plan",
+        "pdf_consent_show", "pdf_consent_set", "enrich_pdfs_plan",
         "enrich_pdfs_report", "pdf_manual_next", "pdf_manual_collect",
         "pdf_manual_assign", "pdf_manual_ignore", "screening_report", "audit_library",
         "export_coded_includes", "generate_bib",
@@ -135,8 +135,8 @@ def test_initialize_then_tools_list(project, stub, tmp_path) -> None:
     ]
     for t in tools:
         assert t["description"].startswith((
-            "[read-only] ", "[writes project files] ", "[writes Zotero] ",
-            "[costs LLM credits] ",
+            "[read-only] ", "[writes project files] ", "[writes user config] ",
+            "[writes Zotero] ", "[costs LLM credits] ",
         )), t["name"]
         assert t["inputSchema"]["type"] == "object"
         assert t["inputSchema"]["additionalProperties"] is False
@@ -492,3 +492,29 @@ def test_pdf_strategy_write_validates_the_order(project, stub, tmp_path) -> None
                               {"order": "api;rm", "present": "yes"})],
                        _env(project, [sys.executable, str(stub)], tmp_path / "rec"))
     assert "does not match" in _payload(reply)["summary"]["error"]
+
+
+def test_real_pdf_consent_round_trip(project, tmp_path) -> None:
+    """The stdlib consent helper end to end: show, set, show. The suite's
+    HOME redirect reaches the subprocess, so the write lands in a scratch
+    config.toml, never the real one."""
+    import tomllib
+    home = Path(os.environ["HOME"])
+    env = _env(project, [sys.executable], tmp_path / "rec")
+    replies = _session([
+        _call(1, "pdf_consent_show", {"site": ["sage"]}),
+        _call(2, "pdf_consent_set", {"site": "sage", "automated": "deny"}),
+        _call(3, "pdf_consent_show", {"site": ["sage"]}),
+        _call(4, "pdf_consent_set", {"site": "Sage Journals", "automated": "allow"}),
+        _call(5, "pdf_consent_set", {"site": "sage", "automated": "yes"}),
+    ], env)
+    before, recorded, after, bad_site, bad_answer = map(_payload, replies)
+    assert before["summary"]["sites"][0]["automated"] == "ask"
+    assert before["summary"]["sites"][0]["stored"] is False
+    assert recorded["summary"]["recorded"]["automated"] == "deny"
+    assert after["summary"]["sites"][0]["automated"] == "deny"
+    assert after["summary"]["sites"][0]["confirmed"]
+    assert bad_site["ok"] is False and bad_answer["ok"] is False
+    cfg = tomllib.loads(
+        (home / ".config" / "academic-research" / "config.toml").read_text())
+    assert cfg["publisher_consent"]["sage"]["automated"] == "deny"

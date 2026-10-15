@@ -8,7 +8,8 @@ flag named here against the target script's argparse without running it.
 Rules every tool follows (BACKLOG P21):
 
 - The description starts with the effect class — `[read-only]`,
-  `[writes project files]`, `[writes Zotero]` or `[costs LLM credits]` —
+  `[writes project files]`, `[writes user config]`, `[writes Zotero]` or
+  `[costs LLM credits]` —
   because that, not the MCP annotations, is what a Claude Code user sees
   when deciding whether to "always allow" a tool.
 - Parameters are the user's decisions only (which library, which
@@ -37,9 +38,13 @@ from pathlib import Path
 
 READ_ONLY = "read-only"
 WRITES_PROJECT = "writes project files"
+#: `~/.config/academic-research/config.toml` — outside the project, and
+#: shared by every project, so it is said separately from project files.
+WRITES_USER_CONFIG = "writes user config"
 WRITES_ZOTERO = "writes Zotero"
 COSTS_LLM = "costs LLM credits"
-EFFECT_CLASSES = (READ_ONLY, WRITES_PROJECT, WRITES_ZOTERO, COSTS_LLM)
+EFFECT_CLASSES = (READ_ONLY, WRITES_PROJECT, WRITES_USER_CONFIG, WRITES_ZOTERO,
+                  COSTS_LLM)
 
 #: Placeholder in `fixed` tokens and parameter defaults, replaced with the
 #: resolved project directory when argv is built.
@@ -679,6 +684,68 @@ PDF_POLICY_WRITE = Tool(
     summarise=summarise_policy_write,
 )
 
+def summarise_consent(out: str, rc: int, project: Path) -> tuple[dict, list[str]]:
+    """The `CONSENT_JSON: {…}` line `pdf_consent.py` prints last."""
+    lines = re.findall(r"^CONSENT_JSON: (.+)$", out, re.MULTILINE)
+    if not lines:
+        return {}, []
+    try:
+        return json.loads(lines[-1]), []
+    except ValueError:
+        return {}, []
+
+
+CONSENT_SITE = Param(
+    "site", "Site key as pdf_plan / pdf_consent_show name it: a handler "
+    "(sage, tandf, ebsco, …), a platform (jstor, proquest) or a host "
+    "(degruyter.com).", kind="option", flag="--site", required=True,
+    pattern=r"^[a-z0-9](?:[a-z0-9.-]{0,62}[a-z0-9])?$",
+)
+
+PDF_CONSENT_SHOW = Tool(
+    name="pdf_consent_show",
+    title="Show automated-download consent",
+    effect=READ_ONLY,
+    description=(
+        "Lists, per site, whether the user has allowed or denied automated "
+        "PDF download by the browser handlers and the Zotero Connector "
+        "(allow / deny / ask = not answered), the date of the answer and the "
+        "site's terms link, plus the sites the current plan depends on with "
+        "their item counts. Publisher APIs, open-access sources and manual "
+        "download need no consent. Use it to put the question to the user "
+        "alongside the plan's counts."
+    ),
+    script="scripts/pipelines/pdf_consent.py",
+    params=(Param("site", "Only these site keys.", kind="repeat", flag="--site"),),
+    fixed=("show",),
+    summarise=summarise_consent,
+)
+
+PDF_CONSENT_SET = Tool(
+    name="pdf_consent_set",
+    title="Record automated-download consent",
+    effect=WRITES_USER_CONFIG,
+    description=(
+        "Records the user's own answer — allow, deny or ask — for automated "
+        "PDF download from one site, dated, in the user config "
+        "([publisher_consent.<site>]; it applies to every project, since it "
+        "depends on the institution's licence). Only what the user said, "
+        "after they have seen the site's terms link: never a default or a "
+        "guess. deny sends the site's items to manual download; a browser or "
+        "Connector run that cannot ask skips any site without allow."
+    ),
+    script="scripts/pipelines/pdf_consent.py",
+    params=(
+        CONSENT_SITE,
+        Param("automated", "The user's answer.", kind="option",
+              flag="--automated", enum=("allow", "deny", "ask"), required=True),
+    ),
+    fixed=("set",),
+    read_only=False,
+    idempotent=True,
+    summarise=summarise_consent,
+)
+
 MANUAL_NOTE = (
     " The user downloads in their own browser; nothing is guessed: a file "
     "that matches no item, or several, is listed (unmatched_files, and "
@@ -1235,6 +1302,8 @@ TOOLS: tuple[Tool, ...] = (
     PDF_STRATEGY_WRITE,
     PDF_STRATEGY_UPDATE,
     PDF_POLICY_WRITE,
+    PDF_CONSENT_SHOW,
+    PDF_CONSENT_SET,
     ENRICH_PDFS_PLAN,
     ENRICH_PDFS_REPORT,
     PDF_MANUAL_NEXT,
