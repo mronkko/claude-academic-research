@@ -7,10 +7,9 @@ Per user feedback (T3-1, 2026-04-25):
 
 Bash `mkdir -p screening/ analysis/ manuscript/ ...` + a sequence of
 `cp` calls used to be the canonical "set up a fresh SLR project" path.
-That requires the wizard to allowlist `mkdir` and `cp`, which the user
-considers too coarse a permission. This script does the same job
-behind a single allowlist entry the wizard already covers
-(`Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/**)`).
+That is a dozen commands for the user to read and approve, and `mkdir -p`
+/ `cp` do not exist in that form on Windows. This script does the same
+job as one auditable, cross-platform command.
 
 Idempotent: directories that already exist are silent no-ops; template
 copies skip files already present (so a user's customisations don't

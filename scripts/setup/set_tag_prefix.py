@@ -18,9 +18,8 @@ Usage:
     python3 set_tag_prefix.py --prefix agentic-ai --dry-run
     python3 set_tag_prefix.py --show              # what is set right now
 
-Stdlib-only, like everything in `scripts/setup/`: it runs before any
-environment exists, and the wizard's `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/
-scripts/**)` allow rule is what keeps it from prompting.
+Stdlib-only, like everything in `scripts/setup/`: it runs under a bare
+`python3` before any environment exists.
 """
 
 from __future__ import annotations

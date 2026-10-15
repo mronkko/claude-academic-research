@@ -12,9 +12,9 @@ test_zotero_mcp_sync.py`'s E3 regex-matches the literal there, and
 Everything user-facing derives from the constants below.
 
 Stdlib-only and import-free on purpose: `check_zotero_mcp_version.py` runs
-as a bare `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/...` subprocess under
-the wizard's Bash allow rule, and must not pull in a dependency or pay an
-import cost to answer a version question.
+as a bare `python3 <plugin>/scripts/setup/...` subprocess with no venv, and
+must not pull in a dependency or pay an import cost to answer a version
+question.
 
 Bumping the floor: edit `FLOOR` and the `pyproject.toml` pin together, then
 run `pytest tests/unit/test_zotero_mcp_floor.py`.

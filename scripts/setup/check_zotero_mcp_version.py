@@ -13,9 +13,8 @@ before a skill hits a "tool not found" error mid-task.
 The floor itself and the install commands live in `zotero_mcp_floor.py`,
 shared with `wizard.py`, so a bump is a one-file edit.
 
-Kept as a script (not an inline `python -c`) so the wizard's existing
-`Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/**)` allow rule covers it — no
-per-session permission prompt at skill load time.
+Kept as a shipped script rather than an inline `python -c`: one
+auditable command that behaves the same on Windows, macOS and Linux.
 """
 from __future__ import annotations
 

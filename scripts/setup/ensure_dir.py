@@ -9,8 +9,8 @@ on already-existing paths. Skills use this to create project-local
 working directories (`fact-check-reports/`, `critic-reviews/`, etc.)
 before writing reports.
 
-Kept as a script (not an inline `python -c`) so the wizard's existing
-`Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/**)` allow rule covers it.
+Kept as a shipped script rather than an inline `python -c`: one
+auditable command that behaves the same on Windows, macOS and Linux.
 Windows built-in `mkdir` has no `-p` flag, which is why this exists.
 """
 import sys

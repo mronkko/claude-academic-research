@@ -4,9 +4,8 @@ Replaces the bash mkdir + cp dance for setting up a fresh SLR project
 with a single shipped script. Per user feedback (2026-04-25):
 > Creating project structure should be a script instead of bash commands.
 
-The wizard's allowlist therefore intentionally drops `mkdir` and `cp`
-from auto-approval; this script does the same job behind a single
-allow-rule the wizard already covers.
+One auditable, cross-platform command instead of a chain of `mkdir`
+and `cp` calls.
 """
 
 from __future__ import annotations
