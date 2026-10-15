@@ -18,17 +18,29 @@ later session resumes it from the file.
 SUB-SKILL) whenever PDFs are to be retrieved. Everything about retrieval
 lives here; those skills only decide *when*.
 
+**Plugin tools.** The steps call the tools of the plugin's own
+**academic-research** MCP server by bare name (`pdf_plan`,
+`start_enrich_pdfs`, …); in Claude Code they appear as
+`mcp__plugin_academic-research_academic-research__<name>`, on other
+hosts with that host's prefix. `start_*` tools are **jobs**: follow one
+with `job_status`; when it is `awaiting_user`, relay its `prompt` and
+pass the user's answer to `job_answer`; stop it with `cancel_job`. The
+server runs one Zotero-writing job and one browser job at a time and
+refuses a second. If the tools are not available, run the *terminal
+equivalent* with Bash instead and tell the user once how to enable the
+server (see **Terminal equivalent** in the glossary).
+
 ## Pre-flight (ALWAYS run first)
 
-1. The plugin is configured: the `check_setup` tool, or
-   `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"`.
+1. The plugin is configured: the `check_setup` tool (terminal equivalent:
+   `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"`).
    `NOT CONFIGURED` → stop and send the user to `/setup` (in a terminal;
    never ask for keys in chat).
 2. You know the Zotero library: a group ID or the personal library. Ask
    if it is ambiguous; never guess the group ID. Every tool and command
    below takes it (`group` / `user`, `--group` / `--user`).
-3. **Resume before planning.** Call `pdf_strategy_show`
-   (`uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/pdf_strategy.py show`).
+3. **Resume before planning.** Call `pdf_strategy_show` (terminal
+   equivalent: `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/pdf_strategy.py show`).
    If a strategy exists and is not complete, tell the user where it
    stopped (steps done, their results, the next step) and ask whether to
    carry on, re-plan, or start over. A running step means a session ended
@@ -436,7 +448,8 @@ route not yet tried. On a real 244-item run, 76 of 119 apparent failures
 were Sage and Academy of Management articles that one browser pass
 recovered; the pipeline had reported all 119 as "no fulltext available".
 
-After **every** step, run the audit — `audit_library` (`uv run
+After **every** step, run the audit — `audit_library` (terminal
+equivalent: `uv run
 ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group
 <id>`) — and read its retrieval report:
 

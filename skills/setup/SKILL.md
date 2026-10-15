@@ -37,6 +37,10 @@ What the wizard touches:
 - **MCP servers:** registered with Claude Code (`claude mcp add`) and,
   if Antigravity (`agy`) is detected, also in
   `~/.gemini/config/mcp_config.json` (backed up as `.bak-wizard`).
+- **The plugin's own `academic-research` MCP server** (the pipeline
+  steps as tools): Claude Code loads it from the plugin itself, needing
+  only `uv`; for Antigravity, and Codex (untested), the wizard offers to
+  register it.
 - **No permission rules.** The wizard does not edit
   `~/.claude/settings.json`; which tool calls to allow is the user's
   own decision.

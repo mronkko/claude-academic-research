@@ -16,6 +16,30 @@ canonical longer entry.
 - **MCP server** — a small helper process the agent can call. Examples
   registered by the setup wizard: Zotero, Scopus,
   OpenAlex, Semantic Scholar, paper-search.
+- **Plugin tools** — the tools of this plugin's own MCP server,
+  **academic-research** (`mcp/server.py`), which runs the shipped
+  scripts on the agent's behalf. Skills name them by bare tool name
+  (`check_setup`, `start_abstract_screen`, …). In Claude Code the full
+  name is `mcp__plugin_academic-research_academic-research__<name>`;
+  other hosts (Antigravity, Codex) prefix them differently, so look for
+  the tool whose name *ends* in the bare name. Each description starts
+  with its effect class (`[read-only]`, `[writes Zotero]`, `[costs LLM
+  credits]`, …).
+- **Job** — a long plugin tool (`start_*`) that returns a `job_id` at
+  once and runs in the background. Follow it with `job_status`; when
+  the status is `awaiting_user`, show the user the `prompt` verbatim and
+  pass *their* answer to `job_answer` — never answer it yourself; stop
+  it with `cancel_job`; `list_jobs` shows recent ones. A job survives a
+  host restart. One job at a time may write to Zotero, and one at a
+  time may drive the plugin's browser.
+- **Terminal equivalent** — the `uv run …` / `python3 …` command a
+  skill gives beside a plugin tool. Use it with Bash **only when the
+  plugin tools are not available** (the server is not registered, or
+  `uv` is missing), and then tell the user once how to enable them:
+  in Claude Code the server ships with the plugin and needs only `uv`
+  on `PATH` (restart the session after installing it); on Antigravity
+  or Codex, `/setup` registers it. Users can always run the same
+  command in their own terminal.
 - **Skill** — a prose rule-book the harness loads when a user's
   request matches the skill's trigger phrases. Skills tell the agent
   *how* to approach a task; they do not contain executable code.

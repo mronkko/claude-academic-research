@@ -5,15 +5,21 @@ description: Use when the user asks to fact-check a manuscript, verify or audit 
 
 # fact-check
 
+**Plugin tools.** Steps name the tools of the plugin's own
+**academic-research** MCP server by bare name (`check_setup`); in Claude
+Code it appears as `mcp__plugin_academic-research_academic-research__check_setup`,
+on other hosts with that host's prefix. If the tools are not available,
+run the *terminal equivalent* given beside each with Bash instead, and
+tell the user once how to enable the server (see **Terminal equivalent**
+in [skills/_glossary.md](../_glossary.md)).
+
 ## Pre-flight (ALWAYS run first)
 
-Before any step below, verify the plugin has been configured:
+Before any step below, verify the plugin has been configured: call
+**`check_setup`** (terminal equivalent:
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"`).
 
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"
-```
-
-If the result is `NOT CONFIGURED`, stop immediately and tell the user:
+If it reports `configured: false` (`NOT CONFIGURED`), stop immediately and tell the user:
 
 > The academic-research project has not been set up on this machine
 > yet. Run the setup skill or setup wizard first — fact-check depends on Zotero and MCP
@@ -22,7 +28,7 @@ If the result is `NOT CONFIGURED`, stop immediately and tell the user:
 
 Do not call MCP tools or proceed with the audit. Running the setup skill/wizard is the required first step.
 
-If the result is `configured`, proceed.
+If it reports `configured: true`, proceed.
 
 ---
 
@@ -36,7 +42,9 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_project_scaffold.py" \
     scripts/test_common.py scripts/test_citations.py
 ```
 
-If the output lists missing files, install them:
+If the output lists missing files, install them (no plugin tool
+installs single templates — `scaffold_project` lays out a whole
+project — so these two stay scripts):
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/install_templates.py" \

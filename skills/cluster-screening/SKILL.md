@@ -15,16 +15,27 @@ protocol) and everything after it (audit, export, the manuscript) is
 `systematic-review`'s. Load that skill for those; load this one for the
 round trip.
 
+**Plugin tools.** The pre-flight calls the plugin's own
+**academic-research** MCP server tool `check_setup` (in Claude Code
+`mcp__plugin_academic-research_academic-research__check_setup`; other
+hosts prefix it differently). If it is not available, run its terminal
+equivalent with Bash and tell the user once how to enable the server
+(see **Terminal equivalent** in the glossary). The round trip below has
+no tools: emitting a manifest and applying responses are modes of the
+screening scripts that no tool exposes, so they stay commands.
+
 ## Pre-flight (ALWAYS run first, both of them, in this order)
 
+1. Call **`check_setup`** (terminal equivalent:
+   `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"`).
+   If it reports `configured: false`, stop and hand off to `/setup`.
+2. Then:
+
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_cluster_config.py"
 ```
 
-If the first says `NOT CONFIGURED`, stop and hand off to `/setup`.
-
-The second prints the automation level. **Read the `effective:` line and
+This prints the automation level. **Read the `effective:` line and
 obey it. The level is not yours to choose, raise, or work around.** It
 is a statement about how much of a shared facility account — somebody
 else's allocation, on hardware the user is accountable for — the user

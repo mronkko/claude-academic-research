@@ -10,15 +10,43 @@ description: Use when running a full systematic literature review (SLR) — PRIS
 > **FE-code**? See [skills/_glossary.md](../_glossary.md) for one-line
 > definitions of every acronym this skill uses.
 
+## Plugin tools — how this skill runs the pipeline
+
+Every pipeline step below is a tool of the plugin's own
+**academic-research** MCP server, named here by its bare name
+(`check_setup`, `start_search`, `start_abstract_screen`, …). In Claude
+Code the full name is
+`mcp__plugin_academic-research_academic-research__<name>`; other hosts
+prefix it differently — use the tool whose name ends in the bare name.
+Each description starts with its effect class (`[read-only]`, `[writes
+Zotero]`, `[costs LLM credits]`, …).
+
+- **Short tools** (`check_setup`, `scaffold_project`, `screening_report`,
+  `audit_library`, `export_coded_includes`, `generate_bib`) run to
+  completion and return a small summary plus the path of their full log.
+- **Jobs** (`start_*`) return a `job_id` at once and run in the
+  background. Follow one with `job_status`. When it reports
+  `awaiting_user`, show the user its `prompt` verbatim and pass **their**
+  answer to `job_answer` — never answer it yourself. `cancel_job` stops a
+  job (interrupting first, so its CSV and tags flush); `list_jobs` shows
+  recent ones. A job outlives the session that started it. One job at a
+  time may write to Zotero — the server refuses a second.
+- **Terminal equivalent.** Beside each tool this skill gives the shipped
+  script it runs. Use that command with Bash **only if the tools are not
+  available** (the server is not registered, or `uv` is missing), and
+  then tell the user once how to enable them: in Claude Code the server
+  ships with the plugin and needs only `uv` on `PATH` (restart the
+  session after installing it); on Antigravity or Codex, `/setup`
+  registers it. Steps with no tool (pilot analysis, tag pruning, LLM
+  provider and model pinning, …) are scripts either way.
+
 ## Pre-flight (ALWAYS run first)
 
-Before any step below, verify the plugin has been configured:
+Before any step below, verify the plugin has been configured: call
+**`check_setup`** (terminal equivalent:
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"`).
 
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"
-```
-
-If the result is `NOT CONFIGURED`, stop immediately and tell the user:
+If it reports `configured: false` (`NOT CONFIGURED`), stop immediately and tell the user:
 
 > The academic-research project has not been set up on this machine
 > yet. Run the setup skill or setup wizard first to configure API keys (Zotero, Elsevier,
@@ -28,7 +56,7 @@ If the result is `NOT CONFIGURED`, stop immediately and tell the user:
 Do not call MCP tools, run pipeline scripts, or proceed with any stage
 of the procedure. Running the setup skill/wizard is the required first step.
 
-If the result is `configured`, proceed.
+If it reports `configured: true`, proceed.
 
 ---
 
@@ -57,10 +85,11 @@ The single proposal must contain:
    never a dated snapshot when a newer sibling exists).
 3. **Item counts**, once the search and import have run — they are not
    gated, so you will have real numbers rather than an estimate.
-4. **Projected LLM cost**, from an actual `--dry-run` of the screening
-   stage. Not a guess, and not omitted because the dry run was
-   awkward — the dry run is one command and its cost line is the number
-   the user is being asked to approve.
+4. **Projected LLM cost**, from an actual dry run of the screening
+   stage (`start_abstract_screen` with `dry_run: true`). Not a guess,
+   and not omitted because the dry run was awkward — the dry run is one
+   call and its cost line is the number the user is being asked to
+   approve.
 
 Then ask once. After a "proceed", the later stages run without further
 questions — the `PAID LLM RUN` banner still prints before each one, so
@@ -95,46 +124,28 @@ user never authorised is not.
 ## Bootstrap (first run in this project)
 
 An SR project needs (a) the canonical directory scaffold, (b) four
-regression-test files, and (c) pipeline-stage config templates. Run
-the three setup helpers below in order. They are all idempotent —
-re-running skips anything already in place. Do not use shell
-`mkdir -p` (prompts the user, bash-only) or chained `cp` calls
+regression-test files, and (c) pipeline-stage config templates. One
+call does all three: **`scaffold_project`** (`kind: "sr"`, the default).
+It is idempotent — it never overwrites an existing file, so re-running
+skips anything already in place — and its summary lists what it created
+(`created_dirs`, `copied_templates`) and how many files it kept. Do not
+use shell `mkdir -p` (prompts the user, bash-only) or chained `cp` calls
 (prompts the user for every chain) for the same work.
 
-Create the directory scaffold:
+Terminal equivalent:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/ensure_dir.py" \
-    scripts screening pdfs analysis analysis/results manuscript
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/scaffold_project.py" --kind sr --no-claude-md
 ```
 
-Check what's already present:
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_project_scaffold.py" \
-    scripts/test_common.py scripts/test_citations.py \
-    scripts/test_empirical_integrity.py scripts/test_systematic_review.py \
-    search_config.py screening_config.py \
-    analysis/manuscript_stats.py manuscript/manuscript_tables.py \
-    manuscript/manuscript.qmd manuscript/apa.csl
-```
-
-If any are missing, install them (one call, skip-if-exists for the
-rest):
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/install_templates.py" \
-    test_common.py:scripts/test_common.py \
-    test_citations.py:scripts/test_citations.py \
-    test_empirical_integrity.py:scripts/test_empirical_integrity.py \
-    test_systematic_review.py:scripts/test_systematic_review.py \
-    search_config.py:search_config.py \
-    screening_config.py:screening_config.py \
-    manuscript_stats.py:analysis/manuscript_stats.py \
-    manuscript_tables.py:manuscript/manuscript_tables.py \
-    manuscript.qmd:manuscript/manuscript.qmd \
-    apa.csl:manuscript/apa.csl
-```
+It creates `screening/`, `pilot/`, `analysis/results/`, `manuscript/`,
+`scripts/`, `output/`, `.claude/` and `critic-reviews/`, and installs
+`scripts/test_common.py`, `scripts/test_citations.py`,
+`scripts/test_empirical_integrity.py`, `scripts/test_systematic_review.py`,
+`search_config.py`, `screening_config.py`, `analysis/manuscript_stats.py`,
+`manuscript/manuscript_tables.py`, `manuscript/manuscript.qmd` and
+`manuscript/apa.csl`; inside a git repo it adds `.claude/` and `output/`
+to `.gitignore`.
 
 `apa.csl` is the APA 7th-edition citation style (CSL project,
 CC BY-SA 3.0); `manuscript.qmd` names it in its YAML, so it must sit next
@@ -152,12 +163,10 @@ before use.
 If the project has no `CLAUDE.md` yet, suggest using
 `${CLAUDE_PLUGIN_ROOT}/templates/sr_claude_md.md` as a starting
 point — but don't write it without the user's say-so. CLAUDE.md is
-user-owned. To install once the user confirms:
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/install_templates.py" \
-    sr_claude_md.md:CLAUDE.md
-```
+user-owned, which is why `scaffold_project` skips it by default. To
+install it once the user confirms: `scaffold_project` with
+`claude_md: "install"` (terminal equivalent:
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/install_templates.py" sr_claude_md.md:CLAUDE.md`).
 
 ---
 
@@ -334,13 +343,11 @@ confirmation):**
    field codes within it, and whether ISSN-filtering will be used
    (requires WoS Expanded).
 6. **Database access** — which databases the formal search will
-   use. Do NOT ask the user blind. First run the probe (it reads
-   `~/.config/academic-research/config.toml` out-of-process and
-   emits only yes/no status — no keys):
-
-   ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_database_access.py"
-   ```
+   use. Do NOT ask the user blind. First read the `databases` section
+   of `check_setup`'s result (the probe reads
+   `~/.config/academic-research/config.toml` out-of-process and emits
+   only yes/no status — no keys; terminal equivalent:
+   `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_database_access.py"`).
 
    Then present the detected set and ask which subset to use. For a
    formal SR, two or three databases are typical; prefer WoS
@@ -391,7 +398,7 @@ between scope.md and search_config.py.
 
 Run this straight after scope lock-in. It needs the scope brief (the
 default is proposed from the focal construct) and it must happen before
-`import_to_zotero.py`, which is the first thing that writes a tag.
+the import (`start_import`), which is the first thing that writes a tag.
 
 Every Zotero tag recording *this review's* judgement is namespaced:
 `agentic-ai/abstract:include`, not a bare `abstract:include`. The prefix
@@ -578,7 +585,7 @@ provider, and the credential agree.
 
 ### Check the connection before any batch run — mandatory
 
-Before `abstract_screen.py` or `fulltext_code.py` runs over a real
+Before `start_abstract_screen` or `start_fulltext_code` runs over a real
 corpus:
 
 ```bash
@@ -644,7 +651,9 @@ inherits OpenAI's list prices, which makes the cost estimate wrong.
 `ANTHROPIC_BASE_URL` is for Anthropic-Messages-shaped endpoints only.
 
 **A one-off model change** — "screen these with the cheap one", "use a
-stronger model for the coding pass" — is a `--model` flag, not an edit:
+stronger model for the coding pass" — is the `model` argument of
+`start_abstract_screen` / `start_fulltext_code` (`model: "fast"`), not an
+edit. Terminal equivalent:
 
 ```bash
 uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/abstract_screen.py \
@@ -652,7 +661,7 @@ uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/abstract_screen.py \
     --model fast
 ```
 
-`--model` accepts a tier (`fast`, `balanced`, `deep`), a short alias
+`model` (`--model`) accepts a tier (`fast`, `balanced`, `deep`), a short alias
 that names a tier (`cheap`, `haiku`, `flash`, `mini`, `sonnet`, `opus`,
 `pro`, `best`, …), or a full model ID. Aliases resolve against the
 configured provider, so `--model fast` means Haiku for an Anthropic
@@ -679,8 +688,9 @@ Run the script bare first if you need to see what the provider serves,
 and confirm the specific model with the user before writing. Then say
 that you did, and that it changed the committed default.
 
-**Cost before spending.** `--dry-run` on either screening script prints
-a projected cost for the real item count. Quote it before a full run,
+**Cost before spending.** `dry_run: true` on either screening job
+(`--dry-run` on the script) prints a projected cost for the real item
+count — read it from the job's `log_tail`. Quote it before a full run,
 especially when the user is about to move to a stronger tier — `deep`
 is roughly double `balanced` per paper. An "unknown" estimate means no
 list price is on file for that model; report that rather than implying
@@ -878,8 +888,9 @@ If the task is pipeline-shaped (enumerate Zotero items, summarise a
 screening CSV, mutate tags, fetch abstracts, filter a search CSV,
 compute counts), one of two things must be true:
 
-1. **A shipped script covers it.** Invoke that script with explicit
-   flags. The Pipeline-scripts table below is the canonical list.
+1. **A shipped tool or script covers it.** Call the tool, or invoke
+   the script with explicit flags where no tool exists. The
+   Pipeline-steps table below is the canonical list.
 2. **No shipped script covers it.** Tell the user:
 
    > There is no shipped script for *<task>*. I can either (a) add a
@@ -909,13 +920,13 @@ compute counts), one of two things must be true:
 
 | Task | Right move |
 |------|------------|
-| Filter / trim a search CSV (top-N by year, year range) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/filter_search_results.py --input <csv> --output <csv> [--year-min Y] [--year-max Y] [--top-n N]` |
-| Summarise screening decisions across passes (last-row-wins, decision counts, list re-screened items) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/screening_report.py <log.csv> [--list <decision>] [--list-rescreened]` |
+| Filter / trim a search CSV (top-N by year, year range) | No tool: `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/filter_search_results.py --input <csv> --output <csv> [--year-min Y] [--year-max Y] [--top-n N]` |
+| Summarise screening decisions across passes (last-row-wins, decision counts, list re-screened items) | `screening_report` (`log_csv`, optional `list_decision` / `list_rescreened`). Terminal equivalent: `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/screening_report.py <log.csv> [--list <decision>] [--list-rescreened]` |
 | Inspect tag state for one item | Use `mcp__zotero__zotero_get_item_metadata` directly — single MCP call, no Python needed. |
-| Count the records in a screening log | `screening_report.py <log.csv>` prints them. Not `wc -l`: quoted fields with line breaks (abstracts) make it overcount, and Windows shells do not have it. |
+| Count the records in a screening log | `screening_report` returns them (`rows_in_file`, `unique_items`). Not `wc -l`: quoted fields with line breaks (abstracts) make it overcount, and Windows shells do not have it. |
 
 **Self-check before any Bash heredoc / inline `python -c`
-exceeding one line:** is this task in the Pipeline-scripts table or
+exceeding one line:** is this task in the Pipeline-steps table or
 covered by a `scripts/setup/` helper? If the answer is "no, but I
 could write a quick one", STOP and propose adding the shipped
 script instead.
@@ -962,9 +973,11 @@ Principles:
   `<prefix>/fulltext:exclude` for full-text coding), and skip items
   already tagged. The CSV log is written in parallel for provenance but is not
   consulted for resume decisions.
-- **Progress the user can follow.** Pipeline scripts use `flush=True` on
-  every print; emit `[N/total]` counters; invoke via `| tee` to a log
-  file. Never pipe to `/dev/null`.
+- **Progress the user can follow.** A job's `job_status` gives its
+  progress counts and log tail — report them at milestones rather than
+  polling in a tight loop. Run from a terminal, the scripts use
+  `flush=True` on every print and emit `[N/total]` counters; invoke via
+  `| tee` to a log file. Never pipe to `/dev/null`.
 - **Walk the user through the process.** At every milestone, explain the
   user the process. State the stages, explain where we are now and what the 
   user needs to do and what the agent does in this stage. Also summarize what
@@ -1184,39 +1197,43 @@ unless `--full-recode` is passed.
   produced, and the input to any decision about pruning a coded-value
   family that turned out too granular to browse.
 
-## Pipeline scripts
+## Pipeline steps
 
-All scripts live under `${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/`. Invoke
+Call the tool; the last column is its terminal equivalent (see "Plugin
+tools" at the top). A row with no tool is run as the script. All
+scripts live under `${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/` and run
 with `uv run`; first-run `uv` installs declared deps into an ephemeral
-venv automatically. Invocations below show the most common form; run
-each script with `--help` to see the full flag surface (every script
-has additional options for re-processing, parallelism, caching, and
-single-item debugging).
+venv automatically. The tools expose the user's decisions only; the
+command lines below show the most common form, and every script's
+`--help` lists the full flag surface (re-processing, parallelism,
+caching, single-item debugging) — a flag a tool does not offer is a
+reason to run the script.
 
-| Stage | Script | Invocation |
+| Stage | Tool | Terminal equivalent |
 |---|---|---|
-| Multi-database formal search | `search.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search.py --config ./search_config.py [--databases scopus,wos,openalex,semantic_scholar]` |
-| Single-database piloting (Scopus) | `search_scopus.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_scopus.py --config ./search_config.py` |
-| Single-database piloting (Web of Science) | `search_wos.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_wos.py --config ./search_config.py` |
-| Single-database piloting (OpenAlex, free) | `search_openalex.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_openalex.py --config ./search_config.py` |
-| Single-database piloting (Semantic Scholar) | `search_semantic_scholar.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_semantic_scholar.py --config ./search_config.py` |
-| Summarise a pilot CSV — year-cutoff distribution | `pilot_analyze.py year-cutoff` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/pilot_analyze.py year-cutoff --csv pilot/search_results.csv` |
-| Summarise a pilot CSV — cross-DB DOI overlap | `pilot_analyze.py db-overlap` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/pilot_analyze.py db-overlap --csv pilot/search_results.csv` |
-| Summarise a pilot CSV — journal coverage (top-N) | `pilot_analyze.py journal-coverage` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/pilot_analyze.py journal-coverage --csv pilot/search_results.csv --top 25` |
-| Summarise a pilot CSV — hits by journals.json field code | `pilot_analyze.py field-breakdown` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/pilot_analyze.py field-breakdown --csv pilot/search_results.csv --journals journals.json` |
-| Filter / trim a search CSV (top-N by year, year range) | `filter_search_results.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/filter_search_results.py --input <csv> --output <csv> [--year-min Y] [--year-max Y] [--top-n N]` |
-| Import deduplicated search CSV into Zotero | `import_to_zotero.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/import_to_zotero.py --group <id> --input <search.csv> [--collection <key-or-name>] [--remote]` — exits non-zero if any item create or update failed; read the failures before moving on, the corpus is incomplete |
-| Abstract screening (Claude Haiku on title+abstract) | `abstract_screen.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/abstract_screen.py --group <id> --collection <key> --config ./screening_config.py [--model <alias>] [--remote]` |
-| Full-text screening + structured coding (Claude Sonnet) | `fulltext_code.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs [--model <alias>] [--remote]` |
-| Update specific coding fields on already-coded items | `fulltext_code.py --update-fields` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs --update-fields FIELD1,FIELD2 [--remote]` |
-| Summarise screening / coding decisions across passes | `screening_report.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/screening_report.py <log.csv> [--list <decision>] [--list-rescreened] [--search-csv <search_results.csv>]` — `--search-csv` adds the removed-before-screening count |
-| Tag supplements / front matter / notices already in a library | `tag_doctypes.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/tag_doctypes.py --group <id> [--collection <key>]` (dry run) · add `--apply` to write · `--no-link` skips relating supplements to their article |
-| Fetch missing abstracts (multi-source cascade) | `enrich_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_abstracts.py --filter-keys-file <keys> [--remote]` |
-| Attach missing PDFs (plan with the user, then API / paid / browser / Connector / manual) | `enrich_pdfs.py` | **REQUIRED SUB-SKILL: retrieving-pdfs** — it runs the planning step and every mode |
-| Audit library (missing abstracts / PDFs / stubs) | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group <id> [--remote]` |
-| Export includes-only coded view | `export_coded_includes.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/export_coded_includes.py --group <id> --collection <key> --config ./screening_config.py --out analysis/results/coded_papers.csv` |
-| List / prune this review's Zotero tags | `manage_tags.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/manage_tags.py --group <id> --collection <key> --list` · add `--prune <field> --apply` to drop a coded-value family |
-| Generate `references.bib` from manuscript keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py` from the project root — scans `manuscript/`, writes `manuscript/references.bib` |
+| Multi-database formal search | `start_search` (job; `databases`, `streams`, `search_fields`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search.py --config ./search_config.py [--databases scopus,wos,openalex,semantic_scholar]` |
+| Single-database piloting (Scopus) | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_scopus.py --config ./search_config.py` |
+| Single-database piloting (Web of Science) | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_wos.py --config ./search_config.py` |
+| Single-database piloting (OpenAlex, free) | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_openalex.py --config ./search_config.py` |
+| Single-database piloting (Semantic Scholar) | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search_semantic_scholar.py --config ./search_config.py` |
+| Summarise a pilot CSV — year-cutoff distribution | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/pilot_analyze.py year-cutoff --csv pilot/search_results.csv` |
+| Summarise a pilot CSV — cross-DB DOI overlap | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/pilot_analyze.py db-overlap --csv pilot/search_results.csv` |
+| Summarise a pilot CSV — journal coverage (top-N) | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/pilot_analyze.py journal-coverage --csv pilot/search_results.csv --top 25` |
+| Summarise a pilot CSV — hits by journals.json field code | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/pilot_analyze.py field-breakdown --csv pilot/search_results.csv --journals journals.json` |
+| Filter / trim a search CSV (top-N by year, year range) | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/filter_search_results.py --input <csv> --output <csv> [--year-min Y] [--year-max Y] [--top-n N]` |
+| Import deduplicated search CSV into Zotero | `start_import` (job; `group`/`user`, `input`, `collection`; `dry_run` first) — fails if any item create or update failed; read the failures in `log_tail` before moving on, the corpus is incomplete | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/import_to_zotero.py --group <id> --input <search.csv> [--collection <key-or-name>] [--remote]` |
+| Abstract screening (LLM on title+abstract) | `start_abstract_screen` (job; `collection`, `group`/`user`, optional `model`, `dry_run`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/abstract_screen.py --group <id> --collection <key> --config ./screening_config.py [--model <alias>] [--remote]` |
+| Full-text screening + structured coding (LLM) | `start_fulltext_code` (job; `collection`, `group`/`user`, optional `model`, `only_keys`, `rerun`, `full_recode`, `dry_run`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py [--model <alias>] [--remote]` |
+| Update specific coding fields on already-coded items | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --update-fields FIELD1,FIELD2 [--remote]` |
+| Summarise screening / coding decisions across passes | `screening_report` (`log_csv`, `list_decision`, `list_rescreened`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/screening_report.py <log.csv> [--list <decision>] [--list-rescreened] [--search-csv <search_results.csv>]` — `--search-csv` (script only) adds the removed-before-screening count |
+| Tag supplements / front matter / notices already in a library | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/tag_doctypes.py --group <id> [--collection <key>]` (dry run) · add `--apply` to write · `--no-link` skips relating supplements to their article |
+| Fetch missing abstracts (multi-source cascade) | `start_enrich_abstracts` (job; `filter_keys_file`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_abstracts.py --filter-keys-file <keys> [--remote]` |
+| Validate DOIs / find missing ones | `start_enrich_dois` (job; `filter_keys_file`; relays its 2/3-match question through `job_status`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_dois.py --all --filter-keys-file <keys>` |
+| Attach missing PDFs (plan with the user, then API / paid / browser / Connector / manual) | **REQUIRED SUB-SKILL: retrieving-pdfs** — it runs the planning step and every mode | — |
+| Audit library (missing abstracts / PDFs / stubs) | `audit_library` (`group` or `user`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group <id> [--remote]` |
+| Export includes-only coded view | `export_coded_includes` (`collection`, `group`/`user`; writes `analysis/results/coded_papers.csv`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/export_coded_includes.py --group <id> --collection <key> --config ./screening_config.py --out analysis/results/coded_papers.csv` |
+| List / prune this review's Zotero tags | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/manage_tags.py --group <id> --collection <key> --list` · add `--prune <field> --apply` to drop a coded-value family |
+| Generate `references.bib` from manuscript keys | `generate_bib` (scans `manuscript/`, writes `manuscript/references.bib`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py` from the project root |
 
 Additional templates shipped with the plugin:
 
@@ -1359,7 +1376,8 @@ the other, and the leading case is Semantic Scholar. It returns no ISSN,
 so it cannot be scoped to a journal list at the source; its keyword
 contribution to a journal-restricted review is structurally weak. For a
 citation search it is the opposite — on one real seed it returned about
-50% more citing works than OpenAlex. So:
+50% more citing works than OpenAlex. So (the per-stream flags are not
+`start_search` arguments — run the script):
 
 ```bash
 uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search.py --config ./search_config.py \
@@ -1391,13 +1409,16 @@ Set the seed DOIs in the config and run the normal search:
 CITATION_SEEDS = ["10.1037/0021-9010.91.4.917"]
 ```
 
+Then `start_search` as usual, or `start_search` with
+`streams: "citation"` to pilot one seed cheaply. Terminal equivalent:
+
 ```bash
 uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search.py --config ./search_config.py
 uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/search.py --config ./search_config.py --streams citation   # pilot one seed
 ```
 
-Both streams land in one corpus under one DOI hash, so `import_to_zotero.py`
-and the integrity machinery need no separate path. Four things to know:
+Both streams land in one corpus under one DOI hash, so the import
+(`start_import`) and the integrity machinery need no separate path. Four things to know:
 
 - **`FROM_YEAR` / `TO_YEAR` always apply. `JOURNALS` applies by
   default** — `--citation-journal-scope auto`, the default, scopes the

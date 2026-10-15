@@ -9,15 +9,24 @@ description: Use when the user asks to work with a Zotero library — adding abs
 > See [skills/_glossary.md](../_glossary.md) for one-line definitions
 > of every acronym this skill uses.
 
+**Plugin tools.** Steps name the tools of the plugin's own
+**academic-research** MCP server by bare name (`check_setup`,
+`audit_library`, `start_enrich_abstracts`, …); in Claude Code they appear
+as `mcp__plugin_academic-research_academic-research__<name>`, on other
+hosts with that host's prefix. `start_*` tools are **jobs**: follow one
+with `job_status`; when it is `awaiting_user`, show the user its `prompt`
+and pass *their* answer to `job_answer` — never answer it yourself; stop
+it with `cancel_job`. If the tools are not available, run the *terminal
+equivalent* given beside each with Bash instead, and tell the user once
+how to enable the server (see **Terminal equivalent** in the glossary).
+
 ## Pre-flight (ALWAYS run first)
 
-Before any step below, verify the plugin has been configured:
+Before any step below, verify the plugin has been configured: call
+**`check_setup`** (terminal equivalent:
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"`).
 
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"
-```
-
-If the result is `NOT CONFIGURED`, stop immediately and tell the user:
+If it reports `configured: false` (`NOT CONFIGURED`), stop immediately and tell the user:
 
 > The academic-research project has not been set up on this machine
 > yet. Run the setup skill (`/setup`) first to configure API keys and
@@ -26,18 +35,16 @@ If the result is `NOT CONFIGURED`, stop immediately and tell the user:
 Do not call MCP tools, run scripts, or proceed with the procedure.
 Running the setup skill/wizard is the required first step.
 
-If the result is `configured`, proceed.
+If it reports `configured: true`, proceed.
 
-Also check the `zotero-mcp-server` version the MCP configuration
-actually launches — an install below the floor (0.11) silently loses
-tool names this skill documents and adds identifiers one at a time
-instead of in batches:
+The same `check_setup` result also gives the `zotero-mcp-server` version
+the MCP configuration actually launches (`zotero_mcp_server`) — an
+install below the floor (0.11) silently loses tool names this skill
+documents and adds identifiers one at a time instead of in batches
+(terminal equivalent:
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_zotero_mcp_version.py"`).
 
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_zotero_mcp_version.py"
-```
-
-A `WARNING` line means the user should upgrade before relying on
+A `zotero_mcp_warnings` entry (a `WARNING` line) means the user should upgrade before relying on
 `mcp__zotero__*` tools; it is informational, not a hard gate — proceed
 if `zotero-cli` and `zotero_io.py` still cover what you need.
 
@@ -83,21 +90,23 @@ differs is **what comes next**: SR context expects
 `abstract_screen.py` to read the enriched library; ad-hoc context
 stops after enrichment.
 
-## Pipeline scripts — direct path, no probing
+## Pipeline steps — direct path, no probing
 
 Do **not** list the plugin's `scripts/pipelines/` directory to figure
-out what is available. The mapping below is authoritative; use the
-exact invocation.
+out what is available. The mapping below is authoritative: call the
+tool; the script column is the terminal equivalent. The rows without a
+tool have none yet — run their script with Bash.
 
-| User intent | Script | Invocation |
+| User intent | Tool | Terminal equivalent |
 |---|---|---|
-| Audit a library for items missing abstracts / PDFs / empty stubs | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group <id>` |
-| Add missing abstracts to items | `enrich_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_abstracts.py --filter-keys-file .claude/audit/audit.missing_abstract.keys` |
-| Repair stored abstracts (copyright notices, HTML entities, "Abstract" headings) | `clean_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/clean_abstracts.py` (dry run; read the CSV it writes, then add `--write` with the user's OK) |
-| Attach missing PDFs (any route: API, paid, browser, Connector, manual) | `enrich_pdfs.py` | **REQUIRED SUB-SKILL: retrieving-pdfs** — it plans with the user, then runs each mode; scope it with `.claude/audit/audit.missing_pdf.keys` |
-| Replace PDFs an item already has (repair a bad or superseded copy) | `enrich_pdfs.py --replace` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --replace --filter-keys-file <keys>` |
-| Generate `references.bib` from a manuscript's citation keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py` from the project root (scans `manuscript/`, writes `manuscript/references.bib`; `--chapters-dir` / `--bib-out` for other layouts) |
-| Tag supplements, front matter and notices (and relate supplements to their article) | `tag_doctypes.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/tag_doctypes.py --group <id> [--collection <key>]` (dry run; add `--apply` with the user's OK) |
+| Audit a library for items missing abstracts / PDFs / empty stubs | `audit_library` (`group` or `user`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group <id>` |
+| Add missing abstracts to items | `start_enrich_abstracts` (job; `filter_keys_file: ".claude/audit/audit.missing_abstract.keys"`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_abstracts.py --filter-keys-file .claude/audit/audit.missing_abstract.keys` |
+| Validate DOIs / find missing ones | `start_enrich_dois` (job; `filter_keys_file: ".claude/audit/audit.missing_doi.keys"`; a 2/3 match is asked through `job_status` — relay it) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_dois.py --all --filter-keys-file <keys>` |
+| Repair stored abstracts (copyright notices, HTML entities, "Abstract" headings) | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/clean_abstracts.py` (dry run; read the CSV it writes, then add `--write` with the user's OK) |
+| Attach missing PDFs (any route: API, paid, browser, Connector, manual) | **REQUIRED SUB-SKILL: retrieving-pdfs** — it plans with the user, then runs each mode; scope it with `.claude/audit/audit.missing_pdf.keys` | — |
+| Replace PDFs an item already has (repair a bad or superseded copy) | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --replace --filter-keys-file <keys>` |
+| Generate `references.bib` from a manuscript's citation keys | `generate_bib` (scans `manuscript/`, writes `manuscript/references.bib`; `chapters_dir` / `bib_out` for other layouts) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py` from the project root |
+| Tag supplements, front matter and notices (and relate supplements to their article) | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/tag_doctypes.py --group <id> [--collection <key>]` (dry run; add `--apply` with the user's OK) |
 
 **`doctype:*` tags mark records that are typed `journal-article` but are
 not research articles**: `doctype:supplement` (APA supplemental material,
@@ -155,24 +164,25 @@ running these stages:**
 
 - PDF retrieval — `retrieving-pdfs` announces the browser window, the
   manual-download tabs and long runs itself, step by step.
-- First run of any `uv run` command installs Python dependencies
-  (~1–20 s). Mention it if noticeable.
+- The first run of any plugin tool or `uv run` command installs Python
+  dependencies (~1–20 s). Mention it if noticeable.
 
 ### Canonical workflow for "add missing abstracts and PDFs to a library"
 
 1. Identify the Zotero library the user means (ask if ambiguous). Use
    `mcp__zotero__zotero_list_libraries` if you need to see what is
    available. Never guess the group ID.
-2. Run `audit_zotero_library.py --group <id>`. Read the summary counts.
-   The script writes `.claude/audit/audit.{missing_abstract,missing_pdf,
+2. Call `audit_library` with the library (`group` / `user`). Read the
+   summary counts. The audit writes `.claude/audit/audit.{missing_abstract,missing_pdf,
    missing_doi,empty_stubs,tdm_recovered,preprint_version}.keys`
    alongside the JSON report (project-local).
 3. Report counts to the user and ask which to fix (missing abstracts,
    missing PDFs, empty stubs, or all).
-4. Run the stage(s) the user chose, passing the matching `.keys` file
-   to `--filter-keys-file` — missing PDFs go to step 6 instead. The
-   audit script prints the exact commands in its "Next steps" output —
-   use those verbatim.
+4. Run the stage(s) the user chose — `start_enrich_abstracts`,
+   `start_enrich_dois` — passing the matching `.keys` file as
+   `filter_keys_file`; missing PDFs go to step 6 instead. (The audit's
+   "Next steps" output prints the same steps as terminal commands — the
+   fallback when the tools are not available.)
 5. Re-run the audit to confirm counts dropped.
 6. **Missing PDFs: REQUIRED SUB-SKILL: retrieving-pdfs.** Load it with
    the Skill tool and follow it rather than running `enrich_pdfs.py`
@@ -266,8 +276,9 @@ hierarchy is:
      batched `zotero_add_item`. Metadata comes from Crossref, which is
      what you want when you hold only identifiers.
    - **A search-results CSV from `search.py`** (the systematic-review
-     pipeline): `scripts/pipelines/import_to_zotero.py` (tier 3) is
-     still the better tool. It builds most items from the search
+     pipeline): the `start_import` job, which runs
+     `scripts/pipelines/import_to_zotero.py` (tier 3), is still the
+     better tool. It builds most items from the search
      databases' own metadata with no Crossref call, keeps the
      database's abstract, imports rows that have no DOI, dedups within
      the batch and against the library by DOI *and* title+first-author,
@@ -280,7 +291,7 @@ hierarchy is:
      without one rather than writing provenance tags that belong to no
      review.
 
-   If `check_zotero_mcp_version.py` reports a version below the floor,
+   If `check_setup` reports a `zotero-mcp-server` below the floor,
    the batching is not there — that install pays a Crossref lookup, a
    template GET and a create POST per identifier, serialised — so
    upgrade first, or use `import_to_zotero.py` for anything beyond a
@@ -394,9 +405,10 @@ anything about to be written back.
 
 - BBT keys are auto-generated from author/year/title (e.g.,
   `brownUsingDailyStock1985a`).
-- Generate the project's bibliography with
+- Generate the project's bibliography with the `generate_bib` tool
+  (terminal equivalent:
   `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py`, run
-  from the project root.
+  from the project root).
 - Never hand-craft keys like `Smith2019`.
 - Never write to the Zotero `Extra` field to override or pin BBT keys.
 - BBT keys resolve via the local JSON-RPC endpoint:

@@ -7,15 +7,21 @@ description: Use when the user asks to revise, polish, critique, or finalize an 
 
 **Invocation:** `/critic-loop <document-path> [--critics evidence,method,argument,expert] [--max-iter 4] [--no-test] [--render-cmd "quarto render {doc} --to gfm"]`
 
+**Plugin tools.** Steps name the tools of the plugin's own
+**academic-research** MCP server by bare name (`check_setup`); in Claude
+Code it appears as `mcp__plugin_academic-research_academic-research__check_setup`,
+on other hosts with that host's prefix. If the tools are not available,
+run the *terminal equivalent* given beside each with Bash instead, and
+tell the user once how to enable the server (see **Terminal equivalent**
+in [skills/_glossary.md](../_glossary.md)).
+
 ## Pre-flight (ALWAYS run first)
 
-Before any step below, verify the plugin has been configured:
+Before any step below, verify the plugin has been configured: call
+**`check_setup`** (terminal equivalent:
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"`).
 
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"
-```
-
-If the result is `NOT CONFIGURED`, stop immediately and tell the user:
+If it reports `configured: false` (`NOT CONFIGURED`), stop immediately and tell the user:
 
 > The academic-research project has not been set up on this machine
 > yet. Run the setup skill or setup wizard first — the evidence critic depends on MCP
@@ -24,7 +30,7 @@ If the result is `NOT CONFIGURED`, stop immediately and tell the user:
 
 Do not launch critics or proceed with the loop. Running the setup skill/wizard is the required first step.
 
-If the result is `configured`, proceed.
+If it reports `configured: true`, proceed.
 
 ---
 
