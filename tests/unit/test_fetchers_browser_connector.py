@@ -210,7 +210,7 @@ def test_poll_for_new_item_returns_new_key_when_found() -> None:
     zot = MagicMock()
     zot.recent_items.return_value = [
         {"key": "KEEPER", "data": {"DOI": "10.1/x"}},
-        {"key": "NEW123", "data": {"DOI": "10.1/x"}},
+        {"key": "NEW123", "data": {"DOI": "10.1/x", "dateAdded": _recent()}},
     ]
     result = _poll_for_new_item(zot, "10.1/x", "KEEPER", timeout_s=0.1)
     assert result == "NEW123"
@@ -231,7 +231,7 @@ def test_poll_for_new_item_ignores_keeper_itself() -> None:
 def test_poll_for_new_item_matches_case_insensitive() -> None:
     zot = MagicMock()
     zot.recent_items.return_value = [
-        {"key": "NEW", "data": {"DOI": "10.1/ABC"}},
+        {"key": "NEW", "data": {"DOI": "10.1/ABC", "dateAdded": _recent()}},
     ]
     assert _poll_for_new_item(
         zot, "10.1/abc", "KEEPER", timeout_s=0.1,
@@ -255,7 +255,8 @@ def test_poll_asks_only_for_the_newest_items() -> None:
     zot = MagicMock()
     zot.recent_items.return_value = [
         {"key": "ATT", "data": {"itemType": "attachment", "DOI": "10.1/x"}},
-        {"key": "NEW", "data": {"itemType": "journalArticle", "DOI": "10.1/x"}},
+        {"key": "NEW", "data": {"itemType": "journalArticle", "DOI": "10.1/x",
+                                "dateAdded": _recent()}},
     ]
     assert _poll_for_new_item(zot, "10.1/x", "KEEPER", timeout_s=0.1) == "NEW"
     zot.journal_articles.assert_not_called()  # the full scan is gone
@@ -506,17 +507,44 @@ def test_poll_matches_a_doi_written_as_a_url() -> None:
     ) == "NEW"
 
 
-def test_poll_doi_match_is_not_subject_to_the_recency_window() -> None:
-    """A DOI identifies the article on its own; narrowing that path
-    would change behaviour that was already correct."""
+def test_poll_doi_match_refuses_a_pre_existing_same_doi_item() -> None:
+    """Reversed for 0.25.0. A DOI identifies the article, not *which
+    copy*: the DOI path skipped the recency window, so an older same-DOI
+    item among the newest 50 (an earlier import, the user's own copy)
+    was taken for the Connector's save — and the caller merges the match
+    into the keeper and trashes it."""
     zot = MagicMock()
     zot.recent_items.return_value = [
-        {"key": "NEW", "data": {"DOI": "10.1/x",
-                                "dateAdded": "2019-01-01T00:00:00Z"}},
+        {"key": "OLDCOPY", "data": {"DOI": "10.1/x",
+                                    "dateAdded": "2019-01-01T00:00:00Z"}},
     ]
     assert _poll_for_new_item(
         zot, "10.1/x", "KEEPER", timeout_s=0.2, title="anything",
-    ) == "NEW"
+    ) is None
+
+
+def test_poll_excludes_the_pre_save_snapshot_even_when_fresh() -> None:
+    """An item added seconds before the save (inside the clock-skew
+    slack) is still not the save; the caller's pre-save snapshot goes
+    into `exclude`."""
+    from fetchers.browser.connector import _recent_keys
+
+    zot = MagicMock()
+    zot.recent_items.return_value = [
+        {"key": "JUSTBEFORE", "data": {"DOI": "10.1/x", "dateAdded": _recent()}},
+    ]
+    snapshot = _recent_keys(zot)
+    assert snapshot == {"JUSTBEFORE"}
+    assert _poll_for_new_item(
+        zot, "10.1/x", "KEEPER", timeout_s=0.2, exclude=snapshot,
+    ) is None
+
+
+def test_recent_keys_is_empty_when_zotero_errors() -> None:
+    zot = MagicMock()
+    zot.recent_items.side_effect = RuntimeError("down")
+    from fetchers.browser.connector import _recent_keys
+    assert _recent_keys(zot) == frozenset()
 
 
 # ---------------------------------------------------------------------------

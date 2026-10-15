@@ -1140,6 +1140,10 @@ class ZoteroConnectorHandler(PublisherHandler):
         # and find the tab whose URL matches — `tabs[0]` in the naïve
         # query sometimes points at a Connector popup on JSTOR.
         page_url = page.url
+        # What was already there before this save. A same-DOI item that
+        # predates the save is the user's own copy, not the Connector's;
+        # matching it would merge it into the keeper and trash it.
+        pre_save_keys = await asyncio.to_thread(_recent_keys, zot)
         try:
             await service_worker.evaluate(_SAVE_WATCH_INSTALL_JS)
         except Exception:
@@ -1223,7 +1227,9 @@ class ZoteroConnectorHandler(PublisherHandler):
             functools.partial(
                 _poll_for_new_item, zot, doi, item["item_key"],
                 _SAVE_POLL_TIMEOUT_S, title=item.get("title", ""),
-                exclude=self.pending.new_keys() if self.pending else frozenset(),
+                exclude=(
+                    self.pending.new_keys() if self.pending else frozenset()
+                ) | pre_save_keys,
                 stop=stop,
             ),
         ))
@@ -1648,6 +1654,20 @@ async def _click_matching_result(page, title: str) -> bool:
     return True
 
 
+def _recent_keys(zot) -> frozenset[str]:
+    """Keys of the newest items right now — the pre-save snapshot.
+
+    Empty on any failure: the poll's `dateAdded` cutoff still guards the
+    match, this only tightens it.
+    """
+    try:
+        return frozenset(
+            it.get("key", "") for it in (zot.recent_items() or [])
+        ) - {""}
+    except Exception:  # noqa: BLE001 — advisory
+        return frozenset()
+
+
 def _poll_for_new_item(
     zot, doi: str, keeper_key: str, timeout_s: float,
     *,
@@ -1668,11 +1688,13 @@ def _poll_for_new_item(
     DOI-only match declared failure for items that had saved
     perfectly, abandoning a duplicate that held the PDF.
 
-    The recency window applies to the **title** path only. A DOI is
-    specific enough to identify the article on its own, but a title is
-    not: without the window a title match would happily return some
-    pre-existing copy elsewhere in the library and the caller would
-    merge the wrong pair. `keeper_key` is excluded on both paths.
+    The recency window applies to **both** paths, and the caller also
+    passes the pre-save snapshot of recent keys in `exclude`. A DOI
+    identifies the article, but not *which copy* of it: the DOI path
+    used to skip the window, so a pre-existing same-DOI item among the
+    newest 50 (an earlier import, the user's own manual copy) was taken
+    for the save — and the caller merges the match into the keeper and
+    trashes it. `keeper_key` is excluded on both paths.
 
     Polls LOCAL Zotero — Zotero Desktop writes new items here
     immediately after the Connector saves. Cloud sync happens
@@ -1716,7 +1738,8 @@ def _poll_for_new_item(
             if data.get("itemType") in ("attachment", "note", "annotation"):
                 continue
             it_doi = doi_utils.doi_cache_key((data.get("DOI") or "").strip())
-            if needle and it_doi == needle:
+            fresh = (data.get("dateAdded") or "") >= cutoff
+            if needle and it_doi == needle and fresh:
                 return it["key"]
             if (
                 want_title
@@ -1725,7 +1748,7 @@ def _poll_for_new_item(
                 # the article's title (10.1080/0142159x.2022.2028751,
                 # 2026-09-25) and was reported as its save.
                 and not it_doi
-                and (data.get("dateAdded") or "") >= cutoff
+                and fresh
                 and _normalise_title(data.get("title")) == want_title
             ):
                 return it["key"]
