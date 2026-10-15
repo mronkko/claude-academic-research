@@ -2470,6 +2470,10 @@ async def _drive_connector(
         return
 
     # Zotero Desktop pre-flight.
+    # A bare session on purpose: this is a 3 s "is Desktop running" probe
+    # of localhost. `http_client.build_session()` would retry a refused
+    # connection five times with 1-16 s backoff, turning the common
+    # answer ("Zotero is not open") into a half-minute stall.
     import requests as _requests
     if not ping_zotero_desktop(_requests.Session()):
         print(
@@ -2977,12 +2981,13 @@ def _adopt_legacy_resolver_cache(args) -> int:
     A one-off, and deliberately manual; `ResolverCache.adopt_legacy` says
     why no rule can make the attribution.
     """
-    import requests as _requests
     from fetchers.library_resolver import load_from_config, select_libraries
 
     cache_dir = getattr(args, "resolver_cache_dir", None) or args.cache_dir
     try:
-        cfg = load_from_config(_requests.Session(), cache_dir)
+        # Network-free (the session is only stored), but it gets the
+        # shared retry policy like every other session in the pipeline.
+        cfg = load_from_config(http_client.build_session(), cache_dir)
         if cfg is None or cfg.cache is None:
             raise ValueError("no [library] openurl_base is configured")
         (resolver_id,) = select_libraries(
@@ -3118,8 +3123,14 @@ def _run_browser_in_process(
     )
     doi_cache = DoiResolverCache(args.cache_dir)
 
-    # Resolver session — no Crossref mailto, no tenacity retries
-    # (competing timeouts lead to visible stalls).
+    # Resolver session — no Crossref mailto, and deliberately *not*
+    # `http_client.build_session()`. The pre-flight is serial over the
+    # whole queue (thousands of items at ~0.5/s); that session's retry
+    # policy (5 tries, 1-16 s backoff on 429/5xx and refused connections)
+    # turns one resolver outage into ~30 s per item — hours of apparent
+    # hang. And retrying buys nothing here: a failed query is "could not
+    # ask", which fails open (the item proceeds as 1a-unknown), so a lost
+    # answer costs one unfiltered attempt, not a wrong exclusion.
     import requests as _requests
     resolver_session = _requests.Session()
     # `--refresh-resolver-cache` sets the miss TTL to zero, so every
