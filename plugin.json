@@ -1,5 +1,5 @@
 {
   "name": "academic-research",
-  "description": "Rule-books and procedures for academic research with Claude Code and Antigravity: MCP-grounded citations, empirical integrity, systematic reviews, Zotero operations, and a parallel-critic manuscript revision loop. Includes a chat-driven /setup wizard for non-technical users.",
+  "description": "Rule-books and procedures for academic research with Claude Code and Antigravity: MCP-grounded citations, empirical integrity, systematic reviews, Zotero operations, and a parallel-critic manuscript revision loop. Includes a guided /setup wizard that registers the MCP servers and stores API keys locally.",
   "disabled": false
 }

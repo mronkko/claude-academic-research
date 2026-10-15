@@ -90,6 +90,38 @@ directory — not checked in because it references machine-local paths).
   command (`python3` on macOS/Linux, `py` on Windows). A local web form
   for keys was considered and rejected as overkill.
 
+Deferred from the 0.25.0 audit (findings file:
+`~/.claude/plans/release-0.25.0-findings.md`, verified at fe154a0):
+
+- **P22 — API PDF fetchers still turn 401/403/429/5xx and timeouts into
+  "no PDF".** OpenAIRE, BASE, arXiv, ScienceDirect and OpenAlex return
+  None on every failure, and `_try_cascade` takes `last_status` only from
+  raised exceptions, so the HTTP-status triage (ACCESS_BLOCKED vs
+  NETWORK_ERROR) never fires for API sources — a 429 storm at Elsevier is
+  logged as a plain miss. Deferred because the fix makes five fetchers
+  raise instead of returning None, and the cascade's blame and
+  classification then needs re-testing per source. Audit finding C20.
+- **P23 — `fulltext_code` looks for SICI-DOI PDFs under the old cache
+  name.** Its DOI-named fallback (`_resolve_pdf`, ~L863) still builds
+  `doi.replace("/", "_") + ".pdf"`, while enrich_pdfs now names cache
+  files through `fetchers/cache_names.py`, which also escapes `<>#` and
+  other characters illegal on Windows. Ordinary DOIs map to the same name
+  either way; only SICI-style DOIs miss. Not fixed in 0.25.0 because
+  importing `fetchers.cache_names` pulls in the whole fetchers package
+  (`fetchers/__init__.py` imports every source, Playwright included) and
+  with it a much larger PEP 723 block; the fix is to move the naming rule
+  somewhere import-light (e.g. `doi_utils`) and import it from both.
+- **P24 — the OpenAlex content-API key travels in URLs.** `fetchers/
+  openalex.py` builds `?api_key=` URLs; they are logged only at debug
+  level (never enabled) and the returned `dl_url` is discarded by both
+  callers, so nothing leaks today. Move the key to a header or params that
+  are scrubbed, as 0.25.0 did for Gemini and the Zotero key check. Audit
+  finding G10.
+- **P25 — Scopus and WoS searchers have no dedicated live search test.**
+  Their only live coverage is `test_mini_slr_end_to_end` (pinned in
+  `SEARCH_LIVE_TESTS` by `test_live_coverage.py`). CLAUDE.md asks for one
+  live test per source; add a small `-m live` keyword search per searcher.
+
 ---
 
 ## Open — four reports from the AI-literature-review study (2026-09-06)
@@ -1224,6 +1256,9 @@ S10's `csl_json_to_zotero` reasoning) — but it surfaced two live defects.
 ### Scripts
 
 - **S13** — `--full-recode` clears every targeted item's stage tag and
+  **Status: fixed in 0.25.0** (`clear_tags_for_recode` drops the cleared
+  tags from the in-memory items instead of re-reading a stale copy;
+  `--dry-run --full-recode` now writes nothing).
   then codes nothing, because the refresh read is stale.
   Found twice while live-validating B1 (`fulltext_code.py`, 2026-08-16).
   The flag writes tag removals through the **Zotero Web API**, then
