@@ -85,8 +85,20 @@ class WosSearch(SearchSource):
         return rows
 
     def _full_query(self, core: str, ctx: SearchContext) -> str:
-        issn_part = " OR ".join(ctx.issns)
-        return f"{core} AND IS=({issn_part}) AND PY={ctx.from_year}-{ctx.to_year}"
+        """The user's core query, scoped by journal and year.
+
+        The core is parenthesised for the same reason as Scopus's: WoS
+        gives `NOT` and a top-level `OR` lower precedence than the `AND`
+        joining the scope clauses, so an unwrapped core leaked past
+        `IS=` / `PY=`. An empty `JOURNALS` omits `IS=()`, which WoS
+        rejects with 400, and searches unscoped.
+        """
+        parts = [f"({core.strip()})"]
+        issns = [i.strip() for i in ctx.issns if i and i.strip()]
+        if issns:
+            parts.append(f"IS=({' OR '.join(issns)})")
+        parts.append(f"PY={ctx.from_year}-{ctx.to_year}")
+        return " AND ".join(parts)
 
     def _fetch_page(self, ctx: SearchContext, api_key: str, query: str,
                     first_record: int, count: int = 100) -> dict:
@@ -145,10 +157,13 @@ class WosSearch(SearchSource):
                           .get("identifier", []))
         if isinstance(id_list, dict):
             id_list = [id_list]
-        doi = next((i["value"].strip().lower() for i in id_list
-                    if i.get("type") == "doi"), "")
-        issn = next((i["value"].strip() for i in id_list
-                     if i.get("type") == "issn"), "")
+        # WoS files many records' DOI only under `xref_doi` (the
+        # Crossref-registered form), and an online-only journal carries
+        # `eissn` with no print `issn`. Reading only `doi` / `issn` lost
+        # the DOI (and with it cross-database dedup) and the ISSN for
+        # those records.
+        doi = self._first_identifier(id_list, ("doi", "xref_doi")).lower()
+        issn = self._first_identifier(id_list, ("issn", "eissn"))
 
         abstracts = (static.get("fullrecord_metadata", {})
                            .get("abstracts", {})
@@ -187,6 +202,18 @@ class WosSearch(SearchSource):
             "abstract": abstract,
         })
         return row
+
+    @staticmethod
+    def _first_identifier(id_list: list, types: tuple[str, ...]) -> str:
+        """First non-empty identifier value, trying `types` in order."""
+        for wanted in types:
+            for ident in id_list:
+                if not isinstance(ident, dict) or ident.get("type") != wanted:
+                    continue
+                value = str(ident.get("value", "") or "").strip()
+                if value:
+                    return value
+        return ""
 
     def _page_range(self, pub_info: dict) -> str:
         """Pages from `pub_info.page`, which is a dict, not a string.

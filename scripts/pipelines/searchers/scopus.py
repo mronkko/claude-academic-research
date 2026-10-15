@@ -115,8 +115,21 @@ class ScopusSearch(SearchSource):
         }.get(described, "")
 
     def _full_query(self, core: str, ctx: SearchContext) -> str:
-        issn_part = " OR ".join(ctx.issns)
-        return (
-            f"{core} AND ISSN({issn_part}) "
-            f"AND PUBYEAR > {ctx.from_year - 1} AND PUBYEAR < {ctx.to_year + 1}"
+        """The user's core query, scoped by journal and year.
+
+        The core is parenthesised before anything is appended. Scopus
+        binds `AND NOT` and a top-level `OR` looser than the `AND` that
+        joins the scope clauses, so an unwrapped `a OR b` or `a AND NOT
+        b` let half the query escape the ISSN and year limits.
+
+        An empty `JOURNALS` yields no ISSN clause at all: `ISSN()` is a
+        syntax error (HTTP 400), and an empty scope means "unscoped".
+        """
+        parts = [f"({core.strip()})"]
+        issns = [i.strip() for i in ctx.issns if i and i.strip()]
+        if issns:
+            parts.append(f"ISSN({' OR '.join(issns)})")
+        parts.append(
+            f"PUBYEAR > {ctx.from_year - 1} AND PUBYEAR < {ctx.to_year + 1}"
         )
+        return " AND ".join(parts)
