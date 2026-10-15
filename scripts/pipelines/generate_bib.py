@@ -4,7 +4,7 @@
 # dependencies = []
 # ///
 """
-generate_bib.py — Scan thesis Markdown chapters for citation keys;
+generate_bib.py — Scan Markdown / Quarto sources for citation keys;
                    fetch each entry from Zotero via Better BibTeX JSON-RPC;
                    write references.bib.
 
@@ -14,15 +14,22 @@ Requirements:
     Zotero must be running with the Better BibTeX plugin installed.
     No extra Python packages required (uses only the standard library).
 
-Usage:
-    python3 generate_bib.py <thesis_dir>
+Usage (from the project root):
+    uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py [project_dir]
 
-    <thesis_dir> can be an absolute path or a path relative to the current
-    working directory. The directory must contain a 'chapters/' subdirectory.
+    project_dir defaults to the current directory. The default layout is
+    the one the plugin's scaffold creates: sources are scanned in
+    `<project_dir>/manuscript/` and the bibliography is written to
+    `<project_dir>/manuscript/references.bib`, next to `manuscript.qmd`,
+    whose YAML says `bibliography: references.bib`. A thesis laid out the
+    older way — `chapters/` and no `manuscript/` — still works: sources
+    then come from `chapters/` and the output goes to
+    `<project_dir>/references.bib`. `--chapters-dir` / `--bib-out`
+    override either default.
 
     Examples:
-        python3 generate_bib.py thesis_AQ1_profit_warnings
-        python3 generate_bib.py /Users/me/projects/my_thesis
+        uv run .../generate_bib.py
+        uv run .../generate_bib.py /Users/me/projects/my_thesis --chapters-dir chapters
 """
 
 import re
@@ -42,8 +49,27 @@ from bbt_client import (  # noqa: E402
 
 TRANSLATOR = "Better BibLaTeX"
 
-# Match [@Key], [@Key1; @Key2], [@Key, p. 5], etc.
-CITEKEY_RE = re.compile(r'@([\w][\w:.#$%&\-+?<>~/]*)')
+# Pandoc citation keys (pandoc manual, "Citation syntax"): `@` followed
+# either by a braced key `@{any key}` or by a key that starts with a
+# letter, digit or `_` and continues with alphanumerics, `_`, and the
+# punctuation `:.#$%&-+?<>~/` *only when internal* — each punctuation
+# character must be followed by an alphanumeric or `_`. That is what
+# keeps the full stop out of "as shown by @smith2020." and the colon out
+# of "@smith2020: ...". The `@` must not follow a word character, so an
+# e-mail address (`jane@uni.edu`) is not a citation.
+CITEKEY_RE = re.compile(
+    r'(?<![\w@])@(?:\{([^{}\s][^{}]*)\}|(\w(?:\w|[:.#$%&\-+?<>~/](?=\w))*))'
+)
+
+# Fenced code blocks and inline code spans hold Python (`@property`,
+# `@dataclass`) and shell text, never citations; Pandoc does not parse
+# citations inside them either.
+_FENCED_CODE_RE = re.compile(r'^(`{3,}|~{3,}).*?^\1[ \t]*$', re.MULTILINE | re.DOTALL)
+_INLINE_CODE_RE = re.compile(r'(`+)(?:(?!\1).)+?\1', re.DOTALL)
+
+# Quarto cross-reference prefixes share the `@` syntax with citations.
+_CROSSREF_PREFIXES = ('fig-', 'tbl-', 'sec-', 'eq-', 'lst-', 'thm-', 'lem-',
+                      'cor-', 'prp-', 'cnj-', 'def-', 'exm-', 'exr-')
 
 # Match the opening line of a BibTeX entry to extract the cite key
 ENTRY_KEY_RE = re.compile(r'^@\w+\{([^,]+),', re.MULTILINE)
@@ -257,16 +283,47 @@ def fix_bib_capitalization(bib_text: str) -> str:
 # Step 1: extract citation keys from Markdown chapter files
 # ---------------------------------------------------------------------------
 
+def extract_keys_from_text(text: str) -> set[str]:
+    """Return the Pandoc citation keys in one Markdown / Quarto text."""
+    text = _FENCED_CODE_RE.sub('', text)
+    text = _INLINE_CODE_RE.sub('', text)
+    keys: set[str] = set()
+    for m in CITEKEY_RE.finditer(text):
+        key = m.group(1) if m.group(1) is not None else m.group(2)
+        if not key.startswith(_CROSSREF_PREFIXES):
+            keys.add(key)
+    return keys
+
+
 def extract_keys(chapters_dir: Path) -> list[str]:
     """Find all @Key tokens in markdown files under chapters_dir."""
     keys: set[str] = set()
     for md in sorted(list(chapters_dir.glob('*.md')) + list(chapters_dir.glob('*.qmd'))):
-        text = md.read_text(encoding='utf-8')
-        for m in CITEKEY_RE.finditer(text):
-            key = m.group(1)
-            if key[0].isalpha() and not key.startswith(('fig-', 'tbl-', 'sec-', 'eq-', 'lst-')):
-                keys.add(key)
+        keys |= extract_keys_from_text(md.read_text(encoding='utf-8'))
     return sorted(keys)
+
+
+def resolve_paths(project_dir: Path, chapters_arg: str | None,
+                  bib_arg: str | None) -> tuple[Path, Path]:
+    """Return (sources_dir, bib_path) for a project.
+
+    Defaults follow the plugin scaffold — `manuscript/` holding both the
+    sources and `references.bib` — and fall back to the older thesis
+    layout (`chapters/`, bib at the project root) only when the project
+    has `chapters/` and no `manuscript/`.
+    """
+    legacy = not (project_dir / 'manuscript').is_dir() and (project_dir / 'chapters').is_dir()
+    if chapters_arg:
+        ca = Path(chapters_arg)
+        sources_dir = ca if ca.is_absolute() else project_dir / ca
+    else:
+        sources_dir = project_dir / ('chapters' if legacy else 'manuscript')
+    if bib_arg:
+        ba = Path(bib_arg)
+        bib_path = ba if ba.is_absolute() else project_dir / ba
+    else:
+        bib_path = project_dir / 'references.bib' if legacy else project_dir / 'manuscript' / 'references.bib'
+    return sources_dir, bib_path
 
 
 # ---------------------------------------------------------------------------
@@ -277,30 +334,23 @@ def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(
         description="Generate references.bib from citation keys found in Markdown / Quarto sources.")
-    parser.add_argument("project_dir",
-                        help="Project root directory. Scans {project_dir}/chapters/ by default for @citekeys.")
+    parser.add_argument("project_dir", nargs="?", default=".",
+                        help="Project root directory (default: the current directory). "
+                             "Scans {project_dir}/manuscript/ for @citekeys.")
     parser.add_argument("--chapters-dir", default=None,
                         help="Override source directory to scan (relative to project_dir, "
-                             "or absolute). Default: chapters/")
+                             "or absolute). Default: manuscript/ (chapters/ when the project "
+                             "has chapters/ and no manuscript/)")
     parser.add_argument("--bib-out", default=None,
-                        help="Override output path for references.bib. Default: {project_dir}/references.bib")
+                        help="Override output path for references.bib (relative to "
+                             "project_dir, or absolute). Default: manuscript/references.bib "
+                             "(references.bib at the project root for a chapters/ layout)")
     args = parser.parse_args()
 
     thesis_arg = Path(args.project_dir)
-    thesis_dir = thesis_arg if thesis_arg.is_absolute() else Path.cwd() / thesis_arg
+    thesis_dir = (thesis_arg if thesis_arg.is_absolute() else Path.cwd() / thesis_arg).resolve()
     thesis_name = thesis_dir.name
-
-    if args.chapters_dir:
-        ca = Path(args.chapters_dir)
-        chapters_dir = ca if ca.is_absolute() else thesis_dir / ca
-    else:
-        chapters_dir = thesis_dir / 'chapters'
-
-    if args.bib_out:
-        ba = Path(args.bib_out)
-        bib_path = ba if ba.is_absolute() else thesis_dir / ba
-    else:
-        bib_path = thesis_dir / 'references.bib'
+    chapters_dir, bib_path = resolve_paths(thesis_dir, args.chapters_dir, args.bib_out)
 
     if not chapters_dir.is_dir():
         print(f"ERROR: source directory not found: {chapters_dir}", flush=True)
@@ -359,7 +409,7 @@ def main() -> None:
     header = (
         "% Auto-generated — do not edit by hand.\n"
         f"% Source: Zotero / Better BibTeX  ({thesis_name})\n"
-        "% Regenerate: python3 generate_bib.py " + thesis_name + "\n\n"
+        "% Regenerate: uv run <plugin>/scripts/pipelines/generate_bib.py (from the project root)\n\n"
     )
     combined = fix_bib_capitalization("\n".join(bibtex_parts))
     bib_path.write_text(header + combined.strip() + "\n", encoding="utf-8")

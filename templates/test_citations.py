@@ -189,7 +189,9 @@ def test_coded_papers_keys_in_references_bib() -> None:
     assert not missing, (
         f"{len(missing)} BBT key(s) in coded_papers.csv missing from "
         f"references.bib; first 5: {sorted(missing)[:5]}. "
-        f"Run `uv run ${{CLAUDE_PLUGIN_ROOT}}/scripts/pipelines/generate_bib.py`."
+        f"Cite them in manuscript/, then run "
+        f"`uv run ${{CLAUDE_PLUGIN_ROOT}}/scripts/pipelines/generate_bib.py` "
+        f"from the project root (it writes manuscript/references.bib)."
     )
 
 

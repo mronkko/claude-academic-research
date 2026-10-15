@@ -91,7 +91,7 @@ exact invocation.
 | Attach PDFs from Wiley journals (TDM token route) | `enrich_pdfs.py --sources wiley` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --sources wiley --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
 | Attach PDFs from Cloudflare-gated publishers (Sage, APA, T&F, Emerald, …) | `enrich_pdfs.py --sources browser` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --sources browser --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
 | Replace PDFs an item already has (repair a bad or superseded copy) | `enrich_pdfs.py --replace` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --replace --filter-keys-file <keys>` |
-| Generate `references.bib` from a manuscript's citation keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/generate_bib.py <project_dir>` |
+| Generate `references.bib` from a manuscript's citation keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/generate_bib.py` from the project root (scans `manuscript/`, writes `manuscript/references.bib`; `--chapters-dir` / `--bib-out` for other layouts) |
 
 **An item that already holds a PDF never reaches a fetcher.** That is
 usually right — it is what stops every run re-downloading a whole
@@ -495,7 +495,8 @@ anything about to be written back.
 - BBT keys are auto-generated from author/year/title (e.g.,
   `brownUsingDailyStock1985a`).
 - Generate the project's bibliography with
-  `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/generate_bib.py <project_dir>`.
+  `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/generate_bib.py`, run
+  from the project root.
 - Never hand-craft keys like `Smith2019`.
 - Never write to the Zotero `Extra` field to override or pin BBT keys.
 - BBT keys resolve via the local JSON-RPC endpoint:
