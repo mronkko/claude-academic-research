@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Use when the user invokes `/setup` (or asks to "configure setup", "run setup wizard", "configure the academic-research project/plugin"), asks to add or rotate API keys (Zotero, Elsevier, WoS, Semantic Scholar, Wiley TDM, OpenAlex, Gemini, OpenAI), switch LLM provider, register MCP servers, or patch permission rules. Also fires when another academic-research skill (zotero-operations, systematic-review, fact-check, critic-loop) reports `NOT CONFIGURED` on its pre-flight check.
+description: Use when the user invokes `/setup`, asks to configure the academic-research plugin, add or rotate an API key (Zotero, Elsevier, WoS, Semantic Scholar, Wiley TDM, OpenAlex, an LLM provider), switch LLM provider or register MCP servers, or when another skill's pre-flight reports `NOT CONFIGURED`. Trigger phrases "/setup", "run setup wizard", "configure the plugin", "add my API key", "switch to OpenAI". Do NOT use for Zotero library work — use `zotero-operations`.
 ---
 
 # setup
@@ -20,87 +20,120 @@ description: Use when the user invokes `/setup` (or asks to "configure setup", "
 >   five MCP servers (Zotero, Scopus, Semantic Scholar, OpenAlex,
 >   paper-search) and offers to register the missing ones.
 
-Setup runs as a terminal wizard the **user** executes. The agent's role is
-only to give them the command and confirm when they are done. Do not
-run any tool calls — no Bash, no Read, no probes. All the information
-needed is already known:
+Setup runs as a terminal wizard the **user** executes. The agent's job
+is to explain why, hand over one command that works as pasted, and
+confirm when the user is done.
 
-- **Wizard path:** `${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py` (or project-relative `./scripts/setup/wizard.py` if not running inside Claude Code or Antigravity)
-  — The active plugin version's absolute path (or project-relative fallback if `${CLAUDE_PLUGIN_ROOT}` is not defined) is used, so the user has a concrete path to run.
-- **Config written to:** `~/.config/academic-research/config.toml` (mode 0600).
-- **Settings patched:** `~/.claude/settings.json` (backed up as `.bak-wizard`, bypassed silently if not running under Claude).
-- **Antigravity MCP config:** if Antigravity (`agy`) is detected, the same MCP servers are also registered into `~/.gemini/config/mcp_config.json` (backed up as `.bak-wizard`). Permission rules are not patched for Antigravity — only Claude Code's `~/.claude/settings.json` is.
-- **Wizard is idempotent:** re-running updates or adds keys without
-  clobbering existing ones.
+**Why a terminal program, in one sentence for the user:** anything typed
+into this chat — API keys included — is sent to the model provider and
+kept in the conversation transcript, so keys are entered in a terminal
+program that hides them as they are typed and writes them only to a file
+on the user's own computer.
+
+What the wizard touches:
+
+- **Config written to:** `~/.config/academic-research/config.toml`
+  (mode 0600 on macOS/Linux).
+- **MCP servers:** registered with Claude Code (`claude mcp add`) and,
+  if Antigravity (`agy`) is detected, also in
+  `~/.gemini/config/mcp_config.json` (backed up as `.bak-wizard`).
+- **No permission rules.** The wizard does not edit
+  `~/.claude/settings.json`; which tool calls to allow is the user's
+  own decision.
+- **Idempotent:** re-running updates or adds keys without clobbering
+  existing ones. It is also the way to rotate a single key.
 
 ## Procedure
 
-**CRITICAL:** never ask the user to paste API keys into the chat. Any text typed into the chat is transmitted to the model provider. The wizard exists so keys stay local.
+**CRITICAL:** never ask the user to paste API keys into the chat.
 
-Paste the following message to the user (no tool calls needed — just
-text):
+### 1. Resolve the wizard's absolute path (the one tool call)
 
-> I'll hand you the setup wizard. It runs in your terminal. It first
-> asks **which LLM provider** should run the screening pipelines —
-> Anthropic, Google, OpenAI, OpenRouter, your institution's own
-> OpenAI-compatible gateway, or a local server (Ollama or LM Studio,
-> which need no API key at all) — and then only asks for that
-> provider's credential rather than all of them. It prompts for
-> each API key with hidden input (keystrokes don't appear), then checks
-> five MCP (Model Context Protocol) servers and offers to register any
-> that are missing: **Zotero** (required — every citation skill uses
-> it), at least one of **Scopus / Semantic Scholar / OpenAlex**
-> (required for literature search to work), and **paper-search**
-> (optional — for ArXiv / PubMed PDF retrieval). It then writes your
-> config file locally. **Your keys never pass through the chat.**
+The user's terminal has no plugin-root environment variable and their
+project has no `scripts/` directory, so the command must carry the
+plugin's real, absolute path. Work it out, then confirm it:
+
+- The wizard is `${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py`. In
+  Claude Code that variable is normally already replaced by an absolute
+  path in the text you are reading.
+- If that path does not start with `/` or a drive letter — it still
+  begins with a `$` variable (other hosts, such as Antigravity) — use this skill's own location instead: this file
+  is `<plugin root>/skills/setup/SKILL.md` (Claude Code reports it as
+  "Base directory for this skill"), so the wizard is
+  `<plugin root>/scripts/setup/wizard.py`. Write the path out in full —
+  no `..`, no `~`, no `*`.
+- **Confirm it with exactly one tool call:** a `Read` of the first few
+  lines of that file. This is the only tool call the hand-off makes —
+  no Bash, no config probes. If the file is not there, tell the user
+  you could not locate the plugin and ask where it is installed;
+  never hand over a command you have not confirmed.
+
+### 2. Hand over one command
+
+Pick the interpreter from the user's operating system (your
+environment information names the platform):
+
+- macOS / Linux: `python3 "<absolute path>"`
+- Windows: `py "<absolute path>"` — the Python launcher installed by
+  python.org's installer. If PowerShell says `py` is not recognised,
+  the same line with `python` instead.
+
+Always quote the path (Windows user folders and macOS
+`Application Support` contain spaces). Then send the user this message,
+with the one resolved command in the fenced block — not a template, not
+two alternatives:
+
+> Setup runs in your terminal rather than in this chat, because anything
+> typed here — API keys included — is sent to the model provider and
+> kept in the chat transcript. The wizard asks for keys with hidden
+> input and stores them only in a file on your computer.
 >
-> Run the setup wizard in your terminal. If the `${CLAUDE_PLUGIN_ROOT}` environment variable is defined:
+> It first asks **which LLM provider** should run the screening
+> pipelines — Anthropic, Google, OpenAI, OpenRouter, your institution's
+> own OpenAI-compatible gateway, or a local server (Ollama or LM Studio,
+> which need no key) — and asks only for that provider's credential. It
+> then checks five MCP (Model Context Protocol) servers and offers to
+> register any that are missing: **Zotero** (required — every citation
+> skill uses it), at least one of **Scopus / Semantic Scholar /
+> OpenAlex** (required for literature search), and **paper-search**
+> (optional — ArXiv / PubMed PDF retrieval).
+>
+> Copy this line into a terminal and press Enter:
 >
 > ```
-> python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py
+> python3 "<absolute path to wizard.py>"
 > ```
 >
-> Otherwise, run the project-relative command from the root of your workspace:
+> **Opening a terminal:** macOS — ⌘-Space, type *Terminal*, Enter.
+> Windows — Windows key, type *PowerShell*, Enter. Linux — Ctrl-Alt-T.
+> If you are running me in a terminal already, open a new tab or window
+> for the wizard.
 >
-> ```
-> python3 ./scripts/setup/wizard.py
-> ```
->
-> **How to open a terminal** if you are not already in one:
-> - **macOS:** ⌘-Space → type *Terminal* → Enter.
-> - **Windows:** Windows key → type *PowerShell* → Enter. If `python3`
->   is not recognised, try `python` instead.
-> - **Linux:** Ctrl-Alt-T (or your distro's terminal app).
->
-> Already running the agent in a terminal? Either open a new tab and run
-> it there, or temporarily exit this session, run the wizard, and then resume this conversation.
->
-> When the wizard prints "Setup complete", return here and say "done"
-> (or similar). I'll confirm and we'll continue.
+> When the wizard prints "Setup complete", come back and say "done".
+
+Replace the whole line in that block with the command from above —
+interpreter for the user's OS plus the path confirmed in step 1.
 
 After the user says they finished the wizard, respond with a short
 confirmation ("Setup done. Ready for the next task.") and let the next
-conversational turn drive the work. Do not run a verification Bash
-call — if something went wrong with the wizard, the user's next
-invocation of `zotero-operations` / `systematic-review` / etc. will
-hit its own pre-flight check and bounce here again.
+conversational turn drive the work. Do not run a verification call — if
+something went wrong, the next skill's own pre-flight check will route
+back here.
 
 ## If the wizard reports errors
 
 The wizard prints to stdout. If the user pastes output showing a
 problem:
 
-- **Python missing**: tell them to install Python 3.11+ — macOS can use
-  Homebrew (`brew install python`), Windows can use python.org's
-  installer (check "Add Python to PATH"), Linux uses the distro's
-  package manager.
+- **Python missing** (`command not found`, or on Windows a Microsoft
+  Store window opening instead): tell them to install Python 3.11+ —
+  macOS can use Homebrew (`brew install python`), Windows python.org's
+  installer (it installs the `py` launcher; tick "Add Python to PATH"),
+  Linux the distro's package manager.
 - **Tkinter not required** — the wizard is terminal-only. Any Python
   3.11+ install works.
 - **Permission denied writing config**: user's home directory has
   unusual permissions. Unlikely on a single-user machine.
-- **Can't parse existing settings.json**: the file is malformed. The
-  wizard backs up to `.bak-wizard` before touching; restore from
-  there, fix manually, or delete and re-run.
 - **MCP register fails with "command not found"**: the underlying MCP
   binary is not installed. The wizard prints the project's homepage and
   the exact install command (`uv tool install
@@ -126,20 +159,23 @@ problem:
 
 "Switch me to OpenAI", "use a local model for screening", "which model
 provider am I on?" — these do not involve a key, so they do not need
-the wizard. Two scripts cover it, and they are the **only** Bash calls
-this skill may make:
+the wizard. Four scripts cover it, and they are the **only** Bash calls
+this skill makes (the wizard hand-off above makes none): the two
+below, plus `resolve_models.py` and `check_model_connection.py` further
+down.
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_llm_provider.py
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/set_llm_provider.py <name>
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_llm_provider.py"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/set_llm_provider.py" <name>
 ```
 
 `<name>` is one of `anthropic`, `google`, `openai`, `openrouter`,
 `gateway`, `ollama`, `lmstudio`. The check script prints the provider,
 whether one was ever chosen, and whether its credential is present —
-never a key value. Do NOT try to read
-`~/.config/academic-research/config.toml` yourself; a permission rule
-denies it precisely so keys cannot reach a transcript.
+never a key value. Do NOT read
+`~/.config/academic-research/config.toml` yourself: it holds the keys,
+and anything you read lands in the transcript. The scripts exist so you
+never have to.
 
 `gateway` is the only provider the plugin ships no address for, so it
 needs **two** answers — an endpoint URL as well as a key — and it is the
@@ -187,7 +223,7 @@ does not serve. Run this from the project directory to see what it
 does serve:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/resolve_models.py
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/resolve_models.py"
 ```
 
 It lists models and writes nothing. **Propose one per stage to the user
@@ -197,7 +233,7 @@ endpoints, `deep-research`), and the `tier?` column is a guess from the
 model's name, not a recommendation. Then write each confirmed choice:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/resolve_models.py \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/resolve_models.py" \
     --stage abstract_screening --model <id>
 ```
 
@@ -208,7 +244,7 @@ check is what proves the model ID, the provider, and the credential
 agree. To re-check later without re-pinning:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_model_connection.py
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_model_connection.py"
 ```
 
 Report the status word verbatim. `QUOTA_EXHAUSTED` and `RATE_LIMITED`
@@ -220,9 +256,13 @@ means rotate the key **through the wizard**, never through the chat.
 ## Red flags
 
 - You are about to run a `Bash` tool call in this skill for anything
-  other than the three provider scripts above. **Don't.** This skill has
-  no Bash probes by design — they cause permission prompts for no
-  benefit. The wizard handles everything else.
+  other than the four provider scripts above, or more than the single
+  `Read` that confirms the wizard path. **Don't.** The wizard handles
+  everything else.
+- You are about to hand the user a command containing
+  a `$` variable, `./scripts/`, `~/.claude/plugins/...`, a `*`, or
+  two alternatives to choose from. **Don't.** Their terminal
+  cannot resolve any of those; give the one confirmed absolute path.
 - A model-connection check returned `QUOTA_EXHAUSTED` and you are about
   to suggest waiting, retrying, or raising a timeout. **Don't.** That
   status means the quota is spent; only billing or a provider switch
