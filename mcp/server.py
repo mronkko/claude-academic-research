@@ -292,7 +292,18 @@ def call_check_setup(tool: reg.Tool, arguments: dict, project: Path) -> dict:
             if sep and name.strip().isidentifier():
                 databases[name.strip()] = status.strip()
         summary["databases"] = databases
-        run = {**second, "output": first["output"] + second["output"]}
+        # The version of the Zotero MCP server the host launches, read from
+        # the MCP config rather than this interpreter (BACKLOG P21).
+        third = run_script(tool.extra_scripts[1], [], project, tool.timeout)
+        servers = [line.partition(": ")[2] for line in third["output"].splitlines()
+                   if line.startswith("zotero-mcp-server: ")]
+        warnings = [line for line in third["output"].splitlines()
+                    if line.startswith("WARNING")]
+        summary["zotero_mcp_server"] = servers
+        if warnings:
+            summary["zotero_mcp_warnings"] = warnings
+        run = {**second, "output": first["output"] + second["output"]
+               + third["output"]}
     else:
         summary["next_step"] = (
             "Run the setup wizard in a terminal; API keys typed into chat "

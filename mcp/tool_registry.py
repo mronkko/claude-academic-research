@@ -326,12 +326,15 @@ CHECK_SETUP = Tool(
     effect=READ_ONLY,
     description=(
         "Reports whether the plugin is configured (the setup wizard has "
-        "written its config file) and which citation databases that config "
-        "unlocks. Never shows keys. If it reports not configured, setup is "
+        "written its config file), which citation databases that config "
+        "unlocks, and the zotero-mcp-server version the MCP configuration "
+        "launches, with a warning when it is below the plugin's floor. "
+        "Never shows keys. If it reports not configured, setup is "
         "done in a terminal with the wizard — do not ask for keys in chat."
     ),
     script="scripts/setup/check_configured.py",
-    extra_scripts=("scripts/setup/check_database_access.py",),
+    extra_scripts=("scripts/setup/check_database_access.py",
+                   "scripts/setup/check_zotero_mcp_version.py"),
 )
 
 SCAFFOLD_PROJECT = Tool(

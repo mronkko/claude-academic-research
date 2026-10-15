@@ -243,12 +243,17 @@ def test_check_setup_reports_databases(project, stub, tmp_path) -> None:
     record = tmp_path / "rec"
     [reply] = _session([_call(1, "check_setup")],
                        _env(project, [sys.executable, str(stub)], record,
-                            output="configured\nscopus: available\n"))
+                            output="configured\nscopus: available\n"
+                                   "zotero-mcp-server: 0.9.1 — Claude Code (user scope)\n"
+                                   "WARNING: below floor\n"))
     payload = _payload(reply)
     assert payload["summary"]["configured"] is True
     assert payload["summary"]["databases"]["scopus"] == "available"
+    assert payload["summary"]["zotero_mcp_server"] == ["0.9.1 — Claude Code (user scope)"]
+    assert payload["summary"]["zotero_mcp_warnings"] == ["WARNING: below floor"]
     scripts = [Path(r["argv"][0]).name for r in _records(record)]
-    assert scripts == ["check_configured.py", "check_database_access.py"]
+    assert scripts == ["check_configured.py", "check_database_access.py",
+                       "check_zotero_mcp_version.py"]
 
 
 def test_project_dir_falls_back_to_cwd(project, stub, tmp_path) -> None:
