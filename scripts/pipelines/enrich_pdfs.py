@@ -5102,9 +5102,9 @@ def _build_parser() -> argparse.ArgumentParser:
              "PDF_MIN_VERSION = \"preprint\" or [pdf] min_version. OFF by "
              "default: a preprint is the manuscript before peer review, and "
              "coding one as the published article misreports what the "
-             "journal actually published. Every attachment this produces "
-             "is tagged `pdf:preprint-version` / `pdf:version:submitted`, "
-             "and the coding stage surfaces the tag — review those items "
+             "journal actually published. A preprint attached this way is "
+             "tagged `pdf:version:submitted` (and `pdf:preprint-version` "
+             "from the preprint source), and the coding stage surfaces it — review those items "
              "before trusting their coded rows.",
     )
     parser.add_argument(
