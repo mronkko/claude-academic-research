@@ -932,6 +932,13 @@ class PublisherHandler(ABC):
     #: worked example.
     concurrency: int = 1
     delay_s: float = 1.0
+    #: The publisher's terms-of-use or text-and-data-mining page, shown
+    #: (never summarised) in the consent prompt for automated download
+    #: from this site — `core/publisher_consent.py`, plan §4. Empty when
+    #: no URL has been verified; the prompt then points at the site's
+    #: home page instead of guessing a path. The site key the consent is
+    #: stored under is the handler's `name`.
+    terms_url: str = ""
     # True when a run against this publisher normally requires the user
     # to clear a Cloudflare challenge or institutional SSO by hand
     # before any download works. Purely declarative — the run behaves

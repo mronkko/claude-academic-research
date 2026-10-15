@@ -19,6 +19,10 @@ from .base import PageNavigationHandler
 class EmeraldHandler(PageNavigationHandler):
     name = "emerald"
     display_name = "Emerald"
+    # TODO(consent terms): no verified terms URL (candidate:
+    # https://www.emerald.com/insight/site-policies); the prompt points
+    # at the site.
+    terms_url = ""
     doi_prefixes = ("10.1108/",)
     url_template = (
         "https://www.emerald.com/insight/content/doi/{doi}/full/pdf?download=true"

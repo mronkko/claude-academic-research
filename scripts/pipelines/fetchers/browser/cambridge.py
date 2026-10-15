@@ -43,6 +43,7 @@ _CONTENT_VIEW = (
 class CambridgeHandler(PdfLinkNavigationHandler):
     name = "cambridge"
     display_name = "Cambridge University Press"
+    terms_url = "https://www.cambridge.org/core/legal-notices/terms"
     doi_prefixes = ("10.1017/",)
     url_template = "https://doi.org/{doi}"
     direct_access_domains = ("cambridge.org",)

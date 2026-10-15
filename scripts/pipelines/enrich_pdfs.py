@@ -3136,6 +3136,120 @@ def _install_interaction_channel(args: argparse.Namespace) -> None:
         interaction.set_channel(interaction.AutoSkipChannel())
 
 
+def _consent_can_ask(args: argparse.Namespace) -> bool:
+    """Whether this run may ask the consent question for automated
+    download (`core/publisher_consent.py`): only with a person at a
+    terminal. `--no-prompt`, `--control-file` (an agent relays prompts;
+    consent is recorded in the planning conversation with `pdf_consent.py
+    set` instead, never answered on the fly through the file) and an
+    unattended run (`args.unattended`, plan step 6) never ask — their
+    sites without an `allow` are skipped as CONSENT_NEEDED."""
+    if (getattr(args, "no_prompt", False) or getattr(args, "control_file", "")
+            or getattr(args, "unattended", False) or getattr(args, "plan", False)):
+        return False
+    return _has_interactive_surface()
+
+
+def _consent_gate(args: argparse.Namespace):
+    """The run's `ConsentGate`, built once and kept on `args` so the
+    Connector pass reuses the answers the handler pass was given."""
+    gate = getattr(args, "_consent_gate", None)
+    if gate is None:
+        from fetchers.browser import interaction
+        from fetchers.browser.consent import ConsentGate
+
+        gate = ConsentGate(
+            can_ask=_consent_can_ask(args),
+            ask=lambda prompt: interaction.get_channel().read_line(prompt),
+        )
+        args._consent_gate = gate
+    return gate
+
+
+def _consent_filter(
+    gate, items: list[dict], *, site: str, mode: str, source: str,
+    args: argparse.Namespace, log_writer, run_date: str,
+) -> list[dict]:
+    """`items` if automated download from `site` may go ahead, else []
+    after logging each item: `skipped_consent_denied` / CONSENT_DENIED
+    (the manual queue opens them first) or `skipped_consent_needed` /
+    CONSENT_NEEDED (record an answer, then re-run). A denied or unanswered
+    site is not handed on to another automated route in this run."""
+    if not items:
+        return items
+    from fetchers.browser import consent
+
+    decision = gate.decide(site, mode=mode, items=len(items))
+    if decision == consent.ALLOW:
+        return items
+    denied = decision == consent.DENY
+    cause = (pdf_fetch_log.FailureCause.CONSENT_DENIED if denied
+             else pdf_fetch_log.FailureCause.CONSENT_NEEDED)
+    status = "skipped_consent_denied" if denied else "skipped_consent_needed"
+    detail = (f"automated download from {site} denied ([publisher_consent] "
+              f"deny) — manual download" if denied else
+              f"no consent recorded for automated download from {site}; "
+              f"this run could not ask")
+    display = consent.site_info(site).display
+    for it in items:
+        log_writer.writerow({
+            "run_date": run_date, "item_key": it.get("item_key", ""),
+            "doi": it.get("doi", ""), "title": (it.get("title") or "")[:70],
+            "status": status, "source": source, "detail": detail,
+        })
+        _log_browser_failure(args, it, source=source, publisher=display,
+                             cause=cause)
+    n = len(items)
+    print(
+        f"  {display} [{site}]: {n} item{'' if n == 1 else 's'} not opened — "
+        + ("automated download denied; they are queued for manual download "
+           "(`--manual next` opens them first)." if denied else
+           "no consent recorded and this run cannot ask (logged "
+           "CONSENT_NEEDED). Record an answer — `pdf_consent.py set --site "
+           f"{site} --automated allow|deny` — and re-run."),
+        flush=True,
+    )
+    from fetchers.browser import interaction
+    interaction.report_progress({"event": "consent_skip", "site": site,
+                                 "decision": decision, "items": n})
+    return []
+
+
+def _consent_tag(site: str) -> str:
+    """`[consent: …]` for the `--plan` queue listing; asks nothing."""
+    from core import publisher_consent as pc
+
+    try:
+        c = pc.lookup(site)
+    except pc.ConsentError:
+        return ""
+    if c.automated == pc.ALLOW:
+        return f"  [consent: allow{' ' + c.confirmed.isoformat() if c.confirmed else ''}]"
+    if c.automated == pc.DENY:
+        return "  [consent: deny → manual]"
+    return "  [consent: not recorded — asked at the start]"
+
+
+def _network_label(args: argparse.Namespace) -> str:
+    """The library whose network this run is on, for the failure log's
+    `network` column: the `--library` / `LIBRARY_ACTIVE` choice, else
+    every configured library (joined with '+'); '' with none configured.
+    Network-free — `load_from_config` only builds the config."""
+    from fetchers.library_resolver import resolver_label
+
+    try:
+        cfg = _resolver_config(args)
+        if cfg is None:
+            return ""
+        active = getattr(cfg, "active_ids", None)
+        return "+".join(
+            resolver_label(r) for r in cfg.resolvers
+            if active is None or r.resolver_id in active
+        )
+    except Exception:  # noqa: BLE001 — a diagnostic label must never stop a run
+        return ""
+
+
 def _has_interactive_surface() -> bool:
     """True iff the script can prompt the user. Checks `/dev/tty`
     (POSIX, the canonical controlling terminal) first, then falls
@@ -3420,7 +3534,7 @@ def _run_browser_in_process(
         resolve_by_host,
     )
     from fetchers.browser.base import NetworkOutage
-    from fetchers.doi_resolver import DoiResolverCache, resolve_doi
+    from fetchers.doi_resolver import DoiResolverCache, cached_resolution, resolve_doi
     from fetchers.library_resolver import lookup_dual
 
     # Plain hostname test, used on URLs we synthesize ourselves from a
@@ -3791,7 +3905,8 @@ def _run_browser_in_process(
             print(
                 f"  • {display} (direct): {len(pub_items)} "
                 f"paper{'' if len(pub_items) == 1 else 's'}"
-                + ("  [needs an interactive solve]" if needs_solve else ""),
+                + ("  [needs an interactive solve]" if needs_solve else "")
+                + _consent_tag(name),
                 flush=True,
             )
         if connector_upfront:
@@ -3901,6 +4016,27 @@ def _run_browser_in_process(
         return 0
 
     # ------------------------------------------------------------------
+    # Consent for the direct handlers (mode 1), one question per site,
+    # all of them before the first browser opens — `core/publisher_consent`.
+    # A denied or unanswered publisher is skipped here and logged; its
+    # items do not go on to the Connector in this run.
+    # ------------------------------------------------------------------
+
+    from fetchers.browser.consent import MODE_BROWSER, MODE_CONNECTOR, site_for_target
+
+    consent_gate = _consent_gate(args)
+    if not connector_only:
+        for name in list(items_by_pub):
+            kept = _consent_filter(
+                consent_gate, items_by_pub[name], site=name, mode=MODE_BROWSER,
+                source=name, args=args, log_writer=log_writer, run_date=run_date,
+            )
+            if kept:
+                items_by_pub[name] = kept
+            else:
+                del items_by_pub[name]
+
+    # ------------------------------------------------------------------
     # Pass 2 — drive direct handlers, collect Connector retries.
     # ------------------------------------------------------------------
 
@@ -4001,12 +4137,19 @@ def _run_browser_in_process(
                 if origin == "upfront":
                     failed_open += 1
                 target = f"https://doi.org/{it['doi']}"
+            landing = cached_resolution(it.get("doi", ""), doi_cache)
             entry_with_target = {
                 **it, "resolver_target_url": target,
                 # Decided now, while the resolver route is in hand; the
                 # Connector and the EBSCO handler only ever see the URL.
                 "pdf_version": pdf_version.for_connector_target(
                     chosen, target, it.get("doi", ""),
+                ),
+                # The site the download would come from, for consent.
+                "consent_site": "ebsco" if is_ebsco_target(chosen) else site_for_target(
+                    chosen, target,
+                    landing_host=(urlparse(landing.url).hostname or "")
+                    if landing and landing.url else "",
                 ),
             }
             if lookup.journal_page_replaced:
@@ -4084,6 +4227,24 @@ def _run_browser_in_process(
             f"Connector: the route's copy would be below min_version = "
             f"{_run_min_version(args)}.",
             flush=True,
+        )
+
+    # Consent for the EBSCOhost handler and the Connector, per site the
+    # saves would come from. Gated before Pass 4a, so an EBSCO failure
+    # handed on to the Connector below carries an EBSCO answer already.
+    ebsco_items = _consent_filter(
+        consent_gate, ebsco_items, site="ebsco", mode=MODE_BROWSER,
+        source="ebsco", args=args, log_writer=log_writer, run_date=run_date,
+    )
+    by_site: dict[str, list[dict]] = {}
+    for it in connector_items:
+        by_site.setdefault(it.get("consent_site") or "doi.org", []).append(it)
+    connector_items = []
+    for site, site_items in by_site.items():
+        connector_items += _consent_filter(
+            consent_gate, site_items, site=site, mode=MODE_CONNECTOR,
+            source="connector", args=args, log_writer=log_writer,
+            run_date=run_date,
         )
 
     # ------------------------------------------------------------------
@@ -6016,6 +6177,9 @@ def main() -> int:
         return 2
     args.pdf_policy = policy
     allow_preprints = policy.min_version == "preprint"
+    # Every failure-log row this run writes says which library's network
+    # it ran on (`pdf_fetch_log.FAILURE_FIELDS`, `network`).
+    pdf_fetch_log.set_run_network(_network_label(args))
 
     if args.manual:
         rc = _check_manual_args(args)

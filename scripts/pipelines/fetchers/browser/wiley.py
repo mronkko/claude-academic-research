@@ -16,6 +16,7 @@ from .base import PageNavigationHandler
 class WileyHandler(PageNavigationHandler):
     name = "wiley"
     display_name = "Wiley (fallback)"
+    terms_url = "https://onlinelibrary.wiley.com/terms-and-conditions"
     # Wiley prefixes: 10.1002 (most), 10.1111 (some), 10.1046 (legacy).
     # `10.1348` = British Psychological Society, published by Wiley.
     doi_prefixes = ("10.1002/", "10.1111/", "10.1046/", "10.1348/")

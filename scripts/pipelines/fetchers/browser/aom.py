@@ -17,6 +17,9 @@ from .base import PageNavigationHandler
 class AomHandler(PageNavigationHandler):
     name = "aom"
     display_name = "Academy of Management"
+    # TODO(consent terms): no verified terms URL (candidate:
+    # https://journals.aom.org/page/terms); the prompt points at the site.
+    terms_url = ""
     doi_prefixes = ("10.5465/",)
     url_template = "https://journals.aom.org/doi/pdf/{doi}?download=true"
     # Open the article landing page during setup. Opening the PDF URL

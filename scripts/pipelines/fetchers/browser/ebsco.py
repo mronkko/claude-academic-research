@@ -253,6 +253,7 @@ class EbscoHandler(PublisherHandler):
 
     name = "ebsco"
     display_name = "EBSCOhost"
+    terms_url = "https://www.ebsco.com/terms-of-use"
     # Deliberately empty: nothing selects this handler by DOI. Keeping it
     # empty also keeps it out of `resolve_by_doi`.
     doi_prefixes = ()

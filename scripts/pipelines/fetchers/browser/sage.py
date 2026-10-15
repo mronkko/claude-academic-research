@@ -23,6 +23,9 @@ class SageHandler(PageNavigationHandler):
 
     name = "sage"
     display_name = "Sage"
+    # TODO(consent terms): unverified candidate, not shipped —
+    # https://journals.sagepub.com/page/policies/text-and-data-mining-license
+    terms_url = ""
     # `10.2190` = Baywood Publishing, acquired by Sage in 2015; its
     # back-catalogue serves from journals.sagepub.com.
     doi_prefixes = ("10.1177/", "10.2190/")

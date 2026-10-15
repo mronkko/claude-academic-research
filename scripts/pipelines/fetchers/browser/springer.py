@@ -57,6 +57,9 @@ _BOOK_SUFFIX = re.compile(r"^97[89]-?\d")
 class SpringerHandler(PageNavigationHandler):
     name = "springer"
     display_name = "Springer Nature"
+    # The TDM policy page; Springer Nature has no single site-wide
+    # terms page that covers SpringerLink downloads more directly.
+    terms_url = "https://www.springernature.com/gp/researchers/text-and-data-mining"
     doi_prefixes = _SPRINGER_PREFIXES
     url_template = "https://link.springer.com/content/pdf/{doi}.pdf"
     # Landing page for the interactive solve. Opening the PDF URL

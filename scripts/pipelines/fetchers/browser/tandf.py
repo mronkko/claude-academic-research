@@ -19,6 +19,7 @@ _BOOK_SUFFIX = re.compile(r"97[89]-?\d")
 class TandfHandler(PageNavigationHandler):
     name = "tandf"
     display_name = "Taylor & Francis"
+    terms_url = "https://www.tandfonline.com/terms-and-conditions"
     # Routledge (10.4324), Haworth (10.1300) and Lawrence Erlbaum
     # (10.1207) are all T&F imprints today and serve from
     # tandfonline.com under the same /doi/pdf/ shape as 10.1080.

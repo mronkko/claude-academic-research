@@ -65,6 +65,10 @@ def _arnumber(url: str) -> str:
 class IeeeHandler(PublisherHandler):
     name = "ieee"
     display_name = "IEEE Xplore"
+    # TODO(consent terms): no verified terms URL (candidate:
+    # https://ieeexplore.ieee.org/Xplorehelp/overview-of-ieee-xplore/terms-of-use);
+    # the prompt points at the site.
+    terms_url = ""
     doi_prefixes = ("10.1109/",)
     url_template = "https://doi.org/{doi}"
     direct_access_domains = ("ieeexplore.ieee.org", "ieee.org")

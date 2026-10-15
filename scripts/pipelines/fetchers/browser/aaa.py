@@ -18,6 +18,9 @@ from .base import PdfLinkNavigationHandler
 class AaaHandler(PdfLinkNavigationHandler):
     name = "aaa"
     display_name = "AAA (Accounting Review)"
+    # TODO(consent terms): no verified terms URL for aaahq.org /
+    # publications.aaahq.org; the prompt points at the site.
+    terms_url = ""
     doi_prefixes = ("10.2308/",)
     # Landing page — the only Silverchair path that resolves a bare DOI.
     url_template = (

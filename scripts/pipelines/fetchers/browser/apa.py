@@ -105,6 +105,9 @@ _SSO_HOST = "sso.apa.org"
 class ApaHandler(PublisherHandler):
     name = "apa"
     display_name = "APA PsycNET"
+    # TODO(consent terms): no verified terms URL (candidate:
+    # https://psycnet.apa.org/termsofuse); the prompt points at the site.
+    terms_url = ""
     doi_prefixes = ("10.1037/",)
     #: Straight to PsycNET's landing view, not through `doi.org`.
     #:

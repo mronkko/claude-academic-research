@@ -19,6 +19,10 @@ from .base import PdfLinkNavigationHandler
 class OupHandler(PdfLinkNavigationHandler):
     name = "oup"
     display_name = "Oxford University Press"
+    # TODO(consent terms): no verified terms URL (candidate:
+    # https://academic.oup.com/pages/legal-and-policy/terms-and-conditions);
+    # the prompt points at the site.
+    terms_url = ""
     doi_prefixes = ("10.1093/",)
     url_template = "https://doi.org/{doi}"
     direct_access_domains = ("academic.oup.com", "oup.com")

@@ -39,6 +39,10 @@ from .base import (
 class InformsHandler(PublisherHandler):
     name = "informs"
     display_name = "INFORMS"
+    # TODO(consent terms): no verified terms URL (candidate:
+    # https://pubsonline.informs.org/page/terms-and-conditions); the
+    # prompt points at the site.
+    terms_url = ""
     doi_prefixes = ("10.1287/",)
     url_template = "https://doi.org/{doi}"
     direct_access_domains = ("pubsonline.informs.org", "informs.org")
