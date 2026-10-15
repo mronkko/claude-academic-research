@@ -146,8 +146,9 @@ def test_plan_mode_builds_no_fetching_sources() -> None:
     # thing that actually suppresses fetching.
     assert 'plan_only = bool(getattr(args, "plan", False))' in src
 
-    # And the flag it already honoured is still honoured.
-    assert "args.dry_run" in src
+    # And the flag it already honoured is still honoured (the retry now
+    # lives in its own helper).
+    assert "args.dry_run" in inspect.getsource(enrich_pdfs._pass2_api_retry)
     argparse.Namespace(plan=True)  # documents the shape the gate reads
 
 
@@ -257,7 +258,7 @@ def test_publisher_filter_skips_the_resolver_for_other_publishers() -> None:
     # pre-2000 articles it had already refused — visible only because a
     # user interrupted it and read the traceback.
     for costly, why in (
-        ("retry_result = src.fetch_pdf(", "the Pass 2 API retry"),
+        ("outcome = _pass2_api_retry(", "the Pass 2 API retry"),
         ("dual = lookup_dual(", "the link resolver"),
     ):
         assert src.index(guard) < src.index(costly), (

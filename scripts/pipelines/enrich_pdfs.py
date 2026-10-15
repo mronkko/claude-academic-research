@@ -3080,7 +3080,6 @@ def _run_browser_in_process(
     # Crossref-resolved host. Distinct from `targets_match_domains`,
     # which matches resolver *targets* and must also consider platform
     # names because Alma's URLs never expose a publisher host.
-    from fetchers.resolvers import host_matches_domains
 
     direct_handlers = all_handlers()
     handler_by_name = {h.name: h for h in direct_handlers}
@@ -3299,6 +3298,11 @@ def _run_browser_in_process(
             "issn": _first_issn(item_data.get("ISSN", "")),
             "pub_date": _year_from_zotero_date(item_data.get("date", "")),
             "volume": (item_data.get("volume") or "").strip() or None,
+            # Carried so the browser pass's failure rows and attach
+            # checks know a book from an article. Without it every
+            # browser row logged item_type "" (then "journalArticle"),
+            # so a book chapter's miss read as a journal article's.
+            "item_type": item_data.get("itemType", "") or "",
         }
 
         if connector_only:
@@ -3348,59 +3352,15 @@ def _run_browser_in_process(
         # does — e.g. a journal migrated onto Elsevier while keeping
         # its original non-10.1016 DOI prefix.
         if resolved_host and pass2_api_sources:
-            for src in pass2_api_sources:
-                if not host_matches_domains(
-                    f"https://{resolved_host}/", src.direct_access_domains,
-                ):
-                    continue
-                try:
-                    retry_result = src.fetch_pdf(
-                        doi, cache_dir=args.cache_dir,
-                        bypass_prefix_filter=True,
-                    )
-                except Exception as e:
-                    print(
-                        f"  Pass 2 API retry via {src.name} errored: "
-                        f"{str(e)[:80]}",
-                        flush=True,
-                    )
-                    retry_result = None
-                if retry_result is None:
-                    continue
-                pdf_path, _source_url = retry_result
-                title70 = (entry.get("title") or "")[:70]
-                if args.dry_run:
-                    log_writer.writerow({
-                        "run_date": run_date, "item_key": entry["item_key"],
-                        "doi": doi, "title": title70,
-                        "status": "dry_run", "source": src.name,
-                    })
-                    print(
-                        f"  Pass 2 API retry hit {src.name} [dry-run] "
-                        f"{title70}", flush=True,
-                    )
-                    break
+            outcome = _pass2_api_retry(
+                entry, doi, resolved_host, pass2_api_sources,
+                zot=zot, log_writer=log_writer, args=args, run_date=run_date,
+            )
+            if outcome == "attached":
                 pass2_attached += 1
-                print(
-                    f"  Pass 2 API retry via {src.name} {title70}",
-                    end=" ", flush=True,
-                )
-                _attach_and_log(
-                    zot, log_writer,
-                    run_date=run_date, item_key=entry["item_key"],
-                    doi=doi, title=title70, source=src.name,
-                    pdf_path=pdf_path,
-                    failure_log_path=getattr(args, "failure_log_csv", "") or "",
-                    item_type=entry.get("item_type", ""),
-                    check_text=not getattr(args, "no_check_text", False),
-                )
-                break
-            else:
-                retry_result = None
-
             # If any matching source attached (or hit dry-run), skip
             # further routing for this item.
-            if retry_result is not None:
+            if outcome is not None:
                 continue
 
         if direct is None:
@@ -4268,6 +4228,69 @@ def _cached_pdf_for(doi: str, cache_dir: str) -> Path | None:
         path = cache_path_for(cache_dir, variant)
         if path.exists() and _pdf_validate.file_defect(path) is None:
             return path
+    return None
+
+
+def _pass2_api_retry(
+    entry: dict,
+    doi: str,
+    resolved_host: str,
+    sources,
+    *,
+    zot,
+    log_writer,
+    args: argparse.Namespace,
+    run_date: str,
+) -> str | None:
+    """Ask the prefix-filtering API sources matching `resolved_host`.
+
+    Returns "attached", "dry_run", or None when the item still has no PDF
+    and must be routed on to the browser handler / Connector.
+
+    A fetch whose attach then failed (corrupt file, upload error) is
+    None, not "attached". It used to count as attached and `continue`
+    past the browser routes — the item was given up on with no PDF, and
+    the summary's "attached N along the way" was inflated by it.
+    """
+    from fetchers.resolvers import host_matches_domains
+
+    for src in sources:
+        if not host_matches_domains(
+            f"https://{resolved_host}/", src.direct_access_domains,
+        ):
+            continue
+        try:
+            result = src.fetch_pdf(
+                doi, cache_dir=args.cache_dir, bypass_prefix_filter=True,
+            )
+        except Exception as e:
+            print(f"  Pass 2 API retry via {src.name} errored: {str(e)[:80]}",
+                  flush=True)
+            continue
+        if result is None:
+            continue
+        pdf_path, _source_url = result
+        title70 = (entry.get("title") or "")[:70]
+        if args.dry_run:
+            log_writer.writerow({
+                "run_date": run_date, "item_key": entry["item_key"],
+                "doi": doi, "title": title70,
+                "status": "dry_run", "source": src.name,
+            })
+            print(f"  Pass 2 API retry hit {src.name} [dry-run] {title70}",
+                  flush=True)
+            return "dry_run"
+        print(f"  Pass 2 API retry via {src.name} {title70}", end=" ", flush=True)
+        if _attach_and_log(
+            zot, log_writer,
+            run_date=run_date, item_key=entry["item_key"],
+            doi=doi, title=title70, source=src.name,
+            pdf_path=pdf_path,
+            failure_log_path=getattr(args, "failure_log_csv", "") or "",
+            item_type=entry.get("item_type", ""),
+            check_text=not getattr(args, "no_check_text", False),
+        ):
+            return "attached"
     return None
 
 
