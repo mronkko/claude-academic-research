@@ -1048,7 +1048,7 @@ same namespace** on flip; a co-resident review's tags are untouched.
 |---|---|---|
 | `<prefix>/abstract:include` | `abstract_screen.py` | Passes title-abstract screening — proceeds to full-text |
 | `<prefix>/abstract:exclude` | `abstract_screen.py` | Excluded at title-abstract stage |
-| `<prefix>/abstract:borderline` | `abstract_screen.py` | Kept for full-text review (missing abstract, or LLM uncertain) |
+| `<prefix>/abstract:borderline` | `abstract_screen.py` | Kept for full-text review (missing abstract, LLM uncertain, or a reply still unparseable after a re-ask) |
 | `<prefix>/fulltext:include` | `fulltext_code.py` | Passes full-text screening; has `SLR Coding: <prefix>` child note |
 | `<prefix>/fulltext:exclude` | `fulltext_code.py` | Excluded at full-text stage |
 
@@ -1329,6 +1329,15 @@ both streams; `--keyword-databases` and `--citation-databases` override
 it for one stream only, and either may name a database absent from
 `--databases` (that flag is a default, not a ceiling). `none` empties a
 stream.
+
+**A named database that cannot run is a failed search.** If a database
+you named is skipped — no credentials configured for it, or no query
+block for it in `search_config.py` — `search.py` counts it with the
+databases whose API calls failed: it exits non-zero and writes no dedup
+CSV and no `search_run.json`, because those certify a complete search.
+Fix the credential (`/setup`) or the config, or drop the database from
+`--databases` and record that as a protocol decision; do not import the
+`.partial.csv`.
 
 This exists because a database can be right for one stream and wrong for
 the other, and the leading case is Semantic Scholar. It returns no ISSN,
@@ -1773,6 +1782,12 @@ phases is a data-quality signal, not a failure to hide.
   capacity for structured extraction).
 - **Items without abstracts → borderline.** Retain for full-text review;
   never auto-exclude.
+- **Unparseable replies are re-asked, then borderline.** When the
+  model's abstract-screening reply has no readable decision (formatting
+  noise such as `**DECISION:** Include.` is tolerated), the item is
+  asked again; only a reply that is still unparseable after the retry
+  is filed as borderline — the deliberate bias toward keeping an item
+  for full-text review.
 - **Append-only logs.** Last-row-wins per Zotero key allows overrides
   without losing history. Abstract becoming available for a previously-
   borderline item does not require editing earlier rows — append a new

@@ -224,9 +224,12 @@ re-emit — the error message says which.
 **Apply is a write path with no LLM in it, often run days later.** That
 is what makes it worth slowing down for:
 
-- `--skip-already-tagged` skips items tagged since the manifest was
-  emitted. Without it, apply overwrites decisions made in between. The
-  applier warns when it finds any; **relay the count before writing.**
+- Items that gained a stage tag after the manifest was emitted are
+  **skipped by default**, so a decision made in between (by hand, or by
+  another run) survives. The applier reports how many it skipped;
+  **relay that count.** `--overwrite-tagged` replaces those decisions
+  with the batch's — pass it only when the user has said that is what
+  they want, never to make a count go to zero.
 - A manifest emitted before tag prefixes existed carries no prefix at
   all, so nothing can say which review it belongs to. Apply refuses it;
   re-emit.
