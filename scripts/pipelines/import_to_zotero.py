@@ -823,11 +823,11 @@ def _patch_existing_items(
           f"(abstracts to backfill: {abstract_patched}).", flush=True)
 
     failed = 0
-    for i, (item_key, version, patch) in enumerate(need_patch, 1):
+    for i, (item_key, _version, patch) in enumerate(need_patch, 1):
         if i % 50 == 0 or i == len(need_patch):
             print(f"  [{i}/{len(need_patch)}] patching...", flush=True)
         try:
-            zot.update_item({"key": item_key, "version": version, **patch})
+            zot.update_fields(item_key, patch)
         except Exception as exc:  # noqa: BLE001 — one item must not sink the import
             failed += 1
             print(f"  FAILED to patch {item_key}: {exc}", flush=True)

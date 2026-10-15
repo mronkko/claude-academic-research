@@ -32,6 +32,7 @@ REPO = Path(__file__).resolve().parents[2]
 #: Kept as a literal list rather than rediscovered at runtime so that a
 #: new script printing an arrow has to be added here deliberately.
 NON_ASCII_ENTRY_POINTS = [
+    "scripts/core/llm.py",
     "scripts/cluster/run_batch.py",
     "scripts/dev/mini_slr.py",
     "scripts/dev/probe_browser_handler.py",
@@ -111,13 +112,7 @@ def test_entry_point_survives_a_cp1252_pipe(script: str) -> None:
 #: Entry points that print cp1252-unencodable text but are deliberately
 #: not protected yet, with the reason. Each is a known gap for the owning
 #: workstream; listing it here keeps the scan below strict for new code.
-KNOWN_UNPROTECTED: dict[str, str] = {
-    "scripts/core/llm.py": (
-        "its `__main__` smoke test prints \u2713/\u2717 marks; a developer "
-        "self-check, but it still dies under a cp1252 pipe — needs "
-        "enable_utf8_output() (owned by the screening workstream)"
-    ),
-}
+KNOWN_UNPROTECTED: dict[str, str] = {}
 
 
 def _unencodable_strings(source: str) -> list[str]:

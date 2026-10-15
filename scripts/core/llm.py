@@ -176,6 +176,11 @@ def extract_year_from_date(date_field: str) -> str:
 # ── Self-test ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    try:
+        from core.console import enable_utf8_output
+    except ImportError:  # run as scripts/core/llm.py
+        from console import enable_utf8_output
+    enable_utf8_output()
     # Quick smoke test
     cases = [
         ('{"decision": "include"}', "include"),

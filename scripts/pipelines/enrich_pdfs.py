@@ -1328,7 +1328,7 @@ def _attachment_summary(*, to_process: int, to_replace: int, stubs_deleted: int)
     return (
         f"{to_process - to_replace} items without real PDF"
         + (f", {to_replace} to replace" if to_replace else "")
-        + (f" ({stubs_deleted} stubs deleted)" if stubs_deleted else "") + "."
+        + (f" ({stubs_deleted} stubs moved to the trash)" if stubs_deleted else "") + "."
     )
 
 

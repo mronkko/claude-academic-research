@@ -85,13 +85,13 @@ class _Zot:
     def cloud_journal_articles(self):
         return self.existing
 
-    def update_item(self, payload):
+    def update_fields(self, item_key, fields):
+        # Like ZoteroClient.update_fields: writes at the item's current
+        # version, so two patches to one item cannot 412 each other.
         for it in self.existing:
-            if it["key"] == payload["key"]:
-                if payload["version"] != it["version"]:
-                    raise RuntimeError("412 Precondition Failed")
+            if it["key"] == item_key:
                 it["version"] += 1
-        self.patches.append(payload)
+        self.patches.append({"key": item_key, **fields})
         return True
 
 

@@ -69,6 +69,7 @@ SR_TEMPLATE_COPIES = (
     ("search_config.py",         "search_config.py"),
     ("screening_config.py",      "screening_config.py"),
     ("manuscript.qmd",           "manuscript/manuscript.qmd"),
+    ("apa.csl",                  "manuscript/apa.csl"),
     ("manuscript_stats.py",      "manuscript/manuscript_stats.py"),
     ("manuscript_tables.py",     "manuscript/manuscript_tables.py"),
     ("test_systematic_review.py", "scripts/test_systematic_review.py"),
@@ -80,6 +81,7 @@ SR_TEMPLATE_COPIES = (
 MANUSCRIPT_TEMPLATE_COPIES = (
     ("manuscript_claude_md.md",  "CLAUDE.md"),
     ("manuscript.qmd",           "manuscript/manuscript.qmd"),
+    ("apa.csl",                  "manuscript/apa.csl"),
     ("manuscript_stats.py",      "manuscript/manuscript_stats.py"),
     ("manuscript_tables.py",     "manuscript/manuscript_tables.py"),
     ("test_citations.py",        "scripts/test_citations.py"),

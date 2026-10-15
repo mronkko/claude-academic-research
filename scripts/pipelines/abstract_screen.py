@@ -555,8 +555,9 @@ def _flush_tag_buffer(zot, buffer: list[tuple[str, dict]]) -> dict[str, int]:
 
     Failed writes leave those items untagged — Zotero tags are the resume
     source of truth, so a re-run re-screens any item whose tag did not
-    land. A warning is printed at batch granularity since per-item failure
-    annotation isn't available on the batch path.
+    land. `batch_update_tags` reports Zotero's per-item outcome and logs
+    each failure with its reason through the `zotero_io` logger; this
+    prints the batch total.
     """
     if not buffer:
         return {"applied": 0, "unchanged": 0, "failed": 0}

@@ -140,7 +140,7 @@ def from_config(mod: ModuleType, path: str) -> str:
             f"       selector and kept apart from other reviews in the same "
             f"library.\n"
             f"       Add a line such as `{CONFIG_ATTR} = \"agentic-ai\"`, or run:\n"
-            f"         python3 ${{CLAUDE_PLUGIN_ROOT:-.}}/scripts/setup/"
+            f"         python3 ${{CLAUDE_PLUGIN_ROOT}}/scripts/setup/"
             f"set_tag_prefix.py --prefix <prefix>"
         )
     try:
