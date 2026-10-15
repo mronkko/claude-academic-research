@@ -412,10 +412,17 @@ def stage_import(ctx: Ctx) -> None:
     coll_key = _require_state(ctx, "collection_key", "collection")
     csv_path = ctx.run_dir / "analysis" / "raw" / "search_results.csv"
     keys_out = ctx.run_dir / ".created_item_keys.txt"
+    # Import writes review-scoped tags, so it needs the project's
+    # TAG_PREFIX (mandatory since the tag namespace landed) — the config
+    # must be in the run dir before this stage, not only before `screen`.
+    cfg_dst = ctx.run_dir / "screening_config.py"
+    if not cfg_dst.exists():
+        shutil.copy2(E2E_FIXTURES_DIR / "screening_config.py", cfg_dst)
     _uv_run(
         PIPELINES_DIR / "import_to_zotero.py",
         ["--group", ctx.group_id, "--collection", str(coll_key),
-         "--input", str(csv_path), "--created-keys-out", str(keys_out)],
+         "--input", str(csv_path), "--created-keys-out", str(keys_out),
+         "--config", "./screening_config.py"],
         cwd=ctx.run_dir,
     )
     new_keys = []
