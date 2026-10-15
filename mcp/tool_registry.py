@@ -8,8 +8,8 @@ flag named here against the target script's argparse without running it.
 Rules every tool follows (BACKLOG P21):
 
 - The description starts with the effect class — `[read-only]`,
-  `[writes project files]`, `[writes user config]`, `[writes Zotero]` or
-  `[costs LLM credits]` —
+  `[writes project files]`, `[writes user config]`, `[writes Zotero]`,
+  `[costs LLM credits]` or `[costs money]` —
   because that, not the MCP annotations, is what a Claude Code user sees
   when deciding whether to "always allow" a tool.
 - Parameters are the user's decisions only (which library, which
@@ -43,8 +43,12 @@ WRITES_PROJECT = "writes project files"
 WRITES_USER_CONFIG = "writes user config"
 WRITES_ZOTERO = "writes Zotero"
 COSTS_LLM = "costs LLM credits"
+#: A paid API billed per call — the OpenAlex Content API at $0.01 a PDF —
+#: that also writes Zotero; said apart from LLM credits because the bill
+#: goes to a different account.
+COSTS_MONEY = "costs money"
 EFFECT_CLASSES = (READ_ONLY, WRITES_PROJECT, WRITES_USER_CONFIG, WRITES_ZOTERO,
-                  COSTS_LLM)
+                  COSTS_LLM, COSTS_MONEY)
 
 #: Placeholder in `fixed` tokens and parameter defaults, replaced with the
 #: resolved project directory when argv is built.
@@ -559,7 +563,7 @@ PDF_PLAN = Tool(
     summarise=summarise_retrieval_plan,
 )
 
-STRATEGY_MODES = r"(api|paid|browser|connector|manual)"
+STRATEGY_MODES = r"(api|paid|browser|connector|unattended|manual)"
 YES_NO = ("yes", "no")
 
 PDF_STRATEGY_SHOW = Tool(
@@ -591,7 +595,9 @@ PDF_STRATEGY_WRITE = Tool(
     script="scripts/pipelines/pdf_strategy.py",
     params=(
         Param("order", "Comma-separated modes in order, from api, paid, "
-              "browser, connector, manual — e.g. `api,paid,manual`.",
+              "browser, connector, unattended, manual — e.g. "
+              "`api,paid,unattended,manual`. `unattended` needs "
+              "unattended=yes.",
               kind="option", flag="--order", required=True,
               pattern=rf"^{STRATEGY_MODES}(,{STRATEGY_MODES})*$"),
         Param("present", "Is the user at the keyboard now.", kind="option",
@@ -638,7 +644,7 @@ PDF_STRATEGY_UPDATE = Tool(
     script="scripts/pipelines/pdf_strategy.py",
     params=(
         Param("mode", "The step.", kind="option", flag="--mode",
-              enum=("api", "paid", "browser", "connector", "manual")),
+              enum=("api", "paid", "browser", "connector", "unattended", "manual")),
         Param("status", "Its new status.", kind="option", flag="--status",
               enum=("pending", "running", "done", "skipped", "failed")),
         Param("result", "One-line outcome, e.g. `attached 212, 40 left`.",
@@ -1219,6 +1225,155 @@ START_PDF_PLAN = Tool(
     artifacts=(PLAN_JSON,),
 )
 
+# --- enrich_pdfs jobs: the API cascade, paid OpenAlex, the unattended run ---
+
+PDF_LOGS = ("output/pdf_attach_log.csv", "output/pdf_fetch_log.csv")
+UNATTENDED_STATE = ".claude/pdf/unattended.json"
+ENRICH_NOTE = (
+    " The first lines of its log give the effective [pdf] policy and where "
+    "each value came from — check it says what was agreed. Run the audit "
+    "(audit_library) afterwards and diagnose what is left."
+)
+MIN_VERSION = Param(
+    "min_version", "This run only: the lowest version to attach (published, "
+    "accepted, preprint), overriding the stored [pdf] policy. Pass it only "
+    "when pdf_strategy_show's tool_arguments carry it.", kind="option",
+    flag="--min-version", enum=("published", "accepted", "preprint"),
+)
+DRY_RUN_PDF = Param(
+    "dry_run", "Download, but do not attach to Zotero.", kind="switch",
+    flag="--dry-run", type="boolean",
+)
+BROWSER_PASS = Param(
+    "pass", "`browser` (default: publisher handlers, the library route to "
+    "EBSCOhost, then the Zotero Connector) or `connector` (Connector only).",
+    kind="map", default="browser",
+    choices={"browser": ("--sources", "browser"),
+             "connector": ("--sources", "connector")},
+)
+
+START_ENRICH_PDFS = Tool(
+    name="start_enrich_pdfs",
+    title="Attach PDFs: free API cascade",
+    effect=WRITES_ZOTERO,
+    description=(
+        "The free API cascade of PDF retrieval for items still without a "
+        "PDF: publisher APIs (Elsevier, Springer, Wiley TDM, Crossref TDM), "
+        "PMC and the open-access sources, in version-quality order; attaches "
+        "what it finds (version-tagged) and cached downloads first. Never "
+        "pays — the paid OpenAlex Content API is off here (its own tool is "
+        "start_enrich_pdfs_paid) — and opens no browser." + ENRICH_NOTE + JOB_NOTE
+    ),
+    script="scripts/pipelines/enrich_pdfs.py",
+    params=(*LIBRARY_ARGS, FILTER_KEYS, MIN_VERSION, DRY_RUN_PDF),
+    fixed=("--paid", "off"),
+    job=True,
+    # enrich_pdfs takes --control-file; the API cascade never asks.
+    control=True,
+    read_only=False,
+    idempotent=False,
+    open_world=True,
+    exclusive=LIBRARY_PAIR,
+    artifacts=PDF_LOGS,
+)
+
+START_ENRICH_PDFS_PAID = Tool(
+    name="start_enrich_pdfs_paid",
+    title="Attach PDFs: paid OpenAlex",
+    effect=COSTS_MONEY,
+    description=(
+        "Costs $0.01 per PDF the OpenAlex Content API serves, billed to the "
+        "user's OpenAlex key — say the plan's count and cost and get the "
+        "user's yes first. scope=paid_only buys from that API alone (the "
+        "strategy's `paid` step); scope=cascade runs the whole API cascade "
+        "with paying in the policy's position (prefer: before the free "
+        "open-access sources; last_resort: after them), or forced with "
+        "cascade_prefer / cascade_last_resort. Attaches to Zotero; no "
+        "browser." + ENRICH_NOTE + JOB_NOTE
+    ),
+    script="scripts/pipelines/enrich_pdfs.py",
+    params=(
+        Param("scope", "`paid_only` (default), `cascade`, `cascade_prefer` or "
+              "`cascade_last_resort` — as pdf_strategy_show's tool_arguments "
+              "say.", kind="map", default="paid_only",
+              choices={"paid_only": ("--sources", "openalex_content",
+                                     "--paid", "prefer"),
+                       "cascade": (),
+                       "cascade_prefer": ("--paid", "prefer"),
+                       "cascade_last_resort": ("--paid", "last_resort")}),
+        *LIBRARY_ARGS, FILTER_KEYS, MIN_VERSION, DRY_RUN_PDF,
+    ),
+    job=True,
+    control=True,
+    read_only=False,
+    idempotent=False,
+    open_world=True,
+    exclusive=LIBRARY_PAIR,
+    artifacts=PDF_LOGS,
+)
+
+START_PDF_UNATTENDED_SETUP = Tool(
+    name="start_pdf_unattended_setup",
+    title="Unattended PDF run: setup",
+    effect=WRITES_USER_CONFIG,
+    description=(
+        "Opens a Chromium window on the user's screen; the user must be "
+        "there. The setup phase of the long unattended browser run: for each "
+        "publisher in the queue it opens the publisher's page so the user "
+        "solves the Cloudflare challenge / signs in once, and for each "
+        "Zotero Connector host it opens the library route so the user clears "
+        "it and confirms. job_status shows each question: relay it verbatim "
+        "and pass the user's answer with job_answer. Downloads nothing and "
+        "writes nothing to Zotero; records the outcome in "
+        ".claude/pdf/unattended.json, and an [A]lways-skip answer in the user "
+        "config ([library] no_access). Consent is not asked here — record it "
+        "with pdf_consent_set first; a site without a recorded allow is "
+        "skipped by the run (CONSENT_NEEDED)." + JOB_NOTE
+    ),
+    script="scripts/pipelines/enrich_pdfs.py",
+    params=(BROWSER_PASS, *LIBRARY_ARGS, FILTER_KEYS, INSTITUTION),
+    fixed=("--unattended", "setup"),
+    job=True,
+    control=True,
+    read_only=False,
+    idempotent=False,
+    open_world=True,
+    exclusive=LIBRARY_PAIR,
+    artifacts=(UNATTENDED_STATE,),
+)
+
+START_PDF_UNATTENDED_RUN = Tool(
+    name="start_pdf_unattended_run",
+    title="Unattended PDF run: run",
+    effect=WRITES_ZOTERO,
+    description=(
+        "Opens a Chromium window but needs nobody: the run phase of the long "
+        "unattended browser run, after start_pdf_unattended_setup. The "
+        "browser pass with no prompts at all (it never reaches "
+        "awaiting_user): it re-checks each publisher's session before it and "
+        "every 15 min within it, and defers whatever needs a person — an "
+        "expired clearance, a sign-in page, an unconfirmed Connector host, "
+        "Zotero Desktop not running — as DEFERRED_NEEDS_USER instead of "
+        "waiting. Attaches to Zotero. The log ends with an `UNATTENDED:` "
+        "summary line (attached, deferred, failures split by network); the "
+        "deferred items open first in the next pdf_manual_next. Session "
+        "lifetimes were not measured: start it soon after setup." + JOB_NOTE
+    ),
+    script="scripts/pipelines/enrich_pdfs.py",
+    params=(BROWSER_PASS, *LIBRARY_ARGS, FILTER_KEYS, INSTITUTION, MIN_VERSION,
+            DRY_RUN_PDF),
+    fixed=("--unattended", "run", "--browser-workers", "4"),
+    job=True,
+    # The guard pairs --control-file with control=True; the run accepts the
+    # file and never writes a question to it.
+    control=True,
+    read_only=False,
+    idempotent=False,
+    open_world=True,
+    exclusive=LIBRARY_PAIR,
+    artifacts=(UNATTENDED_STATE, *PDF_LOGS),
+)
+
 JOB_ID = Param(
     "job_id", "The job_id a start_* tool returned (see list_jobs).",
     kind="option", required=True, pattern=r"^[a-z_]+-[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$",
@@ -1285,6 +1440,10 @@ LIST_JOBS = Tool(
 
 JOB_TOOLS: tuple[Tool, ...] = (
     START_PDF_PLAN,
+    START_ENRICH_PDFS,
+    START_ENRICH_PDFS_PAID,
+    START_PDF_UNATTENDED_SETUP,
+    START_PDF_UNATTENDED_RUN,
     START_SEARCH,
     START_IMPORT,
     START_ENRICH_ABSTRACTS,

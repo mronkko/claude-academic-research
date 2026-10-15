@@ -385,3 +385,67 @@ def test_the_pdf_plan_job_runs_beside_a_zotero_writer(project: Path, monkeypatch
     for job_id in (writer, plan):
         _call("cancel_job", {"job_id": job_id})
         assert _wait(job_id)["status"] == "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# enrich_pdfs jobs (plan step 6): API cascade, paid OpenAlex, unattended run
+# ---------------------------------------------------------------------------
+
+def _script_argv(project: Path, job_id: str) -> list[str]:
+    job = json.loads((project / ".claude" / "jobs" / job_id / "job.json")
+                     .read_text(encoding="utf-8"))
+    argv = job["argv"]
+    script = next(i for i, a in enumerate(argv) if a.endswith("enrich_pdfs.py"))
+    return argv[script + 1:argv.index("--progress-json")]
+
+
+def test_enrich_pdfs_jobs_build_the_strategys_argv(project: Path) -> None:
+    cases = {
+        ("start_enrich_pdfs", ()): ["--paid", "off", "--group", "12"],
+        ("start_enrich_pdfs_paid", ()): [
+            "--sources", "openalex_content", "--paid", "prefer", "--group", "12"],
+        ("start_enrich_pdfs_paid", (("scope", "cascade_last_resort"),)): [
+            "--paid", "last_resort", "--group", "12"],
+        ("start_pdf_unattended_setup", ()): [
+            "--unattended", "setup", "--sources", "browser", "--group", "12"],
+        ("start_pdf_unattended_run", (("pass", "connector"),)): [
+            "--unattended", "run", "--browser-workers", "4", "--sources",
+            "connector", "--group", "12"],
+    }
+    for (tool, extra), expected in cases.items():
+        job_id = _call(tool, {"group": "12", **dict(extra)})["job_id"]
+        assert _script_argv(project, job_id) == expected, tool
+        job = json.loads((project / ".claude" / "jobs" / job_id / "job.json")
+                         .read_text(encoding="utf-8"))
+        assert "--control-file" in job["argv"]           # enrich_pdfs takes it
+        _wait(job_id)
+
+
+def test_paid_and_unattended_run_are_zotero_writers_and_setup_is_not(
+    project: Path, monkeypatch,
+) -> None:
+    """One Zotero writer at a time: paying and the unattended run attach;
+    the setup phase downloads nothing, so it may start beside a writer."""
+    monkeypatch.setenv("FAKE_MODE", "hang")
+    markers = Path(os.environ["FAKE_MARKERS"])
+    writer = _call("start_enrich_pdfs", {"group": "12"})["job_id"]
+    _wait_for_file(markers / "started")
+    for tool in ("start_enrich_pdfs_paid", "start_pdf_unattended_run",
+                 "start_enrich_pdfs"):
+        with pytest.raises(server.ToolInputError, match=writer):
+            _call(tool, {"group": "12"})
+    setup = _call("start_pdf_unattended_setup", {"group": "12"})["job_id"]
+    for job_id in (writer, setup):
+        _call("cancel_job", {"job_id": job_id})
+        assert _wait(job_id)["status"] == "cancelled"
+
+
+def test_paying_says_so_in_its_effect_class() -> None:
+    import tool_registry as reg
+    paid = reg.TOOLS_BY_NAME["start_enrich_pdfs_paid"]
+    assert paid.full_description().startswith("[costs money] ")
+    assert "$0.01" in paid.description
+    free = reg.TOOLS_BY_NAME["start_enrich_pdfs"]
+    assert free.effect == reg.WRITES_ZOTERO and free.fixed == ("--paid", "off")
+    assert "Opens a Chromium window" in reg.TOOLS_BY_NAME[
+        "start_pdf_unattended_setup"].description

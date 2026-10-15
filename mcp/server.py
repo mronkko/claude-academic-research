@@ -550,7 +550,7 @@ def _live_zotero_writers(project: Path) -> list[str]:
 
 
 def _writes_zotero(tool: reg.Tool, arguments: dict) -> bool:
-    return (tool.effect in (reg.WRITES_ZOTERO, reg.COSTS_LLM)
+    return (tool.effect in (reg.WRITES_ZOTERO, reg.COSTS_LLM, reg.COSTS_MONEY)
             and not arguments.get("dry_run"))
 
 

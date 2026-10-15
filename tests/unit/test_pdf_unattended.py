@@ -674,7 +674,6 @@ def test_run_hands_the_connector_the_hosts_confirmed_in_setup(browser_pass,
 
 @pytest.mark.parametrize("argv", [
     ["--unattended", "run", "--manual", "next"],
-    ["--unattended", "run", "--control-file", "x.json"],
     ["--unattended", "run", "--no-prompt"],
     ["--unattended", "setup", "--plan"],
     ["--unattended", "setup", "--all"],
@@ -689,6 +688,21 @@ def test_conflicting_flags_exit_2_before_any_work(monkeypatch, argv) -> None:
     monkeypatch.setattr(enrich_pdfs.zotero_io.ZoteroClient, "from_args",
                         lambda *a, **k: pytest.fail("reached Zotero"))
     assert enrich_pdfs.main() == 2
+
+
+def test_the_run_accepts_but_never_uses_a_control_file(tmp_path) -> None:
+    """The MCP job runner hands every enrich_pdfs job a control file; the
+    run installs the unattended channel regardless."""
+    args = enrich_pdfs._build_parser().parse_args(
+        ["--unattended", "run", "--control-file", str(tmp_path / "c.json")])
+    assert enrich_pdfs._check_unattended_args(args) == 0
+    previous = interaction.get_channel()
+    try:
+        enrich_pdfs._install_interaction_channel(args)
+        assert isinstance(interaction.get_channel(), interaction.UnattendedChannel)
+    finally:
+        interaction.set_channel(previous)
+    assert not (tmp_path / "c.json").exists()
 
 
 def test_unattended_defaults_to_the_browser_pass_and_sets_the_run_flag() -> None:

@@ -5769,18 +5769,20 @@ def _check_unattended_args(args: argparse.Namespace) -> int:
         ("--auto-publishers", args.auto_publishers),
         ("--on-first-failure", bool(args.on_first_failure)),
     ) if on]
-    if phase == "run":
-        clash += [flag for flag, on in (
-            ("--control-file", bool(args.control_file)),
-            ("--no-prompt", args.no_prompt),
-        ) if on]
+    if phase == "run" and args.no_prompt:
+        clash.append("--no-prompt")
     if clash:
         print(f"ERROR: --unattended {phase} is its own mode; drop "
               f"{', '.join(clash)}." + (
-                  " The run never asks, so it takes no control file and needs "
-                  "no --no-prompt." if phase == "run" else ""),
+                  " The run never asks; it needs no --no-prompt."
+                  if phase == "run" else ""),
               file=sys.stderr)
         return 2
+    if phase == "run" and args.control_file:
+        # Accepted so the MCP job runner can hand every enrich_pdfs job the
+        # same flags; the run never writes a question to it.
+        print(f"Unattended run: {args.control_file} will stay idle — the run "
+              f"asks nothing.", flush=True)
     sources = [s.strip().lower() for s in (args.sources or "").split(",") if s.strip()]
     if sources not in ([], ["browser"], ["connector"]):
         print("ERROR: --unattended drives the browser pass: --sources browser "
@@ -5832,7 +5834,7 @@ def _finish_unattended_run(args: argparse.Namespace, rows: list[dict], since: st
     pdf_unattended.add_run(state, {k: v for k, v in summary.items()
                                    if k != "deferred_keys"})
     pdf_unattended.save_state(state, _unattended_state_path(args))
-    interaction.report_progress({"event": "unattended_done",
+    interaction.report_progress({"event": "summary", "phase": "unattended_run",
                                  **{k: v for k, v in summary.items()
                                     if k != "deferred_keys"}})
     print(pdf_unattended.summary_line(summary), flush=True)

@@ -129,14 +129,16 @@ def test_initialize_then_tools_list(project, stub, tmp_path) -> None:
         "enrich_pdfs_report", "pdf_manual_next", "pdf_manual_collect",
         "pdf_manual_assign", "pdf_manual_ignore", "screening_report", "audit_library",
         "export_coded_includes", "generate_bib",
-        "start_pdf_plan", "start_search", "start_import", "start_enrich_abstracts",
+        "start_pdf_plan", "start_enrich_pdfs", "start_enrich_pdfs_paid",
+        "start_pdf_unattended_setup", "start_pdf_unattended_run",
+        "start_search", "start_import", "start_enrich_abstracts",
         "start_enrich_dois", "start_abstract_screen", "start_fulltext_code",
         "job_status", "job_answer", "cancel_job", "list_jobs",
     ]
     for t in tools:
         assert t["description"].startswith((
             "[read-only] ", "[writes project files] ", "[writes user config] ",
-            "[writes Zotero] ", "[costs LLM credits] ",
+            "[writes Zotero] ", "[costs LLM credits] ", "[costs money] ",
         )), t["name"]
         assert t["inputSchema"]["type"] == "object"
         assert t["inputSchema"]["additionalProperties"] is False
