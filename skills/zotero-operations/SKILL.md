@@ -92,6 +92,19 @@ exact invocation.
 | Attach PDFs from Cloudflare-gated publishers (Sage, APA, T&F, Emerald, …) | `enrich_pdfs.py --sources browser` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --sources browser --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
 | Replace PDFs an item already has (repair a bad or superseded copy) | `enrich_pdfs.py --replace` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --replace --filter-keys-file <keys>` |
 | Generate `references.bib` from a manuscript's citation keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py` from the project root (scans `manuscript/`, writes `manuscript/references.bib`; `--chapters-dir` / `--bib-out` for other layouts) |
+| Tag supplements, front matter and notices (and relate supplements to their article) | `tag_doctypes.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/tag_doctypes.py --group <id> [--collection <key>]` (dry run; add `--apply` with the user's OK) |
+
+**`doctype:*` tags mark records that are typed `journal-article` but are
+not research articles**: `doctype:supplement` (APA supplemental material,
+DOI `<article DOI>.supp`), `doctype:front-matter` ("Editorial Board",
+"Issue Information", "Featured Cover", "Acknowledgment of Ad Hoc
+Reviewers", author-less "Call for Papers: …"), `doctype:notice` (SAGE
+"Publication Notice" retraction/withdrawal notices). They are global, not
+review-namespaced — a fact about the record, like `predatory:flag`.
+`import_to_zotero.py` applies them on import and relates each supplement
+to its article (Zotero "Related", both directions) when the article is in
+the batch or library. Keep these items; never delete them to "clean up".
+Screening skips them and counts them for PRISMA.
 
 **An item that already holds a PDF never reaches a fetcher.** That is
 usually right — it is what stops every run re-downloading a whole

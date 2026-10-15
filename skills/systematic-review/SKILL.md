@@ -1025,7 +1025,7 @@ the paper**:
   reviews may legitimately disagree about the same paper, and each needs
   its own answer recorded.
 - **Global, deliberately unprefixed** — `predatory:flag`,
-  `retracted:flag`, `pdf:tdm-recovered`, `pdf:preprint-version`,
+  `retracted:flag`, `doctype:*`, `pdf:tdm-recovered`, `pdf:preprint-version`,
   `pdf:repository-copy`. Whether a journal is on Beall's list, or a paper
   retracted, or an attachment reconstructed from XML, is true regardless
   of who is reviewing it. Reviews sharing a library share these rather
@@ -1087,6 +1087,7 @@ These are the global ones — **not** namespaced, for the reason given
 under *Namespacing* above.
 
 | `predatory:flag` | Preflight journal check against Beall's list (`import_to_zotero.py`) | **Warning, not exclusion.** Author decides during full-text review whether to keep each flagged paper. |
+| `doctype:supplement` / `doctype:front-matter` / `doctype:notice` | `import_to_zotero.py` on import; `tag_doctypes.py` for items already in the library. Rules in `scripts/pipelines/doctype.py` | **Kept, but not screened.** Records Crossref types as `journal-article` that are not research articles: APA supplemental material (DOI `<article DOI>.supp`, "Supplemental Material for …"), publisher front matter ("Editorial Board", "Issue Information", "Featured Cover", "Acknowledgment of Ad Hoc Reviewers", author-less "Call for Papers: …"), and SAGE "Publication Notice" retraction/withdrawal notices. `abstract_screen.py` and `fulltext_code.py` skip any `doctype:*`-tagged item and print the count per class — report it as PRISMA "records removed before screening" (`screening_report.py --search-csv`, or `search.n_removed_*` in `manuscript_stats.py`). A supplement is also linked to its article as a Zotero related item. Do not delete these items, and do not screen them by hand. |
 | `retracted:flag` | Post-coding retraction check via `mcp__zotero__scite_check_retractions` (see *Retraction check* in *Key methodological rules*) | **Warning, not exclusion.** Cited paper has been retracted per Scite's retraction-watch data. Adjudicator decides whether to keep (with a discussion note), replace the citation, or drop the paper. |
 | `pdf:tdm-recovered` | `enrich_pdfs.py`, when Elsevier's TDM API returns only a 1-page preview and the fetcher falls back to the XML endpoint | **Warning, not exclusion.** The attached "PDF" is text reconstructed from XML, not the publisher's native PDF — may be less complete or lose figures/tables. `audit_zotero_library.py` lists these under `tdm_recovered`; review before/during full-text coding. |
 | `pdf:preprint-version` | `enrich_pdfs.py --allow-preprints`, when the only copy found is on arXiv / SSRN / RePEc | **Warning, not exclusion — and the most consequential of these.** The attached PDF is the manuscript *before* peer review. Hypotheses, samples and findings all move between a working paper and the published article, and nothing downstream can tell the difference: the coding note and the CSV row read identically either way. `fulltext_code.py` names these items before it codes them and `audit_zotero_library.py` lists them under `preprint_version`. Verify each coded finding against the published article, or fetch the real one, before the numbers reach a manuscript. Do **not** confuse this with `OUT_OF_SCOPE`, which is about the *item's* type being a preprint; this is a journal article with a preprint file attached. |
@@ -1204,7 +1205,8 @@ single-item debugging).
 | Abstract screening (Claude Haiku on title+abstract) | `abstract_screen.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/abstract_screen.py --group <id> --collection <key> --config ./screening_config.py [--model <alias>] [--remote]` |
 | Full-text screening + structured coding (Claude Sonnet) | `fulltext_code.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs [--model <alias>] [--remote]` |
 | Update specific coding fields on already-coded items | `fulltext_code.py --update-fields` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs --update-fields FIELD1,FIELD2 [--remote]` |
-| Summarise screening / coding decisions across passes | `screening_report.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/screening_report.py <log.csv> [--list <decision>] [--list-rescreened]` |
+| Summarise screening / coding decisions across passes | `screening_report.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/screening_report.py <log.csv> [--list <decision>] [--list-rescreened] [--search-csv <search_results.csv>]` — `--search-csv` adds the removed-before-screening count |
+| Tag supplements / front matter / notices already in a library | `tag_doctypes.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/tag_doctypes.py --group <id> [--collection <key>]` (dry run) · add `--apply` to write · `--no-link` skips relating supplements to their article |
 | Fetch missing abstracts (multi-source cascade) | `enrich_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_abstracts.py --filter-keys-file <keys> [--remote]` |
 | Attach missing PDFs (multi-source cascade) | `enrich_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --filter-keys-file <keys> [--remote] [--item-types journalArticle,bookSection,book]` — journal articles only unless `--item-types` admits more; an admitted type is never logged `OUT_OF_SCOPE` |
 | Attach Wiley PDFs only (TDM token) | `enrich_pdfs.py --sources wiley` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --sources wiley --filter-keys-file <keys>` |
@@ -1802,6 +1804,15 @@ phases is a data-quality signal, not a failure to hide.
   asked again; only a reply that is still unparseable after the retry
   is filed as borderline — the deliberate bias toward keeping an item
   for full-text review.
+- **Supplements, front matter and notices are skipped, not screened.**
+  `search.py` labels them in a `doctype` column (and counts them in
+  `search_metadata.json` under `unique_records_by_doctype`);
+  `import_to_zotero.py` imports them with a global `doctype:*` tag; both
+  screening scripts skip tagged items and print how many per class. They
+  stay in the corpus and the DOI hash, so report them as "records removed
+  before screening" in the PRISMA flow, not as exclusions. If a screening
+  run warns about untagged look-alikes (a library imported before 0.25.0),
+  run `tag_doctypes.py` (dry run, then `--apply`) before screening.
 - **Append-only logs.** Last-row-wins per Zotero key allows overrides
   without losing history. Abstract becoming available for a previously-
   borderline item does not require editing earlier rows — append a new
