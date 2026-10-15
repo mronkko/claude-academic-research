@@ -145,6 +145,13 @@ def _http_json(
     they are answers, not blips, and the caller reports them to the user.
     """
     req = urllib.request.Request(url, headers=headers or {})
+    # Error text is printed, so mask any credential a header carries: a
+    # pasted key with a stray newline makes `http.client` quote the
+    # header value verbatim in its exception.
+    secrets = [
+        v for k, v in (headers or {}).items()
+        if re.search(r"key|auth|token", k, re.IGNORECASE)
+    ]
     status, data, err = 0, None, ""
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         retry_after: float | None = None
@@ -156,21 +163,26 @@ def _http_json(
                 except json.JSONDecodeError:
                     return response.status, None, "non-JSON response"
         except urllib.error.HTTPError as e:
-            status, data, err = e.code, None, f"{e.code} {e.reason}"
+            status, data = e.code, None
+            err = providers.redact(f"{e.code} {e.reason}", *secrets)
             if e.code not in _RETRY_STATUSES:
                 return status, data, err
             retry_after = _retry_after_seconds(e.headers.get("Retry-After"))
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            status, data, err = 0, None, str(e)
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+            # ValueError: `http.client` rejects a header value containing
+            # a newline before anything is sent.
+            status, data, err = 0, None, providers.redact(str(e), *secrets)
         if attempt < _MAX_ATTEMPTS:
             time.sleep(_backoff_delay(attempt, retry_after))
     return status, data, err
 
 
 def _verify_zotero(key: str) -> tuple[bool, str, dict]:
+    # `/keys/current` with the key in a header, not `/keys/<key>`: a URL
+    # is what ends up in error text and proxy logs.
     status, data, err = _http_json(
-        f"https://api.zotero.org/keys/{key}",
-        headers={"Zotero-API-Version": "3"},
+        "https://api.zotero.org/keys/current",
+        headers={"Zotero-API-Version": "3", "Zotero-API-Key": key},
     )
     if status == 0:
         return False, f"could not reach api.zotero.org ({err}) — saved anyway", {}
@@ -210,8 +222,10 @@ def _verify_anthropic(key: str) -> tuple[bool, str, dict]:
 
 
 def _verify_gemini(key: str) -> tuple[bool, str, dict]:
+    # Header, not `?key=` — see `_verify_zotero`.
     status, data, err = _http_json(
-        f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
+        "https://generativelanguage.googleapis.com/v1beta/models",
+        headers={"x-goog-api-key": key},
     )
     if status == 0:
         return False, f"could not reach generativelanguage.googleapis.com ({err}) — saved anyway", {}
@@ -1011,7 +1025,8 @@ def _print_header() -> None:
 
 def _prompt_key(spec: KeySpec, existing: str | None, interactive: bool,
                 verify: bool) -> tuple[str, dict]:
-    env_value = os.environ.get(spec.env_var, "").strip()
+    env_value = os.environ.get(spec.env_var, "").strip() if spec.env_var else ""
+    existing = str(existing or "").strip()
 
     if not interactive:
         value = env_value or (existing or "")

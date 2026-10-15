@@ -25,6 +25,8 @@ list encodes durably.
 
 from __future__ import annotations
 
+import re
+import urllib.parse
 from dataclasses import dataclass, field
 
 #: Stage-independent capability tiers. Every provider maps each of these
@@ -51,8 +53,9 @@ class ProviderSpec:
     base_url_env: str = ""
     default_base_url: str = ""
     #: Endpoint that lists available models. `{base}` is substituted with
-    #: the effective base URL, `{key}` with the API key (Google puts the
-    #: key in the query string rather than a header).
+    #: the effective base URL. Never put a credential in it: URLs end up
+    #: in exception messages, logs and proxies. Every transport sends its
+    #: key in a header (Google's is `x-goog-api-key`).
     list_models_url: str = ""
     #: Substrings that identify a tier inside this provider's model IDs.
     #: Checked lowercase, in order; first match wins. Advisory only —
@@ -108,7 +111,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         transport="google",
         api_key_env="GEMINI_API_KEY",
         default_base_url="https://generativelanguage.googleapis.com",
-        list_models_url="{base}/v1beta/models?key={key}&pageSize=200",
+        list_models_url="{base}/v1beta/models?pageSize=200",
         tier_hints={
             TIER_FAST: ("flash-lite", "flash"),
             TIER_BALANCED: ("flash",),
@@ -323,3 +326,34 @@ def tier_label(spec: ProviderSpec, model_id: str) -> str:
     where a question mark reads as "this one I cannot place".
     """
     return tier_of(spec, model_id) or "?"
+
+
+_URL_KEY_PARAM = re.compile(
+    r"([?&](?:key|api_key|apikey|access_token)=)[^&#\s]+", re.IGNORECASE,
+)
+
+
+def redact(text: str, *secrets: str) -> str:
+    """`text` with every occurrence of `secrets` replaced by `***`.
+
+    Defence in depth for anything that reports a failure to a user or an
+    agent transcript. Keys travel in headers, but an exception message
+    can still quote one — `http.client` names the offending header value
+    when a pasted key contains a newline — and these messages are
+    printed, logged and handed back to the assistant. Also masks a
+    `key=`-style URL parameter, whatever its value.
+    """
+    out = str(text)
+    for secret in secrets:
+        secret = (secret or "").strip()
+        if len(secret) < 4:
+            continue  # too short to mask without mangling ordinary words
+        forms = {
+            secret,
+            urllib.parse.quote(secret, safe=""),
+            repr(secret)[1:-1],
+            repr(secret.encode("utf-8", "replace"))[2:-1],
+        }
+        for form in sorted(forms, key=len, reverse=True):
+            out = out.replace(form, "***")
+    return _URL_KEY_PARAM.sub(r"\1***", out)

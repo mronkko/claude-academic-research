@@ -294,9 +294,12 @@ def _chat_request(
         )
     if spec.transport == "google":
         clean = model.removeprefix("models/")
+        # The key goes in a header, never the query string: a URL is
+        # what ends up in exception text (an `InvalidURL` quotes it
+        # whole), proxy logs and this module's own `detail`.
         return (
-            f"{base}/v1beta/models/{clean}:generateContent?key={api_key}",
-            {"content-type": "application/json"},
+            f"{base}/v1beta/models/{clean}:generateContent",
+            {"content-type": "application/json", "x-goog-api-key": api_key},
             {
                 "contents": [{"parts": [{"text": PROBE_PROMPT}]}],
                 "generationConfig": {"maxOutputTokens": PROBE_MAX_TOKENS},
@@ -376,6 +379,7 @@ def check_connection(
             detail="No model is pinned for this stage.",
         )
 
+    api_key = (api_key or "").strip()
     url, headers, payload = _chat_request(spec, base, model, api_key)
     request = urllib.request.Request(  # noqa: S310 — provider URLs from the registry
         url,
@@ -401,7 +405,7 @@ def check_connection(
             status=classify(e.code, body),
             provider=spec.name,
             model=model,
-            detail=_extract_message(body),
+            detail=providers.redact(_extract_message(body), api_key),
             http_status=e.code,
         )
     except urllib.error.URLError as e:
@@ -409,12 +413,12 @@ def check_connection(
             status=ConnectionStatus.UNREACHABLE,
             provider=spec.name,
             model=model,
-            detail=f"{base}: {e.reason}",
+            detail=providers.redact(f"{base}: {e.reason}", api_key),
         )
     except Exception as e:  # noqa: BLE001 — a probe must never sink its caller
         return ConnectionResult(
             status=ConnectionStatus.UNKNOWN,
             provider=spec.name,
             model=model,
-            detail=" ".join(str(e).split())[:400],
+            detail=providers.redact(" ".join(str(e).split()), api_key)[:400],
         )

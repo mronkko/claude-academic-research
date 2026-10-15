@@ -71,7 +71,15 @@ class DiscoveryError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
-def _get_json(url: str, headers: dict[str, str], timeout: int = 10) -> dict:
+def _get_json(
+    url: str, headers: dict[str, str], timeout: int = 10, secret: str = "",
+) -> dict:
+    """GET and parse JSON, retrying transient failures.
+
+    `secret` is masked out of every error message: `DiscoveryError` text
+    is printed and returned to the assistant, and an exception from
+    `urllib`/`http.client` can quote a malformed header value verbatim.
+    """
     req = urllib.request.Request(url, headers=headers)
     last = ""
     for attempt in range(1, _MAX_ATTEMPTS + 1):
@@ -81,9 +89,9 @@ def _get_json(url: str, headers: dict[str, str], timeout: int = 10) -> dict:
         except urllib.error.HTTPError as e:
             last = f"HTTP {e.code}"
             if e.code not in _RETRY_STATUSES:
-                raise DiscoveryError(last) from e
+                raise DiscoveryError(last) from None
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
-            last = str(e)
+            last = providers.redact(str(e), secret)
         if attempt < _MAX_ATTEMPTS:
             time.sleep(random.uniform(0.0, min(2.0 ** attempt, _MAX_DELAY_S)))  # noqa: S311
     raise DiscoveryError(last or "unreachable")
@@ -93,7 +101,9 @@ def _auth_headers(spec: ProviderSpec, api_key: str) -> dict[str, str]:
     if spec.transport == "anthropic":
         return {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
     if spec.transport == "google":
-        return {}  # key rides in the query string
+        # A header, not a query parameter: a URL carrying the key ends up
+        # in exception text, proxy logs and the debug log.
+        return {"x-goog-api-key": api_key} if api_key else {}
     if api_key:
         return {"Authorization": f"Bearer {api_key}"}
     return {}
@@ -195,8 +205,9 @@ def list_models(spec: ProviderSpec, api_key: str = "", base_url: str = "") -> li
             f"{spec.name} has no base URL configured; set "
             f"{providers.base_url_location(spec)}"
         )
-    url = spec.list_models_url.format(base=base, key=api_key)
-    payload = _get_json(url, _auth_headers(spec, api_key))
+    api_key = (api_key or "").strip()
+    url = spec.list_models_url.format(base=base)
+    payload = _get_json(url, _auth_headers(spec, api_key), secret=api_key)
     models = _normalise(spec, payload)
     if not models:
         raise DiscoveryError(f"{spec.name} returned no models")

@@ -45,7 +45,11 @@ def get(section: str, key: str, env: str | None = None, default: str = "") -> st
         val = os.environ.get(env, "").strip()
         if val:
             return val
-    return load_config().get(section, {}).get(key, default)
+    val = load_config().get(section, {}).get(key, default)
+    # Stripped like the environment value above. A key pasted into the
+    # file with a trailing newline or space is otherwise sent as-is, and
+    # `http.client` rejects it with an error that quotes the key.
+    return val.strip() if isinstance(val, str) else val
 
 
 def require(section: str, key: str, env: str | None = None) -> str:
