@@ -298,8 +298,8 @@ def test_validate_doi_fix_malformed_writes_clean_form() -> None:
         fix_malformed=True, dry_run=False, zot=zot,
     )
     assert result.status == "validate_malformed_doi_fixed"
-    zot.update_item.assert_called_once()
-    payload = zot.update_item.call_args[0][0]
+    zot.update_fields.assert_called_once()
+    payload = zot.update_fields.call_args[0][1]
     assert payload["DOI"] == "10.1/x"
 
 
@@ -320,7 +320,7 @@ def test_validate_doi_fix_malformed_respects_dry_run() -> None:
     # Still classified as ok (malformed but dry-run means no fix was
     # applied, so we report the plain validate_ok status).
     assert result.status == "validate_ok"
-    zot.update_item.assert_not_called()
+    zot.update_fields.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -359,8 +359,8 @@ def test_find_missing_3_of_3_auto_applies() -> None:
         dry_run=False, no_prompt=False,
     )
     assert result.status == "applied_high_confidence"
-    zot.update_item.assert_called_once()
-    assert zot.update_item.call_args[0][0]["DOI"] == "10.1/new"
+    zot.update_fields.assert_called_once()
+    assert zot.update_fields.call_args[0][1]["DOI"] == "10.1/new"
 
 
 def test_find_missing_3_of_3_dry_run_does_not_write() -> None:
@@ -379,7 +379,7 @@ def test_find_missing_3_of_3_dry_run_does_not_write() -> None:
         dry_run=True, no_prompt=False,
     )
     assert result.status == "applied_high_confidence_dry_run"
-    zot.update_item.assert_not_called()
+    zot.update_fields.assert_not_called()
 
 
 def test_find_missing_3_of_3_on_invalid_without_replace_flag_proposes_only() -> None:
@@ -400,7 +400,7 @@ def test_find_missing_3_of_3_on_invalid_without_replace_flag_proposes_only() -> 
         dry_run=False, no_prompt=False,
     )
     assert result.status == "proposed_replacement"
-    zot.update_item.assert_not_called()
+    zot.update_fields.assert_not_called()
 
 
 def test_find_missing_3_of_3_on_invalid_with_replace_flag_overwrites() -> None:
@@ -420,7 +420,7 @@ def test_find_missing_3_of_3_on_invalid_with_replace_flag_overwrites() -> None:
         dry_run=False, no_prompt=False,
     )
     assert result.status == "replaced_high_confidence"
-    zot.update_item.assert_called_once()
+    zot.update_fields.assert_called_once()
 
 
 def test_find_missing_2_of_3_non_tty_proposes_not_applied() -> None:
@@ -442,7 +442,7 @@ def test_find_missing_2_of_3_non_tty_proposes_not_applied() -> None:
         dry_run=False, no_prompt=True,
     )
     assert result.status == "proposed_not_applied"
-    zot.update_item.assert_not_called()
+    zot.update_fields.assert_not_called()
 
 
 def test_find_missing_2_of_3_prompt_accept_applies() -> None:
@@ -466,7 +466,7 @@ def test_find_missing_2_of_3_prompt_accept_applies() -> None:
             dry_run=False, no_prompt=False,
         )
     assert result.status == "applied_after_prompt"
-    zot.update_item.assert_called_once()
+    zot.update_fields.assert_called_once()
 
 
 def test_find_missing_2_of_3_prompt_decline_skips() -> None:
@@ -490,7 +490,7 @@ def test_find_missing_2_of_3_prompt_decline_skips() -> None:
             dry_run=False, no_prompt=False,
         )
     assert result.status == "proposed_skipped_by_user"
-    zot.update_item.assert_not_called()
+    zot.update_fields.assert_not_called()
 
 
 def test_find_missing_no_candidates_not_found() -> None:
@@ -507,7 +507,7 @@ def test_find_missing_no_candidates_not_found() -> None:
         dry_run=False, no_prompt=False,
     )
     assert result.status == "not_found_in_crossref"
-    zot.update_item.assert_not_called()
+    zot.update_fields.assert_not_called()
 
 
 def test_find_missing_zero_score_ambiguous_when_multiple_candidates() -> None:
@@ -529,7 +529,7 @@ def test_find_missing_zero_score_ambiguous_when_multiple_candidates() -> None:
         dry_run=False, no_prompt=True,
     )
     assert result.status == "ambiguous_no_clear_match"
-    zot.update_item.assert_not_called()
+    zot.update_fields.assert_not_called()
 
 
 def test_find_missing_skipped_no_title() -> None:
@@ -600,3 +600,67 @@ def test_prompt_confirm_shows_apply_prompt_and_reads_stdin(
     assert result is True
     assert "Apply? [y/N]" in capsys.readouterr().out
     stdin_mock.readline.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Writes go out at the item's current version (A5)
+# ---------------------------------------------------------------------------
+
+
+class _VersionedSurface:
+    """A write surface that enforces versions the way Zotero does: a
+    PATCH at anything but the stored version raises pyzotero's 412
+    error, a good one bumps it."""
+
+    def __init__(self, key: str, version: int) -> None:
+        self.key, self.version = key, version
+        self.writes: list[dict] = []
+
+    def item(self, key: str) -> dict:
+        return {"key": key, "version": self.version, "data": {"key": key}}
+
+    def update_item(self, payload: dict):
+        from pyzotero import errors as pz_errors
+        if payload["version"] != self.version:
+            raise pz_errors.PreConditionFailedError(
+                f"\nCode: 412\nResponse: Item {self.key} has been modified "
+                f"since specified version"
+            )
+        self.writes.append(payload)
+        self.version += 1
+        return True
+
+
+def test_fix_malformed_then_replace_invalid_writes_the_same_item_twice() -> None:
+    """`--fix-malformed --replace-invalid`: pass 1 rewrites the malformed
+    DOI, which bumps the item's version; pass 2 then wrote the
+    replacement at the version read at startup — a guaranteed 412, logged
+    as `write_failed`, with no retry."""
+    import zotero_io
+
+    mod = _load()
+    item = _item_with_authors(
+        [("Smith", "A.")], title="A Study of Things", date="2014",
+        DOI="https://doi.org/10.2307/invalid", version=1,
+    )
+    surface = _VersionedSurface("K1", version=1)
+    zot = zotero_io.ZoteroClient(api_key="k", group_id="1")
+    zot._cloud = surface
+
+    cache = MagicMock()
+    cache.get.return_value = None
+    mod._validate_doi(
+        item, _crossref_returning(None), cache,
+        fix_malformed=True, dry_run=False, zot=zot,
+    )
+    result = mod._find_missing_doi(
+        item, _search_returning([
+            _crossref_item("10.1/new", "A Study of Things", ["Smith"], 2014),
+        ]), zot,
+        is_replacement=True, replace_invalid=True,
+        dry_run=False, no_prompt=False,
+    )
+
+    assert result.status == "replaced_high_confidence"
+    assert [w["DOI"] for w in surface.writes] == ["10.2307/invalid", "10.1/new"]
+    assert [w["version"] for w in surface.writes] == [1, 2]

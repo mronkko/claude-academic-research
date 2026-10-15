@@ -1839,6 +1839,26 @@ class ZoteroClient:
                 "HTTP %s", attachment_key, status,
             )
 
+    @retry(
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception(_is_version_conflict),
+        wait=wait_exponential(multiplier=1, max=10),
+        reraise=True,
+    )
+    def update_fields(self, item_key: str, fields: dict) -> bool:
+        """PATCH `fields` onto `item_key` at its *current* version.
+
+        `update_item` sends whatever version the caller read, which goes
+        stale the moment anything else writes the item — including the
+        caller's own earlier write in the same run (enrich_dois's
+        malformed-DOI fix followed by its replacement write). This reads
+        the version from the write surface just before writing, and on a
+        412 reads it again (three attempts).
+        """
+        current = self.get_item(item_key)
+        payload = {"key": item_key, "version": current["version"], **fields}
+        return bool(self._write_client().update_item(payload))
+
     def update_item(self, payload: dict) -> bool:
         """Generic item PATCH (used by import_to_zotero for bulk field updates).
 

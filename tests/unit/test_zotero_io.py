@@ -325,6 +325,30 @@ def test_a_server_id_mismatch_is_not_retried_as_a_version_conflict() -> None:
     assert fake.update_item.call_count == 1
 
 
+def test_update_fields_writes_at_the_current_version_and_retries_412() -> None:
+    """A5. The write reads the version just before writing, and again
+    after a 412, rather than trusting the version the caller read."""
+    from pyzotero import errors as pz_errors
+
+    zc = _client()
+    fake = MagicMock()
+    versions = iter([7, 9])
+    fake.item.side_effect = lambda key: {"key": key, "version": next(versions)}
+    fake.update_item.side_effect = [
+        pz_errors.PreConditionFailedError("\nCode: 412\n"), True,
+    ]
+    zc._cloud = fake
+
+    with patch("time.sleep"):
+        assert zc.update_fields("X1", {"DOI": "10.1/x"}) is True
+
+    sent = [c.args[0] for c in fake.update_item.call_args_list]
+    assert sent == [
+        {"key": "X1", "version": 7, "DOI": "10.1/x"},
+        {"key": "X1", "version": 9, "DOI": "10.1/x"},
+    ]
+
+
 def _cloud_with_template():
     """A fake pyzotero client whose attachment template is a real dict.
 

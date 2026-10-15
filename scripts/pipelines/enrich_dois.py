@@ -251,11 +251,11 @@ def _validate_doi(
     malformed_was_fixed = False
     if was_malformed and fix_malformed and not dry_run:
         try:
-            zot.update_item({
-                "key": zot_item["key"],
-                "version": zot_item["version"],
-                "DOI": clean_doi,
-            })
+            # `update_fields` writes at the item's current version. The
+            # version in `zot_item` was read at startup, and pass 2
+            # (--replace-invalid) writes the same item again: sending
+            # that stale version there was a guaranteed 412.
+            zot.update_fields(zot_item["key"], {"DOI": clean_doi})
             malformed_was_fixed = True
         except Exception as e:
             print(f"  [{zot_item.get('key')}] fix-malformed write failed: {e}",
@@ -403,11 +403,7 @@ def _find_missing_doi(
                 crossref_authors=cr_authors_str,
             )
         try:
-            zot.update_item({
-                "key": zot_item["key"],
-                "version": zot_item["version"],
-                "DOI": top_doi,
-            })
+            zot.update_fields(zot_item["key"], {"DOI": top_doi})
         except Exception as e:
             print(f"  [{zot_item.get('key')}] write failed: {e}", flush=True)
             return FindResult(
