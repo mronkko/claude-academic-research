@@ -50,7 +50,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fetchers import _pdf_validate, cache_names
+from fetchers import _pdf_validate, cache_names, pdf_version
 from fetchers._title_match import content_words
 from fetchers.base import (
     AbstractFetcher,
@@ -386,6 +386,12 @@ class OpenAlexSource(_OpenAlexClient, AbstractFetcher, PdfFetcher):
         pdf_url = (work.get("open_access") or {}).get("oa_url")
         if not pdf_url:
             return None
+        # `oa_url` is the best OA location's URL; its version comes from
+        # that location, and only when the URL really is that location's.
+        best = work.get("best_oa_location") or {}
+        location = best if pdf_url in (
+            best.get("pdf_url"), best.get("landing_page_url"),
+        ) else None
         ua = f"mailto:{self._mailto()}" if self._mailto() else "Mozilla/5.0"
         try:
             resp = self.http.get(pdf_url, headers={"User-Agent": ua}, timeout=60)
@@ -398,6 +404,10 @@ class OpenAlexSource(_OpenAlexClient, AbstractFetcher, PdfFetcher):
             return None
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(resp.content)
+        pdf_version.record(
+            path, pdf_version.from_openalex_location(location, pdf_url),
+            source=self.name,
+        )
         return path, pdf_url
 
 

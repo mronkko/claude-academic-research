@@ -19,7 +19,7 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from fetchers import _pdf_validate, cache_names
+from fetchers import _pdf_validate, cache_names, pdf_version
 from fetchers.base import PdfFetcher
 
 logger = logging.getLogger(__name__)
@@ -87,6 +87,11 @@ class PmcSource(PdfFetcher):
         conv_url = (
             "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/"
             f"?ids={urllib.parse.quote(doi, safe='')}&format=json"
+            # `versions=yes` adds the per-version list whose `mid`
+            # (NIHMS…) marks an author manuscript — see
+            # `pdf_version.from_pmc_record`. The top-level fields are
+            # unchanged by it.
+            "&versions=yes"
         )
         try:
             conv = self.http.get(conv_url, timeout=30)
@@ -106,6 +111,7 @@ class PmcSource(PdfFetcher):
         if not records or not isinstance(records[0], dict) or "pmcid" not in records[0]:
             return None
         pmcid = records[0]["pmcid"]
+        version = pdf_version.from_pmc_record(records[0])
 
         # Step 2: request the PDF — may land either on the PDF itself or on
         # a PoW challenge page.
@@ -128,6 +134,7 @@ class PmcSource(PdfFetcher):
                 return None
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(resp.content)
+            pdf_version.record(path, version, source=self.name)
             return path, pdf_url
 
         # Step 3: parse PoW challenge out of the HTML.
@@ -176,4 +183,5 @@ class PmcSource(PdfFetcher):
 
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(resp2.content)
+        pdf_version.record(path, version, source=self.name)
         return path, pdf_url

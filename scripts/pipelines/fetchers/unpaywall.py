@@ -7,7 +7,7 @@ import os
 import urllib.parse
 from pathlib import Path
 
-from fetchers import _pdf_validate, cache_names
+from fetchers import _pdf_validate, cache_names, pdf_version
 from fetchers.base import PdfFetcher
 
 logger = logging.getLogger(__name__)
@@ -62,11 +62,13 @@ class UnpaywallSource(PdfFetcher):
         data = meta.json() or {}
 
         best = data.get("best_oa_location") or {}
+        chosen = best
         pdf_url = best.get("url_for_pdf") or best.get("url")
         if not pdf_url:
             for loc in data.get("oa_locations") or []:
                 if loc.get("url_for_pdf"):
                     pdf_url = loc["url_for_pdf"]
+                    chosen = loc
                     break
         if not pdf_url:
             return None
@@ -87,4 +89,10 @@ class UnpaywallSource(PdfFetcher):
 
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(resp.content)
+        # The location's own `version` / `host_type`, read by the measured
+        # rule in `pdf_version.from_oa_location` — not trusted as given.
+        pdf_version.record(
+            path, pdf_version.from_unpaywall_location(chosen, pdf_url),
+            source=self.name,
+        )
         return path, pdf_url

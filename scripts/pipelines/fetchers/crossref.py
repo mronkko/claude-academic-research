@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fetchers import _pdf_validate, cache_names
+from fetchers import _pdf_validate, cache_names, pdf_version
 from fetchers.base import AbstractFetcher, PdfFetcher, is_not_found
 
 if TYPE_CHECKING:
@@ -108,12 +108,14 @@ class CrossrefSource(AbstractFetcher, PdfFetcher):
             return None
 
         pdf_url = None
+        content_version = None
         for link in msg.get("link", []) or []:
             if (
                 link.get("intended-application") == "text-mining"
                 and link.get("content-type") == "application/pdf"
             ):
                 pdf_url = link.get("URL")
+                content_version = link.get("content-version")
                 break
         if not pdf_url:
             return None
@@ -146,4 +148,8 @@ class CrossrefSource(AbstractFetcher, PdfFetcher):
             return None
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(resp.content)
+        pdf_version.record(
+            path, pdf_version.from_crossref_link(content_version),
+            source=self.name,
+        )
         return path, pdf_url

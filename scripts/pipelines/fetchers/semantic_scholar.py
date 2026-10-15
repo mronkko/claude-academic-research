@@ -21,7 +21,7 @@ import os
 import urllib.parse
 from pathlib import Path
 
-from fetchers import _pdf_validate, cache_names
+from fetchers import _pdf_validate, cache_names, pdf_version
 from fetchers.base import AbstractFetcher, PdfFetcher, answered
 from fetchers.doi_url import doi_path
 
@@ -177,4 +177,7 @@ class SemanticScholarSource(AbstractFetcher, PdfFetcher):
 
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(resp.content)
+        pdf_version.record(
+            path, pdf_version.from_semantic_scholar(pdf_url), source=self.name,
+        )
         return path, pdf_url
