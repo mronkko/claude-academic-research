@@ -158,71 +158,183 @@ def test_semantic_scholar_paginates_through_the_shared_session(monkeypatch) -> N
     assert calls[1]["params"]["token"] == "t1"
 
 
+
 # ---------------------------------------------------------------------------
 # Guard: the pattern must not come back.
 # ---------------------------------------------------------------------------
 
-_HTTP_VERBS = {"get", "post", "put", "patch", "delete", "head", "request"}
+_HTTP_VERBS = {"get", "post", "put", "patch", "delete", "head", "options", "request"}
+
+#: Fully-qualified callables that make (or build a client for) an
+#: outbound request without `http_client`'s retry adapter.
+_UNRETRIED = (
+    {f"requests.{verb}" for verb in _HTTP_VERBS}
+    | {f"requests.api.{verb}" for verb in _HTTP_VERBS}
+    | {"requests.Session", "requests.session", "requests.sessions.Session",
+       "urllib.request.urlopen"}
+)
 
 # `http_client` is where the retrying session is defined, so it is the
 # one module allowed to call `requests` directly.
-_ALLOWED = {"http_client.py"}
+_ALLOWED_FILES = {"http_client.py"}
+
+#: Existing call sites that predate this guard's wider net:
+#: (path relative to scripts/pipelines, fully-qualified callee) ->
+#: (number of call sites, reason). Each is a known gap owned by the
+#: module's workstream; the entry is here so the guard is strict for *new*
+#: code today. The count is exact, so a new call in an allow-listed file
+#: still fails, and fixing one fails `test_allow_list_has_no_stale_entries`
+#: until the count is lowered.
+_KNOWN_SITES: dict[tuple[str, str], tuple[int, str]] = {
+    ("enrich_pdfs.py", "requests.Session"): (3, (
+        "bare sessions for the Zotero-desktop ping, the resolver config "
+        "load and the resolver session — resolver traffic with no retry "
+        "adapter; should be http_client.build_session()"
+    )),
+    ("zotero_io.py", "urllib.request.urlopen"): (3, (
+        "api.zotero.org group listing (from_config) plus two local Zotero "
+        "desktop endpoints — stdlib, no retry"
+    )),
+    ("bbt_client.py", "urllib.request.urlopen"): (2, (
+        "Better BibTeX JSON-RPC on localhost:23119 — stdlib on purpose, no retry"
+    )),
+}
 
 
-def _bare_requests_calls(source: str) -> list[int]:
-    """Line numbers of `requests.<verb>(...)` calls in `source`.
+def _qualified_aliases(tree: ast.AST) -> dict[str, str]:
+    """Local name -> fully-qualified module/attribute it is bound to.
+
+    Covers `import requests as _requests`, `import urllib.request`,
+    `from requests import Session`, `from urllib import request` and the
+    like, anywhere in the file — a lazy import inside a function binds a
+    name just as well, which is exactly how enrich_pdfs.py's
+    `_requests.Session()` slipped past the old `requests.<verb>` match.
+    """
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.asname:
+                    aliases[a.asname] = a.name
+                else:
+                    # `import urllib.request` binds `urllib`.
+                    top = a.name.split(".")[0]
+                    aliases[top] = top
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            for a in node.names:
+                aliases[a.asname or a.name] = f"{node.module}.{a.name}"
+    return aliases
+
+
+def _qualified_name(func: ast.AST, aliases: dict[str, str]) -> str | None:
+    parts: list[str] = []
+    while isinstance(func, ast.Attribute):
+        parts.append(func.attr)
+        func = func.value
+    if not isinstance(func, ast.Name) or func.id not in aliases:
+        return None
+    return ".".join([aliases[func.id], *reversed(parts)])
+
+
+def _unretried_calls(source: str) -> list[tuple[int, str]]:
+    """(line, qualified callee) for every unretried HTTP call in `source`.
 
     Walks the AST rather than grepping, so a docstring that *mentions*
     `requests.patch()` (import_to_zotero.py does, describing code that
     was removed) is not mistaken for a call site.
     """
+    tree = ast.parse(source)
+    aliases = _qualified_aliases(tree)
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            name = _qualified_name(node.func, aliases)
+            if name in _UNRETRIED:
+                found.append((node.lineno, name))
+    return found
+
+
+def _all_sites() -> list[tuple[str, int, str]]:
     return [
-        node.lineno
-        for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr in _HTTP_VERBS
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "requests"
+        (p.relative_to(PIPELINES).as_posix(), line, name)
+        for p in sorted(PIPELINES.rglob("*.py"))
+        if p.name not in _ALLOWED_FILES
+        for line, name in _unretried_calls(p.read_text(encoding="utf-8"))
     ]
+
+
+@pytest.mark.parametrize("snippet, expected", [
+    ("import requests\nrequests.get('u')", "requests.get"),
+    ("import requests as _r\n_r.post('u')", "requests.post"),
+    ("from requests import get\nget('u')", "requests.get"),
+    ("from requests import get as fetch\nfetch('u')", "requests.get"),
+    ("import requests\nrequests.Session()", "requests.Session"),
+    ("def f():\n    import requests as _requests\n    _requests.Session()", "requests.Session"),
+    ("from requests import Session\nSession()", "requests.Session"),
+    ("import urllib.request\nurllib.request.urlopen('u')", "urllib.request.urlopen"),
+    ("import urllib.request as ur\nur.urlopen('u')", "urllib.request.urlopen"),
+    ("from urllib.request import urlopen\nurlopen('u')", "urllib.request.urlopen"),
+    ("from urllib import request\nrequest.urlopen('u')", "urllib.request.urlopen"),
+])
+def test_the_guard_sees_every_spelling(snippet: str, expected: str) -> None:
+    assert [name for _, name in _unretried_calls(snippet)] == [expected]
+
+
+@pytest.mark.parametrize("snippet", [
+    '"""Uses requests.patch() historically."""',
+    "import http_client\ns = http_client.build_session()\ns.get('u')",
+    "from urllib.parse import urlparse\nurlparse('u')",
+    "import requests\nx: requests.Session | None = None",
+])
+def test_the_guard_ignores_sanctioned_and_non_calls(snippet: str) -> None:
+    assert _unretried_calls(snippet) == []
+
+
+def _site_counts() -> dict[tuple[str, str], list[int]]:
+    counts: dict[tuple[str, str], list[int]] = {}
+    for path, line, name in _all_sites():
+        counts.setdefault((path, name), []).append(line)
+    return counts
 
 
 def test_no_pipeline_module_calls_requests_directly() -> None:
     """Any new outbound HTTP goes through `http_client.build_session()`.
 
-    A bare `requests.get` has no retry adapter, so it fails on the first
-    transient 429 or 503 — or, worse, invites the hand-rolled
+    A bare `requests.get` — or a bare `requests.Session()`, or
+    `urllib.request.urlopen` — has no retry adapter, so it fails on the
+    first transient 429 or 503, or invites the hand-rolled
     `sleep`-and-retry loop this module was written to remove. A session
     built by `build_session()` carries the policy on every call, so
     `session.post(...)` is the sanctioned form.
     """
-    offenders = [
-        f"{p.relative_to(PIPELINES)}:{line}"
-        for p in PIPELINES.rglob("*.py")
-        if p.name not in _ALLOWED
-        for line in _bare_requests_calls(p.read_text(encoding="utf-8"))
-    ]
+    offenders = []
+    for (path, name), lines in sorted(_site_counts().items()):
+        allowed = _KNOWN_SITES.get((path, name), (0, ""))[0]
+        if len(lines) > allowed:
+            offenders.append(
+                f"{path}:{','.join(map(str, sorted(lines)))}  {name} "
+                f"({len(lines)} sites, {allowed} allow-listed)"
+            )
     assert not offenders, (
-        "These call `requests` directly instead of routing through "
-        "`http_client.build_session()`, so they get no retry/backoff:\n  "
-        + "\n  ".join(offenders)
+        "These make HTTP requests without `http_client.build_session()`, "
+        "so they get no retry/backoff:\n  " + "\n  ".join(offenders)
     )
 
 
-def test_search_scripts_declare_what_http_client_imports() -> None:
-    """`http_client` imports urllib3 and tenacity.
-
-    Every `uv run`-able script that reaches it must declare both in its
-    PEP 723 block, or the import fails at runtime with no venv to fall
-    back on. The searchers reach it via `SearchContext.http()`.
-    """
-    missing: list[str] = []
-    for script in sorted(PIPELINES.glob("search*.py")):
-        header = script.read_text(encoding="utf-8").split("# ///")[1]
-        for dep in ("urllib3", "tenacity"):
-            if dep not in header:
-                missing.append(f"{script.name}: {dep}")
-    assert not missing, (
-        "PEP 723 block is missing a dependency http_client needs:\n  "
-        + "\n  ".join(missing)
+def test_allow_list_has_no_stale_entries() -> None:
+    counts = _site_counts()
+    stale = sorted(
+        f"{key}: allow-lists {allowed}, found {len(counts.get(key, []))}"
+        for key, (allowed, _reason) in _KNOWN_SITES.items()
+        if len(counts.get(key, [])) < allowed
     )
+    assert not stale, (
+        "_KNOWN_SITES allows more call sites than exist — lower the count "
+        "(or drop the entry) so the guard covers them again:\n  " + "\n  ".join(stale)
+    )
+
+
+# The PEP 723 half of this guard — every `uv run` script that reaches
+# `http_client` declares urllib3 and tenacity — lives with the other
+# inline-metadata checks in test_pep723_script_deps.py, where it now
+# covers every script rather than only search*.py.
