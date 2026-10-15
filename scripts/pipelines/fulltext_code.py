@@ -1885,6 +1885,12 @@ def main() -> int:
     # populations are defined by the CSV and the manifest.
     items, _stage_report = _abstract_stage_eligible(items, abstract_prefix)
     print(_stage_report, flush=True)
+    # Supplements, front matter and notices never reach coding, even when
+    # the collection skipped abstract screening (where they would
+    # otherwise all be "eligible").
+    items, doctype_skipped = screening_common.drop_doctype_items(
+        items, stage="full-text coding",
+    )
 
     attachments = zot.all_attachments()
     atts_by_parent: dict[str, list[dict]] = {}
@@ -1998,6 +2004,7 @@ def main() -> int:
                     "collection": args.collection,
                     "library": zot.library_ref(),
                     "already_tagged": len(tagged),
+                    "skipped_by_doctype": doctype_skipped,
                     "limit": args.limit,
                     "only_keys": args.only_keys,
                     "rerun": args.rerun,

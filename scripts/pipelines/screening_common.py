@@ -37,6 +37,7 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from types import ModuleType
 
+import doctype
 import tag_prefix
 
 # ---------------------------------------------------------------------------
@@ -125,6 +126,34 @@ def items_with_stage_tag(
         if hit:
             done.add(item["key"])
     return done
+
+
+def drop_doctype_items(
+    items: list[dict], *, stage: str, quiet: bool = False,
+) -> tuple[list[dict], dict[str, int]]:
+    """Remove `doctype:*`-tagged items before a screening stage.
+
+    Supplements, front matter and notices are kept in Zotero but are not
+    research articles, so no stage spends a model call on them. The count
+    per class is printed every run because PRISMA reports them as removed
+    before screening — a number that has to be read off somewhere, not
+    reconstructed. Untagged items that *look* like one are left in (the
+    tag is the one auditable decision) but warned about.
+    """
+    kept, skipped = doctype.split_items(items)
+    if quiet:
+        return kept, skipped
+    if skipped:
+        print(f"  Skipped before {stage} — not research articles "
+              f"(doctype:* tag): {sum(skipped.values())} "
+              f"({doctype.format_counts(skipped)})", flush=True)
+    lookalikes = doctype.untagged_lookalikes(kept)
+    if lookalikes:
+        print(f"  WARNING: {lookalikes} untagged item(s) look like "
+              f"supplements, front matter or notices and WILL be screened. "
+              f"Tag them first with tag_doctypes.py (dry run, then --apply).",
+              flush=True)
+    return kept, skipped
 
 
 def stage_tag_op(prefix: str, decision: str) -> dict:

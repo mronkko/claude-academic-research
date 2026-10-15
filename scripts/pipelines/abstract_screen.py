@@ -810,6 +810,12 @@ def main() -> int:
             ns=ns,
         )
 
+    # Before anything is counted, sampled or priced: supplements, front
+    # matter and notices are not screened, and their count is the PRISMA
+    # "removed before screening" figure.
+    coll_items, doctype_skipped = screening_common.drop_doctype_items(
+        coll_items, stage="abstract screening",
+    )
     tagged = _already_tagged(coll_items, stage_prefix)
     to_screen = [it for it in coll_items if it["key"] not in tagged]
     print(f"  Already tagged ({stage_prefix}*): {len(tagged)}, remaining: "
@@ -865,6 +871,7 @@ def main() -> int:
                 "collection": args.collection,
                 "library": zot.library_ref(),
                 "already_tagged": len(tagged),
+                "skipped_by_doctype": doctype_skipped,
                 "sample": args.sample,
                 "max_input_chars": args.max_input_chars,
                 "model_hint": model,
