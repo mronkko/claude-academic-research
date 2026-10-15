@@ -104,6 +104,23 @@ directory — not checked in because it references machine-local paths).
   command (`python3` on macOS/Linux, `py` on Windows). A local web form
   for keys was considered and rejected as overkill.
 
+- **P26 — PDF retrieval redesign: plan with the user, then execute.**
+  **Status: in progress for 0.25.0.** Settled with the user on
+  2026-10-15; the plan and its `## STATE` are the source of truth:
+  `~/.claude/plans/pdf-retrieval.md`. In short: no fixed `--all` order —
+  a new `retrieving-pdfs` skill classifies the queue, agrees a strategy
+  with the user and saves it to the project; a `[pdf]` policy
+  (`min_version`, `reconstructed`, `paid`) with global default and
+  per-project override, asked in `/setup`; global `pdf:version:*` and
+  `pdf:manual` tags; a new manual mode (`enrich_pdfs.py --manual next`
+  / `collect`: open the next batch of tabs in the user's own browser,
+  collect the previous batch from Downloads, match and attach — never
+  guess); browser handlers and the Connector become a long unattended
+  run with per-site consent in user config, where a missing answer means
+  skip with `CONSENT_NEEDED`, never yes. Build order: version tags
+  (measure Unpaywall/OpenAlex `version` reliability first) → policy →
+  manual mode → planning step + skill → consent → unattended run.
+
 Deferred from the 0.25.0 audit (findings file:
 `~/.claude/plans/release-0.25.0-findings.md`, verified at fe154a0):
 
