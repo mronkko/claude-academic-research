@@ -1200,7 +1200,7 @@ single-item debugging).
 | Summarise a pilot CSV — journal coverage (top-N) | `pilot_analyze.py journal-coverage` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/pilot_analyze.py journal-coverage --csv pilot/search_results.csv --top 25` |
 | Summarise a pilot CSV — hits by journals.json field code | `pilot_analyze.py field-breakdown` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/pilot_analyze.py field-breakdown --csv pilot/search_results.csv --journals journals.json` |
 | Filter / trim a search CSV (top-N by year, year range) | `filter_search_results.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/filter_search_results.py --input <csv> --output <csv> [--year-min Y] [--year-max Y] [--top-n N]` |
-| Import deduplicated search CSV into Zotero | `import_to_zotero.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/import_to_zotero.py --group <id> --input <search.csv> [--collection <key-or-name>] [--remote]` |
+| Import deduplicated search CSV into Zotero | `import_to_zotero.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/import_to_zotero.py --group <id> --input <search.csv> [--collection <key-or-name>] [--remote]` — exits non-zero if any item create or update failed; read the failures before moving on, the corpus is incomplete |
 | Abstract screening (Claude Haiku on title+abstract) | `abstract_screen.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/abstract_screen.py --group <id> --collection <key> --config ./screening_config.py [--model <alias>] [--remote]` |
 | Full-text screening + structured coding (Claude Sonnet) | `fulltext_code.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs [--model <alias>] [--remote]` |
 | Update specific coding fields on already-coded items | `fulltext_code.py --update-fields` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --pdf-dir ./pdfs --update-fields FIELD1,FIELD2 [--remote]` |
@@ -1331,13 +1331,24 @@ it for one stream only, and either may name a database absent from
 stream.
 
 **A named database that cannot run is a failed search.** If a database
-you named is skipped — no credentials configured for it, or no query
-block for it in `search_config.py` — `search.py` counts it with the
-databases whose API calls failed: it exits non-zero and writes no dedup
-CSV and no `search_run.json`, because those certify a complete search.
-Fix the credential (`/setup`) or the config, or drop the database from
-`--databases` and record that as a protocol decision; do not import the
-`.partial.csv`.
+you named in `--databases`, `--keyword-databases` or
+`--citation-databases` is skipped — no credentials configured for it, or
+no `QUERY_DEFS` / block terms for it in `search_config.py` — `search.py`
+counts it with the databases whose API calls failed: it exits non-zero
+and writes no dedup CSV and no `search_run.json`, because those certify
+a complete search. Fix the credential (`/setup`) or the config, or drop
+the database from the flag and record that as a protocol decision; do
+not import the `.partial.csv`. A database the script selected *by
+default* (you named none) may still be skipped without failing; then
+`search_metadata.json` lists it under `skipped_databases`, and
+`databases` names only the ones that actually ran — so the methods
+section, which reads `databases`, never claims a search that did not
+happen.
+
+**Semantic Scholar needs journal titles.** S2 returns no ISSN, so with a
+`JOURNALS` list that gives ISSNs only (no titles) it has nothing to match
+on, and `search.py` stops with an error rather than returning an empty
+or unscoped stream. Add titles, or leave S2 out of the keyword stream.
 
 This exists because a database can be right for one stream and wrong for
 the other, and the leading case is Semantic Scholar. It returns no ISSN,
@@ -1484,7 +1495,10 @@ Three consequences for protocol design:
   the record with the non-empty abstract. Blindly-first-wins drops data.
 - **Second-pass dedup by title+first-author.** DOI-only dedup misses the
   common case where Scopus has a DOI and WoS does not (or vice versa).
-  Normalise title, first-author lastname, merge.
+  Normalise title, first-author lastname, merge — but **never merge two
+  records whose DOIs differ**: same title and first author with
+  different DOIs is two papers (an erratum, a reprint, a two-part
+  article), not one.
 
 ### Abstract retrieval cascade
 

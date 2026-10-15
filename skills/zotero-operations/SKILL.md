@@ -539,12 +539,16 @@ must handle all three:
 
 1. **Against the existing Zotero library.** Match each input row by DOI,
    falling back to `normalised_title|first_author_lastname`. If matched,
-   add to the target collection and backfill the abstract if empty.
+   add to the target collection and backfill the abstract if empty. The
+   title fallback never matches two records that both carry DOIs and the
+   DOIs differ — those are different papers.
 
 2. **Within the import batch itself.** As the loop processes rows, keep
    growing sets of `batch_doi_seen` and `batch_title_seen`. A second row
    for the same paper (e.g. Scopus + WoS where only one has a DOI) must
    merge into the already-queued item, not create a new one.
+   `import_to_zotero.py` exits non-zero when any create or patch fails;
+   treat that as an incomplete import, not a warning.
 
 3. **Post-import.** Always run `mcp__zotero__zotero_find_duplicates` at
    the end of the import. (It and `zotero_merge_duplicates` exist only
