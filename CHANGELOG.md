@@ -5,6 +5,581 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.0] — 2026-10-15
+
+This release brings four things. The first is a full audit of the
+codebase, with fixes for what it found, several of which could lose
+data. The second is a redesign of PDF retrieval: instead of one fixed
+sequence of sources, the agent now plans a strategy with you and then
+carries it out. The third is an MCP server bundled with the plugin, so
+agents call named tools rather than composing shell commands for you to
+approve one by one. The fourth is that setup no longer writes any
+permission rules. The release also includes about fifty fixes to PDF
+retrieval and abstract enrichment that landed on `main` between 0.24.1
+and the start of this work, most of them found during live runs of a
+large review.
+
+### Changed — read this before upgrading
+
+- **Preprint copies of published articles are no longer attached by
+  default.** The new `[pdf] min_version` policy defaults to `accepted`,
+  so a preprint-server copy of a published article (found through
+  Unpaywall, OpenAlex OA or Semantic Scholar) is refused and the cascade
+  goes on to the next source. Items that only exist on arXiv are still
+  attached. The refused copy is kept in `<cache>/below_policy/` and the
+  log shows `skipped_below_policy`. To get the old behaviour, set
+  `min_version = "preprint"` or pass `--allow-preprints` / `--min-version
+  preprint` for a single run.
+
+- **Setup no longer writes permission rules.** The wizard used to add
+  allow rules and a Read-deny on `config.toml` to
+  `~/.claude/settings.json`, and kept a backup copy of that file. It now
+  leaves `settings.json` alone: what to auto-approve is your decision.
+  Rules written by earlier versions are left as they are, with no
+  migration. The project-level `analysis/results/**` deny rules that
+  `empirical-integrity` installs are unchanged, since they guard data
+  integrity rather than save you a prompt.
+
+- **A database you name that ends up skipped now fails the search.**
+  Before, a missing key or an unavailable database quietly dropped out
+  and the run reported success. `search_metadata.json` now lists only
+  the databases that ran and records the rest under
+  `skipped_databases`.
+
+- **Batch apply no longer overwrites decisions made since the manifest
+  was emitted.** Emitting a cluster manifest and applying its responses
+  can be days apart. If an item was tagged in between, by a human
+  adjudicator or another run, apply used to overwrite that tag unless you
+  remembered `--skip-already-tagged`. Skipping is now the default in
+  both `abstract_screen` and `fulltext_code`. Pass `--overwrite-tagged`
+  to overwrite. The old flag is still accepted and does nothing.
+
+- **Import stops on failures it used to report as success, and never
+  merges records with different DOIs.** `import_to_zotero.py` exits
+  non-zero when any create or patch fails. Two search rows with
+  different DOIs are never treated as one record, and untitled records
+  no longer collapse into each other.
+
+- **`enrich_pdfs.py --plan` on its own is refused.** It needs
+  `--sources browser`, `connector` or `--all` to say which pass to plan.
+  The new whole-queue plan is `--plan-strategy` (see Added).
+
+- **Web of Science is no longer in the default abstract cascade.**
+  Clarivate's API terms (v3.8 §4(a)) bar using WoS data with language
+  models without an AI Addendum, and these abstracts feed LLM screening.
+  Name `wos` in `--sources` to include it. A new exclude list
+  (`--exclude-sources`, `ABSTRACT_EXCLUDE_SOURCES`, `[abstracts]
+  exclude_sources`) keeps a source out even when it is named.
+
+- **New version floors: pyzotero >= 1.16 and zotero-mcp-server >= 0.11.**
+  pyzotero is raised in `pyproject.toml` and every PEP 723 block. The
+  zotero-mcp floor comes with batched `zotero_add_item`, which is now a
+  first-class route for adding a list of identifiers.
+  `import_to_zotero.py` remains the route for search-result CSVs.
+
+- **Import dry runs use your real Zotero key.** A dry run used to send
+  the placeholder key `dummy`, which Zotero refuses, and then carried on
+  with "NOT CHECKED" counts. A key that Zotero rejects now stops both dry
+  and real runs, and the message says whether the key came from
+  `ZOTERO_API_KEY` (which overrides `config.toml`) or from the config
+  file.
+
+- **The project scaffold puts `manuscript_stats.py` in `analysis/`.**
+  The template, `manuscript.qmd` and the skill all said `analysis/`
+  while the scaffold wrote it to `manuscript/`. The scaffold also
+  creates `analysis/results/` now. The `scaffold_project` tool installs
+  the template `CLAUDE.md` only when you ask for it (the terminal script
+  gains `--no-claude-md` and otherwise behaves as before).
+
+- **Playwright runs its newest release.** The plugin no longer pins a
+  version, and install instructions say `uvx playwright@latest`. If the
+  Chromium build for the running version is missing, `enrich_pdfs.py`
+  says so before doing any work, names the exact install command, and
+  exits 2. Before, it failed at browser launch after the whole Zotero
+  read.
+
+- **`--replace` moves the old attachment to Zotero's trash** instead of
+  deleting it permanently, so a replacement that goes wrong can be
+  undone.
+
+### Added
+
+- **PDF retrieval is planned with you, then carried out step by step.**
+  The new `retrieving-pdfs` skill owns PDF retrieval;
+  `systematic-review` and `zotero-operations` hand over to it. It sorts
+  every item without a PDF by likely route (publisher API, paid OpenAlex
+  with its cost, a publisher's browser handler, EBSCOhost, the Zotero
+  Connector, manual download), talks the order and your availability
+  through with you, and records the agreed strategy in
+  `.claude/pdf/strategy.toml`. A later session can pick it up from
+  there. The plan comes from `enrich_pdfs.py --plan-strategy
+  [--plan-lookups none|openalex|all]`. It is read-only, writes
+  `.claude/pdf/plan.json` plus a keys file per route, and its OpenAlex
+  lookups use keyless metadata that is never billed. `pdf_strategy.py`
+  (`init`, `show`, `update`, `policy`) manages the strategy file.
+
+- **A retrieval policy in `[pdf]`.** `min_version` (`published`,
+  `accepted` or `preprint`; default `accepted`), `reconstructed` (whether
+  a PDF may be rebuilt from publisher XML) and `paid` (`off`, `prefer`
+  or `last_resort`; default `prefer`). `/setup` asks all three. A
+  project can override them with `PDF_*` settings in
+  `screening_config.py`, which is parsed, not executed. A single run can
+  override them with `--min-version`, `--paid` or `--allow-preprints`.
+  The run banner shows the policy in effect and where each value came
+  from. `last_resort` tries paid OpenAlex only after every free source.
+  `off` never pays, and also turns off paid abstracts. The older keys
+  `[elsevier] render_xml_to_pdf` and `[openalex] use_paid_content_api`
+  are still read as fallbacks.
+
+- **Every attached PDF records its version.** Each attachment is tagged
+  `pdf:version:published`, `pdf:version:accepted` or
+  `pdf:version:submitted`, as a global tag. The `version` field that
+  APIs return was checked against 298 DOIs. It is trusted only for
+  `publishedVersion` on publisher or journal hosts. Every other answer
+  is classified conservatively.
+
+- **Manual download mode.** `enrich_pdfs.py --manual next` opens the
+  next 25 articles still missing a PDF in your own browser (the library
+  link where there is one, doi.org otherwise). `--manual collect` picks
+  up what you downloaded from your Downloads folder and attaches it. A
+  file is matched by the DOI on its first page, by title, or by file
+  name, and a file it cannot place is never guessed. `--manual assign`
+  and `--manual ignore` handle the rest. Manual attachments get the new
+  global tag `pdf:manual` and a `pdf:version:*` tag, and they obey
+  `min_version`. New keys `[pdf] downloads_dir` and `manual_batch_size`.
+
+- **Consent before automated download from a publisher site.** The
+  browser handlers and the Zotero Connector ask once per site, showing
+  the site, the mode, the item count and a link to its terms. The answer
+  is stored with its date under `[publisher_consent.<site>]` in your
+  user config, and `/setup` can review or change it. A missing answer
+  never counts as yes. Under `--no-prompt`, under an agent's control
+  file, or in an unattended run, unanswered sites are skipped as
+  `CONSENT_NEEDED`. A site you declined goes to manual download as
+  `CONSENT_DENIED`. The audit writes `retry.consent_needed.keys` and
+  `retry.consent_denied.keys`. Publisher APIs, open-access sources and
+  manual download never ask. `pdf_fetch_log.csv` gains a `network`
+  column naming the active library.
+
+- **A long unattended browser run.** `enrich_pdfs.py --unattended setup`
+  is done with you present: consent, one challenge or sign-in per
+  publisher, and confirming the Connector's hosts. `--unattended run`
+  then works through the queue with no prompts. Anything that needs a
+  person is deferred as `DEFERRED_NEEDS_USER`, with a reason
+  (`challenge`, `login`, `repeated_failures`, `host_unconfirmed`,
+  `zotero_unavailable`, `zotero_wrong_library`), and is opened first by
+  the next `--manual next`. The run re-checks the session before each
+  publisher and every 15 minutes (`--recheck-minutes`, `[pdf]
+  unattended_recheck_minutes`). Session lifetimes were not measured, so
+  this default is a cautious guess, not a measured figure. EZproxy
+  sign-ins do not survive a browser restart. The audit writes
+  `retry.deferred.keys`, and the run summary splits failures by
+  network.
+
+- **A bundled MCP server, so agents call tools instead of shell
+  commands.** Skills used to paste `uv run ${CLAUDE_PLUGIN_ROOT}/...`
+  commands, and you had to approve each one as a separate string. The
+  plugin now ships a stdlib-only MCP server, launched with `uv`, that
+  runs the same unchanged scripts as tools. Your host can then offer
+  "always allow" per tool. Each tool description starts with its effect
+  class (read-only, writes project files, writes Zotero, costs money),
+  and no tool forces a prompt on every call. Path parameters are refused
+  if they point outside the project. Full output goes to
+  `.claude/mcp/logs/`, and the tool returns a summary and the last lines.
+  - Short tools: `check_setup`, `scaffold_project`, `screening_report`,
+    `audit_library`, `export_coded_includes`, `generate_bib`,
+    `enrich_pdfs_plan` (the browser-pass plan), `enrich_pdfs_report`,
+    the PDF planning tools (`pdf_plan`, `pdf_strategy_show`,
+    `pdf_strategy_write`, `pdf_strategy_update`, `pdf_policy_write`),
+    manual download (`pdf_manual_next`, `pdf_manual_collect`,
+    `pdf_manual_assign`, `pdf_manual_ignore`) and consent
+    (`pdf_consent_show`, `pdf_consent_set`).
+  - Background jobs for the long steps: `start_search`, `start_import`,
+    `start_enrich_abstracts`, `start_enrich_dois`,
+    `start_abstract_screen`, `start_fulltext_code`, `start_pdf_plan`,
+    `start_enrich_pdfs`, `start_enrich_pdfs_paid`,
+    `start_pdf_unattended_setup` and `start_pdf_unattended_run`, managed
+    with `job_status`, `job_answer`, `cancel_job` and `list_jobs`. A job
+    lives in `.claude/jobs/<id>/` and survives a restart of the server
+    or the host. Cancelling interrupts the script first, so CSVs and tag
+    buffers are flushed. A job relays the script's questions to the
+    agent, which passes them on to you rather than answering them itself.
+  - Only one Zotero-writing or money-spending job runs at a time (dry
+    runs are exempt), and only one Playwright browser job runs per
+    project, because the browser profile cannot be shared. Dry runs are
+    not exempt from the browser rule.
+  - Claude Code registers the server through the plugin manifest. The
+    wizard registers it for Antigravity, and for Codex when `~/.codex`
+    exists. The Codex registration has not been tested.
+  - The skills now call these tools by name. The shipped script appears
+    only as the "terminal equivalent", for when the tools are
+    unavailable or you are working in your own terminal. Every script
+    still runs from a terminal exactly as before.
+
+- **`--progress-json` on the six job scripts** (search, import, the
+  abstract and DOI enrichers, both screening stages), plus
+  `--control-file` on `enrich_dois.py` so its "Apply?" question for a
+  2-of-3 match can be relayed to you.
+
+- **Supplements, front matter and notices are recognised and tagged.**
+  Crossref types APA supplemental material (`<parent DOI>.supp`),
+  publisher front matter (Editorial Board, Issue Information, Featured
+  Cover, Acknowledgment of Ad Hoc Reviewers, Call for Papers) and SAGE
+  Publication Notices (which are retraction or withdrawal notices) as
+  journal articles. In one real search they were 22% of one journal's
+  records. They are kept in Zotero and tagged `doctype:supplement`,
+  `doctype:front-matter` or `doctype:notice` (global tags). Search writes
+  a `doctype` column and per-class counts. Import tags them and links
+  each supplement to its article in both directions. Screening skips
+  them and reports a count per class. `screening_report --search-csv`
+  and `manuscript_stats` (`search.n_removed_*`) report them as removed
+  before screening, for PRISMA. `tag_doctypes.py` backfills an existing
+  library and is a dry run by default.
+
+- **`clean_abstracts.py` repairs abstracts already in Zotero.** In one
+  library of 22,229 abstracts, 2,715 carried a publisher copyright
+  notice, 624 held HTML entities and 1,716 opened with a fused
+  "Abstract" heading. Every source's text is now cleaned as it is
+  fetched. The repair script plans the same cleaning for stored
+  abstracts, writes a before/after CSV, and patches Zotero only with
+  `--write`. It never writes an abstract that would end up empty.
+  Enrichment also refuses text that is not an abstract: the title
+  repeated, an author list, acknowledgements, an author bio, a table of
+  contents, or a GROBID extraction whose title does not match the item.
+
+- **Abstract enrichment says when a source holds an abstract it will not
+  give you.** A record outside your subscription is logged `withheld`
+  rather than `not_found`. `not_found` now requires that every source
+  counted actually answered, so a timeout, a 429 or a missing key can no
+  longer produce a false "no abstract exists". Every log row gets a
+  `ran_at` timestamp.
+
+- **Smaller additions to PDF retrieval.** An arXiv source for items
+  whose own DOI is an arXiv DOI. `--item-types` admits book chapters and
+  books (the default stays `journalArticle`). Progress lines for Pass
+  3's library-route lookups. A `NO_PDF_OFFERED` cause for a page that
+  offers no PDF, which used to be logged `ACCESS_BLOCKED`, and a
+  "readable, no PDF offered" page class. Connector merges run in the
+  background while the next page loads (turn this off with
+  `--connector-foreground-merge`), and the Connector stops waiting as
+  soon as it reports the save finished. The browser setup step reads
+  the publisher's page for a no-access sentence before asking you about
+  it.
+
+- **The manuscript template renders on a fresh scaffold.** An APA CSL
+  file is shipped (CC BY-SA, attributed), the template's paths are
+  fixed, and the render environment is documented. `generate_bib.py`
+  works with no arguments on a scaffolded project, and its citekeys
+  follow Pandoc's rules.
+
+### Fixed
+
+#### Zotero writes and data loss
+
+- **`enrich_pdfs` deleted linked-file PDFs as stubs.** Stub cleanup now
+  touches only stored attachments, moves real stubs to the trash instead
+  of deleting them, and does nothing during `--plan` or `--dry-run`.
+- **Tag writes that Zotero rejected or rate-limited were counted as
+  successes.** This affected abstract screening, `--csv-backfill`,
+  `manage_tags.py` and `apply_qa_adjudications`. Batch writes now report
+  Zotero's real outcome for each item, and transient errors and version
+  conflicts are retried.
+- **Full-text coding wrote the include tag before the coding note.** An
+  interrupted run could leave an include with no coding.
+  The note is written first now. `export_coded_includes` exits
+  non-zero and lists any include that has no note.
+- **`--full-recode` cleared the tags and then coded nothing.** It now
+  codes every item it untagged, and `--dry-run --full-recode` writes
+  nothing (BACKLOG S13).
+- **Abstracts that discuss copyright were cut short** by the cleaner,
+  which mistook the discussion for a notice.
+- **The Zotero Connector could take an existing item with the same DOI
+  as its new save**, merging that item away and trashing it. It also
+  took a figshare supplement saved under the article's title for the
+  article. A save is now matched only to an item that appeared after
+  the save was fired, and a record with a different DOI is never
+  accepted.
+- **Connector merges could leave a keeper with no PDF.** Merges that
+  looked done were undone when Zotero Desktop finished an upload, or
+  they trashed the only item that held the PDF. A merge now waits for a
+  PDF that has finished syncing, re-parents and trashes on the surface
+  it writes to (Desktop when local writes are on), and verifies the move
+  before `--replace` removes anything. A merge that cannot finish yet is
+  queued in `connector_pending_merges.json` rather than failed.
+- **PDF uploads retry dropped connections and timeouts** on the same
+  attachment, without leaving empty attachments behind. Slow Zotero
+  listing pages are retried page by page.
+- **`enrich_dois --fix-malformed --replace-invalid` failed with HTTP
+  412**, and import patched existing items at a stale version. Both now
+  write at the item's current version.
+- **Two import rows matching one item no longer abort with 412.** Each
+  batch carries a Zotero write token, and `--created-keys-out` survives a
+  crash.
+- **POST and PATCH requests are retried only on 429**, never on a 5xx or
+  a read error, which could create duplicates.
+
+#### Search
+
+- **An `OR` or `AND NOT` in a Scopus or WoS query escaped the journal and
+  year limits.** The scope now binds to the whole query. An empty
+  `JOURNALS` searches unscoped instead of failing with HTTP 400.
+- **OpenAlex keyword search was capped at 10,000 results.** It now pages
+  by cursor and reports the API's total. A citation seed that fails on
+  throttling or a server error fails the run instead of reading as "not
+  found".
+- **Semantic Scholar warns when it reaches its 10,000-record cap**, and an
+  ISSN-only `JOURNALS` stops with a clear error.
+- **Deduplication treats DOIs case-insensitively and ignores doi.org
+  prefixes.** WoS keeps DOIs stored as `xref_doi` and ISSNs stored as
+  `eissn`.
+
+#### PDF retrieval
+
+- **The audit kept saying "run the browser pass" for items the browser
+  pass had already tried.** The ILL, manual and network retry lists now
+  fill, and a browser-pass verdict supersedes the cascade's
+  `BROWSER_REQUIRED`.
+- **A publisher page that never starts a download is treated as a
+  paywall** and flagged for ILL, not "retry next run".
+- **A lost network or a crashed browser stops the pass cleanly** instead
+  of failing every remaining item or asking you about a dead window.
+  Ctrl-C now ends a browser or Connector run instead of hanging at a
+  prompt.
+- **`--plan` and `--dry-run` never write to Zotero.** `--all --plan` no
+  longer runs the API cascade, and `--dry-run` skips the Connector.
+- **`--replace` fetches a fresh copy** instead of re-attaching the cached
+  bad one. It no longer swaps a PDF for an identical copy, and a
+  relaunched `--replace` run resumes instead of redoing finished items.
+- **The link resolver no longer reads an unreachable library as "no
+  access".** Failed Alma lookups are not cached as misses, month-based
+  embargoes are respected, and a journal home page is never opened as a
+  full-text route.
+- **A failed Pass-2 upload goes on to the browser or the Connector**
+  instead of stopping there. Deleting a bad PDF makes the next run fetch
+  it again, because Zotero rather than the run log now decides whether an
+  item is done.
+- **Publisher fixes.** Already-downloaded Wiley PDFs are reused and
+  every Wiley PDF is validated. Sage downloads go through the page, so
+  Cloudflare clearance applies. Springer and Palgrave book DOIs open at
+  `/chapter/` or `/book/`, and Routledge book DOIs are left to
+  taylorfrancis.com. WoS quotes DOI queries, handles SICI DOIs, falls
+  back to the title, and checks a title hit against year, authors and
+  venue. arXiv claims only arXiv DOIs.
+- **The Connector paces Elsevier and stops at its block page.** After
+  about 17 rapid saves through an institutional proxy, ScienceDirect
+  blocked the institution's IP address. Elsevier pages are now spaced
+  75 s apart by DOI prefix and landing host, and a block stops that
+  publisher for the run without logging its items as refused. A proxy
+  sign-in page is no longer logged `ACCESS_BLOCKED`. The Connector stops
+  after a run of empty saves, reads the article's own tab rather than
+  whichever tab is active, and survives an extension folder that macOS
+  will not let it read.
+- **A cached Elsevier XML recovery was still attached after you turned
+  recovery off.** It is no longer served.
+- **Smaller fixes.** Cache filenames are Windows-safe and DOIs are encoded
+  in URLs. The PMC proof-of-work is bounded. Bad GROBID responses are
+  not cached. Book chapters are logged correctly. A dry run is not
+  counted as attached. The text cache is written atomically. The
+  resolver cost estimate counts only the queries the run will actually
+  make.
+
+#### Screening
+
+- **An unparseable screening reply is retried before it becomes
+  `borderline`.** The model is asked again up to twice. The parser
+  accepts `**DECISION:** include` and similar variants, and re-asks and
+  fallbacks are counted in the run summary.
+- **Ctrl-C or any error cancels queued model calls** instead of sending
+  them, and paying for them, anyway.
+- **Cluster runs survive interruption.** `run_manifest.py` saves each
+  response as it arrives, survives Ctrl-C and SIGTERM, and resumes
+  (`--no-resume` to start over). Batch apply refuses a degenerate run
+  even without a `.run.json`.
+- **A plain `fulltext_code` run says how many error rows it held back.**
+- **A screening CSV open in Excel no longer crashes a run on Windows**,
+  and JSON that follows prose containing quotes or braces is still found.
+
+#### Setup and security
+
+- **API keys no longer appear in URLs or error messages.** Gemini and the
+  Zotero key check send keys in headers, error text is masked, and
+  whitespace around a pasted key is ignored. Abstract enrichment no
+  longer prints an OpenAlex message that quoted the key.
+- **Re-running setup dropped settings it did not ask about.** This
+  included the Zotero user ID and groups, the gateway key variable and
+  test model, the cluster host, `[library] openurl_base` and hand-added
+  sections. Re-runs now keep everything they do not change, numbers and
+  booleans keep their type, and a declined option stored as `"False"` is
+  read as no. An unparseable `config.toml` stops setup, which saves a
+  timestamped copy and changes nothing.
+- **Code injection through `--model`.** `resolve_models.py` now rejects
+  anything that is not a model ID before writing it into a Python file.
+  `install_templates.py` refuses source paths outside `templates/` and
+  destinations outside the project.
+- **Setup hands you one command that works in your terminal**, with the
+  path filled in, and says why setup runs outside the chat: keys typed
+  into the chat reach the model provider and the transcript.
+- **Setup reports the zotero-mcp version that your MCP config actually
+  launches**, not the one in the plugin's own environment.
+- **Smaller fixes.** The cluster check recognises wildcard allow rules
+  such as `Bash(ssh*)`. Setup survives closed input and model servers
+  that return a bare list. The deny-rule helpers handle non-ASCII text
+  and refuse to overwrite a malformed `settings.json`.
+
+#### Skills and templates
+
+- **`fact-check` no longer needs the superpowers plugin.**
+- **The skills describe this release's defaults.** They warn when the
+  Zotero duplicate or retraction toolsets are missing, and the
+  `zotero-operations` advice on batch adds through zotero-mcp is no
+  longer out of date. Every skill description meets the trigger
+  contract. The systematic-review test template no longer passes
+  silently, and the README is accurate (ten skills, the editorial-tools
+  install line).
+
+### Developer
+
+- Tests run against an empty `HOME` with the plugin's environment
+  variables cleared and its config cache reset. The network guard fails
+  closed (DNS, `connect_ex` and `sendto` are blocked too), and unmarked
+  tests under `tests/live/` are marked `live` automatically.
+- The guards parse code rather than grep it. That covers aliased
+  `requests`, bare `Session()` and `urlopen`, transitive PEP 723
+  imports, console encoding and localhost Zotero calls. New guards
+  check that skills name tools that exist and that every MCP tool's
+  flags exist in its script.
+- CI lints `templates/`, `editorial-tools/` and `mcp/` as well.
+
+### Known limitations
+
+- API PDF fetchers still log a 401/403/429/5xx or a timeout as "no PDF"
+  rather than as a block or a network error (BACKLOG P22).
+- Full-text coding can miss a cached PDF for a SICI-style DOI, because
+  it still builds the old cache filename (P23).
+- The OpenAlex content-API key still travels in request URLs. It is not
+  logged (P24).
+- Scopus and WoS have no dedicated live search test. Their only live
+  coverage is the mini end-to-end SLR (P25).
+- The attended browser and Connector pass still runs through Bash, so
+  the one-browser-job guard cannot see it. Do not start an unattended
+  job while one is open.
+- Nine sites have no verified terms link, so the consent question shows
+  their home page instead: Sage, APA, AoM, AAA, OUP, INFORMS, Emerald,
+  IEEE and ProQuest. Wiley's and Taylor & Francis's links are shipped
+  but could not be checked over plain HTTP.
+
+## [0.24.1] — 2026-09-22
+
+### Added
+
+- **Choose which library a PDF run uses with `--library`.** A reader
+  with two affiliations is on one institution's network at a time.
+  Before this, the only way to switch was to edit `config.toml` between
+  passes. `enrich_pdfs.py --library NAME` takes a label or an endpoint,
+  can be repeated, and can also be set with `LIBRARY_ACTIVE`. The run
+  then follows only that library's routes. Items whose routes are all at
+  another library are deferred: they are not attempted and not logged,
+  so the run on the other network still finds them untried. Every
+  library is still consulted, so a "no coverage" verdict stays reliable.
+  An unknown or ambiguous name fails before any network call.
+  `LIBRARY_OPENURL_BASE` now replaces the configured endpoints even when
+  `openurl_base` is a list. It used to be ignored in that case, which is
+  the one case the list exists for.
+
+- **`--adopt-legacy-resolver-cache LIBRARY`** assigns resolver-cache
+  entries written before this release to the library you name. Those
+  entries say nothing about which library wrote them, so they are no
+  longer read. The run warns once when it re-queries unadopted entries.
+
+### Fixed
+
+- **Reordering `[library] openurl_base` made one library read another's
+  cached routes.** The first-listed library wrote cache keys that did not
+  name it, so after a reorder the new first entry inherited the old
+  one's answers. This is how a browser pass on one university's VPN
+  ended up following another university's resolver links. Every cache
+  key and every route now names its resolver.
+- **An Alma primary library suppressed the date-ignoring lookup at an SFX
+  secondary.** Each library is now queried the way its own dialect
+  allows.
+- **Tables and figures were missing from PDFs rebuilt from Elsevier
+  XML.** Elsevier stores them outside the article body, and the renderer
+  read only the body. In one review's corpus, 346 of 431 recovered PDFs
+  whose text cites "Table N" contained no table at all. Tables and
+  figures are now placed at their first anchor, captions carry their
+  label, legends and significance footnotes stay with their table, and
+  blank cells keep their column (dropping them shifted later values into
+  the wrong column of a correlation matrix). Recoveries made by earlier
+  versions now count as stale and are rebuilt rather than reused, when
+  recovery is enabled.
+- **The `zotero-operations` skill now says where a standalone import gets
+  its tag prefix.** `import_to_zotero.py` requires one since 0.24.0.
+
+## [0.24.0] — 2026-09-11
+
+### Changed — read this before upgrading
+
+- **Every Zotero tag that records a review's judgement now carries the
+  review's prefix.** Screening, coding, QA and search-block tags used to
+  be plain literals such as `abstract:include`. In a library holding
+  more than one review, which is the normal case, those tags could not
+  be filtered by review. Worse, deduplication unions tag sets, so one
+  item could end up carrying two reviews' contradictory decisions. Tags
+  are now written `<prefix>/<family>:<value>`, using the `TAG_PREFIX` in
+  your project's `screening_config.py` (or `--tag-prefix`). `TAG_PREFIX`
+  is required. A missing or malformed prefix stops the script with a
+  message naming the fix, and an empty string is not accepted as a way
+  to opt out. Tags that state a fact about the item (`predatory:flag`,
+  `retracted:flag`, `pdf:*`) stay global, because they hold whoever is
+  reviewing the paper. There is no migration for tags written by
+  earlier versions.
+
+- **Each review gets its own `SLR Coding` note.** The coding note was
+  found by one fixed marker and overwritten in place, so a second review
+  coding the same paper replaced the first review's coding. The note is
+  now namespaced too, and its JSON records which review wrote it.
+
+### Added
+
+- **Coded categorical fields can become tags.** A
+  `FULLTEXT_CODING_FIELDS` entry with a closed `values` list and
+  `"tag": True` writes `<prefix>/<field>:<value>` on each include, in
+  the same write as the stage tag. The list is included in the prompt's
+  JSON schema. A value outside it is still recorded in the note and the
+  CSV but is never tagged, so a category the model invented cannot look
+  as authoritative as a real one. `tag` without `values` is refused when
+  the config loads, before any model calls are paid for.
+  `--full-recode` clears these coded tags as well as the stage tag.
+
+- **`manage_tags.py`** lists every tag in the review's namespace, with
+  item counts grouped by family, and prunes a family you no longer want.
+  This is how you notice that a field which looked categorical has forty
+  single-use values. It is a dry run by default. Pruning a decision
+  family (abstract, fulltext, qa) also needs `--force`, since those
+  verdicts can be recovered only by screening again.
+
+- **The systematic-review skill asks about tags.** After scope lock-in it
+  explains why prefixes exist, proposes one based on the focal
+  construct, and shows the actual tags (`set_tag_prefix.py --dry-run`)
+  before recording your answer. The coding protocol also asks which
+  categorical fields should become tags, warns that forty categories is
+  noise where five is useful, and notes that the choice can be changed
+  either way later.
+
+- **Cluster manifests record the prefix they were emitted under**, and
+  apply refuses a manifest whose prefix does not match. Emit and apply
+  can be days apart. Applying anyway would file a whole run's verdicts
+  under another review's namespace without any warning.
+
+### Fixed
+
+- `fulltext_code.py --update-fields` and `export_coded_includes.py
+  --tag` bypassed the stage constants with bare tag literals. They now
+  use the prefixed form.
+- The mini end-to-end SLR runs under its own `mini-slr` prefix. Before,
+  unprefixed fixture tags made its wait loop spin until it timed out,
+  which made the live suite appear to hang.
+
 ## [0.23.2] — 2026-09-11
 
 ### Fixed
