@@ -126,7 +126,8 @@ scripts/
   core/                    # config loader/writer, LLM provider primitives
   sources/                 # predatory-journal (Beall's list) checks
   pipelines/               # orchestrator scripts (search, enrich_*, abstract_screen,
-                            #   fulltext_code, generate_bib, ...) plus:
+                            #   fulltext_code, generate_bib, ...; tag_doctypes
+                            #   backfills doctype:* tags on an existing library) plus:
     fetchers/               #   per-provider abstract/PDF fetchers (Crossref,
                             #     OpenAlex, ScienceDirect, browser/ for
                             #     Cloudflare-gated publishers)
