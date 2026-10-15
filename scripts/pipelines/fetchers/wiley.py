@@ -26,6 +26,7 @@ import os
 import threading
 from pathlib import Path
 
+from fetchers import _pdf_validate
 from fetchers.base import PdfFetcher
 
 logger = logging.getLogger(__name__)
@@ -94,12 +95,25 @@ class WileySource(PdfFetcher):
         if not results:
             return None
         r = results[0]
-        if r.status != DownloadStatus.SUCCESS:
+        # EXISTING_FILE is a hit, not a miss. `wiley-tdm` skips files it
+        # already has (`skip_existing_files` defaults on), so a PDF this
+        # client downloaded on a --dry-run, or one whose attach failed,
+        # came back EXISTING_FILE on every later run and was never served
+        # again — the item stayed PDF-less with the file sitting on disk.
+        if r.status not in (DownloadStatus.SUCCESS, DownloadStatus.EXISTING_FILE):
             return None
         path_str = getattr(r, "file_path", None) or getattr(r, "path", None)
         if not path_str:
             return None
         path = Path(str(path_str))
         if not path.exists():
+            return None
+        # Wiley's output was the one cascade route never validated, and
+        # the EXISTING_FILE path above would otherwise serve a truncated
+        # or HTML body forever. Drop it so the next run re-fetches.
+        defect = _pdf_validate.file_defect(path)
+        if defect is not None:
+            logger.warning("%s: rejected PDF for %s — %s", self.name, doi, defect)
+            path.unlink(missing_ok=True)
             return None
         return path, f"wiley-tdm://{doi}"

@@ -82,6 +82,58 @@ def test_a_wiley_failure_is_no_longer_whispered(tmp_path, monkeypatch, caplog) -
     assert any("429" in r.getMessage() for r in caplog.records), caplog.text
 
 
+_GOOD_PDF = b"%PDF-1.4\n" + b"x" * 2000 + b"\nstartxref\n9\n%%EOF\n"
+
+
+def _wiley_returning(monkeypatch, status: str, path):
+    import sys
+
+    import fetchers.wiley as wmod
+
+    monkeypatch.setattr(wmod, "_CLIENT", None, raising=False)
+    monkeypatch.setattr(wmod, "_CLIENT_KEY", None, raising=False)
+
+    class _Client:
+        def __init__(self, **kw) -> None:
+            pass
+
+        def download_pdfs(self, dois):
+            return [SimpleNamespace(status=status, path=path)]
+
+    monkeypatch.setitem(sys.modules, "wiley_tdm", SimpleNamespace(TDMClient=_Client))
+    monkeypatch.setitem(sys.modules, "wiley_tdm.download_status", SimpleNamespace(
+        DownloadStatus=SimpleNamespace(SUCCESS="ok", EXISTING_FILE="existing"),
+    ))
+    return wmod.WileySource(None, SimpleNamespace(wiley_tdm_token="t"))
+
+
+def test_wiley_existing_file_is_served_not_treated_as_a_miss(
+    tmp_path, monkeypatch,
+) -> None:
+    """`wiley-tdm` answers EXISTING_FILE for a PDF it already holds. That
+    was read as a miss, so a file downloaded by --dry-run or left by a
+    failed attach was never served again."""
+    pdf = tmp_path / "10.1111_x.pdf"
+    pdf.write_bytes(_GOOD_PDF)
+    src = _wiley_returning(monkeypatch, "existing", pdf)
+    got = src.fetch_pdf("10.1111/x", cache_dir=str(tmp_path))
+    assert got is not None and got[0] == pdf
+
+
+@pytest.mark.parametrize("status", ["ok", "existing"])
+def test_wiley_output_is_validated_and_a_bad_file_dropped(
+    tmp_path, monkeypatch, status,
+) -> None:
+    """Wiley was the one cascade route with no `_pdf_validate`: a
+    truncated or HTML body was accepted, then served as EXISTING_FILE
+    forever."""
+    bad = tmp_path / "10.1111_x.pdf"
+    bad.write_bytes(b"<html>" + b"x" * 2000)
+    src = _wiley_returning(monkeypatch, status, bad)
+    assert src.fetch_pdf("10.1111/x", cache_dir=str(tmp_path)) is None
+    assert not bad.exists()
+
+
 # --- Springer: stop asking once the wall is confirmed -----------------
 
 
