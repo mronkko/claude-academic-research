@@ -228,15 +228,16 @@ def _run_search_metadata(tmp_path, *, extra: list[str]) -> dict:
         f"CITATION_SEEDS = ['{SEED}']\n",
         encoding="utf-8",
     )
-    # Hermetic without tripping the "no database selected" guard: OpenAlex
-    # is selected for the keyword stream, but the config defines no block
-    # terms, so `_run_keyword_stream` skips before making any request. The
-    # citation stream gets no database. Metadata is still written, and the
-    # scope resolution under test does not depend on any source running.
+    # Hermetic without tripping the "no database selected" guard: the
+    # default (auto-detected) selection always includes OpenAlex for the
+    # keyword stream, but the config defines no block terms or
+    # QUERY_DEFS, so every source is skipped before making any request.
+    # The citation stream gets no database. Not passing `--databases` is
+    # deliberate: a database the user *names* and the run skips counts as
+    # a failed search and writes no metadata.
     result = subprocess.run(
         [sys.executable, str(repo / "scripts" / "pipelines" / "search.py"),
          "--config", str(cfg),
-         "--databases", "openalex",
          "--citation-databases", "none",
          "--output-dir", str(tmp_path / "out"),
          "--metadata-dir", str(tmp_path / "meta"), *extra],

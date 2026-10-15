@@ -133,3 +133,12 @@ def test_unmatched_no_doi_rows_survive_untouched() -> None:
 
     assert merged == 0
     assert {r["title"] for r in deduped} == {"One", "Something else"}
+
+
+def test_dedup_matches_dois_across_case_and_url_prefix() -> None:
+    """Databases disagree on DOI case and on keeping a doi.org prefix;
+    keyed on the raw string the same paper survived dedup twice."""
+    a = _row(db="openalex", doi="10.1002/SMJ.3001", title="T")
+    b = _row(db="wos", doi="https://doi.org/10.1002/smj.3001", title="T")
+    deduped, _ = search._dedup([a, b])
+    assert len(deduped) == 1

@@ -141,3 +141,64 @@ def test_all_databases_succeeding_is_unaffected(run_search) -> None:
     assert (out / "search_results.csv").is_file()
     assert (meta / "search_run.json").is_file()
     assert len(_rows(out / "search_results.csv")) == 3
+
+
+# --- a database that was named but skipped is a failed search ----------
+
+class _CredlessSource(_Source):
+    def credentials_error(self, _ctx) -> str | None:
+        return f"{self.name}: no API key"
+
+
+def test_a_named_database_without_credentials_fails_the_run(
+    run_search, monkeypatch,
+) -> None:
+    """`--databases alpha,bravo` with bravo lacking a key used to print
+    SKIP, then write search_run.json and list bravo in the metadata as
+    searched — certifying a corpus that never included it."""
+    main, out, meta = run_search([
+        _Source("alpha", rows=2), _CredlessSource("bravo"),
+    ])
+    monkeypatch.setattr(sys, "argv", [*sys.argv, "--databases", "alpha,bravo"])
+
+    with pytest.raises(SystemExit) as exc:
+        main()
+
+    assert "bravo: skipped" in str(exc.value)
+    assert not (meta / "search_run.json").exists()
+    assert (out / "search_results_raw.partial.csv").is_file()
+
+
+def test_a_named_database_whose_query_shape_is_missing_fails_the_run(
+    run_search, monkeypatch,
+) -> None:
+    """The config has no QUERY_DEFS, so a named Scopus cannot search."""
+    main, _out, meta = run_search([
+        _Source("alpha", rows=1), _Source("scopus", rows=5),
+    ])
+    monkeypatch.setattr(sys, "argv", [*sys.argv, "--databases", "alpha,scopus"])
+
+    with pytest.raises(SystemExit) as exc:
+        main()
+
+    assert "scopus: skipped" in str(exc.value)
+    assert "QUERY_DEFS" in str(exc.value)
+    assert not (meta / "search_run.json").exists()
+
+
+def test_an_auto_selected_database_may_skip_but_is_not_listed_as_searched(
+    run_search,
+) -> None:
+    """Without --databases the selection is a default, so a source the
+    config cannot feed is skipped quietly — but the metadata must not
+    claim it was searched."""
+    import json
+
+    main, _out, meta = run_search([
+        _Source("alpha", rows=1), _Source("wos", rows=5),
+    ])
+
+    assert main() == 0
+    metadata = json.loads((meta / "search_metadata.json").read_text("utf-8"))
+    assert metadata["databases"] == ["alpha"]
+    assert "wos" in metadata["skipped_databases"]

@@ -60,6 +60,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import screening_common  # noqa: E402
+from doi_utils import doi_key  # noqa: E402
 from plugin_version import plugin_version  # noqa: E402
 from searchers import (  # noqa: E402
     DISCOVERY_CITATION,
@@ -133,11 +134,26 @@ def _merge_row(keeper: dict, other: dict) -> None:
         keeper["discovery_source"] = DISCOVERY_KEYWORD
 
 
+def _dedup_doi_key(raw: str) -> str:
+    """Identity key for a row's DOI: case- and prefix-insensitive.
+
+    DOIs are case-insensitive by definition, and the four databases
+    disagree on case and on whether a `https://doi.org/` prefix survives;
+    keyed on the raw string, one paper found by two databases was kept
+    twice. A malformed DOI falls back to its lowercased self, so it still
+    dedups against its exact repeats without colliding with anything else.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    return doi_key(raw) or raw.lower()
+
+
 def _dedup(rows: list[dict]) -> tuple[list[dict], int]:
     by_doi: dict[str, dict] = {}
     no_doi: list[dict] = []
     for r in rows:
-        doi = r["doi"].strip()
+        doi = _dedup_doi_key(r["doi"])
         if not doi:
             no_doi.append(r)
         elif doi not in by_doi:
@@ -260,18 +276,37 @@ def _run_keyword_stream(source, cfg, ctx: SearchContext) -> list[dict]:
     is a valid OpenAlex/S2 run, and one that defines only QUERY_DEFS is a
     valid Scopus/WoS run.
     """
-    name = source.name
-    if name in ("scopus", "wos") and not hasattr(cfg, "QUERY_DEFS"):
-        print(f"  ({name} needs QUERY_DEFS in the config — skipping)",
-              flush=True)
+    reason = _keyword_skip_reason(source.name, cfg)
+    if reason:
+        print(f"  ({reason} — skipping)", flush=True)
         return []
+    return source.run(cfg, ctx)
+
+
+def _keyword_skip_reason(name: str, cfg) -> str:
+    """Why `name`'s keyword stream cannot run on `cfg`, or "" if it can."""
+    if name in ("scopus", "wos") and not getattr(cfg, "QUERY_DEFS", None):
+        return f"{name} needs QUERY_DEFS in the config"
     if (name in ("openalex", "semantic_scholar")
         and not (getattr(cfg, "BLOCK_A_TERMS", None)
                  or getattr(cfg, "BLOCK_B_TERMS", None))):
-        print(f"  ({name} needs BLOCK_A_TERMS / BLOCK_B_TERMS — skipping)",
-              flush=True)
-        return []
-    return source.run(cfg, ctx)
+        return f"{name} needs BLOCK_A_TERMS / BLOCK_B_TERMS"
+    return ""
+
+
+def _explicitly_named(*flags: str) -> set[str]:
+    """Database names the user typed into any of the database flags.
+
+    A database the user named and the run then skipped is a failed
+    search, not a quiet omission: the protocol says it was searched. Only
+    the auto-detected default selection may skip silently.
+    """
+    names: set[str] = set()
+    for raw in flags:
+        if raw.strip().lower() == "none":
+            continue
+        names.update(n.strip() for n in raw.split(",") if n.strip())
+    return names
 
 
 def _run_citation_stream(
@@ -472,18 +507,41 @@ def main() -> int:
     counts: dict = {}
     citation_counts: dict = {}
     failed: dict[str, str] = {}
+    skipped: dict[str, str] = {}
+    explicit = _explicitly_named(
+        args.databases, args.keyword_databases, args.citation_databases,
+    )
     for name in selected:
         source = registry[name]
-        err = source.credentials_error(ctx)
-        if err:
-            print(f"SKIP {name}: {err}", flush=True)
+        wants_keyword = "keyword" in streams and name in keyword_dbs
+        wants_citation = ("citation" in streams and name in citation_dbs
+                          and bool(seeds))
+        kw_reason = _keyword_skip_reason(name, cfg) if wants_keyword else ""
+        # A keyword stream the config cannot feed skips the whole
+        # database when the user named it (the named search did not
+        # happen) or when it was the only stream it was asked for. An
+        # auto-selected database with a citation stream still runs that.
+        reason = source.credentials_error(ctx) or (
+            kw_reason if (name in explicit or not wants_citation) else ""
+        )
+        if reason:
+            if name in explicit:
+                # Named on the command line, so the protocol says it was
+                # searched. Counting it as failed keeps search_run.json
+                # from certifying a corpus that is missing it.
+                failed[name] = f"skipped — {reason}"
+                print(f"FAILED {name}: skipped — {reason}", flush=True)
+            else:
+                skipped[name] = reason
+                print(f"SKIP {name}: {reason}", flush=True)
+            print()
             continue
         print(f"── {name} ──", flush=True)
         try:
             rows: list[dict] = []
-            if "keyword" in streams and name in keyword_dbs:
+            if wants_keyword:
                 rows.extend(_run_keyword_stream(source, cfg, ctx))
-            if "citation" in streams and name in citation_dbs and seeds:
+            if wants_citation:
                 rows.extend(_run_citation_stream(source, seeds, ctx))
         except Exception as e:  # noqa: BLE001
             # One throttled database used to abort the process and throw
@@ -560,7 +618,10 @@ def main() -> int:
         "plugin_version": plugin_version(),
         "search_date_start": run_start,
         "search_date_end": run_end,
-        "databases": selected,
+        # Only databases that actually ran; listing a skipped one here
+        # reported a search that never happened.
+        "databases": [n for n in selected if n in counts],
+        "skipped_databases": skipped,
         "from_year": ctx.from_year,
         "to_year": ctx.to_year,
         "journals": {issn: cfg.JOURNALS[issn][1] for issn in ctx.issns},
