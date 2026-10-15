@@ -5381,6 +5381,10 @@ def _plan_publisher_api(
     return "", ""
 
 
+#: Run-log statuses of a consent skip (`_consent_filter`): nothing opened.
+_CONSENT_SKIP_STATUSES = frozenset({"skipped_consent_needed", "skipped_consent_denied"})
+
+
 def _plan_log_signals(
     log_csv: str, failure_log_csv: str, browser_sources: set[str],
 ) -> tuple[set[str], set[str], dict[str, str], set[str]]:
@@ -5403,7 +5407,10 @@ def _plan_log_signals(
             continue
         if source in api_sources:
             api_tried.add(key)
-        elif source in browser_sources:
+        elif source in browser_sources and (
+                row.get("status") or "") not in _CONSENT_SKIP_STATUSES:
+            # A consent skip opened nothing: the browser pass has not
+            # answered for the item, it chose not to ask the site.
             browser_tried.add(key)
         if (row.get("status") or "") == "skipped_below_policy":
             below.add(key)
@@ -5413,7 +5420,8 @@ def _plan_log_signals(
         source = (row.get("source") or "").strip()
         if source in api_sources:
             api_tried.add(key)
-        elif source in browser_sources:
+        elif source in browser_sources and (
+                row.get("cause") or "") not in pdf_fetch_log.NOT_ATTEMPTED_CAUSES:
             browser_tried.add(key)
     latest = {
         k: (r.get("cause") or "")
@@ -5526,11 +5534,16 @@ def _resolver_keys_cached(doi: str, resolver_cfg, *, dual: bool) -> bool:
 def _plan_resolver(
     entry: dict, handler, resolver_cfg, *, network: bool,
     direct_access: set[str], ignore_coverage: bool,
+    route: dict | None = None,
 ) -> tuple[str, str, bool]:
     """(direct-route case, resolver answer, a network query was made) for
     one item, from the cache unless `network`. Same lookups and the same
     reading as the browser pass (`classify_direct_route`, `_pass3_target`),
-    so the plan and the run cannot disagree about an item they both see."""
+    so the plan and the run cannot disagree about an item they both see.
+
+    `route`, when given, receives the Pass-3 `target` and `url` the
+    answer came from — the planner keys the Connector's consent site on
+    them, as the run does."""
     from fetchers.browser import is_ebsco_target
     from fetchers.library_resolver import lookup_dual
 
@@ -5560,6 +5573,8 @@ def _plan_resolver(
         return case, pdf_plan.R_UNKNOWN, asked
     asked = asked or not _resolver_keys_cached(doi, resolver_cfg, dual=False)
     lookup = _pass3_target(entry, resolver_cfg)
+    if route is not None:
+        route.update(target=lookup.target, url=lookup.url or "")
     if lookup.deferred:
         answer = pdf_plan.R_DEFERRED
     elif lookup.url and is_ebsco_target(lookup.target):
@@ -5571,6 +5586,39 @@ def _plan_resolver(
     else:
         answer = pdf_plan.R_NONE
     return case, answer, asked
+
+
+def _plan_consent(f, route: dict, landing_host: str, sites: dict[str, dict]) -> None:
+    """Fill `f.consent_site` / `f.consent` for the automated route the
+    item would take (`pdf_plan.automated_route`), the way the browser pass
+    keys it: the handler's name, `ebsco`, or the Connector's save site
+    from the resolver route (or doi.org's cached landing host when it
+    fails open). Reads the stored answer; never asks."""
+    from core import publisher_consent as pc
+    from fetchers.browser.consent import site_for_target, site_info
+
+    automated = pdf_plan.automated_route(f)
+    if automated == pdf_plan.BROWSER:
+        site = f.handler
+    elif automated == pdf_plan.EBSCO:
+        site = "ebsco"
+    elif automated == pdf_plan.CONNECTOR:
+        url = route.get("url") or f"https://doi.org/{f.doi}"
+        site = site_for_target(route.get("target"), url, landing_host=landing_host)
+    else:
+        return
+    try:
+        stored = pc.lookup(site)
+    except pc.ConsentError:
+        return
+    f.consent_site, f.consent = stored.site, stored.automated
+    if stored.site not in sites:
+        info = site_info(stored.site)
+        sites[stored.site] = {
+            "display": info.display, "terms_url": info.terms_url,
+            "homepage": info.homepage, "automated": stored.automated,
+            "confirmed": stored.confirmed.isoformat() if stored.confirmed else "",
+        }
 
 
 def _plan_progress(event: dict) -> None:
@@ -5688,6 +5736,7 @@ def _run_plan_strategy(args: argparse.Namespace, zot, all_items: list[dict]) -> 
         unknown["openalex_unchecked"] = len(dois)
 
     facts: list[pdf_plan.ItemFacts] = []
+    consent_sites: dict[str, dict] = {}
     resolver_unknown = 0
     asked = 0
     t0 = time.monotonic()
@@ -5719,12 +5768,15 @@ def _run_plan_strategy(args: argparse.Namespace, zot, all_items: list[dict]) -> 
             found = oa_paid.get(doi_utils.doi_key(doi))
             if found is not None:
                 f.open_access, f.paid = found
+            route: dict = {}
             f.direct_case, f.resolver, net = _plan_resolver(
                 e, handler, resolver_cfg, network=(lookups == "all"),
                 direct_access=direct_access,
                 ignore_coverage=bool(getattr(args, "ignore_library_coverage", False)),
+                route=route,
             )
             asked += net
+            _plan_consent(f, route, host, consent_sites)
             if f.resolver == pdf_plan.R_UNKNOWN and not (
                     f.handler and f.direct_case in ("3-in-coverage", "1a-unknown")):
                 resolver_unknown += 1
@@ -5759,6 +5811,7 @@ def _run_plan_strategy(args: argparse.Namespace, zot, all_items: list[dict]) -> 
         },
         resolver_configured=resolver_cfg is not None,
         notes=notes,
+        consent_sites=consent_sites,
     )
     summary, path = pdf_plan.write_outputs(plan)
     print("")

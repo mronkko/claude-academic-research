@@ -147,7 +147,8 @@ def test_json_shape_the_skill_reads(tmp_path) -> None:
     assert data["below_policy"] == 1
     assert data["audit"] == {"retry.below_policy": 1, "retry.browser": 1}
     assert data["browser_publishers"] == {
-        "sage": {"display": "Sage", "items": 1, "needs_solve": True}}
+        "sage": {"display": "Sage", "items": 1, "needs_solve": True,
+                 "consent": "ask", "confirmed": "", "terms_url": ""}}
     assert data["routes"] == {pp.BROWSER: 1, pp.MANUAL: 1, pp.NO_DOI: 1}
     rows = {r["key"]: r for r in data["items"]}
     assert rows["A"]["route"] == pp.BROWSER and rows["A"]["handler"] == "sage"
@@ -422,3 +423,97 @@ def test_progress_events_for_a_job(rig, tmp_path) -> None:
     events = [json.loads(line)["event"] for line in
               progress.read_text(encoding="utf-8").splitlines()]
     assert events[0] == "start" and events[-1] == "summary"
+
+
+# ---------------------------------------------------------------------------
+# Consent (plan step 5): status per site, denied → manual
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(("facts", "fallback"), [
+    (dict(handler="sage", consent_site="sage", consent="deny"), pp.MANUAL),
+    (dict(handler="sage", consent_site="sage", consent="ask"), pp.BROWSER),
+    (dict(handler="sage", consent_site="sage", consent="allow"), pp.BROWSER),
+    (dict(resolver=pp.R_EBSCO, consent_site="ebsco", consent="deny"), pp.MANUAL),
+    (dict(resolver=pp.R_ROUTE, consent_site="jstor", consent="deny"), pp.MANUAL),
+    # Consent is only for automated routes: a no-route item is untouched.
+    (dict(resolver=pp.R_NONE, consent="deny"), pp.MANUAL),
+    (dict(resolver=pp.R_DEFERRED, consent="deny"), pp.OTHER_LIBRARY),
+])
+def test_a_denied_site_falls_back_to_manual(facts, fallback) -> None:
+    f = pp.ItemFacts(key="K", doi="10.1/x", api_tried=True, **facts)
+    assert pp.fallback_route(f) == fallback
+    assert pp.route_for(f) == fallback
+
+
+def test_plan_reports_consent_per_site_with_the_counts(tmp_path) -> None:
+    facts = [
+        pp.ItemFacts(key="A", doi="10.1177/a", api_tried=True, handler="sage",
+                     handler_display="Sage", consent_site="sage", consent="deny"),
+        pp.ItemFacts(key="B", doi="10.1177/b", api_tried=True, handler="sage",
+                     handler_display="Sage", consent_site="sage", consent="deny"),
+        pp.ItemFacts(key="C", doi="10.1/c", api_tried=True, resolver=pp.R_EBSCO,
+                     consent_site="ebsco", consent="ask"),
+        pp.ItemFacts(key="D", doi="10.1/d", api_tried=True, resolver=pp.R_ROUTE,
+                     consent_site="jstor", consent="allow"),
+    ]
+    sites = {
+        "sage": {"display": "Sage", "terms_url": "", "confirmed": "2026-10-01"},
+        "ebsco": {"display": "EBSCOhost", "terms_url": "https://www.ebsco.com/terms-of-use",
+                  "confirmed": ""},
+        "jstor": {"display": "JSTOR", "terms_url": "https://about.jstor.org/terms/",
+                  "confirmed": "2026-10-15"},
+    }
+    summary, _ = pp.write_outputs(_plan(facts, consent_sites=sites), tmp_path)
+    assert summary["fallback_routes"] == {pp.EBSCO: 1, pp.CONNECTOR: 1, pp.MANUAL: 2}
+    # The denied publisher is still listed, with its answer.
+    assert summary["browser_publishers"]["sage"]["consent"] == "deny"
+    assert summary["browser_publishers"]["sage"]["items"] == 2
+    c = summary["consent"]
+    assert c["sage"]["automated"] == "deny" and c["sage"]["items"] == 2
+    assert c["ebsco"]["modes"] == ["browser (EBSCOhost)"]
+    assert c["ebsco"]["terms_url"] == "https://www.ebsco.com/terms-of-use"
+    assert c["jstor"]["modes"] == ["connector"] and c["jstor"]["confirmed"] == "2026-10-15"
+    assert summary["consent_counts"] == {"ask": 1, "deny": 2, "allow": 1,
+                                         "sites_to_ask": 1}
+    text = pp.format_summary(summary)
+    assert "Consent for automated download" in text
+    assert "EBSCOhost [ebsco]: 1 item via browser (EBSCOhost) · not asked yet" in text
+    assert "denied → manual" in text
+    assert "consent_ask=1 consent_deny=2" in text.splitlines()[-1]
+    rows = {r["key"]: r for r in json.loads(
+        (tmp_path / pp.PLAN_JSON).read_text(encoding="utf-8"))["items"]}
+    assert rows["A"]["fallback"] == pp.MANUAL
+    assert rows["A"]["automated_route"] == pp.BROWSER
+
+
+def test_the_planner_reads_stored_consent_and_asks_nothing(rig, monkeypatch) -> None:
+    from core import publisher_consent as pc
+    pc.record("sage", "deny")
+    assert rig.run() == 0
+    plan = rig.plan()
+    rows = {r["key"]: r for r in plan["items"]}
+    assert rows["SAGE0001"]["consent_site"] == "sage"
+    assert rows["SAGE0001"]["consent"] == "deny"
+    assert rows["SAGE0001"]["route"] == pp.MANUAL
+    assert plan["consent"]["sage"]["automated"] == "deny"
+    # No resolver: the Connector fails open to doi.org, keyed by its site.
+    assert rows["UNKN0001"]["consent_site"] == "doi.org"
+    assert plan["consent"]["doi.org"]["automated"] == "ask"
+    assert rig.zot.writes == []
+
+
+def test_consent_skips_do_not_count_as_the_browser_pass_answering(tmp_path) -> None:
+    """A CONSENT_NEEDED row opened nothing; reading it as browser_tried
+    would send the item to manual download instead of asking consent."""
+    log = tmp_path / "log.csv"
+    log.write_text("run_date,item_key,doi,title,status,source,detail\n"
+                   "d,K1,10.1177/x,T,skipped_consent_needed,sage,\n"
+                   "d,K2,10.1177/y,T,no_pdf,sage,\n", encoding="utf-8")
+    fail = tmp_path / "fail.csv"
+    import pdf_fetch_log
+    pdf_fetch_log.log_failure(fail, item_key="K3", source="connector",
+                              cause=pdf_fetch_log.FailureCause.CONSENT_DENIED)
+    _api, browser, latest, _below = enrich_pdfs._plan_log_signals(
+        str(log), str(fail), {"sage", "connector"})
+    assert browser == {"K2"}
+    assert latest["K3"] == "CONSENT_DENIED"

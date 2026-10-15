@@ -387,8 +387,8 @@ def summarise_retrieval_plan(out: str, rc: int, project: Path) -> tuple[dict, li
             plan = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             plan = {}
-        for key in ("browser_publishers", "paid_openalex", "policy", "audit",
-                    "unknown", "manual_queue"):
+        for key in ("browser_publishers", "consent", "consent_counts",
+                    "paid_openalex", "policy", "audit", "unknown", "manual_queue"):
             if key in plan:
                 summary[key] = plan[key]
         artifacts.append(PLAN_JSON)

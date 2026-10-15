@@ -22,6 +22,14 @@ default order (API cascade → paid → browser / Connector → manual);
 will likely get 300; of everything it might miss, 120 are behind two
 Cloudflare publishers and 80 have no automated route at all".
 
+**Consent** (plan §4). Items on a browser-handler, EBSCOhost or
+Connector route carry the site their download would come from and the
+user's stored answer for it (`ItemFacts.consent_site` / `consent`, read
+from `core/publisher_consent` — never asked here). The summary lists them
+per site (`consent`, `consent_counts`) so the skill can ask consent along
+with the counts; a site answered `deny` sends its items' `fallback` to
+`manual` (`automated_route` keeps the route they would otherwise take).
+
 **Three lookup depths** (`LOOKUPS`):
 
 - `none` — caches only: the Crossref DOI cache, the link-resolver cache,
@@ -152,10 +160,23 @@ class ItemFacts:
     audit_sets: tuple[str, ...] = ()
     #: A copy below `[pdf] min_version` was found and set aside.
     below_policy: bool = False
+    #: The site an automated download would come from on the item's
+    #: browser / EBSCO / Connector route (`fetchers.browser.consent`),
+    #: "" when it has no such route or the site is not known.
+    consent_site: str = ""
+    #: That site's stored answer — `allow`, `deny` or `ask` (also for
+    #: no entry at all); "" without a site.
+    consent: str = ""
 
 
-def fallback_route(f: ItemFacts) -> str:
-    """Where the item goes if every API source fails it."""
+#: Routes that download automatically and so need consent (modes 1, 2).
+CONSENT_ROUTES: tuple[str, ...] = (BROWSER, EBSCO, CONNECTOR)
+
+
+def automated_route(f: ItemFacts) -> str:
+    """`fallback_route` before consent: the automated route the item
+    would take if every site allowed it. The planner uses it to say which
+    site is asked about; `fallback_route` is what actually happens."""
     if not f.doi:
         return NO_DOI
     if f.browser_tried:
@@ -171,6 +192,17 @@ def fallback_route(f: ItemFacts) -> str:
     # A route, an unanswered question, or no resolver at all: the
     # Connector pass fails open to doi.org, so it still gets a try.
     return CONNECTOR
+
+
+def fallback_route(f: ItemFacts) -> str:
+    """Where the item goes if every API source fails it. A site the user
+    denied automated download for sends the item to manual download —
+    the browser pass would skip it (CONSENT_DENIED). `ask` keeps the
+    route: the planning conversation is where that question is put."""
+    route = automated_route(f)
+    if route in CONSENT_ROUTES and f.consent == "deny":
+        return MANUAL
+    return route
 
 
 def route_for(f: ItemFacts) -> str:
@@ -243,6 +275,9 @@ class Plan:
     credentials: dict = field(default_factory=dict)
     resolver_configured: bool = False
     notes: list[str] = field(default_factory=list)
+    #: site -> {"display", "terms_url", "automated", "confirmed"} for every
+    #: `ItemFacts.consent_site` in the queue (gathered by enrich_pdfs).
+    consent_sites: dict = field(default_factory=dict)
 
 
 def _count(values: Iterable[str], order: tuple[str, ...]) -> dict[str, int]:
@@ -259,14 +294,39 @@ def summarise(plan: Plan) -> dict:
     fallbacks = {f.key: fallback_route(f) for f in facts}
     with_doi = [f for f in facts if f.doi]
 
+    automated = {f.key: automated_route(f) for f in facts}
     publishers: dict[str, dict] = {}
     for f in facts:
-        if fallbacks[f.key] == BROWSER:
+        # By the route before consent, so a denied publisher is still
+        # listed — with its answer — rather than vanishing into `manual`.
+        if automated[f.key] == BROWSER:
+            site = plan.consent_sites.get(f.consent_site or f.handler, {})
             entry = publishers.setdefault(f.handler, {
                 "display": f.handler_display or f.handler,
                 "items": 0, "needs_solve": f.handler_needs_solve,
+                "consent": f.consent or "ask",
+                "confirmed": site.get("confirmed", ""),
+                "terms_url": site.get("terms_url", ""),
             })
             entry["items"] += 1
+
+    consent: dict[str, dict] = {}
+    for f in facts:
+        route = automated[f.key]
+        if route not in CONSENT_ROUTES or not f.consent_site:
+            continue
+        site = plan.consent_sites.get(f.consent_site, {})
+        entry = consent.setdefault(f.consent_site, {
+            "display": site.get("display", f.consent_site),
+            "automated": f.consent or "ask",
+            "confirmed": site.get("confirmed", ""),
+            "terms_url": site.get("terms_url", ""),
+            "modes": [], "items": 0,
+        })
+        entry["items"] += 1
+        mode = ROUTE_MODE[route] if route != EBSCO else "browser (EBSCOhost)"
+        if mode not in entry["modes"]:
+            entry["modes"].append(mode)
 
     paid_items = sum(1 for f in with_doi if f.paid)
     paid_after_api = sum(1 for f in facts if routes[f.key] == PAID)
@@ -313,6 +373,18 @@ def summarise(plan: Plan) -> dict:
         "fallback_routes": _count(fallbacks.values(), FALLBACK_ROUTES),
         "browser_publishers": dict(sorted(
             publishers.items(), key=lambda kv: (-kv[1]["items"], kv[0]))),
+        # Consent for automated download, per site on a browser / EBSCO /
+        # Connector route (modes 1, 2): what the conversation asks with
+        # the counts. `automated` is allow | deny | ask (ask = no answer).
+        "consent": dict(sorted(
+            consent.items(), key=lambda kv: (-kv[1]["items"], kv[0]))),
+        "consent_counts": {
+            "ask": sum(e["items"] for e in consent.values() if e["automated"] == "ask"),
+            "deny": sum(e["items"] for e in consent.values() if e["automated"] == "deny"),
+            "allow": sum(e["items"] for e in consent.values()
+                         if e["automated"] == "allow"),
+            "sites_to_ask": sum(1 for e in consent.values() if e["automated"] == "ask"),
+        },
         "signals": {
             "api_tried": sum(f.api_tried for f in facts),
             "publisher_api": sum(bool(f.publisher_api) for f in facts),
@@ -363,6 +435,8 @@ def write_outputs(plan: Plan, project: Path = Path(".")) -> tuple[dict, Path]:
     full = {**summary, "items": [
         {"key": f.key, "doi": f.doi, "route": route_for(f),
          "fallback": fallback_route(f),
+         **({"automated_route": automated_route(f)}
+            if automated_route(f) != fallback_route(f) else {}),
          **{k: v for k, v in asdict(f).items()
             if k not in ("key", "doi", "title") and v not in ("", None, (), False)}}
         for f in plan.facts
@@ -376,6 +450,15 @@ def write_outputs(plan: Plan, project: Path = Path(".")) -> tuple[dict, Path]:
 # ---------------------------------------------------------------------------
 # The human summary
 # ---------------------------------------------------------------------------
+
+def _consent_word(entry: dict) -> str:
+    answer = entry.get("consent") or entry.get("automated") or "ask"
+    if answer == "allow":
+        return "allowed" + (f" {entry['confirmed']}" if entry.get("confirmed") else "")
+    if answer == "deny":
+        return "denied → manual"
+    return "not asked yet"
+
 
 def _n(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
@@ -409,7 +492,24 @@ def format_summary(summary: dict) -> str:
         lines.append("  Browser publishers (items · needs a Cloudflare / SSO solve):")
         for p in pubs.values():
             lines.append(f"    {p['display']}: {p['items']}"
-                         + ("  [solve]" if p["needs_solve"] else ""))
+                         + ("  [solve]" if p["needs_solve"] else "")
+                         + f"  [consent: {_consent_word(p)}]")
+    consent = summary.get("consent") or {}
+    if consent:
+        lines.append("")
+        lines.append("Consent for automated download (browser handlers and the "
+                     "Connector; per site):")
+        for site, c in consent.items():
+            terms = f" — terms: {c['terms_url']}" if c.get("terms_url") else ""
+            lines.append(f"  {c['display']} [{site}]: {_n(c['items'], 'item')} via "
+                         f"{', '.join(c['modes'])} · {_consent_word(c)}{terms}")
+        counts = summary.get("consent_counts") or {}
+        if counts.get("sites_to_ask"):
+            lines.append(
+                f"  {counts['sites_to_ask']} site(s) have no answer: a browser or "
+                f"Connector run that cannot ask skips their {counts['ask']} item(s) "
+                f"as CONSENT_NEEDED. Ask the user now and record it "
+                f"(pdf_consent_set). Denied sites go to manual download.")
     paid = summary["paid_openalex"]
     lines.append("")
     if paid.get("unchecked"):
@@ -450,6 +550,8 @@ def format_summary(summary: dict) -> str:
         "paid_items": paid["items"],
         "paid_known": int(bool(paid["known"])),
         "below_policy": summary["below_policy"],
+        "consent_ask": (summary.get("consent_counts") or {}).get("ask", 0),
+        "consent_deny": (summary.get("consent_counts") or {}).get("deny", 0),
         "lookups": summary["lookups"],
     }
     lines.append("PLAN: " + " ".join(f"{k}={v}" for k, v in fields.items()))
