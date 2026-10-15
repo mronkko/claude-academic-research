@@ -88,6 +88,10 @@ directory — not checked in because it references machine-local paths).
     terminal equivalent). Setup itself stays in the terminal (S27).
   Full spec: the coordinator's `release-0.25.0.md` plan, "## P18 spec".
 
+  `check_setup` also reports the zotero-mcp-server version the host's MCP
+  configuration actually launches (`check_zotero_mcp_version.py` now
+  resolves the configured binary instead of the plugin's own venv), so
+  3a's reason for leaving it out no longer applies.
 - **S27 — the setup hand-off gives one command that works, and says
   why.** **Status: done in 0.25.0.** The setup skill handed the user
   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py` (the variable
