@@ -41,8 +41,16 @@ directory — not checked in because it references machine-local paths).
 
 - **P21 — the pipeline as tools of a plugin-bundled MCP server.**
   **Status: in progress for 0.25.0 — 3a done** (server, short tools,
-  registration; skills not yet rewired). **3b done (non-PDF jobs);
-  enrich_pdfs jobs follow the PDF redesign (P26)** — `mcp/job_runner.py`,
+  registration; skills not yet rewired). **3b done, enrich_pdfs jobs
+  included** (P26 step 6, 2026-10-15: `start_enrich_pdfs` — the free API
+  cascade, fixed `--paid off`; `start_enrich_pdfs_paid` — new effect class
+  `[costs money]`, scope `paid_only` / `cascade[_prefer|_last_resort]`;
+  `start_pdf_unattended_setup` — control-file Q&A, `[writes user config]`;
+  `start_pdf_unattended_run` — never asks; every enrich_pdfs job keeps
+  `control=True` because the schema guard pairs it with the script's
+  `--control-file`). **3c remains**: rewire the other skills to call the
+  tools (`retrieving-pdfs` already does, via `pdf_strategy_show`'s
+  `tool_arguments`) — `mcp/job_runner.py`,
   six `start_*` tools plus `job_status` / `job_answer` / `cancel_job` /
   `list_jobs`, `--progress-json` on the six scripts (stdlib
   `progress_json.py`), `--control-file` on `enrich_dois` (the only one
@@ -112,7 +120,10 @@ directory — not checked in because it references machine-local paths).
   for keys was considered and rejected as overkill.
 
 - **P26 — PDF retrieval redesign: plan with the user, then execute.**
-  **Status: in progress for 0.25.0.** Settled with the user on
+  **Status: all six build steps done for 0.25.0** (2026-10-15; step 6,
+  the unattended run, without the session-lifetime measurement — skipped
+  by the user's decision, so its re-check schedule is a conservative
+  default). Open follow-ups are in the plan's `## STATE`. Settled with the user on
   2026-10-15; the plan and its `## STATE` are the source of truth:
   `~/.claude/plans/pdf-retrieval.md`. In short: no fixed `--all` order —
   a new `retrieving-pdfs` skill classifies the queue, agrees a strategy
