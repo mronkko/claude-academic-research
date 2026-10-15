@@ -44,6 +44,12 @@ from log_schemas import PDF_FETCH_FIELDS
 
 SUCCESS_STATUSES = frozenset({"attached", "attached_via_connector", "dry_run", "unchanged"})
 
+#: The subset that actually leaves a PDF on the item. `dry_run` is a
+#: success for the run (the fetch worked, nothing to itemise) but it
+#: attached nothing; counting it under "with a PDF attached" told a user
+#: who had just run --dry-run that their library now held the PDFs.
+ATTACHED_STATUSES = SUCCESS_STATUSES - {"dry_run"}
+
 STATUS_INFO: dict[str, tuple[str, str]] = {
     # status: (one-line meaning, next lever)
     "attached": ("PDF attached", ""),
@@ -276,15 +282,19 @@ def format_report(
         return "PDF run report: no log rows found."
 
     buckets = group_by_status(rows)
-    resolved = sum(len(v) for k, v in buckets.items() if k in SUCCESS_STATUSES)
-    unresolved = len(rows) - resolved
+    resolved = sum(len(v) for k, v in buckets.items() if k in ATTACHED_STATUSES)
+    dry = len(buckets.get("dry_run", []))
+    unresolved = len(rows) - resolved - dry
 
     out: list[str] = []
     out.append("")
     out.append("=" * 68)
     out.append(f"PDF run report — {len(rows)} items")
+    dry_note = (
+        f", {dry} downloaded but not attached (--dry-run)" if dry else ""
+    )
     out.append(
-        f"  {resolved} with a PDF attached, {unresolved} still without"
+        f"  {resolved} with a PDF attached{dry_note}, {unresolved} still without"
     )
     out.append("=" * 68)
 

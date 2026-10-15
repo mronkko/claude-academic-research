@@ -78,6 +78,19 @@ def test_header_separates_resolved_from_still_missing() -> None:
     assert "1 still without" in text
 
 
+def test_dry_run_is_not_counted_as_attached() -> None:
+    """A --dry-run uploads nothing; the header said its downloads were
+    "with a PDF attached"."""
+    text = report.format_report([
+        _row(item_key="A", status="attached"),
+        _row(item_key="B", status="dry_run"),
+        _row(item_key="C", status="skipped_no_pdf"),
+    ])
+    assert "1 with a PDF attached" in text
+    assert "1 downloaded but not attached (--dry-run)" in text
+    assert "1 still without" in text
+
+
 def test_attached_no_text_counts_as_still_missing() -> None:
     """It has a file, but nothing downstream can read it — reporting it
     as resolved would hide the item."""

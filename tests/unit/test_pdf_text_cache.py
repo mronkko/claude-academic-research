@@ -41,6 +41,25 @@ def test_first_call_runs_pdftotext_and_caches(tmp_path: Path, cache_dir: Path) -
     assert cached[0].read_text(encoding="utf-8") == "extracted text"
 
 
+def test_an_interrupted_write_leaves_no_cache_entry(
+    tmp_path: Path, cache_dir: Path, monkeypatch,
+) -> None:
+    """A plain write interrupted mid-way left a truncated file that the
+    next call served forever as the PDF's text."""
+    pdf = _write_pdf(tmp_path, "paper.pdf", b"%PDF-1.4 body")
+
+    def boom(self, *a, **k):
+        Path.write_bytes(self, b"trunc")   # partial bytes on disk...
+        raise KeyboardInterrupt            # ...then the interrupt
+
+    monkeypatch.setattr(Path, "write_text", boom)
+    with patch.object(pdf_text_cache, "_run_pdftotext", return_value="full text"), \
+            pytest.raises(KeyboardInterrupt):
+        pdf_text_cache.get_text("ABCD0001", pdf, cache_dir=cache_dir)
+    assert list(cache_dir.glob("ABCD0001-*.txt")) == []
+    assert list(cache_dir.iterdir()) == []
+
+
 def test_second_call_reads_from_cache_without_running_pdftotext(
     tmp_path: Path, cache_dir: Path,
 ) -> None:

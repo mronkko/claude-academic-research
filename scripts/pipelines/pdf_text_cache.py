@@ -29,6 +29,7 @@ network, or any pipeline state — just `subprocess` and the filesystem.
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 import sys
@@ -91,7 +92,15 @@ def get_text(
 
     text = _run_pdftotext(pdf_path)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_file.write_text(text, encoding="utf-8")
+    # Write-then-rename. A plain write interrupted mid-way (Ctrl-C, a
+    # full disk, two workers on one item) left a truncated file that the
+    # `is_file()` check above then served forever as the PDF's text.
+    tmp = cache_file.with_name(f".{cache_file.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, cache_file)
+    finally:
+        tmp.unlink(missing_ok=True)
     return text
 
 
