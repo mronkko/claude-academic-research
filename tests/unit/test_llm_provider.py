@@ -1,29 +1,37 @@
+"""LLM provider routing and the Gemini adapter, against stubbed SDKs.
+
+The `anthropic` and `google.genai` SDKs are replaced in `sys.modules` for
+the duration of each test only. They used to be installed at import time
+and never removed, so every test collected after this module saw a
+MagicMock where `anthropic` should be — whether or not the real SDK was
+installed.
+"""
+
 import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
+from core import llm_provider
 
-# Mock anthropic module so tests can run without having it installed
-mock_anthropic_module = MagicMock()
-sys.modules["anthropic"] = mock_anthropic_module
-
-# Mock google and google.genai modules so tests can run without having them installed
-mock_google = MagicMock()
-mock_genai = MagicMock()
-mock_google.genai = mock_genai
 
 class MockGenerateContentConfig:
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
             setattr(self, k, v)
 
-mock_genai.types.GenerateContentConfig = MockGenerateContentConfig
 
-sys.modules["google"] = mock_google
-sys.modules["google.genai"] = mock_genai
-sys.modules["google.genai.types"] = mock_genai.types
-
-from core import llm_provider  # noqa: E402
+@pytest.fixture(autouse=True)
+def _stub_sdks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the vendor SDKs; `llm_provider` imports them lazily, so the
+    stubs only need to be in place while a test runs."""
+    mock_genai = MagicMock()
+    mock_genai.types.GenerateContentConfig = MockGenerateContentConfig
+    mock_google = MagicMock()
+    mock_google.genai = mock_genai
+    monkeypatch.setitem(sys.modules, "anthropic", MagicMock())
+    monkeypatch.setitem(sys.modules, "google", mock_google)
+    monkeypatch.setitem(sys.modules, "google.genai", mock_genai)
+    monkeypatch.setitem(sys.modules, "google.genai.types", mock_genai.types)
 
 
 def test_get_provider_routing():
