@@ -1352,6 +1352,62 @@ class ZoteroClient:
         removed = len(existing - target)
         return added + removed
 
+    #: Zotero's predicate for "Related" items.
+    RELATION_PREDICATE = "dc:relation"
+
+    def item_uri(self, item_key: str) -> str:
+        """The URI Zotero stores in `relations` to point at an item.
+
+        Always the `http://zotero.org/...` form, whichever surface the
+        write goes through: it is an identifier, not a URL anything
+        fetches, and Zotero Desktop writes the same form.
+        """
+        return (f"http://zotero.org/{self.library_type}s/{self.group_id}"
+                f"/items/{item_key}")
+
+    @retry(
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception(_is_version_conflict),
+        wait=wait_exponential(multiplier=1, max=10),
+        reraise=True,
+    )
+    def add_related(
+        self, item_key: str, related_keys: Iterable[str], *,
+        cloud: bool = False,
+    ) -> int:
+        """Add `dc:relation` links from `item_key` to each related key.
+
+        One direction only — call it for both items to get the two-way
+        link Zotero Desktop makes when you relate items by hand. Existing
+        relations (of any predicate) are kept; returns how many links
+        were added, 0 without writing when all were already there.
+
+        `cloud=True` reads and writes api.zotero.org whatever the write
+        surface, for callers relating items they have just created there:
+        Zotero Desktop does not know about those until it syncs, and a
+        version read from one surface cannot be written to the other.
+        """
+        client = self.cloud if cloud else self._write_client()
+        current = client.item(item_key)
+        relations = dict(current.get("data", {}).get("relations") or {})
+        existing = relations.get(self.RELATION_PREDICATE) or []
+        if isinstance(existing, str):
+            existing = [existing]
+        wanted = [self.item_uri(k) for k in related_keys if k != item_key]
+        added = [u for u in dict.fromkeys(wanted) if u not in existing]
+        if not added:
+            return 0
+        relations[self.RELATION_PREDICATE] = list(existing) + added
+        payload = {
+            "key": item_key,
+            "version": current["version"],
+            "relations": relations,
+        }
+        # Version read just above from the same surface; a 412 re-reads it
+        # (the retry), as `update_fields` does.
+        client.update_item(payload)
+        return len(added)
+
     def get_tags(self, item_key: str) -> set[str]:
         """Return the current set of tags on an item (for resume checks)."""
         item = self.get_item(item_key)

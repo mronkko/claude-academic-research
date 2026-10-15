@@ -192,3 +192,50 @@ def format_counts(counts: dict[str, int]) -> str:
         k for k in counts if k not in DOCTYPES and counts[k]
     )
     return ", ".join(f"{k} {counts[k]}" for k in order)
+
+
+def supplement_links(
+    supplement_dois: Iterable[str], key_by_doi: dict[str, str],
+) -> list[tuple[str, str]]:
+    """`(supplement_key, parent_key)` for every supplement whose parent is known.
+
+    `key_by_doi` maps lower-cased bare DOIs to Zotero keys — the library
+    plus whatever the current run created. A supplement whose article is
+    in neither stays tagged and unlinked; nothing is fetched to find it.
+    """
+    pairs: list[tuple[str, str]] = []
+    for doi in supplement_dois:
+        d = _norm_doi(doi)
+        parent = parent_doi(d)
+        if parent and d in key_by_doi and parent in key_by_doi:
+            pair = (key_by_doi[d], key_by_doi[parent])
+            if pair[0] != pair[1] and pair not in pairs:
+                pairs.append(pair)
+    return pairs
+
+
+def link_supplements(
+    pairs: list[tuple[str, str]], zot, *, cloud: bool = False,
+) -> tuple[int, int]:
+    """Relate each supplement and its article, both directions.
+
+    `zot` is a `zotero_io.ZoteroClient` (duck-typed so this module stays
+    importable without pyzotero). A failed pair is reported and skipped:
+    the tag is already the load-bearing record, and the link is a
+    convenience that must not fail an import. Returns `(linked, failed)`.
+    """
+    linked = failed = 0
+    for supp_key, parent_key in pairs:
+        try:
+            zot.add_related(supp_key, [parent_key], cloud=cloud)
+            zot.add_related(parent_key, [supp_key], cloud=cloud)
+        except Exception as exc:  # noqa: BLE001 — see docstring
+            failed += 1
+            print(f"  WARNING: could not relate supplement {supp_key} to "
+                  f"article {parent_key}: {exc}", flush=True)
+        else:
+            linked += 1
+    if pairs:
+        print(f"  Supplements linked to their article: {linked}"
+              + (f" ({failed} failed)" if failed else ""), flush=True)
+    return linked, failed

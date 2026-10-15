@@ -139,3 +139,40 @@ def test_split_items_counts_per_doctype_and_ignores_untagged_lookalikes():
     assert skipped == {"supplement": 1, "front-matter": 2}
     assert doctype.untagged_lookalikes(items) == 1
     assert doctype.format_counts(skipped) == "supplement 1, front-matter 2"
+
+
+def test_supplement_links_pairs_only_known_parents():
+    key_by_doi = {
+        "10.1037/apl0000550.supp": "SUPP0001",
+        "10.1037/apl0000550": "ART00001",
+        "10.1037/apl0000557.supp": "SUPP0002",  # parent not in library
+    }
+    pairs = doctype.supplement_links(
+        ["10.1037/APL0000550.supp", "10.1037/apl0000557.supp",
+         "10.1037/apl0000550.supp"],
+        key_by_doi,
+    )
+    assert pairs == [("SUPP0001", "ART00001")]
+
+
+class _RelZot:
+    def __init__(self, fail_on=()):
+        self.calls: list[tuple] = []
+        self._fail_on = set(fail_on)
+
+    def add_related(self, key, related, *, cloud=False):
+        if key in self._fail_on:
+            raise RuntimeError("412")
+        self.calls.append((key, tuple(related), cloud))
+        return 1
+
+
+def test_link_supplements_links_both_ways_and_survives_failures(capsys):
+    zot = _RelZot(fail_on={"SUPP0002"})
+    linked, failed = doctype.link_supplements(
+        [("SUPP0001", "ART00001"), ("SUPP0002", "ART00002")], zot, cloud=True,
+    )
+    assert (linked, failed) == (1, 1)
+    assert zot.calls == [("SUPP0001", ("ART00001",), True),
+                         ("ART00001", ("SUPP0001",), True)]
+    assert "could not relate supplement SUPP0002" in capsys.readouterr().out

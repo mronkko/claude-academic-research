@@ -91,6 +91,7 @@ except ImportError:
         "block at the top declares pyzotero + requests."
     )
 
+import doctype  # noqa: E402
 import doi_utils  # noqa: E402
 import http_client  # noqa: E402
 import screening_common  # noqa: E402
@@ -345,6 +346,24 @@ def _container_field_of(item: dict) -> str | None:
     return None
 
 
+def row_doctype(row: dict, item: dict | None = None) -> str:
+    """The doctype class of a CSV row (and the item built from it), or "".
+
+    Re-derived rather than read from the row's `doctype` column, so a CSV
+    from before that column existed — or one edited by hand — gets the
+    same answer as a fresh search. The built item is consulted for
+    authors because a Crossref-filled item has creators the row's
+    display-order string may lack.
+    """
+    item = item or {}
+    return doctype.classify(
+        row.get("title") or item.get("title", ""),
+        row.get("doi") or item.get("DOI", ""),
+        has_authors=bool((row.get("authors") or "").strip()
+                         or item.get("creators")),
+    )
+
+
 def _apply_plugin_layers(
     item: dict, row: dict, collection_key: str | None, *, ns: str,
 ) -> dict:
@@ -428,6 +447,13 @@ def _apply_plugin_layers(
             # touches the paper — so reviews sharing a library share the
             # flag rather than each stamping a private copy.
             tags.append({"tag": "predatory:flag", "type": 1})
+
+    # Supplements, front matter and notices are imported, not dropped,
+    # and tagged so screening can skip them with a count PRISMA can
+    # report. Global like `predatory:flag`: it is a fact about the record.
+    dt = row_doctype(row, item)
+    if dt:
+        tags.append({"tag": doctype.tag_for(dt), "type": 1})
 
     if tags:
         item["tags"] = tags
@@ -772,14 +798,15 @@ def _fetch_existing_items(
 
 
 def _patch_existing_items(
-    to_add: list[tuple[str, str]],
+    to_add: list[tuple[str, str, str]],
     zot: zotero_io.ZoteroClient,
     collection_key: str | None,
 ) -> int:
-    """Patch existing items to add missing abstracts and/or collection
-    membership. Uses ZoteroClient.update_item (pyzotero) — the custom
-    If-Unmodified-Since-Version requests.patch() that used to live here
-    is gone. Returns the number of items whose patch failed.
+    """Patch existing items to add missing abstracts, collection
+    membership and/or a missing `doctype:*` tag. `to_add` holds
+    `(item_key, abstract, doctype)`. Uses ZoteroClient.update_fields —
+    the custom If-Unmodified-Since-Version requests.patch() that used to
+    live here is gone. Returns the number of items whose patch failed.
     """
     if not to_add:
         return 0
@@ -797,13 +824,17 @@ def _patch_existing_items(
     # superseded; Zotero answered 412 and the import aborted. One patch
     # per item, carrying the first non-empty abstract.
     abstract_by_key: dict[str, str] = {}
-    for item_key, abstract in to_add:
+    doctype_by_key: dict[str, str] = {}
+    for item_key, abstract, dt in to_add:
         if not abstract_by_key.get(item_key):
             abstract_by_key[item_key] = abstract
+        if dt and not doctype_by_key.get(item_key):
+            doctype_by_key[item_key] = dt
 
     need_patch: list[tuple[str, int, dict]] = []
-    abstract_patched = 0
+    abstract_patched = doctype_patched = 0
     for item_key, abstract in abstract_by_key.items():
+        dt = doctype_by_key.get(item_key, "")
         item = item_by_key.get(item_key)
         if not item:
             continue
@@ -816,11 +847,16 @@ def _patch_existing_items(
         if not (d.get("abstractNote") or "").strip() and abstract:
             patch["abstractNote"] = abstract
             abstract_patched += 1
+        tags = d.get("tags", []) or []
+        if dt and not doctype.from_tags(tags):
+            patch["tags"] = list(tags) + [{"tag": doctype.tag_for(dt), "type": 1}]
+            doctype_patched += 1
         if patch:
             need_patch.append((item_key, item["version"], patch))
 
     print(f"  Items needing patch: {len(need_patch)} "
-          f"(abstracts to backfill: {abstract_patched}).", flush=True)
+          f"(abstracts to backfill: {abstract_patched}, "
+          f"doctype tags to add: {doctype_patched}).", flush=True)
 
     failed = 0
     for i, (item_key, _version, patch) in enumerate(need_patch, 1):
@@ -867,6 +903,7 @@ def _create_new_items(
     to_create: list[dict],
     zot: zotero_io.ZoteroClient,
     created_keys: list[str] | None = None,
+    key_by_index: dict[int, str] | None = None,
 ) -> tuple[int, int, list[str]]:
     """POST `to_create` in batches. Returns `(created, failed, keys)`.
 
@@ -883,6 +920,10 @@ def _create_new_items(
 
     A batch that fails outright (HTTP error, network error) is counted as
     failed and the remaining batches still run; the caller exits non-zero.
+
+    With `key_by_index`, also records which `to_create` position each
+    new key belongs to — the success map is keyed by position within the
+    batch, and a failed item would shift a plain list.
     """
     filtered_to_create = []
     for item in to_create:
@@ -934,6 +975,9 @@ def _create_new_items(
         success = result.get("success", {})
         created += len(success)
         created_keys.extend(str(v) for v in success.values())
+        if key_by_index is not None:
+            for pos, key in success.items():
+                key_by_index[i + int(pos)] = str(key)
         failed += len(result.get("failed", {}))
         if result.get("failed"):
             for idx, err in result["failed"].items():
@@ -1097,8 +1141,12 @@ def main() -> int:
     doi_map, title_map = _fetch_existing_items(zot, args.dry_run)
     doi_by_key = {key: doi for doi, key in doi_map.items()}
 
-    to_add: list[tuple[str, str]] = []
+    to_add: list[tuple[str, str, str]] = []
     to_create: list[dict] = []
+    #: Every supplement DOI in this batch, new or already in the library,
+    #: for the parent-linking pass after the writes.
+    supplement_dois: list[str] = []
+    doctype_counts: dict[str, int] = {}
     batch_doi_seen: dict[str, int] = {}
     batch_title_seen: dict[str, int] = {}
     dropped_within_batch = 0
@@ -1117,9 +1165,14 @@ def main() -> int:
     for row in rows:
         doi = _normalize_doi_key(row.get("doi") or "")
         abstract = (row.get("abstract") or "").strip()
+        dt = row_doctype(row)
+        if dt == doctype.SUPPLEMENT and doi and doi not in supplement_dois:
+            supplement_dois.append(doi)
 
         if doi and doi in doi_map:
-            to_add.append((doi_map[doi], abstract))
+            to_add.append((doi_map[doi], abstract, dt))
+            if dt:
+                doctype_counts[dt] = doctype_counts.get(dt, 0) + 1
             continue
 
         tk = _title_author_key(row.get("title", ""), row.get("authors", ""))
@@ -1130,7 +1183,9 @@ def main() -> int:
         # however alike their titles. Merging them lost one silently.
         if (tk and tk in title_map
                 and not _dois_conflict(doi, doi_by_key.get(title_map[tk], ""))):
-            to_add.append((title_map[tk], abstract))
+            to_add.append((title_map[tk], abstract, dt))
+            if dt:
+                doctype_counts[dt] = doctype_counts.get(dt, 0) + 1
             continue
 
         # Within-batch dedup — merge rather than duplicate
@@ -1157,6 +1212,9 @@ def main() -> int:
         )
         build_counts[how] += 1
         preview_samples.setdefault(how, item)
+        item_dt = doctype.from_tags(item.get("tags", []))
+        if item_dt:
+            doctype_counts[item_dt] = doctype_counts.get(item_dt, 0) + 1
         if how == BUILD_FALLBACK and not doi:
             fallback_no_doi += 1
         idx = len(to_create)
@@ -1171,6 +1229,17 @@ def main() -> int:
         print(f"  Within-batch duplicates merged:  {dropped_within_batch}",
               flush=True)
     _print_provenance_summary(build_counts, fallback_no_doi)
+    if doctype_counts:
+        print(f"  Not research articles (tagged doctype:*, skipped at "
+              f"screening): {doctype.format_counts(doctype_counts)}",
+              flush=True)
+    if supplement_dois:
+        known = set(doi_map) | set(batch_doi_seen)
+        n_linkable = sum(1 for d in supplement_dois
+                         if doctype.parent_doi(d) in known)
+        print(f"  Supplements with their article in the batch or library "
+              f"(to be linked as related items): {n_linkable} of "
+              f"{len(supplement_dois)}", flush=True)
 
     if args.dry_run:
         _print_dry_run_preview(preview_samples)
@@ -1181,11 +1250,12 @@ def main() -> int:
 
     created = failed = 0
     created_keys: list[str] = []
+    key_by_index: dict[int, str] = {}
     try:
         if to_create:
             print(f"\nCreating {len(to_create)} new items...", flush=True)
             created, failed, _ = _create_new_items(
-                to_create, zot, created_keys,
+                to_create, zot, created_keys, key_by_index,
             )
             print(f"  Created: {created}  Failed: {failed}", flush=True)
     finally:
@@ -1198,6 +1268,20 @@ def main() -> int:
                 "\n".join(created_keys) + ("\n" if created_keys else ""),
                 encoding="utf-8",
             )
+
+    if supplement_dois:
+        key_by_doi = dict(doi_map)
+        for idx, key in key_by_index.items():
+            new_doi = _normalize_doi_key(to_create[idx].get("DOI") or "")
+            if new_doi:
+                key_by_doi[new_doi] = key
+        # Through the Web API: the items were just created there, and
+        # Zotero Desktop has not seen them until it syncs. A failed link
+        # is a warning, not a failed import — the tag is the record.
+        doctype.link_supplements(
+            doctype.supplement_links(supplement_dois, key_by_doi), zot,
+            cloud=True,
+        )
 
     if failed or patch_failed:
         # Exit non-zero: a caller (or an agent) reading only the exit
