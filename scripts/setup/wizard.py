@@ -58,6 +58,7 @@ from check_cluster_config import LEVELS as _CLUSTER_LEVELS  # noqa: E402
 from core import config_writer as _config_writer  # noqa: E402
 from core import pdf_policy as _pdf_policy  # noqa: E402
 from core import providers  # noqa: E402
+from core import publisher_consent as _publisher_consent  # noqa: E402
 from zotero_mcp_floor import (  # noqa: E402
     PIP_INSTALL_CMD as ZOTERO_MCP_PIP_INSTALL_CMD,
 )
@@ -1508,6 +1509,64 @@ def _offer_no_access_editor(
 
 
 # ---------------------------------------------------------------------------
+# [publisher_consent] review.
+#
+# Consent for automated download (browser handlers, Zotero Connector) is
+# asked by the run itself, once per site, the first time a terminal run
+# reaches it — or recorded from the planning conversation. The wizard is
+# where the answers are reviewed and changed; it never asks for new
+# sites, because a question without that run's item count and terms link
+# is a question the user cannot answer well.
+# ---------------------------------------------------------------------------
+
+
+def _offer_consent_review(interactive: bool, existing: dict) -> dict[str, dict]:
+    """Changed `[publisher_consent.<site>]` tables, `{site: {automated,
+    confirmed}}` — empty when nothing changed or on non-interactive runs.
+
+    Lists the stored answers; the user picks entries by number and gives
+    each a new answer (allow / deny / ask), dated today. Enter keeps all.
+    """
+    import datetime as _dt
+
+    stored = _publisher_consent.read_all(existing)
+    if not interactive:
+        return {}
+    print("\n  Automated PDF download — stored consent per site:")
+    if not stored:
+        print("    (none yet — a browser or Connector run in a terminal asks once")
+        print("     per site, showing its terms link; agent runs skip unanswered")
+        print("     sites and the planning conversation records the answer.)")
+        return {}
+    entries = sorted(stored.values(), key=lambda c: c.site)
+    for i, c in enumerate(entries, 1):
+        when = f" (confirmed {c.confirmed.isoformat()})" if c.confirmed else ""
+        bad = f" [unreadable value {c.invalid!r}, read as ask]" if c.invalid else ""
+        print(f"    {i}. {c.site}: {c.automated}{when}{bad}")
+    print("  Change any? Enter numbers separated by spaces, or press Enter to "
+          "keep them all.")
+    raw = _ask("    > ").strip()
+    if not raw:
+        return {}
+    try:
+        picked = sorted({int(tok) for tok in raw.split()})
+    except ValueError:
+        print("    (could not parse — leaving the answers unchanged.)")
+        return {}
+    changed: dict[str, dict] = {}
+    for n in picked:
+        if not 1 <= n <= len(entries):
+            continue
+        c = entries[n - 1]
+        answer = _ask_choice(f"Automated download from {c.site}?",
+                             _publisher_consent.ANSWERS, c.automated)
+        if answer != c.automated or c.invalid:
+            changed[c.site] = {"automated": answer, "confirmed": _dt.date.today()}
+            print(f"    {c.site}: {answer}")
+    return changed
+
+
+# ---------------------------------------------------------------------------
 # [library] direct_access editor.
 #
 # The counterpart to `no_access`, and the one question about access the
@@ -2870,6 +2929,10 @@ def main() -> int:
             values.setdefault("library", {})[key] = updated
         else:
             removals.add(("library", key))
+
+    consent_changes = _offer_consent_review(interactive, existing_cfg)
+    if consent_changes:
+        values.setdefault("publisher_consent", {}).update(consent_changes)
 
     _write_config(_merge_config(existing_cfg, values, removals))
     gitignore_updated = _maybe_add_claude_to_gitignore()
