@@ -214,10 +214,25 @@ def test_wos_title_fallback_on_doi_alias() -> None:
         f"pick a different alias-only DOI for the fallback regression test."
     )
 
-    abstract = src.fetch_abstract(doi, title=title)
+    # The item's own metadata, as enrich_abstracts passes it. Since
+    # 82a2462 a title hit is accepted only when its year and an author
+    # or the venue agree with the item (`record_agrees`), and an item
+    # with no metadata can never agree — so without `meta` this lookup
+    # is refused by design ("no year to compare"), not by WoS.
+    from fetchers._title_match import item_meta
+    meta = item_meta({
+        "date": "2014",
+        "creators": [{"lastName": "Cornelissen"}, {"lastName": "Werner"}],
+        "publicationTitle": "Academy of Management Annals",
+    })
+    abstract = src.fetch_abstract(doi, title=title, meta=meta)
     assert abstract is not None, (
         f"WoS title fallback failed for title={title!r}. Title normaliser "
         f"may have regressed, or the paper is no longer in WoS."
+    )
+    assert src.fetch_abstract(doi, title=title) is None, (
+        "a title hit was accepted for an item with no metadata to check "
+        "it against — the record_agrees guard has been lost"
     )
     assert len(abstract) > 60, (
         f"WoS title-fallback abstract is too short ({len(abstract)} chars)"
