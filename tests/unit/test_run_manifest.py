@@ -96,9 +96,22 @@ def test_each_response_is_journalled_as_it_completes(tmp_path, provider) -> None
     real = run_manifest.execute_one
 
     def spy(req, client, model):
-        # Before each call, count what the journal holds so far.
+        # Before call k, every earlier response must reach the journal.
+        # The main thread journals a completed future while the worker
+        # may already be starting the next call, so allow it a moment
+        # rather than racing it — what matters is that it arrives while
+        # the run is still going, not only when the run ends.
+        import time
+
         j = run_manifest.partial_path(out)
-        seen.append(len(j.read_text().splitlines()) if j.exists() else 0)
+        want = len(seen)
+        deadline = time.monotonic() + 2.0
+        while True:
+            have = len(j.read_text().splitlines()) if j.exists() else 0
+            if have >= want or time.monotonic() > deadline:
+                break
+            time.sleep(0.01)
+        seen.append(have)
         return real(req, client, model)
 
     run_manifest.execute_one = spy
