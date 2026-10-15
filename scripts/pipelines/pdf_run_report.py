@@ -147,6 +147,15 @@ STATUS_INFO: dict[str, tuple[str, str]] = {
         "first. To allow automation after all, change the answer "
         "(`pdf_consent.py set`, or /setup).",
     ),
+    "deferred_needs_user": (
+        "Set aside by an unattended run: it needed a person",
+        "Nothing was learned about access. The run's `detail` says what "
+        "stopped it (an expired Cloudflare clearance, a sign-in page, a "
+        "Connector host not confirmed in the setup phase, Zotero Desktop "
+        "not running, repeated unexplained failures). Download these by "
+        "hand — `enrich_pdfs.py --manual next` opens them first — or run "
+        "`--unattended setup` again and re-run.",
+    ),
     "skipped_no_library_coverage": (
         "Library link-resolver reported no licensed full-text route",
         "Verify against your library's own journal listing before "

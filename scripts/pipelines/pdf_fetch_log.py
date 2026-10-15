@@ -163,6 +163,21 @@ class FailureCause(StrEnum):
     later changes the answer to `allow`, this key file is exactly what a
     browser pass should be re-run over. Not an exclusion."""
 
+    DEFERRED_NEEDS_USER = "DEFERRED_NEEDS_USER"
+    """An unattended browser run (`enrich_pdfs.py --unattended run`, plan
+    step 6) reached something only a person can do — an expired
+    Cloudflare clearance, a sign-in / SSO / EZproxy login page, a
+    Connector host nobody confirmed in the setup phase, Zotero Desktop
+    not running, or the unexplained failures an attended run would have
+    asked about — and set the item aside instead of blocking. The
+    specific reason is in the run log's `detail` column.
+
+    Nothing was learned about access, so never an exclusion and never an
+    ILL candidate. The audit writes `retry.deferred.keys`, and the manual
+    queue opens those items first (`manual_pdfs.PRIORITY_RETRY_SETS`); a
+    later attended browser pass over the same key file is the other
+    route."""
+
     UPLOAD_FAILED = "UPLOAD_FAILED"
     """The PDF was fetched successfully but could not be attached to
     Zotero. Categorically different from the four above: the full text
@@ -444,6 +459,9 @@ CAUSE_PRECEDENCE: tuple[str, ...] = (
     # item: they say why the route that could have answered was never
     # taken, which is the actionable part.
     FailureCause.CONSENT_NEEDED.value,
+    # Deferred by an unattended run: like a consent skip, it says why the
+    # route that could answer was not taken this time.
+    FailureCause.DEFERRED_NEEDS_USER.value,
     FailureCause.UPLOAD_FAILED.value,
     FailureCause.CORRUPT_DOWNLOAD.value,
     FailureCause.NO_PDF_OFFERED.value,
@@ -562,6 +580,11 @@ SUGGESTED_FE_CODE: dict[str, str] = {
     FailureCause.CONSENT_DENIED.value:
         "NOT an exclusion — automated download denied for the site; "
         "download by hand (enrich_pdfs.py --manual next)",
+    FailureCause.DEFERRED_NEEDS_USER.value:
+        "NOT an exclusion — an unattended run set it aside for a person "
+        "(expired clearance, a login page, an unconfirmed Connector host); "
+        "download by hand (enrich_pdfs.py --manual next) or re-run the "
+        "browser pass attended",
 }
 
 #: Causes that must never be adjudicated as a full-text exclusion —
@@ -585,12 +608,15 @@ RECOVERABLE_CAUSES: frozenset[str] = frozenset({
     FailureCause.VERSION_BELOW_POLICY.value,
     FailureCause.CONSENT_NEEDED.value,
     FailureCause.CONSENT_DENIED.value,
+    FailureCause.DEFERRED_NEEDS_USER.value,
 })
 
 #: Causes that record a route the browser pass *chose not to take*
-#: (consent), as opposed to one it took. A planner must not read their
-#: rows as "the browser pass has answered for this item".
+#: (consent, an unattended run's deferral), as opposed to one it took. A
+#: planner must not read their rows as "the browser pass has answered for
+#: this item".
 NOT_ATTEMPTED_CAUSES: frozenset[str] = frozenset({
     FailureCause.CONSENT_NEEDED.value,
     FailureCause.CONSENT_DENIED.value,
+    FailureCause.DEFERRED_NEEDS_USER.value,
 })

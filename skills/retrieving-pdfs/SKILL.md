@@ -401,6 +401,7 @@ Then act by cause:
 | `VERSION_BELOW_POLICY` | A copy below `[pdf] min_version` was found and set aside in `<cache>/below_policy/`, not attached | Get the published version another way (`retry.below_policy.keys`: `paid`, `browser`, `manual`), or ask whether to lower `PDF_MIN_VERSION`. **Not an exclusion.** |
 | `CONSENT_NEEDED` | Automated download from the item's site (a browser handler, or the page the Connector would save from) was skipped: no consent recorded, and the run could not ask (`--no-prompt`, `--control-file`, unattended). Nothing was attempted | Ask the user about that site (*Consent* below), record it with `pdf_consent_set`, re-run the browser step over `retry.consent_needed.keys` — or `manual`. Not ILL. **Not an exclusion.** |
 | `CONSENT_DENIED` | The user recorded `deny` for the site, so the browser pass did not open it | `manual` (`retry.consent_denied.keys` opens first). If the user changes the answer to `allow`, re-run the browser step over that key file. **Not an exclusion.** |
+| `DEFERRED_NEEDS_USER` | An unattended run reached something only a person can do — an expired Cloudflare clearance, a sign-in / SSO / EZproxy login page, a Connector host not confirmed in the setup phase, Zotero Desktop not running, or repeated unexplained failures — and set the item aside instead of waiting. The run log's `detail` names the reason; nothing was attempted | `manual` (`retry.deferred.keys` opens first), or with the user present the `browser` step over that key file, or `--unattended setup` again before another run. Not ILL. **Not an exclusion.** |
 | `UPLOAD_FAILED` | Fetched, but the Zotero attach failed | Re-run `api`: it attaches from the local cache, no new download (`retry.reattach.keys`). Cheapest of all. **Not an exclusion.** |
 | `OUT_OF_SCOPE` | Book chapter, thesis, preprint | FE2 / FE3 — excluded on item type, not on retrieval; chasing a PDF wastes the user's time |
 | `UNAVAILABLE` | Every route tried, nothing found | FE6 — the only cause that justifies a full-text-unavailable exclusion, and only after the preprint offer below |
@@ -422,7 +423,7 @@ the audit, you do not know the cause, and you may not tag. The audit
 writes the retry sets as key files (`retry.browser[.<publisher>]`,
 `retry.ill`, `retry.network`, `retry.reattach`, `retry.manual`,
 `retry.below_policy`, `retry.consent_needed`, `retry.consent_denied`,
-`true_negative`, `out_of_scope`) under
+`retry.deferred`, `true_negative`, `out_of_scope`) under
 `.claude/audit/` — feed them straight to `--filter-keys-file`; never
 assemble key lists by hand or with `jq`.
 

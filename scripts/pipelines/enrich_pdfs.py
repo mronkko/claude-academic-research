@@ -5381,8 +5381,11 @@ def _plan_publisher_api(
     return "", ""
 
 
-#: Run-log statuses of a consent skip (`_consent_filter`): nothing opened.
-_CONSENT_SKIP_STATUSES = frozenset({"skipped_consent_needed", "skipped_consent_denied"})
+#: Run-log statuses of a consent skip (`_consent_filter`) or an unattended
+#: run's deferral (`_defer_item`): nothing was opened for the item.
+_CONSENT_SKIP_STATUSES = frozenset({
+    "skipped_consent_needed", "skipped_consent_denied", "deferred_needs_user",
+})
 
 
 def _plan_log_signals(

@@ -366,6 +366,7 @@ def _report_retrieval_failures(
     cause_order = [
         pdf_fetch_log.FailureCause.BROWSER_REQUIRED.value,
         pdf_fetch_log.FailureCause.CONSENT_NEEDED.value,
+        pdf_fetch_log.FailureCause.DEFERRED_NEEDS_USER.value,
         pdf_fetch_log.FailureCause.UPLOAD_FAILED.value,
         pdf_fetch_log.FailureCause.CORRUPT_DOWNLOAD.value,
         pdf_fetch_log.FailureCause.NO_PDF_OFFERED.value,
@@ -459,6 +460,7 @@ def _write_retry_keys(pdf_fetch_log, verdicts: dict, stem: Path) -> dict[str, Pa
         "retry.below_policy": [],
         "retry.consent_needed": [],
         "retry.consent_denied": [],
+        "retry.deferred": [],
         "true_negative": [],
         "out_of_scope": [],
     }
@@ -484,6 +486,9 @@ def _write_retry_keys(pdf_fetch_log, verdicts: dict, stem: Path) -> dict[str, Pa
         # Denied: the manual queue opens these first. Own set, not
         # `retry.manual` — see `FailureCause.CONSENT_DENIED`.
         cause.CONSENT_DENIED.value: "retry.consent_denied",
+        # Set aside by an unattended run for a person: the next manual
+        # cycle opens these first (`manual_pdfs.PRIORITY_RETRY_SETS`).
+        cause.DEFERRED_NEEDS_USER.value: "retry.deferred",
         cause.UNAVAILABLE.value: "true_negative",
         cause.OUT_OF_SCOPE.value: "out_of_scope",
     }
@@ -558,7 +563,7 @@ def main() -> int:
             "of the items that still have no PDF, says how many are "
             "recoverable rather than genuinely unavailable, and writes "
             "retry key-files (retry.browser[.<publisher>], retry.ill, retry.manual, "
-            "retry.consent_needed, retry.consent_denied, "
+            "retry.consent_needed, retry.consent_denied, retry.deferred, "
             "retry.network, true_negative, out_of_scope) for "
             "--filter-keys-file. Pass an empty string to skip."
         ),

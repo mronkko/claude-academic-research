@@ -100,16 +100,20 @@ SETTLED = frozenset({ATTACHED, DUPLICATE, REJECTED, BELOW_POLICY, IGNORED, NOT_N
 #: Audit retry sets whose items are put at the front of the queue: each
 #: is an item a person is known to be the next step for. Items denied
 #: automated download (`retry.consent_denied`, build step 5) are here: a
-#: "deny" falls through to this mode, never to nothing. Step 6 adds the
-#: items an unattended run deferred (e.g. "retry.deferred") the same way.
+#: "deny" falls through to this mode, never to nothing. So are the items
+#: an unattended run deferred for a person (`retry.deferred`, step 6:
+#: DEFERRED_NEEDS_USER) — the run's summary hands them to this mode.
 #: `retry.consent_needed` is deliberately absent — those wait for an
 #: answer, and an `allow` sends them back to the browser pass.
 PRIORITY_RETRY_SETS: tuple[str, ...] = (
     "retry.manual", "retry.below_policy", "retry.consent_denied",
+    "retry.deferred",
 )
 
 #: Run-log statuses whose items also go to the front of the queue.
-PRIORITY_LOG_STATUSES = frozenset({"skipped_below_policy", "skipped_consent_denied"})
+PRIORITY_LOG_STATUSES = frozenset({
+    "skipped_below_policy", "skipped_consent_denied", "deferred_needs_user",
+})
 
 
 # ---------------------------------------------------------------------------
