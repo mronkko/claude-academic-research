@@ -29,7 +29,9 @@ Writes the decision in two places:
 1. As a `fulltext:include` / `fulltext:exclude` Zotero tag on the
    item — the authoritative state (per the `systematic-review`
    skill's Zotero-as-ground-truth principle). Error rows are NOT
-   tagged, so a re-run naturally retries them.
+   tagged, but a plain re-run does not retry them either: it holds
+   them back (and says how many), so re-running the stage does not
+   silently re-spend on them. `--rerun` retries exactly those rows.
 2. As an append-only row in `screening/fulltext_screening.csv` — the
    run-history for provenance.
 
@@ -586,6 +588,25 @@ def _select_to_code(
             continue
         out.append(item)
     return out
+
+
+def held_back_error_count(
+    items: list[dict],
+    *,
+    tagged: set[str],
+    last_decisions: dict[str, str],
+) -> int:
+    """How many untagged items a default run holds back as past errors.
+
+    The hold-back itself is deliberate (see `_select_to_code`), but an
+    item left out without a word looks like an item that was coded — so
+    the run prints this count with the way to retry them.
+    """
+    return sum(
+        1 for it in items
+        if it["key"] not in tagged
+        and last_decisions.get(it["key"], "") == "error"
+    )
 
 
 def _abstract_stage_eligible(
@@ -1872,6 +1893,16 @@ def main() -> int:
                 f"logged decision was `error`; nothing else is considered.",
                 flush=True,
             )
+        else:
+            held = held_back_error_count(
+                items, tagged=tagged, last_decisions=last,
+            )
+            if held:
+                print(
+                    f"  Held back {held} item(s) whose last logged decision "
+                    f"was `error`; retry them with --rerun.",
+                    flush=True,
+                )
 
         # Warn on tag/CSV drift (CSV decision exists but no tag yet).
         drift_count = sum(

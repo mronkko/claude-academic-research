@@ -126,3 +126,21 @@ def test_the_help_no_longer_promises_a_selector_it_lacks() -> None:
     ).stdout
     assert "--rerun" in out
     assert "only" in out.lower()
+
+
+def test_a_default_run_counts_what_it_holds_back() -> None:
+    """D7: the hold-back stays, but it is reported — two error rows left
+    out of a default run must show up as a count, not as silence."""
+    assert fulltext_code.held_back_error_count(
+        ITEMS, tagged=TAGGED, last_decisions=LAST,
+    ) == 2
+    # A tagged item whose last row is an error is done, not held back.
+    assert fulltext_code.held_back_error_count(
+        ITEMS, tagged=TAGGED | {"err"}, last_decisions=LAST,
+    ) == 1
+
+
+def test_the_docstring_no_longer_promises_a_plain_rerun_retries_errors() -> None:
+    doc = fulltext_code.__doc__ or ""
+    assert "a re-run naturally retries them" not in doc
+    assert "--rerun" in doc
