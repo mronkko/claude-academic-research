@@ -79,6 +79,10 @@ than pasting long `uv run` commands for you to approve one by one:
 | `scaffold_project` | writes project files | `scripts/setup/scaffold_project.py` |
 | `enrich_pdfs_plan` | read-only | `scripts/pipelines/enrich_pdfs.py --plan` |
 | `enrich_pdfs_report` | read-only | `scripts/pipelines/enrich_pdfs.py --report` |
+| `pdf_manual_next` | writes Zotero, opens browser tabs | `scripts/pipelines/enrich_pdfs.py --manual next` |
+| `pdf_manual_collect` | writes Zotero | `scripts/pipelines/enrich_pdfs.py --manual collect` |
+| `pdf_manual_assign` | writes Zotero | `scripts/pipelines/enrich_pdfs.py --manual assign` |
+| `pdf_manual_ignore` | writes project files | `scripts/pipelines/enrich_pdfs.py --manual ignore` |
 | `screening_report` | read-only | `scripts/pipelines/screening_report.py` |
 | `audit_library` | read-only | `scripts/pipelines/audit_zotero_library.py` |
 | `export_coded_includes` | writes project files | `scripts/pipelines/export_coded_includes.py` |

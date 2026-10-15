@@ -1092,6 +1092,7 @@ under *Namespacing* above.
 | `pdf:tdm-recovered` | `enrich_pdfs.py`, when Elsevier's TDM API returns only a 1-page preview and the fetcher falls back to the XML endpoint | **Warning, not exclusion.** The attached "PDF" is text reconstructed from XML, not the publisher's native PDF — may be less complete or lose figures/tables. `audit_zotero_library.py` lists these under `tdm_recovered`; review before/during full-text coding. |
 | `pdf:preprint-version` | `enrich_pdfs.py --allow-preprints`, when the only copy found is on arXiv / SSRN / RePEc | **Warning, not exclusion — and the most consequential of these.** The attached PDF is the manuscript *before* peer review. Hypotheses, samples and findings all move between a working paper and the published article, and nothing downstream can tell the difference: the coding note and the CSV row read identically either way. `fulltext_code.py` names these items before it codes them and `audit_zotero_library.py` lists them under `preprint_version`. Verify each coded finding against the published article, or fetch the real one, before the numbers reach a manuscript. Do **not** confuse this with `OUT_OF_SCOPE`, which is about the *item's* type being a preprint; this is a journal article with a preprint file attached. |
 | `pdf:version:published` / `pdf:version:accepted` / `pdf:version:submitted` | `enrich_pdfs.py`, on every PDF it attaches (API sources, browser handlers, Zotero Connector) | **Information, not exclusion.** Which version the attached file is: the publisher's version of record, the author's accepted manuscript, or a preprint. Decided from the source, conservatively — anything uncertain is tagged `accepted`, never `published` — so `published` is reliable and `accepted` may include some typeset publisher PDFs hosted by repositories. Older attachments have no version tag. Additive: `pdf:repository-copy` and `pdf:preprint-version` are still written. |
+| `pdf:manual` | `enrich_pdfs.py --manual` (MCP `pdf_manual_next` / `pdf_manual_collect` / `pdf_manual_assign`) | **Information.** The user downloaded this PDF in their own browser and the manual-download cycle matched and attached it. Its `pdf:version:*` tag comes from the page the tab opened (library platform or doi.org → published), lowered when the file's first page says it is an accepted manuscript or a preprint. |
 | `<prefix>/fulltext:unavailable` | Applied by the agent **only** after `audit_zotero_library.py` reports the item's cause as `UNAVAILABLE` | The full text could not be obtained by any route the plugin has. This one **is** namespaced — it is a `fulltext:*` tag, mutually exclusive with `<prefix>/fulltext:include` / `…:exclude`, and it records a decision about this review rather than a fact about the paper. **Do not invent a spelling for this, and do not omit the prefix** — an unprefixed one belongs to no review and no script will see it. **Do not apply it on a failed enrichment run alone:** a `BROWSER_REQUIRED` or `ACCESS_BLOCKED` item is reachable and this tag would be false. See *Phase 4 — diagnose before you exclude*. |
 
 ### QA and adjudication tags
@@ -1212,6 +1213,7 @@ single-item debugging).
 | Attach missing PDFs (multi-source cascade) | `enrich_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --filter-keys-file <keys> [--remote] [--item-types journalArticle,bookSection,book]` — journal articles only unless `--item-types` admits more; an admitted type is never logged `OUT_OF_SCOPE` |
 | Attach Wiley PDFs only (TDM token) | `enrich_pdfs.py --sources wiley` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --sources wiley --filter-keys-file <keys>` |
 | Attach Cloudflare-gated PDFs (Sage, APA, T&F, Emerald, …) | `enrich_pdfs.py --sources browser` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --sources browser --filter-keys-file <keys>` |
+| Manual download in batches (user downloads, plugin attaches) | `enrich_pdfs.py --manual next` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --manual next [--filter-keys-file <keys>] [--library <name>]`, then `--manual collect` after the last batch |
 | Audit library (missing abstracts / PDFs / stubs) | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group <id> [--remote]` |
 | Export includes-only coded view | `export_coded_includes.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/export_coded_includes.py --group <id> --collection <key> --config ./screening_config.py --out analysis/results/coded_papers.csv` |
 | List / prune this review's Zotero tags | `manage_tags.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/manage_tags.py --group <id> --collection <key> --list` · add `--prune <field> --apply` to drop a coded-value family |
@@ -1653,6 +1655,37 @@ extension and routes requests through the institution's SFX/OpenURL
 resolver (`scripts/pipelines/fetchers/library_resolver.py`). Requires:
 Zotero Desktop running locally, Zotero Connector installed in the
 Chromium profile, and the institution's OpenURL base URL configured.
+
+#### Manual download in batches — often the fastest route
+
+For whatever the API phases leave, **offer this before a long browser
+pass**: the user downloads in their own browser (their logins, VPN and
+extensions apply, no Cloudflare automation, no terms-of-use question —
+they are the one clicking), and the plugin does the rest. Usually the
+quickest way through a few hundred items.
+
+One command per cycle — `pdf_manual_next` (MCP) or
+`enrich_pdfs.py --manual next`:
+
+1. It opens the next batch (25 tabs by default; `batch_size`,
+   `[pdf] manual_batch_size`) — the library route, else doi.org. If a
+   route needs a proxy sign-in, only that tab opens: tell the user to
+   sign in and download it; the rest open on the next call.
+2. It moves the PDFs downloaded since the *previous* batch opened from
+   the Downloads folder (`[pdf] downloads_dir`, default `~/Downloads`)
+   into `output/pdf_staging/batch-N/`; unfinished downloads wait.
+3. It matches each file to an item still without a PDF (DOI or title on
+   the first page, Elsevier / DOI file names) and attaches it
+   (`pdf:manual`, version-tagged, `[pdf] min_version` applies).
+
+Tell the user to download what they can from the open tabs and say
+"done"; then run the next cycle. Relay the summary line (opened,
+attached, unmatched, remaining). After the last batch run
+`pdf_manual_collect`. **Never assign a file yourself**: an unmatched or
+ambiguous file is listed with its candidates — ask the user which item
+it is, then `pdf_manual_assign` (or `pdf_manual_ignore` for a stray
+file). State is in `.claude/pdf/manual_state.json`, so a later session
+resumes where this one stopped.
 
 **Phase 4 — diagnose before you exclude. This step is mandatory.**
 

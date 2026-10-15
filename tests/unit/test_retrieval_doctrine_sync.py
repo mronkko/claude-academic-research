@@ -117,6 +117,7 @@ GLOBAL_TAGS = {
     "predatory:flag", "retracted:flag",
     "pdf:tdm-recovered", "pdf:preprint-version", "pdf:repository-copy",
     "pdf:version:published", "pdf:version:accepted", "pdf:version:submitted",
+    "pdf:manual",
 }
 
 #: Every retrieval/stage tag the plugin defines, in bare form (the
@@ -230,9 +231,10 @@ def test_known_tags_covers_every_pdf_tag_in_code() -> None:
     from fetchers.pdf_version import VERSION_TAGS
     from fetchers.preprint import PREPRINT_VERSION_TAG
     from fetchers.sciencedirect import TDM_RECOVERED_TAG
+    from manual_pdfs import MANUAL_TAG
 
     in_code = {REPOSITORY_COPY_TAG, PREPRINT_VERSION_TAG, TDM_RECOVERED_TAG,
-               *VERSION_TAGS}
+               *VERSION_TAGS, MANUAL_TAG}
     assert in_code <= KNOWN_TAGS, (
         f"code defines pdf tag(s) missing from KNOWN_TAGS: "
         f"{in_code - KNOWN_TAGS}"
