@@ -12,7 +12,7 @@ zotero-mcp uses on itself in its own ``tests/test_toolsets.py`` +
 ``validate_toolsets()``.
 
 Authoritative source is the *installed* ``zotero-mcp-server`` package
-(pinned ``>=0.9,<0.10`` in ``pyproject.toml``'s dev group) — specifically its
+(pinned ``>=0.11,<0.12`` in ``pyproject.toml``'s dev group) — specifically its
 live FastMCP tool registry, ``toolsets`` module, and CLI parser. This
 deliberately does NOT parse ``@mcp.tool`` decorators out of source: that
 would only reproduce the class of drift this guard exists to catch.
@@ -203,9 +203,9 @@ def test_e2_referenced_tools_are_enabled_under_wizard_profile() -> None:
 
 def test_e3_dev_dependency_is_pinned_below_next_major() -> None:
     pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
-    assert re.search(r'"zotero-mcp-server>=0\.9,<0\.10"', pyproject), (
+    assert re.search(r'"zotero-mcp-server>=0\.11,<0\.12"', pyproject), (
         "pyproject.toml's [dependency-groups] dev must pin "
-        "zotero-mcp-server>=0.9,<0.10. Unpinned, an unrelated upstream "
+        "zotero-mcp-server>=0.11,<0.12. Unpinned, an unrelated upstream "
         "release would redden this test module on every PR instead of "
         "surfacing as its own named signal on the weekly drift workflow."
     )

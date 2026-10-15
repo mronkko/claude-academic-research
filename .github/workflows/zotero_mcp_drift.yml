@@ -2,7 +2,7 @@ name: zotero-mcp drift check
 
 # Installs zotero-mcp-server UNPINNED (latest from PyPI) and runs only
 # tests/unit/test_zotero_mcp_sync.py against it. The rest of CI pins
-# zotero-mcp-server>=0.9,<0.10 deliberately (see E3 in the batch-DOI-import
+# zotero-mcp-server>=0.11,<0.12 deliberately (see E3 in the batch-DOI-import
 # plan) so an unrelated upstream release doesn't redden every PR; this
 # workflow is what gives drift a week's lead time instead of surfacing as a
 # mystery failure in someone else's unrelated PR.

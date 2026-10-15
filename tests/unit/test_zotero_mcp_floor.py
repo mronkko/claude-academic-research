@@ -46,9 +46,7 @@ def test_floor_matches_the_pyproject_pin(floor) -> None:
 
 
 def test_derived_strings_are_built_from_the_floor(floor) -> None:
-    assert floor.FLOOR_STR == "0.9" or floor.FLOOR_STR.startswith(
-        f"{floor.FLOOR[0]}."
-    )
+    assert floor.FLOOR_STR == f"{floor.FLOOR[0]}.{floor.FLOOR[1]}"
     assert floor.REQUIREMENT.endswith(f">={floor.FLOOR_STR}")
     assert floor.REQUIREMENT in floor.UV_INSTALL_CMD
     assert floor.REQUIREMENT in floor.PIP_INSTALL_CMD
@@ -57,15 +55,16 @@ def test_derived_strings_are_built_from_the_floor(floor) -> None:
 @pytest.mark.parametrize(
     ("version", "below"),
     [
-        ("0.8.9", True),
+        ("0.9.1", True),
+        ("0.10.0", True),
         ("0.6.2", True),
-        ("0.9.0", False),
-        ("0.9.1", False),
-        ("0.10.0", False),
+        ("0.11.0", False),
+        ("0.14.1", False),
+        ("0.20.0", False),
         ("1.0.0", False),
         # Suffixed / non-numeric components must not crash or mis-sort.
-        ("0.9.0rc1", False),
-        ("0.8rc1", True),
+        ("0.11.0rc1", False),
+        ("0.10rc1", True),
         ("1.0.0.dev3", False),
     ],
 )

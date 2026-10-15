@@ -8,7 +8,7 @@
 #     "tenacity>=8.0",
 #     "urllib3>=2.0",
 #     "httpx>=0.25",
-#     "zotero-mcp-server>=0.9,<0.10",
+#     "zotero-mcp-server>=0.11,<0.12",
 # ]
 # ///
 """Import a deduplicated search-results CSV into a Zotero group library.

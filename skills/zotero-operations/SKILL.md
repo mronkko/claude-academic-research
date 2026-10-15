@@ -28,8 +28,10 @@ Running the setup skill/wizard is the required first step.
 
 If the result is `configured`, proceed.
 
-Also check the installed `zotero-mcp-server` version — a stale pre-0.9
-install silently loses the tool names this skill documents:
+Also check the `zotero-mcp-server` version the MCP configuration
+actually launches — an install below the floor (0.11) silently loses
+tool names this skill documents and adds identifiers one at a time
+instead of in batches:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_zotero_mcp_version.py"
@@ -378,26 +380,44 @@ hierarchy is:
    `mcp__zotero__zotero_get_item_fulltext`, …). These cover most
    *reads* — item metadata, children, attachments, items lists,
    fulltext, annotations. `mcp__zotero__zotero_add_item` (`source_type=
-   "doi"`/`"url"`/`"isbn"`, batchable) is the one *write* that belongs
-   here, but know its cost before reaching for it on more than a
-   handful of DOIs: each identifier pays one Crossref/metadata lookup,
-   one item-template GET, one create POST, and — as currently
-   published — a PDF download-and-upload too, all serialized under
-   zotero-mcp's process-wide API lock. `attach_mode="none"` does not
-   yet suppress that PDF step outside the arXiv path, so a
-   screening-scale batch (dozens to hundreds of DOIs) can wedge the
-   lock and crash Zotero Desktop's local server — this is exactly what
-   happened before this sentence existed. A handful of DOIs is fine;
-   anything screening-scale goes through `import_to_zotero.py`
-   (tier 3) instead. That script tags each item with the query that
-   found it, so it needs a tag namespace: run it from a project whose
-   `screening_config.py` declares `TAG_PREFIX`, or pass
-   `--tag-prefix <name>` for a standalone import. It refuses to run
-   without one rather than writing provenance tags that belong to no
-   review. (A fix that batches creates, narrows the lock,
-   and makes `attach_mode="none"` actually skip the PDF step is in
-   progress upstream — once it ships and the wizard's version floor
-   moves past it, revisit these numbers.)
+   "doi"`/`"url"`/`"isbn"`) is the *write* that belongs here, and it
+   is a first-class route for adding papers by identifier at any scale,
+   screening-scale included. Pass the whole list in **one call** (a
+   list, or a comma/newline-separated string) rather than one call per
+   DOI: from zotero-mcp-server 0.11 (this plugin's floor) a batch
+   resolves Crossref metadata in one request per 50 DOIs, creates items
+   50 per POST, resolves the collection once, and reports each
+   identifier separately (added / reused / failed), so one bad DOI does
+   not sink the rest. Set `attach_mode="none"` unless the user wants
+   PDFs now — it skips the PDF download-and-upload entirely, and PDF
+   retrieval is a separate pipeline step anyway. One call per DOI in a
+   loop gives all of that back, so batch.
+
+   **Which route for bulk adds:**
+   - **A list of DOIs/URLs/ISBNs** — reference-list snowballing,
+     papers the user names, a handful of late additions to a review:
+     batched `zotero_add_item`. Metadata comes from Crossref, which is
+     what you want when you hold only identifiers.
+   - **A search-results CSV from `search.py`** (the systematic-review
+     pipeline): `scripts/pipelines/import_to_zotero.py` (tier 3) is
+     still the better tool. It builds most items from the search
+     databases' own metadata with no Crossref call, keeps the
+     database's abstract, imports rows that have no DOI, dedups within
+     the batch and against the library by DOI *and* title+first-author,
+     and layers on what the review needs: `search:` provenance tags per
+     query, ISSN/journal canonicalisation, the predatory flag,
+     `doctype:*` tags with supplements related to their article. It
+     tags under the review's namespace, so run it from a project whose
+     `screening_config.py` declares `TAG_PREFIX`, or pass
+     `--tag-prefix <name>` for a standalone import; it refuses to run
+     without one rather than writing provenance tags that belong to no
+     review.
+
+   If `check_zotero_mcp_version.py` reports a version below the floor,
+   the batching is not there — that install pays a Crossref lookup, a
+   template GET and a create POST per identifier, serialised — so
+   upgrade first, or use `import_to_zotero.py` for anything beyond a
+   handful of DOIs.
 2. **`zotero-cli`** for one-off writes MCP doesn't expose — `zotero-cli
    edit <key> --abstract/--add-tags/--doi/...`, `zotero-cli duplicates
    find|merge`, `zotero-cli notes create|update`, `zotero-cli add
