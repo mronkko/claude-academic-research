@@ -231,8 +231,9 @@ def test_main_writes_rows_for_tagged_items(monkeypatch, tmp_path) -> None:
 def test_main_warns_on_missing_slr_coding_note(
     monkeypatch, tmp_path, capsys,
 ) -> None:
-    """A tagged item with no SLR Coding child note is reported as a
-    warning and excluded from the output. Never silently dropped."""
+    """A tagged item with no SLR Coding child note is reported, excluded
+    from the output, and fails the run (D4): an include without coding is
+    a hole in the corpus, and a warning on exit 0 is read past."""
 
     items = [_tagged_item("X", title="Lonely", bbt="lonely", year="2020")]
     children_by_parent: dict[str, list] = {"X": []}  # no note child
@@ -255,9 +256,12 @@ def test_main_warns_on_missing_slr_coding_note(
     ])
 
     rc = exp.main()
-    assert rc == 0
-    captured = capsys.readouterr().out
-    assert "note" in captured and "have no" in captured
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "note" in captured.out and "have no" in captured.out
+    # Every affected key is named, on stderr, with the way to fix it.
+    assert "no coding note: X" in captured.err
+    assert "--only-keys" in captured.err
     # Output still written but contains just the header (no rows).
     with out.open(newline="") as f:
         rows = list(csv.DictReader(f))

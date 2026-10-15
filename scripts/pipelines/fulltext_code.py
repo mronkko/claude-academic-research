@@ -990,22 +990,15 @@ def apply_coded_row(
                         f"{'; '.join(rejected)}",
                         flush=True,
                     )
-            try:
-                zot.update_tags(
-                    item_key,
-                    add=add,
-                    remove_prefixed=remove_prefixed,
-                )
-            except Exception as tag_exc:  # noqa: BLE001
-                existing_reason = row.get("reason", "")
-                row["reason"] = (
-                    f"{existing_reason} [TAG WRITE FAILED: {tag_exc}]"
-                )[:500]
-
-            # The SLR Coding child note is written for includes only.
-            # Excludes don't get one — the tag plus the CSV row is enough
-            # provenance, and excluded papers typically have empty /
-            # placeholder coding fields.
+            # The SLR Coding child note is written for includes only, and
+            # BEFORE the tag. The tag is what marks the item done; written
+            # first, a failed note left an include that no re-run would
+            # touch and that export_coded_includes could not export. Now
+            # a failed note means no tag, so the next run codes it again.
+            # Excludes don't get a note — the tag plus the CSV row is
+            # enough provenance, and their coding fields are typically
+            # empty or placeholder.
+            note_ok = True
             if decision == "include":
                 try:
                     note_html = _build_slr_coding_note_html(
@@ -1017,9 +1010,24 @@ def apply_coded_row(
                         note_html=note_html,
                     )
                 except Exception as note_exc:  # noqa: BLE001
+                    note_ok = False
                     existing_reason = row.get("reason", "")
                     row["reason"] = (
-                        f"{existing_reason} [NOTE WRITE FAILED: {note_exc}]"
+                        f"{existing_reason} [NOTE WRITE FAILED: {note_exc}; "
+                        f"left untagged so a re-run codes it again]"
+                    )[:500]
+
+            if note_ok:
+                try:
+                    zot.update_tags(
+                        item_key,
+                        add=add,
+                        remove_prefixed=remove_prefixed,
+                    )
+                except Exception as tag_exc:  # noqa: BLE001
+                    existing_reason = row.get("reason", "")
+                    row["reason"] = (
+                        f"{existing_reason} [TAG WRITE FAILED: {tag_exc}]"
                     )[:500]
     with log_lock:
         csv_io.upsert_by_item_key(output_path, row, csv_columns)

@@ -247,10 +247,17 @@ def main() -> int:
               f"its SLR_CODING_DATA payload is malformed: "
               f"{malformed_note[:5]}", flush=True)
 
+    # An include without its coding is a hole in the corpus, not a
+    # footnote: the export is what the synthesis reads, and a warning on a
+    # zero exit is exactly what a skill or script running this reads past.
+    incomplete = missing_note + malformed_note
+    rc = 1 if incomplete else 0
+
     if args.dry_run:
         print(f"\n[DRY RUN] Would write {len(rows)} rows to {args.out}",
               flush=True)
-        return 0
+        _report_incomplete(missing_note, malformed_note, filter_tag)
+        return rc
 
     # Column assembly.
     if args.columns:
@@ -276,7 +283,33 @@ def main() -> int:
             writer.writerow(row)
 
     print(f"\nWrote {len(rows)} rows to {args.out}", flush=True)
-    return 0
+    _report_incomplete(missing_note, malformed_note, filter_tag)
+    return rc
+
+
+def _report_incomplete(
+    missing_note: list[str], malformed_note: list[str], filter_tag: str,
+) -> None:
+    """Name every included item the export could not code, on stderr.
+
+    The full list, not a sample: these are the items to re-code, and a
+    truncated list sends the user back to Zotero to find the rest.
+    """
+    if not (missing_note or malformed_note):
+        return
+    print(
+        f"\nERROR: {len(missing_note) + len(malformed_note)} item(s) tagged "
+        f"{filter_tag!r} are missing from the export because their coding "
+        f"note is absent or unreadable. Re-code them: remove that tag "
+        f"from these items, then run `fulltext_code.py --only-keys <keys>`.",
+        file=sys.stderr, flush=True,
+    )
+    if missing_note:
+        print(f"  no coding note: {','.join(missing_note)}",
+              file=sys.stderr, flush=True)
+    if malformed_note:
+        print(f"  malformed coding note: {','.join(malformed_note)}",
+              file=sys.stderr, flush=True)
 
 
 if __name__ == "__main__":
