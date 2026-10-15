@@ -99,8 +99,8 @@ becomes the durable consultation artifact for every subsequent citation
 |------|-----------|----------------|----------|
 | OpenAlex | `mcp__openalex__*` | — | Open metadata, citation graphs, journal/author profiles |
 | Semantic Scholar | `mcp__semantic-scholar__*` | — | Abstracts, citation networks, ArXiv |
-| Scopus | `mcp__scopus__*` | `pybliometrics` (Python 3.14, config at `~/.config/pybliometrics.cfg`) | Comprehensive citation database, AJG/ABS journal coverage |
-| Web of Science | — (not yet implemented) | — | Citation database, journal impact factors; institutional access available |
+| Scopus | `mcp__scopus__*` | `pybliometrics` (pipeline scripts, via `uv run`; config at `~/.config/pybliometrics.cfg`) | Comprehensive citation database, AJG/ABS journal coverage |
+| Web of Science | — (no MCP server) | WoS API in the pipeline's search and PDF scripts | Citation database, journal impact factors; institutional access available |
 | Zotero | `mcp__zotero__*` | — | Reference management, full-text retrieval |
 
 Procedures for *adding papers to Zotero*, *fixing BBT keys*, and

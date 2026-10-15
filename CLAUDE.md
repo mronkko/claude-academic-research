@@ -16,21 +16,21 @@ An academic research **plugin** for Claude Code and Antigravity — not an appli
 
 ```bash
 # Default test run — unit tests only; live tests are deselected by marker.
-pytest tests/ -q
+uv run --group dev python -m pytest tests/ -q
 
 # Single test file or test.
-pytest tests/unit/test_zotero_io.py -q
-pytest tests/unit/test_zotero_io.py::test_attach_pdf_raises_on_failure -q
+uv run --group dev python -m pytest tests/unit/test_zotero_io.py -q
+uv run --group dev python -m pytest tests/unit/test_zotero_io.py::test_attach_pdf_raises_on_failure -q
 
 # Live tests (real network, API keys required — opt in explicitly).
-pytest -m live tests/live/
-pytest -m live_browser tests/live/test_browser_publishers.py
+uv run --group dev python -m pytest -m live tests/live/
+uv run --group dev python -m pytest -m live_browser tests/live/test_browser_publishers.py
 
-# Lint (CI blocker).
-ruff check scripts tests
+# Lint (CI blocker). templates/ and editorial-tools/scripts/ are Python too.
+uv run --group dev ruff check scripts tests templates editorial-tools/scripts
 
 # Lint with auto-fix for I001/UP037/F401/F541 etc.
-ruff check scripts tests --fix
+uv run --group dev ruff check scripts tests templates editorial-tools/scripts --fix
 
 # Set up / refresh the dev environment.
 uv sync --group dev
@@ -70,12 +70,12 @@ Two habits that make these prompts cheap to write: keep a `## STATE` section at 
 
 - **`skills/<name>/SKILL.md`** — each has YAML frontmatter (`name`, `description`) + a markdown body. The `description` is what the Claude Code harness matches on to decide whether to load the skill. Every procedural skill in this plugin follows the same shape: "Use when …" + `Trigger phrases: …` + a "Do NOT use for X — use Y instead" delegation rule. Breaking that shape causes the wrong skill to fire. Description bodies are kept under ~500 chars and contain no workflow summary — workflow summaries cause Claude to follow the description instead of reading the skill body. CSO doctrine is in `superpowers:writing-skills`.
 - **`REQUIRED SUB-SKILL: <name>` contract.** When a skill body or per-subagent prompt names a sub-skill that way, the receiver is expected to **load the named skill via the `Skill` tool before proceeding** — never to inline the sub-skill's content into the prompt verbatim. This applies symmetrically: a main agent dispatching N parallel subagents (e.g. fact-check's per-citation `Agent` calls) tells each one which sub-skill to load; each subagent then loads it independently. The caller does *not* paste the sub-skill body into the prompt — that would re-introduce the duplication the sub-skill extraction was meant to eliminate, and force every prompt rewrite to ripple across callers. The one sub-skill used this way is `verifying-citations` (loaded by `fact-check`'s per-citation subagents and by `critic-loop`'s evidence critic). The plugin depends on no external skill: `fact-check` states the one parallel-dispatch rule it needs inline (send every per-citation `Agent` call in a single message), rather than loading `superpowers:dispatching-parallel-agents`, which a user may not have installed.
-- **`templates/`** — copied into downstream user projects (`manuscript.qmd`, `manuscript_tables.py`, `manuscript_stats.py`, `test_citations.py`, `test_empirical_integrity.py`, `test_systematic_review.py`, `test_common.py`, `search_config.py`, `screening_config.py`, `sr_claude_md.md`, `manuscript_claude_md.md`). Changes here affect what a fresh project looks like.
-- **`.claude-plugin/plugin.json`** — carries the version string. Bump only on user-visible releases, not on lint or CI fixes.
+- **`templates/`** — copied into downstream user projects (`manuscript.qmd`, `apa.csl`, `manuscript_tables.py`, `manuscript_stats.py`, `test_citations.py`, `test_empirical_integrity.py`, `test_systematic_review.py`, `test_common.py`, `search_config.py`, `screening_config.py`, `sr_claude_md.md`, `manuscript_claude_md.md`). Changes here affect what a fresh project looks like. The exception is `model_catalog.toml`, which `scripts/core/model_discovery.py` reads in place and is never copied. `apa.csl` is the CSL project's APA 7th-edition style, CC BY-SA 3.0 — keep its `<rights>` element if you update it.
+- **`.claude-plugin/plugin.json`** — the Claude Code manifest; carries the version string. Bump only on user-visible releases, not on lint or CI fixes. The root `plugin.json` is the Antigravity manifest (no version); `tests/unit/test_plugin_manifest.py` keeps the two in sync.
 
 ### Pipeline scripts
 
-`scripts/pipelines/` contains the full systematic-review pipeline — one orchestrator script per stage, roughly in dependency order: `search.py` (plus four `search_<db>.py` single-DB wrappers for piloting) → `import_to_zotero.py` → enrichment (`enrich_abstracts.py`, `enrich_pdfs.py`, `enrich_dois.py`) → `abstract_screen.py` → `fulltext_code.py` → `audit_zotero_library.py` → `export_coded_includes.py` → `generate_bib.py`. The three `enrich_*` scripts replaced the pre-v0.3.0 `attach_pdfs.py` / `fetch_*.py` monolith (removed in v0.6.0). All of these orchestrators invoke:
+`scripts/pipelines/` contains the full systematic-review pipeline — one orchestrator script per stage, roughly in dependency order: `search.py` (plus four `search_<db>.py` single-DB wrappers for piloting) → `import_to_zotero.py` → enrichment (`enrich_abstracts.py`, `enrich_pdfs.py`, `enrich_dois.py`) → `abstract_screen.py` → `fulltext_code.py` → `audit_zotero_library.py` → `export_coded_includes.py` → `generate_bib.py`. Around them sit stage helpers: `pilot_analyze.py` and `filter_search_results.py` (pilot / trim search CSVs), `screening_report.py`, `manage_tags.py`, `apply_qa_adjudications.py`, `clean_abstracts.py`, `reconcile_merged_pdfs.py`, and `run_manifest.py` / `batch_manifest.py` for batch screening. `scripts/cluster/` holds the GPU-cluster side of batch screening (`run_batch.py`, `run_batch.sbatch`, driven by the `cluster-screening` skill), `scripts/sources/` the predatory-journal list, and `scripts/dev/` developer-only tools (`mini_slr.py` drives the `live_slr` test). The three `enrich_*` scripts replaced the pre-v0.3.0 `attach_pdfs.py` / `fetch_*.py` monolith (removed in v0.6.0). All of these orchestrators invoke:
 
 - `scripts/pipelines/fetchers/` — per-provider classes implementing `AbstractFetcher` / `PdfFetcher` ABCs in `fetchers/base.py`. Crossref / OpenAlex / ScienceDirect inherit both. `fetchers/browser/` hosts Playwright handlers for Cloudflare-gated publishers and requires `library_resolver.py` for SFX/OpenURL pre-flight.
 - `scripts/pipelines/searchers/` — per-database ABC implementations (Scopus, WoS, OpenAlex, Semantic Scholar) with a similar base-class pattern.
@@ -84,13 +84,13 @@ Two habits that make these prompts cheap to write: keep a `## STATE` section at 
 - `scripts/pipelines/doi_utils.py` — the one DOI normaliser. Stdlib-only, because `fetchers/doi_resolver.py` sits below the orchestrators and `enrich_dois.py` has no `zotero-mcp-server` in its PEP 723 block. Exposes a **strict** form (`normalize_doi` / `doi_key`, returns nothing for a malformed DOI — right for dedup identity) and a **lenient** one (`strip_doi_prefixes` / `doi_cache_key` — right for cache keys and for the `--fix-malformed` repair path). The split is load-bearing; the module docstring says why.
 - `scripts/pipelines/screening_common.py` — config-module loading, stage-tag matching, CSV decision reading, and `--csv-backfill`, shared by `abstract_screen.py` / `fulltext_code.py` (and the config loader by `search.py`). Each orchestrator keeps a thin private wrapper binding its own stage constants.
 - `scripts/pipelines/tag_prefix.py` — the per-review tag namespace. Every tag recording *this review's judgement* is written `<prefix>/<family>:<value>` from a mandatory `TAG_PREFIX` in the project's `screening_config.py`; one library routinely holds several reviews, and without the namespace they share the `abstract:*` family while `merge_duplicate_item` unions tag sets. Tags stating a fact about the *item* (`predatory:flag`, `retracted:flag`, `pdf:*`) stay global on purpose — which is also why the library-wide `enrich_*` scripts need no prefix and take no `--config`. `screening_common` needed no change to support this: `items_with_stage_tag(prefix=…)` and `stage_tag_op(prefix, …)` already took a full prefix string, so the stage constants simply became suffixes (`STAGE_TAG_FAMILY` / `STAGE_TAG_SUFFIX`). The `SLR Coding` child note is namespaced through `zotero_io.slr_coding_marker(ns)` for the same reason — one fixed marker meant a second review's coding silently overwrote the first's. `scripts/setup/set_tag_prefix.py` duplicates the validation rules because `scripts/setup/` must stay stdlib-only and cannot import from `scripts/pipelines/`; `tests/unit/test_set_tag_prefix.py` fails if the two copies ever disagree.
-- `scripts/core/models.py` — model defaults and `--model` aliases (`haiku`, `sonnet`, …) for the screening stages. `templates/screening_config.py` cannot import it (it is copied into user projects), so `tests/unit/test_model_defaults.py` keeps the literals equal.
+- `scripts/core/models.py` — stage → tier mapping and `--model` aliases (`haiku`, `sonnet`, …) for the screening stages. `templates/screening_config.py` ships with no model pins; `scripts/setup/resolve_models.py` fills them at bootstrap from what the user's provider serves. `tests/unit/test_model_defaults.py` pins the tier mapping, alias resolution and override precedence.
 
 ### Runtime model users see
 
 - Scripts run via `uv run` with PEP 723 inline dependency declarations (no venv, no `requirements.txt`).
 - Secrets live in `~/.config/academic-research/config.toml` (mode 0600) or env vars; env takes precedence.
-- A `permissions.deny` rule blocks the Read tool from the config file so API keys never enter a conversation.
+- The plugin writes no permission rules (P20): the wizard leaves `~/.claude/settings.json` alone. Skills keep keys out of the conversation by never reading the config file — scripts read it themselves, and `check_*` scripts report only yes/no status. The one exception is project-level and deliberate: `empirical-integrity` writes `analysis/results/**` deny rules into the project's `.claude/settings.json` via `add_deny_rules.py`, a data-integrity guard.
 - Zotero reads prefer the local HTTP server at `localhost:23119` (Better BibTeX must be enabled in Zotero desktop). Writes go there too when `[zotero] local_api_key` is set — Zotero 10 accepts local writes after a one-time consent dialog the `/setup` wizard requests — and fall back to the Web API when it is not. File uploads (`attach_pdf`) and `merge_duplicate_item` stay on the Web API either way; see `zotero_io.py`'s module docstring for why, and for the rule that a read feeding a write must use the write's own surface.
 
 ### Cross-platform notes
@@ -102,12 +102,12 @@ Python 3.11/3.12/3.13`). A few conventions that keep it that way:
 - **Config path**: `Path.home() / ".config" / "academic-research" / "config.toml"` on every OS. The literal string `~/.config/` appears in prose only; never write `open("~/x")` in code (use `Path.home()`).
 - **Project-local artefacts**: scripts and skills write run-outputs under `.claude/<scope>/` for transient internals (e.g. `.claude/audit/`) and under top-level visible directories for outputs the user is expected to find and review (e.g. `critic-reviews/` for critic-loop iteration reports, `fact-check-reports/` for fact-check audits). The setup wizard adds `.claude/` to the project `.gitignore` if one exists; visible review directories like `critic-reviews/` and `fact-check-reports/` are deliberately *not* gitignored — users may want to commit them as part of their manuscript history.
 - **`os.chmod`**: always guard with `if sys.platform != "win32":`. Python's chmod on Windows only toggles the read-only bit; NTFS per-user ACLs already protect paths under `C:\Users\<user>\`.
-- **Skill pre-flight and bootstrap helpers**: when a skill needs to probe config / scaffold / deny-rules / database access, create a project-local directory, or copy templates into a project, invoke the cross-platform scripts in `scripts/setup/` (`check_configured.py`, `check_project_scaffold.py FILE...`, `check_deny_rules.py RULE...`, `check_database_access.py`, `ensure_dir.py DIR...`, `install_templates.py BASENAME:DEST...`). Do not use POSIX `test -f` / `mkdir -p`, shell `cp` chains, or inline `python -c`. None of those are covered by the wizard's `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/**)` allow rule, so they trigger a permission prompt at skill load time; the script paths are covered. `check_database_access.py` in particular is the out-of-process way to inspect `~/.config/academic-research/config.toml` — the Read tool is denied on that path to protect keys, but a subprocess script that emits only yes/no status is fine.
+- **Skill pre-flight and bootstrap helpers**: when a skill needs to probe config / scaffold / deny-rules / database access, create a project-local directory, or copy templates into a project, invoke the cross-platform scripts in `scripts/setup/` (`check_configured.py`, `check_project_scaffold.py FILE...`, `check_deny_rules.py RULE...`, `check_database_access.py`, `ensure_dir.py DIR...`, `install_templates.py BASENAME:DEST...`). Do not use POSIX `test -f` / `mkdir -p`, shell `cp` chains, or inline `python -c`: a shipped script is audited once and tested on all three platforms, while an improvised one-liner is new code the user must approve on the spot and usually breaks on Windows. Write plugin paths as `${CLAUDE_PLUGIN_ROOT}/...` with no `:-.` fallback (`.` is the user's project, which has no `scripts/`). `check_database_access.py` in particular is the out-of-process way to inspect `~/.config/academic-research/config.toml` — skills must never read that file themselves, since anything read lands in the transcript, but a subprocess script that emits only yes/no status is fine.
 
 ### Test suite shape
 
 - `tests/conftest.py` inserts both `scripts/` and `scripts/pipelines/` on `sys.path`, so unit tests can `import zotero_io` and `import http_client` directly without the sys.path gymnastics the scripts do at runtime.
-- Default run deselects `live` and `live_browser` markers — those require real API keys and are opt-in per `pyproject.toml`.
+- Default run deselects the `live`, `live_browser`, `live_slr` and `live_cluster` markers — those need real API keys, a real Zotero group or a real cluster, and are opt-in per `pyproject.toml`. `allow_network` marks the few unit tests that deliberately reach the socket layer, exempting them from the no-network guard in `tests/unit/conftest.py`.
 - Live tests live under `tests/live/` and each publisher / source / API key MUST have a matching live test. The `test_live_coverage.py` guard enforces this at CI time.
 
 ## Real-session logs (`logs/`)
