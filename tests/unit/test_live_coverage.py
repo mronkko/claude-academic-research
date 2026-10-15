@@ -2,10 +2,11 @@
 
 Runs on every `pytest` invocation (no marker). If a new browser
 handler is added to `fetchers.browser.all_handlers()`, a new `KeySpec`
-added to `scripts/setup/wizard.py:KEYS`, or a new `AbstractFetcher` /
-`PdfFetcher` subclass added under `scripts/pipelines/fetchers/`
-without a matching live test being added at the same time, this
-test fails with an actionable message.
+added to `scripts/setup/wizard.py:KEYS`, a new `AbstractFetcher` /
+`PdfFetcher` subclass added under `scripts/pipelines/fetchers/`, or a new
+search database added to `searchers.ALL_SOURCE_CLASSES` without a
+matching live test being added at the same time, this test fails with an
+actionable message.
 
 The policy is documented in the project memory at
 `feedback_every_source_has_a_test.md`:
@@ -14,17 +15,29 @@ The policy is documented in the project memory at
 > registry entry, KeySpec, or source module must ship with a matching
 > live test; a default-run guard test enforces the invariant at PR
 > time.
+
+Matching is by exact name. A test function must exist under the expected
+name (found by parsing the file, so a docstring or comment that merely
+mentions the name does not count — the old substring check accepted
+`test_x` wherever `test_x_old` appeared), a KNOWN_DOIS key must be a
+literal key of that dict, and an env var must appear as a whole word
+inside a `test_auth_*` function. Each check also asserts the registry it
+walks is non-empty, so a broken import cannot make the guard pass
+vacuously.
 """
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPTS_ROOT = REPO / "scripts"
+LIVE = REPO / "tests" / "live"
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
@@ -73,6 +86,56 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _test_functions(path: Path) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Every `test_*` function defined in `path`, by exact name."""
+    tree = ast.parse(_read(path))
+    return {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("test_")
+    }
+
+
+def _known_doi_keys() -> set[str]:
+    """The literal keys of `KNOWN_DOIS` in tests/live/conftest.py.
+
+    Parsed rather than imported (the module is not importable outside a
+    pytest session) and rather than grepped: a regex over the file also
+    matched keys of `APA_REGRESSION_DOIS` and anything in a comment.
+    """
+    tree = ast.parse(_read(LIVE / "conftest.py"))
+    for node in tree.body:
+        if isinstance(node, ast.AnnAssign):
+            target = node.target
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        else:
+            continue
+        if isinstance(target, ast.Name) and target.id == "KNOWN_DOIS":
+            assert isinstance(node.value, ast.Dict), "KNOWN_DOIS is no longer a dict literal"
+            return {
+                k.value for k in node.value.keys
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)
+            }
+    raise AssertionError("KNOWN_DOIS not found in tests/live/conftest.py")
+
+
+def _missing_tests(mapping: dict[str, list[str]], names: list[str],
+                   live_file: Path, label: str) -> list[str]:
+    """Names without a mapping entry, or whose mapped test does not exist
+    in `live_file` under exactly that name."""
+    defined = _test_functions(live_file)
+    missing: list[str] = []
+    for name in names:
+        expected = mapping.get(name)
+        if expected is None:
+            missing.append(f"{name} (no entry in {label} — add one plus a live test)")
+            continue
+        missing.extend(f"{name} → expected {t}" for t in expected if t not in defined)
+    return missing
+
+
 # ---------------------------------------------------------------------------
 # Publishers ↔ test_browser_publishers.py
 # ---------------------------------------------------------------------------
@@ -83,19 +146,43 @@ def test_every_publisher_in_registry_has_a_known_doi() -> None:
     registry; the corresponding DOI must exist in KNOWN_DOIS."""
     from fetchers.browser import all_handlers
 
-    conftest = _read(REPO / "tests" / "live" / "conftest.py")
-    # Parse KNOWN_DOIS keys from conftest source (not importable without
-    # pytest session setup). Accept both "key": and 'key':
-    known_keys = set(re.findall(r"[\"']([a-zA-Z_0-9]+)[\"']\s*:\s*\"10\.", conftest))
+    handlers = all_handlers()
+    assert handlers, "fetchers.browser.all_handlers() returned nothing"
+    known_keys = _known_doi_keys()
 
-    missing = []
-    for handler in all_handlers():
-        if handler.name not in known_keys:
-            missing.append(handler.name)
+    missing = [h.name for h in handlers if h.name not in known_keys]
     assert not missing, (
         f"Browser handlers without a KNOWN_DOIS entry: {missing}. "
         f"Add DOIs to tests/live/conftest.py so test_browser_publishers.py "
         f"can exercise them."
+    )
+
+
+def test_the_browser_live_test_is_parametrized_from_the_registry() -> None:
+    """A KNOWN_DOIS entry is only coverage if a live test iterates the
+    registry. Pin that the per-publisher test exists and takes its
+    parameters from `all_handlers()`, so deleting or hard-coding it
+    cannot leave the DOI check above passing on its own."""
+    path = LIVE / "test_browser_publishers.py"
+    test = _test_functions(path).get("test_browser_publisher_downloads_pdf")
+    assert test is not None, f"{path.name}: test_browser_publisher_downloads_pdf is gone"
+    parametrize_args = [
+        ast.unparse(arg)
+        for dec in test.decorator_list
+        if isinstance(dec, ast.Call) and ast.unparse(dec.func).endswith("parametrize")
+        for arg in dec.args
+    ]
+    assert "_handlers()" in parametrize_args, (
+        f"{path.name}: the publisher test is no longer parametrized by "
+        f"_handlers(); found {parametrize_args}"
+    )
+    helper = next(
+        (n for n in ast.parse(_read(path)).body
+         if isinstance(n, ast.FunctionDef) and n.name == "_handlers"),
+        None,
+    )
+    assert helper is not None and "all_handlers()" in ast.unparse(helper), (
+        f"{path.name}: _handlers() no longer returns fetchers.browser.all_handlers()"
     )
 
 
@@ -107,13 +194,27 @@ def test_every_publisher_in_registry_has_a_known_doi() -> None:
 def test_every_keyspec_has_an_auth_test() -> None:
     """Every KeySpec in wizard.py:KEYS has a test in test_auth_workflows.py."""
     wizard = _load_wizard()
-    auth_tests = _read(REPO / "tests" / "live" / "test_auth_workflows.py")
+    assert wizard.KEYS, "wizard.KEYS is empty"
+    path = LIVE / "test_auth_workflows.py"
+    source = _read(path)
+    # Only text inside a `test_auth_*` function (code or docstring)
+    # counts — a mention in a module comment or a helper is not a test.
+    auth_bodies = [
+        ast.get_source_segment(source, fn) or ""
+        for name, fn in _test_functions(path).items()
+        if name.startswith("test_auth_")
+    ]
+    assert auth_bodies, f"no test_auth_* functions found in {path.name}"
+
+    def covered(needle: str) -> bool:
+        # Whole-word: `WOS_API_KEY` must not be satisfied by
+        # `WOS_API_KEY_EXTENDED`.
+        pattern = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(needle)}(?![A-Za-z0-9_])")
+        return any(pattern.search(body) for body in auth_bodies)
 
     missing = []
     for spec in wizard.KEYS:
         if spec.env_var:
-            # The auth test references the env var name directly or in a
-            # comment/docstring. Accept any mention as sufficient.
             needle = spec.env_var
         else:
             # A config-only spec has no variable to search for, and
@@ -127,15 +228,15 @@ def test_every_keyspec_has_an_auth_test() -> None:
             # `api_key_env` indirection), and a guard that breaks on a
             # refactor of the thing it guards teaches people to edit the
             # guard. The marker states the intent instead.
-            needle = f"[{spec.toml_section}].{spec.toml_key}"
-        if needle not in auth_tests:
+            needle = f"covers: [{spec.toml_section}].{spec.toml_key}"
+        if not covered(needle):
             missing.append(spec.env_var or f"[{spec.toml_section}].{spec.toml_key}")
     assert not missing, (
         f"KeySpecs without a matching test in test_auth_workflows.py: "
         f"{missing}. Add a test_auth_{{name}} function that calls the "
         f"matching _verify_* helper. A config-only spec (no env var) is "
-        f"matched by a `covers: [section].key` marker in that file, "
-        f"since it has no variable name to grep for."
+        f"matched by a `covers: [section].key` marker in that test's "
+        f"docstring, since it has no variable name to grep for."
     )
 
 
@@ -163,21 +264,11 @@ def test_every_abstract_source_has_a_live_test() -> None:
     sources = sorted(
         cls.name for cls in _leaf_sources() if issubclass(cls, AbstractFetcher)
     )
-    abstract_tests = _read(REPO / "tests" / "live" / "test_abstract_endpoints.py")
-
-    missing = []
-    for name in sources:
-        expected_tests = ABSTRACT_LIVE_TESTS.get(name)
-        if expected_tests is None:
-            missing.append(
-                f"{name} (no entry in ABSTRACT_LIVE_TESTS — add one plus a "
-                f"live test)"
-            )
-            continue
-        missing.extend(
-            f"{name} → expected {t}" for t in expected_tests
-            if t not in abstract_tests
-        )
+    assert sources, "no AbstractFetcher sources found — the registry walk is broken"
+    missing = _missing_tests(
+        ABSTRACT_LIVE_TESTS, sources, LIVE / "test_abstract_endpoints.py",
+        "ABSTRACT_LIVE_TESTS",
+    )
     assert not missing, (
         f"Abstract sources without a matching live test: {missing}. "
         f"Add a corresponding test to tests/live/test_abstract_endpoints.py."
@@ -224,22 +315,103 @@ def test_every_pdf_source_has_a_live_test() -> None:
     sources = sorted(
         cls.name for cls in _leaf_sources() if issubclass(cls, PdfFetcher)
     )
-    pdf_tests = _read(REPO / "tests" / "live" / "test_pdf_endpoints.py")
-
-    missing = []
-    for name in sources:
-        expected_tests = PDF_LIVE_TESTS.get(name)
-        if expected_tests is None:
-            missing.append(
-                f"{name} (no entry in PDF_LIVE_TESTS — add one plus a "
-                f"live test)"
-            )
-            continue
-        missing.extend(
-            f"{name} → expected {t}" for t in expected_tests
-            if t not in pdf_tests
-        )
+    assert sources, "no PdfFetcher sources found — the registry walk is broken"
+    missing = _missing_tests(
+        PDF_LIVE_TESTS, sources, LIVE / "test_pdf_endpoints.py", "PDF_LIVE_TESTS",
+    )
     assert not missing, (
         f"PDF sources without a matching live test: {missing}. "
         f"Add a corresponding test to tests/live/test_pdf_endpoints.py."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Search databases ↔ tests/live
+# ---------------------------------------------------------------------------
+
+
+# Search source `name` → (live test file, test function names).
+# Scopus and WoS have no dedicated live search test today: their only live
+# coverage is the end-to-end mini SLR, whose fixed search_config runs all
+# four databases (tests/live/e2e/search_config.py says so). Pinned here so
+# that coverage cannot vanish silently and a fifth database cannot be
+# added without a line in this table.
+SEARCH_LIVE_TESTS: dict[str, tuple[str, list[str]]] = {
+    "openalex": ("test_citation_search.py", ["test_openalex_lists_works_citing_the_seed"]),
+    "semantic_scholar": (
+        "test_s2_journal_scope.py", ["test_semantic_scholar_returns_rows_under_journal_scope"],
+    ),
+    "scopus": ("test_mini_slr.py", ["test_mini_slr_end_to_end"]),
+    "wos": ("test_mini_slr.py", ["test_mini_slr_end_to_end"]),
+}
+
+
+def test_every_search_source_has_a_live_test() -> None:
+    """Each class in `searchers.ALL_SOURCE_CLASSES` has a live test."""
+    from searchers import ALL_SOURCE_CLASSES
+
+    names = sorted(cls.name for cls in ALL_SOURCE_CLASSES)
+    assert names, "searchers.ALL_SOURCE_CLASSES is empty"
+    missing: list[str] = []
+    for name in names:
+        entry = SEARCH_LIVE_TESTS.get(name)
+        if entry is None:
+            missing.append(f"{name} (no entry in SEARCH_LIVE_TESTS — add one plus a live test)")
+            continue
+        filename, expected = entry
+        defined = _test_functions(LIVE / filename)
+        missing.extend(f"{name} → expected {filename}::{t}" for t in expected if t not in defined)
+    assert not missing, f"Search sources without a matching live test: {missing}."
+
+
+# ---------------------------------------------------------------------------
+# tests/live never runs by default
+# ---------------------------------------------------------------------------
+
+
+class _FakeItem:
+    """Just enough of `pytest.Item` for the collection hook."""
+
+    def __init__(self, path: Path, markers: list[str]) -> None:
+        self.fspath = path
+        self.markers = list(markers)
+
+    def get_closest_marker(self, name: str):
+        return name if name in self.markers else None
+
+    def add_marker(self, mark) -> None:
+        self.markers.append(mark.name)
+
+
+def test_a_live_test_without_a_marker_is_marked_live() -> None:
+    """tests/conftest.py marks every unmarked test under tests/live/ as
+    `live`, so a forgotten marker cannot put a real-network test into the
+    default run. Exercised on stand-in items so the check does not depend
+    on some real live test happening to lack a marker."""
+    from tests.conftest import LIVE_ROOT, pytest_collection_modifyitems
+
+    unmarked = _FakeItem(LIVE_ROOT / "test_new_publisher.py", [])
+    browser = _FakeItem(LIVE_ROOT / "test_browser_publishers.py", ["live_browser"])
+    unit = _FakeItem(REPO / "tests" / "unit" / "test_x.py", [])
+    pytest_collection_modifyitems([unmarked, browser, unit])  # type: ignore[list-item]
+
+    assert unmarked.markers == ["live"]
+    assert browser.markers == ["live_browser"], "an explicit live marker is kept as is"
+    assert unit.markers == [], "unit tests are not touched"
+
+
+def test_the_default_run_selects_nothing_under_tests_live() -> None:
+    """End to end: collect tests/live with the default addopts and confirm
+    no item survives the `-m` filter. `--collect-only -q` prints one
+    `path::name` line per selected item."""
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q",
+         "-p", "no:cacheprovider", str(LIVE)],
+        capture_output=True, text=True, cwd=REPO, timeout=300,
+    )
+    selected = [line for line in result.stdout.splitlines() if "::" in line]
+    assert "deselected" in result.stdout, result.stdout[-2000:] + result.stderr[-2000:]
+    assert not selected, (
+        "these tests under tests/live/ would run in the default suite:\n  "
+        + "\n  ".join(selected)
     )
