@@ -391,19 +391,71 @@ def latest_per_item(failures: list[dict[str, str]]) -> dict[str, dict[str, str]]
     that matters is the most *actionable* one: an item with a
     BROWSER_REQUIRED row is recoverable regardless of how many API
     sources returned 404 alongside it.
+
+    The one exception is a BROWSER_REQUIRED row the browser pass has
+    since answered — see `_superseded_browser_required`.
     """
     priority = {cause: i for i, cause in enumerate(CAUSE_PRECEDENCE)}
-    best: dict[str, dict[str, str]] = {}
+    by_item: dict[str, list[dict[str, str]]] = {}
     for row in failures:
         key = row.get("item_key", "")
-        if not key:
-            continue
-        current = best.get(key)
-        if current is None or priority.get(row.get("cause", ""), 9) < priority.get(
-            current.get("cause", ""), 9
-        ):
-            best[key] = row
+        if key:
+            by_item.setdefault(key, []).append(row)
+    best: dict[str, dict[str, str]] = {}
+    for key, rows in by_item.items():
+        live = [r for r in rows if not _superseded_browser_required(r, rows)]
+        for row in live or rows:
+            current = best.get(key)
+            if current is None or priority.get(row.get("cause", ""), 9) < priority.get(
+                current.get("cause", ""), 9
+            ):
+                best[key] = row
     return best
+
+
+#: Sources only the browser pass writes that are not a per-publisher
+#: handler slug. Handler slugs are matched against the BROWSER_REQUIRED
+#: row's own `untried_handler` instead, which keeps this module free of
+#: a `fetchers.browser` import.
+BROWSER_PASS_SOURCES: frozenset[str] = frozenset({"connector", "library_resolver"})
+
+
+def _is_browser_pass_row(row: dict[str, str], untried_handler: str) -> bool:
+    """True if `row` records an answer the browser pass gave."""
+    if row.get("cause", "") == FailureCause.BROWSER_REQUIRED.value:
+        return False
+    source = row.get("source", "") or ""
+    if source in BROWSER_PASS_SOURCES:
+        return True
+    if untried_handler and source == untried_handler:
+        return True
+    try:
+        return int(row.get("attempt", "") or 0) >= 2
+    except ValueError:
+        return False
+
+
+def _superseded_browser_required(
+    row: dict[str, str], item_rows: list[dict[str, str]],
+) -> bool:
+    """A BROWSER_REQUIRED row whose claim the browser pass has disproved.
+
+    BROWSER_REQUIRED says "the browser pass has not been tried". The API
+    cascade writes it under its own `source`, so the browser pass's
+    verdict lands in a *different* row (the key is `(item_key, source)`)
+    and never overwrites it. Ranked purely by precedence, the stale claim
+    then outranked the real answer forever: the audit kept saying "run
+    the browser pass" for items it had already run on, and the ILL /
+    manual / network retry sets never filled.
+
+    Time-independent on purpose: a later API-cascade run rewrites its
+    BROWSER_REQUIRED row with a fresh timestamp, and that does not make
+    the browser pass untried again.
+    """
+    if row.get("cause", "") != FailureCause.BROWSER_REQUIRED.value:
+        return False
+    handler = row.get("untried_handler", "") or ""
+    return any(_is_browser_pass_row(r, handler) for r in item_rows if r is not row)
 
 
 # Mapping from FailureCause → suggested FE / action label, for the

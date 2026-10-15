@@ -12,6 +12,7 @@ import csv
 from pathlib import Path
 
 import pdf_fetch_log
+import pytest
 
 # ---------------------------------------------------------------------------
 # classify_failure
@@ -524,6 +525,57 @@ def test_latest_per_item_lets_item_type_win() -> None:
     ]
     best = pdf_fetch_log.latest_per_item(rows)
     assert best["A"]["cause"] == pdf_fetch_log.FailureCause.OUT_OF_SCOPE.value
+
+
+def _br_row(item: str = "A", handler: str = "sage") -> dict[str, str]:
+    return {"item_key": item, "source": "crossref", "attempt": "1",
+            "cause": pdf_fetch_log.FailureCause.BROWSER_REQUIRED.value,
+            "untried_handler": handler}
+
+
+@pytest.mark.parametrize("browser_row", [
+    # The handler the cascade named has now run and answered.
+    {"source": "sage", "attempt": "2",
+     "cause": pdf_fetch_log.FailureCause.ACCESS_BLOCKED.value},
+    # An upload failure after that handler's download (attempt defaults to 1).
+    {"source": "sage", "attempt": "1",
+     "cause": pdf_fetch_log.FailureCause.UPLOAD_FAILED.value},
+    {"source": "connector", "attempt": "2",
+     "cause": pdf_fetch_log.FailureCause.NO_PDF_OFFERED.value},
+    {"source": "library_resolver", "attempt": "2",
+     "cause": pdf_fetch_log.FailureCause.NETWORK_ERROR.value},
+])
+def test_browser_verdict_supersedes_stale_browser_required(browser_row) -> None:
+    """The API cascade's BROWSER_REQUIRED row ("browser pass not tried")
+    outranked the browser pass's real verdict, because the two live under
+    different `source` keys. The audit then said "run the browser"
+    forever and retry.ill / manual / network never filled."""
+    rows = [_br_row(), {"item_key": "A", **browser_row}]
+    best = pdf_fetch_log.latest_per_item(rows)
+    assert best["A"]["cause"] == browser_row["cause"]
+
+
+def test_browser_required_survives_an_unrelated_api_row() -> None:
+    """Another API source's answer says nothing about the browser pass."""
+    rows = [
+        _br_row(),
+        {"item_key": "A", "source": "openalex", "attempt": "1",
+         "cause": pdf_fetch_log.FailureCause.ACCESS_BLOCKED.value},
+    ]
+    best = pdf_fetch_log.latest_per_item(rows)
+    assert best["A"]["cause"] == pdf_fetch_log.FailureCause.BROWSER_REQUIRED.value
+
+
+def test_browser_required_without_handler_superseded_by_any_browser_row() -> None:
+    """No handler named means "the browser pass has not run at all", so
+    any attempt-2 row is that pass having run."""
+    rows = [
+        _br_row(handler=""),
+        {"item_key": "A", "source": "ebsco", "attempt": "2",
+         "cause": pdf_fetch_log.FailureCause.ACCESS_BLOCKED.value},
+    ]
+    best = pdf_fetch_log.latest_per_item(rows)
+    assert best["A"]["cause"] == pdf_fetch_log.FailureCause.ACCESS_BLOCKED.value
 
 
 def test_read_failures_returns_empty_list_for_missing_file(tmp_path: Path) -> None:
