@@ -82,7 +82,10 @@ PDF two routes:
   with: "the API will likely get 300; of what it may miss, 120 sit behind
   two Cloudflare publishers and 80 have no automated route at all".
 
-Also say: the paid count and its cost (`$0.01` per PDF), items `below
+Also say: the **consent** section — per site on a browser, EBSCOhost or
+Connector route, how many items depend on it and whether the user has
+allowed, denied or not yet answered automated download (Step 3 asks);
+the paid count and its cost (`$0.01` per PDF), items `below
 policy` (a copy exists but below `min_version`), the audit flags on the
 queue (`retry.manual`, `retry.below_policy`, …), publisher APIs with a
 missing credential (`signals.publisher_api_missing_key` — `/setup`
@@ -122,7 +125,11 @@ Ask, in one message, and give your recommendation with each:
    for the unattended run, which is not built yet. Until it is, describe
    the browser and Connector modes as needing the user present — never
    start one on the strength of this answer.
-4. **The policy, if none is stored** (`policy.stored` is false in the
+4. **Consent for automated download**, for every site in the plan's
+   `consent` section that is still `ask` (not answered) and that the
+   chosen order reaches with `browser` or `connector` — see *Consent*
+   below.
+5. **The policy, if none is stored** (`policy.stored` is false in the
    plan: every value came from the defaults): `min_version`
    (`published` | `accepted` | `preprint`), `reconstructed`, `paid`. See
    *Retrieval policy* below for what each means. Recommend `accepted` /
@@ -152,6 +159,47 @@ Then write it:
 Terminal equivalents: `pdf_strategy.py init --order … --present yes|no
 [--unattended yes|no]`, `pdf_strategy.py policy --min-version …`. Never
 edit `.claude/pdf/strategy.toml` by hand.
+
+### Consent (browser and Connector modes only)
+
+When the plugin itself drives a site — a publisher browser handler,
+EBSCOhost, or the Zotero Connector saving from the page the library's
+link resolver opens — whether that is permitted depends on the
+institution's licence and the site's terms. So each site has a stored
+answer, in the user's config (it applies to every project):
+`allow`, `deny`, or `ask` (not answered). **No other mode asks:** the
+publisher APIs (Elsevier, Wiley TDM, Crossref TDM) and the open-access
+sources are channels the publisher offers for this, and in manual
+download the user is the one clicking.
+
+**A missing answer never means yes.** A browser or Connector run that
+cannot ask — `--no-prompt`, every `--control-file` run you drive, an
+unattended run — skips each site without `allow` and logs its items
+`CONSENT_NEEDED`. So when the order includes `browser` or `connector`,
+put the question **in the planning conversation**, per site, with the
+plan's numbers:
+
+- read the sites from the plan's `consent` section (or
+  **`pdf_consent_show`**, which adds the stored answers and dates);
+- for each site still `ask`, tell the user the site, the mode (browser
+  handler or Connector), the item count, and **the terms link** — give
+  the link, never a summary of what the terms say; where no link is
+  recorded, say so and name the site's home page;
+- ask: allow, deny, or decide later. Record **only what they say**, with
+  **`pdf_consent_set`** (`pdf_consent.py set --site <site> --automated
+  allow|deny`). "Decide later" records nothing: those items are skipped
+  as `CONSENT_NEEDED`, and a run in the user's own terminal asks them
+  itself (allow / once / deny / not now).
+
+Never record an answer the user did not give, and never treat silence,
+"sure, whatever is fastest" about the strategy, or an earlier answer for
+a different site as consent. A `deny` is not a dead end: those items go
+to `manual` (`retry.consent_denied.keys` opens first). The site keys:
+a handler's name (`sage`, `tandf`, …), `ebsco` for all of EBSCOhost, a
+platform for the Connector (`jstor`, `proquest`) or a host
+(`degruyter.com`); `doi.org` stands for "wherever a DOI link lands" when
+the landing site is not known. The user can review and change every
+stored answer in `/setup`.
 
 **Autonomous runs.** When the calling skill runs autonomously, fold these
 questions into its single up-front proposal. With no answer, run the
@@ -248,6 +296,12 @@ lookups before the Connector pass, `run_done`); report progress from it.
 - `--no-prompt` answers every challenge with "skip" — only for a run
   nobody is watching, never instead of the control file when the user is
   there.
+- **Consent is settled before the run, not during it.** The control-file
+  run never relays a consent question: a site without a recorded `allow`
+  is skipped (`CONSENT_NEEDED`), a denied one goes to manual
+  (`CONSENT_DENIED`). Record the answers first (*Consent* above); after
+  the run, the audit's `retry.consent_needed.keys` is the set to re-run
+  once the user has answered.
 - **Two libraries, one network at a time.** With several
   `[library] openurl_base` entries, pass `--library <name>` for the
   institution whose VPN or login is up now (the run banner lists the
@@ -290,8 +344,8 @@ next`):
 Tell the user to download what they can from the open tabs and say
 "done"; then run the next cycle. Relay the summary line (opened,
 attached, unmatched, remaining). After the last batch call
-`pdf_manual_collect`. Items in `retry.manual` and `retry.below_policy`
-open first.
+`pdf_manual_collect`. Items in `retry.manual`, `retry.below_policy` and
+`retry.consent_denied` open first.
 
 **Never assign a file yourself.** An unmatched or ambiguous file is
 listed with its candidates — ask the user which item it is, then
@@ -345,7 +399,7 @@ Then act by cause:
 | `CORRUPT_DOWNLOAD` | A source served bytes that are not a usable PDF — usually truncated | A *different* source: the same one returns the same bytes. The publisher route, `browser`, or `manual`. **Not an exclusion.** |
 | `NO_PDF_OFFERED` | The Connector opened the library's route and its translator finished without a PDF — usually an HTML-only galley; nobody refused access | `manual` (`retry.manual.keys` opens first): save the HTML full text or find the PDF link. Not ILL. **Not an exclusion.** |
 | `VERSION_BELOW_POLICY` | A copy below `[pdf] min_version` was found and set aside in `<cache>/below_policy/`, not attached | Get the published version another way (`retry.below_policy.keys`: `paid`, `browser`, `manual`), or ask whether to lower `PDF_MIN_VERSION`. **Not an exclusion.** |
-| `CONSENT_NEEDED` | Automated download from the item's site (a browser handler, or the page the Connector would save from) was skipped: no consent recorded, and the run could not ask (`--no-prompt`, `--control-file`, unattended). Nothing was attempted | Ask the user about that site (*Consent* below), record the answer (`pdf_consent.py set`), re-run the browser step over `retry.consent_needed.keys` — or `manual`. Not ILL. **Not an exclusion.** |
+| `CONSENT_NEEDED` | Automated download from the item's site (a browser handler, or the page the Connector would save from) was skipped: no consent recorded, and the run could not ask (`--no-prompt`, `--control-file`, unattended). Nothing was attempted | Ask the user about that site (*Consent* below), record it with `pdf_consent_set`, re-run the browser step over `retry.consent_needed.keys` — or `manual`. Not ILL. **Not an exclusion.** |
 | `CONSENT_DENIED` | The user recorded `deny` for the site, so the browser pass did not open it | `manual` (`retry.consent_denied.keys` opens first). If the user changes the answer to `allow`, re-run the browser step over that key file. **Not an exclusion.** |
 | `UPLOAD_FAILED` | Fetched, but the Zotero attach failed | Re-run `api`: it attaches from the local cache, no new download (`retry.reattach.keys`). Cheapest of all. **Not an exclusion.** |
 | `OUT_OF_SCOPE` | Book chapter, thesis, preprint | FE2 / FE3 — excluded on item type, not on retrieval; chasing a PDF wastes the user's time |
@@ -367,7 +421,8 @@ its cause in the retrieval report is `UNAVAILABLE`.** If you have not run
 the audit, you do not know the cause, and you may not tag. The audit
 writes the retry sets as key files (`retry.browser[.<publisher>]`,
 `retry.ill`, `retry.network`, `retry.reattach`, `retry.manual`,
-`retry.below_policy`, `true_negative`, `out_of_scope`) under
+`retry.below_policy`, `retry.consent_needed`, `retry.consent_denied`,
+`true_negative`, `out_of_scope`) under
 `.claude/audit/` — feed them straight to `--filter-keys-file`; never
 assemble key lists by hand or with `jq`.
 
@@ -470,6 +525,8 @@ source. Every attached PDF carries `pdf:version:published`,
 - You started a browser or Connector pass while the user said they are
   away, or because "an unattended run is possible".
 - You assigned a downloaded file to an item the user did not name.
+- You recorded a consent answer (`pdf_consent_set`) the user did not give,
+  or summarised a site's terms instead of giving the link.
 - You tagged anything `<prefix>/fulltext:unavailable` without an audit
   saying `UNAVAILABLE`.
 - You edited `.claude/pdf/strategy.toml` or `screening_config.py` by hand

@@ -418,6 +418,34 @@ def test_the_skill_names_the_planning_and_strategy_tools() -> None:
                            r"|check_setup|job_status|list_jobs)`", _pdf()))
     assert {"pdf_plan", "start_pdf_plan", "pdf_strategy_show", "pdf_strategy_write",
             "pdf_strategy_update", "pdf_policy_write", "pdf_manual_next",
-            "pdf_manual_collect", "pdf_manual_assign"} <= named
+            "pdf_manual_collect", "pdf_manual_assign", "pdf_consent_show",
+            "pdf_consent_set"} <= named
     unknown = named - set(tool_registry.TOOLS_BY_NAME) - {"pdf_fetch_log"}  # a module
     assert not unknown, f"retrieving-pdfs names tools the server lacks: {unknown}"
+
+
+# ---------------------------------------------------------------------------
+# Consent (plan step 5)
+# ---------------------------------------------------------------------------
+
+
+def test_the_skill_states_the_consent_rules() -> None:
+    """The three rules an agent could get wrong: silence is not consent,
+    only the browser / Connector modes ask, and the terms are linked,
+    never summarised."""
+    text = _pdf()
+    assert "A missing answer never means yes" in text
+    assert "No other mode asks" in text
+    assert "never a summary of what the terms say" in text
+    assert "Record **only what they say**" in text
+    for label in ("retry.consent_needed", "retry.consent_denied"):
+        assert label in text, label
+
+
+def test_the_consent_key_files_are_ones_the_audit_writes() -> None:
+    import inspect
+
+    import audit_zotero_library
+    src = inspect.getsource(audit_zotero_library._write_retry_keys)
+    for label in ("retry.consent_needed", "retry.consent_denied"):
+        assert f'"{label}"' in src
