@@ -1,6 +1,6 @@
 ---
 name: suggesting-reviewers
-description: Use when an editor needs to identify peer reviewers OR an associate editor (AE) to handle a manuscript from its abstract — matching the paper's topics and methodology to editorial-board members, associate editors, and external experts and excluding ineligible people. Trigger phrases "suggest reviewers", "find reviewers for this paper", "who could review this", "recommend referees", "reviewer candidates", "suggest an AE", "assign an associate editor", "who should handle this paper", "recommend an AE", "select an associate editor". Do NOT use for writing or revising the manuscript — use `academic-research:critic-loop` / `manuscript-revision`. Do NOT use to verify a draft's citations — use `academic-research:fact-check`.
+description: Use when a journal editor needs peer reviewers or a handling associate editor (AE) for a manuscript, matched from its abstract to editorial-board members and external experts, excluding ineligible people. Trigger phrases "suggest reviewers", "find reviewers for this paper", "recommend referees", "suggest an AE", "who should handle this paper". Do NOT use for revising a manuscript — use `academic-research:critic-loop`. Do NOT use to verify a draft's citations — use `academic-research:fact-check`.
 ---
 
 # Suggesting reviewers or associate editors

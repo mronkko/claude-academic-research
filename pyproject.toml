@@ -57,6 +57,9 @@ dev = [
     # EBSCO test is the only check separating an article from its first
     # page, and behind an importorskip it simply did not run.
     "pypdf>=4.0",
+    # tests/unit/test_skill_frontmatter.py parses SKILL.md frontmatter with a
+    # real YAML loader; until now pyyaml only arrived transitively.
+    "pyyaml>=6.0",
 ]
 
 [tool.pytest.ini_options]

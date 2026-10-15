@@ -1,6 +1,6 @@
 ---
 name: empirical-integrity
-description: Use when editing manuscripts (.qmd, .Rmd, .ipynb, .tex, .md) that contain numbers, statistics, tables, test results, or methodology facts (search dates, model names, keyword strings). Enforces the rule that every quantitative or methodological claim in prose must come from a pipeline-generated authoritative file via code chunk or inline expression — never hand-typed.
+description: Use when writing or editing a manuscript (.qmd, .Rmd, .ipynb, .tex, .md) that states numbers, statistics, tables, test results, or methodology facts (search dates, model names, keyword strings) — every such value must come from a pipeline-generated file via an inline expression. Trigger phrases "add the sample size", "report the results", "update the table", "insert this statistic". Do NOT use for citation claims — use `grounded-citations` / `fact-check`.
 ---
 
 # Empirical integrity

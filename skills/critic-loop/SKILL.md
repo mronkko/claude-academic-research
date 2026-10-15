@@ -1,6 +1,6 @@
 ---
 name: critic-loop
-description: Use when the user asks to revise, polish, or critique an academic manuscript, chapter, thesis, or paper through parallel critic perspectives. Trigger phrases "/critic-loop", "run critic-loop", "revise this manuscript", "run critics on this draft", "run a critical review", "review this chapter". Invoke as `/critic-loop <document-path>`.
+description: Use when the user asks to revise, polish, critique, or finalize an existing academic manuscript, chapter, thesis, or paper — runs parallel critic subagents until no MAJOR issue remains. Trigger phrases "/critic-loop", "run critic-loop", "revise this manuscript", "polish this chapter", "critique this draft", "review this thesis". Do NOT use for first drafts — use `academic-style`. Do NOT use for a standalone citation audit — use `fact-check`.
 ---
 
 # critic-loop

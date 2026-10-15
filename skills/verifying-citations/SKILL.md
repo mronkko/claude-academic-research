@@ -1,6 +1,6 @@
 ---
 name: verifying-citations
-description: Use when verifying that a citation in a manuscript is honestly supported by its source — a sub-skill called by `fact-check` and by the evidence critic inside `critic-loop`. Loaded via `REQUIRED SUB-SKILL: verifying-citations` from a calling skill; not invoked standalone by end users. Defines the classification scheme, the staged abstract-then-fulltext rule, and the always-escalate triggers so both callers share one source of truth.
+description: Use only when a calling skill names it as a REQUIRED SUB-SKILL — the per-citation rule-book (classification scheme, staged abstract-then-fulltext rule, always-escalate triggers) shared by `fact-check` subagents and the evidence critic in `critic-loop`. Trigger phrases "REQUIRED SUB-SKILL verifying-citations", "load verifying-citations". Do NOT use for a user's request to check a draft's citations — use `fact-check`.
 ---
 
 # verifying-citations

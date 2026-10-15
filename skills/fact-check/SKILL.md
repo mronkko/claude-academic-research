@@ -1,6 +1,6 @@
 ---
 name: fact-check
-description: Use when the user asks to fact-check a manuscript, verify citations, audit sources, or check whether cited papers actually support the claims attributed to them. Trigger phrases "fact-check", "verify citations", "audit citations", "check the sources", "do these papers actually say that", "verify the numbers in this draft". Do NOT use during or immediately after `/critic-loop` — the evidence critic inside that loop covers the same ground and burns MCP / Zotero quota twice.
+description: Use when the user asks to fact-check a manuscript, verify or audit its citations, or check that cited papers support the claims attributed to them. Trigger phrases "fact-check", "verify citations", "audit citations", "check the sources", "do these papers actually say that", "verify the numbers in this draft". Do NOT use during or right after a `critic-loop` run — its evidence critic already audits the citations. Do NOT use to add a new citation — use `grounded-citations`.
 ---
 
 # fact-check

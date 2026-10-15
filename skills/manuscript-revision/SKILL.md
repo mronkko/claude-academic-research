@@ -1,6 +1,6 @@
 ---
 name: manuscript-revision
-description: Use when the user asks to revise, polish, improve, critique, or finalize an existing academic draft — manuscripts, papers, theses, chapters, dissertations. Trigger phrases "revise this draft", "polish this chapter", "finalize this manuscript", "improve this paper", "critique this section", "review this thesis". Do NOT use for first-draft writing or blank-page work — this skill's doctrine applies once a draft exists and is ready for revision.
+description: Use when the question is how or why an academic draft should be revised rather than running the revision — why parallel critics, what each critic is for, when a revision is finished. Trigger phrases "how should I revise this", "why a critic loop", "what do the critics check", "when is the draft done". Do NOT use to run a revision — use `critic-loop`. Do NOT use for drafting conventions — use `academic-style`.
 ---
 
 # Manuscript revision
