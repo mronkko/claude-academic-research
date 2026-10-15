@@ -136,8 +136,10 @@ def test_the_documented_verdicts_are_the_ones_implemented() -> None:
 
 def test_every_collection_enumeration_is_narrowed() -> None:
     """The helper is only worth having if it is on every path that reads
-    the collection, and there are two: the initial enumeration and the
-    re-read after `--full-recode` clears the resume tags. The bug this
+    the collection. There used to be two — the initial enumeration and a
+    re-read after `--full-recode` cleared the resume tags; that re-read
+    was stale (BACKLOG S13) and is gone, but any enumeration added later
+    must still be narrowed. The bug this
     fixes was precisely an enumeration nobody narrowed, so an AST check
     rather than a comment — the same guard style as
     tests/unit/test_searcher_backoff.py.
@@ -163,9 +165,7 @@ def test_every_collection_enumeration_is_narrowed() -> None:
                   if isinstance(n, ast.Call)
                   and isinstance(n.func, ast.Name)
                   and n.func.id == "_abstract_stage_eligible"]
-    assert len(enumerations) >= 2, (
-        "expected the initial enumeration and the --full-recode re-read"
-    )
+    assert len(enumerations) >= 1, "expected the initial enumeration"
     assert len(narrowings) == len(enumerations), (
         f"{len(enumerations)} collection enumeration(s) in main() but "
         f"{len(narrowings)} call(s) to _abstract_stage_eligible. Every "

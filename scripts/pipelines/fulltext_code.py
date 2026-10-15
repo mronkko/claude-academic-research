@@ -609,6 +609,45 @@ def held_back_error_count(
     )
 
 
+def clear_tags_for_recode(
+    zot, items: list[dict], prefixes: list[str], *, write: bool = True,
+) -> list[dict]:
+    """Clear `prefixes` tags on every item; return the items as they now are.
+
+    The returned copies have the cleared tags removed **in memory**, for
+    exactly the items whose clear succeeded. This used to re-read the
+    collection instead — but the writes go to the Web API and the read
+    came back from the local API at localhost:23119, which had not synced
+    yet. The stale read still showed every `fulltext:include`, so nothing
+    was selected: the run printed "Nothing to code." and exited 0 having
+    already wiped the tags (BACKLOG S13). This function knows precisely
+    what it removed, so it needs no read at all.
+
+    An item whose clear failed keeps its tags in the returned copy, so it
+    still counts as coded and is not re-coded on top of a tag that stayed.
+
+    `write=False` (a dry run) changes nothing in Zotero and returns what
+    the items would look like, so the dry run prices the real selection.
+    """
+    out: list[dict] = []
+    for it in items:
+        try:
+            if write:
+                zot.update_tags(it["key"], remove_prefixed=prefixes)
+        except Exception as e:  # noqa: BLE001
+            print(f"  WARN: could not clear tag on {it['key']}: {e}",
+                  flush=True)
+            out.append(it)
+            continue
+        data = dict(it.get("data", {}))
+        data["tags"] = [
+            t for t in data.get("tags", [])
+            if not any(str(t.get("tag", "")).startswith(p) for p in prefixes)
+        ]
+        out.append({**it, "data": data})
+    return out
+
+
 def _abstract_stage_eligible(
     items: list[dict],
     abstract_prefix: str,
@@ -1763,7 +1802,9 @@ def main() -> int:
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if args.full_recode and output_path.exists():
+    # Not on a dry run: it promises to write nothing, and this deletes
+    # the log (after backing it up).
+    if args.full_recode and output_path.exists() and not args.dry_run:
         backup = output_path.with_suffix(".bak-" + datetime.now(
             UTC).strftime("%Y%m%dT%H%M%SZ"))
         shutil.copy2(output_path, backup)
@@ -1869,29 +1910,17 @@ def main() -> int:
         ]
         print(f"--full-recode: clearing {', '.join(p + '*' for p in recode_prefixes)} "
               f"tags on all targeted items", flush=True)
-        for it in items:
-            try:
-                zot.update_tags(it["key"], remove_prefixed=recode_prefixes)
-            except Exception as e:  # noqa: BLE001
-                print(f"  WARN: could not clear tag on {it['key']}: {e}",
-                      flush=True)
-        # Refresh items to reflect the tag clearing. Re-narrow: this is a
-        # fresh enumeration of the whole collection, so without it
-        # --full-recode would quietly re-admit the abstract-excluded items
-        # that the pass above removed.
-        items = zot.collection_items(
-            args.collection, item_type="journalArticle",
+        items = clear_tags_for_recode(
+            zot, items, recode_prefixes, write=not args.dry_run,
         )
-        items, _ = _abstract_stage_eligible(items, abstract_prefix)
-        if args.only_keys:
-            wanted = {k.strip() for k in args.only_keys.split(",") if k.strip()}
-            items = [it for it in items if it["key"] in wanted]
 
     if not args.update_fields:
         # Resume: skip items already carrying this review's
         # fulltext:include / fulltext:exclude.
         tagged = _already_tagged(items, stage_prefix)
-        last = _load_last_decisions(output_path)
+        # --full-recode starts the log afresh (backed up above); a dry run
+        # leaves the file in place but must select as if it had not.
+        last = {} if args.full_recode else _load_last_decisions(output_path)
         to_code = _select_to_code(
             items, tagged=tagged, last_decisions=last, rerun=args.rerun,
         )
