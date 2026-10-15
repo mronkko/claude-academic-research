@@ -18,6 +18,13 @@ directory — no shell, and nothing from `scripts/` is imported here, so a
 script behaves exactly as it does when run from a terminal. The server
 never reads the plugin's config.toml; the scripts do, as they always have.
 
+Short tools run the script to completion and return a summary. Job
+tools (`start_*`) return at once with a job_id: the script runs under
+`job_runner.py`, detached, and every job tool reads the job's directory
+under `.claude/jobs/`, so the server itself holds no state and a job
+outlives the server that started it. This loop handles one request at a
+time, which is why nothing here ever waits on a job.
+
 Project directory: `CLAUDE_PROJECT_DIR` when the host sets it (Claude
 Code does; a stdio server's cwd is undocumented there), else the cwd.
 
@@ -31,15 +38,19 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import shutil
+import signal
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+import job_runner  # noqa: E402
 import tool_registry as reg  # noqa: E402
 
 PLUGIN_ROOT = _HERE.parent
@@ -140,7 +151,7 @@ def confine(value: str, project: Path, name: str) -> str:
 # Argument handling
 # ---------------------------------------------------------------------------
 
-def _check_type(param: reg.Param, value: object) -> None:
+def _check_type(param: reg.Param, value: object, *, allow_dash: bool = False) -> None:
     if param.kind == "repeat":
         ok = isinstance(value, list) and all(isinstance(v, str) for v in value)
         want = "an array of strings"
@@ -156,7 +167,8 @@ def _check_type(param: reg.Param, value: object) -> None:
     if param.pattern:
         if not re.fullmatch(param.pattern, value):  # type: ignore[arg-type]
             raise ToolInputError(f"{param.name}: {value!r} does not match {param.pattern}")
-    if isinstance(value, str) and value.startswith("-") and not param.path:
+    if (isinstance(value, str) and value.startswith("-") and not param.path
+            and not allow_dash):
         # A value that argparse would read as a flag of its own.
         raise ToolInputError(f"{param.name}: may not start with '-'")
 
@@ -312,11 +324,402 @@ def call_check_setup(tool: reg.Tool, arguments: dict, project: Path) -> dict:
     return _result(tool, run, project, summary, [])
 
 
+# ---------------------------------------------------------------------------
+# Jobs
+# ---------------------------------------------------------------------------
+#
+# A job is a directory, `.claude/jobs/<job_id>/`, and nothing else:
+#
+#   job.json              tool, argv, started_at, pid, runner_pid, status,
+#                         exit_code, finished_at (the runner keeps it current)
+#   run.log               the script's stdout + stderr
+#   progress.jsonl        the script's --progress-json events
+#   control.json(.reply)  the ControlFileChannel handshake, for scripts
+#                         that can ask the user something
+#   cancel.json           written by cancel_job; the runner acts on it
+#
+# The server keeps no job state of its own, so every job tool works the
+# same from a fresh server process — after a host restart, say — as from
+# the one that started the job.
+
+JOBS_DIR = Path(".claude") / "jobs"
+#: Test hook: seconds the runner waits between cancel escalation steps.
+GRACE_ENV = "ACADEMIC_RESEARCH_MCP_JOB_GRACE_S"
+CANCEL_GRACE_S = 20.0
+FINAL_STATUSES = ("succeeded", "failed", "cancelled")
+LIST_JOBS_LIMIT = 20
+#: How long a job may show no runner pid before it counts as never started.
+RUNNER_START_WINDOW_S = 60
+#: Progress events kept verbatim in a status reply.
+PROGRESS_LAST_EVENTS = 3
+PROGRESS_MAX_CHARS = 3000
+
+#: Runner processes this server started. Polled so they are reaped when
+#: they exit — a zombie would otherwise still look alive to `_pid_alive`.
+_spawned: list[subprocess.Popen] = []
+
+
+def _reap() -> None:
+    for proc in list(_spawned):
+        if proc.poll() is not None:
+            _spawned.remove(proc)
+
+
+def _pid_alive(pid: object) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if sys.platform == "win32":
+        # os.kill(pid, 0) on Windows *terminates* the process; ask instead.
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _new_job_id(tool: reg.Tool) -> str:
+    short = tool.name.removeprefix("start_")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    return f"{short}-{stamp}-{secrets.token_hex(2)}"
+
+
+def _job_dir(project: Path, job_id: str) -> Path:
+    # job_id has already matched JOB_ID's pattern: no separators, no dots.
+    job_dir = project / JOBS_DIR / job_id
+    if not (job_dir / job_runner.JOB_FILE).is_file():
+        raise ToolInputError(f"no job {job_id!r} in this project (see list_jobs)")
+    return job_dir
+
+
+def _rel(path: Path, project: Path) -> str:
+    try:
+        return path.relative_to(project).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _spawn_detached(argv: list[str], cwd: Path) -> subprocess.Popen:
+    """Start `argv` so it outlives this server and its host."""
+    env = dict(os.environ)
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    kwargs: dict = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = (subprocess.DETACHED_PROCESS
+                                   | subprocess.CREATE_NEW_PROCESS_GROUP)
+    else:
+        kwargs["start_new_session"] = True
+    return subprocess.Popen(
+        argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        close_fds=True, **kwargs,
+    )
+
+
+def _iter_jobs(project: Path):
+    root = project / JOBS_DIR
+    if not root.is_dir():
+        return
+    for job_dir in root.iterdir():
+        job = job_runner.read_json(job_dir / job_runner.JOB_FILE)
+        if job:
+            yield job_dir, job
+
+
+def _job_state(job_dir: Path, job: dict) -> tuple[str, str]:
+    """(status, note) from what is on disk and whether the runner lives."""
+    status = job.get("status")
+    if status in FINAL_STATUSES:
+        return status, ""
+    runner = job.get("runner_pid")
+    if runner is None:
+        try:
+            started = datetime.fromisoformat(job.get("started_at", ""))
+            age = (datetime.now(UTC) - started).total_seconds()
+        except (TypeError, ValueError):
+            age = RUNNER_START_WINDOW_S + 1
+        if age > RUNNER_START_WINDOW_S:
+            return "failed", "the job runner never started"
+    elif not _pid_alive(runner):
+        # It may have recorded the result between our two reads.
+        job = job_runner.read_json(job_dir / job_runner.JOB_FILE)
+        if job.get("status") in FINAL_STATUSES:
+            return job["status"], ""
+        return "failed", ("the job runner stopped without recording an exit "
+                          "status (machine restart or killed); see run.log")
+    control = job_runner.read_json(job_dir / "control.json")
+    if control.get("state") == "awaiting_user":
+        return "awaiting_user", ""
+    return "running", ""
+
+
+def _strip(event: dict) -> dict:
+    return {k: v for k, v in event.items() if k != "ts"}
+
+
+def summarise_progress(path: Path) -> dict:
+    """The last few events and running counts — never the whole file."""
+    events = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue  # a line still being written
+        if isinstance(event, dict) and isinstance(event.get("event"), str):
+            events.append(event)
+    if not events:
+        return {}
+    out: dict = {"events": len(events)}
+    starts = [e for e in events if e["event"] == "start"]
+    if starts:
+        out["start"] = _strip(starts[-1])
+    items = [e for e in events if e["event"] == "item"]
+    if items:
+        last = items[-1]
+        for key in ("phase", "done", "queued"):
+            if key in last:
+                out[key] = last[key]
+        outcomes: dict[str, int] = {}
+        for e in items:
+            o = str(e.get("outcome", "?"))
+            outcomes[o] = outcomes.get(o, 0) + 1
+        out["outcomes"] = outcomes
+    summaries = [e for e in events if e["event"] == "summary"]
+    if summaries:
+        out["summary"] = _strip(summaries[-1])
+    done = [e for e in events if e["event"] == "done"]
+    if done:
+        out["finished"] = _strip(done[-1])
+    out["last_events"] = [_strip(e) for e in events[-PROGRESS_LAST_EVENTS:]]
+    ts = events[-1].get("ts")
+    if isinstance(ts, (int, float)):
+        out["updated_at"] = datetime.fromtimestamp(ts, UTC).isoformat(timespec="seconds")
+    if len(json.dumps(out, default=str)) > PROGRESS_MAX_CHARS:
+        out.pop("last_events", None)
+        if len(json.dumps(out, default=str)) > PROGRESS_MAX_CHARS:
+            out["summary"] = {"keys": sorted(out.get("summary", {}))}
+    return out
+
+
+def _artifacts(tool: reg.Tool | None, job: dict, project: Path) -> list[str]:
+    if tool is None:
+        return []
+    try:
+        started = datetime.fromisoformat(job["started_at"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        return []
+    found = []
+    for rel in tool.artifacts:
+        path = project / rel
+        try:
+            if path.is_file() and path.stat().st_mtime >= started - 1:
+                found.append(rel)
+        except OSError:
+            continue
+    return found
+
+
+def _live_zotero_writers(project: Path) -> list[str]:
+    writers = []
+    for job_dir, job in _iter_jobs(project):
+        tool = reg.TOOLS_BY_NAME.get(job.get("tool", ""))
+        if (tool is not None and _writes_zotero(tool, job.get("arguments") or {})
+                and _job_state(job_dir, job)[0] in ("running", "awaiting_user")):
+            writers.append(job_dir.name)
+    return writers
+
+
+def _writes_zotero(tool: reg.Tool, arguments: dict) -> bool:
+    return (tool.effect in (reg.WRITES_ZOTERO, reg.COSTS_LLM)
+            and not arguments.get("dry_run"))
+
+
+def start_job(tool: reg.Tool, arguments: dict, project: Path) -> dict:
+    args = build_argv(tool, arguments, project)
+    _reap()
+    if _writes_zotero(tool, arguments):
+        # One Zotero library, one writer: concurrent writers interleave
+        # badly and the 412 retry masks rather than resolves it.
+        busy = _live_zotero_writers(project)
+        if busy:
+            raise ToolInputError(
+                f"job {busy[0]} is still writing to Zotero; wait for it "
+                "(job_status) or stop it (cancel_job) before starting another"
+            )
+    job_id = _new_job_id(tool)
+    job_dir = project / JOBS_DIR / job_id
+    job_dir.mkdir(parents=True)
+    script_argv = [*launcher(), str(PLUGIN_ROOT / tool.script), *args,
+                   "--progress-json", str(job_dir / "progress.jsonl")]
+    if tool.control:
+        script_argv += ["--control-file", str(job_dir / "control.json")]
+    try:
+        grace = float(os.environ.get(GRACE_ENV, "") or CANCEL_GRACE_S)
+    except ValueError:
+        grace = CANCEL_GRACE_S
+    job = {
+        "job_id": job_id, "tool": tool.name, "arguments": arguments,
+        "argv": script_argv, "started_at": job_runner.now_iso(),
+        "status": "running", "pid": None, "runner_pid": None,
+        "exit_code": None, "finished_at": None, "grace_s": grace,
+    }
+    job_runner.write_json(job_dir / job_runner.JOB_FILE, job)
+    runner = [sys.executable, str(_HERE / "job_runner.py"), str(job_dir), "--",
+              *script_argv]
+    try:
+        _spawned.append(_spawn_detached(runner, project))
+    except OSError as e:
+        job_runner.write_json(job_dir / job_runner.JOB_FILE, {
+            **job, "status": "failed", "error": f"could not start the runner: {e}",
+            "finished_at": job_runner.now_iso()})
+        raise
+    return {
+        "ok": True, "job_id": job_id, "status": "running",
+        "job_dir": _rel(job_dir, project),
+        "next": "Call job_status with this job_id to follow it.",
+    }
+
+
+def call_job_status(arguments: dict, project: Path) -> dict:
+    _reap()
+    job_dir = _job_dir(project, arguments["job_id"])
+    job = job_runner.read_json(job_dir / job_runner.JOB_FILE)
+    status, note = _job_state(job_dir, job)
+    tool = reg.TOOLS_BY_NAME.get(job.get("tool", ""))
+    try:
+        log = (job_dir / job_runner.LOG_FILE).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        log = ""
+    result: dict = {
+        "ok": True, "job_id": job_dir.name, "tool": job.get("tool"),
+        "status": status, "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"), "exit_code": job.get("exit_code"),
+        "progress": summarise_progress(job_dir / "progress.jsonl"),
+        "log_tail": _tail(log),
+        "log_path": _rel(job_dir / job_runner.LOG_FILE, project),
+        "artifacts": _artifacts(tool, job, project),
+    }
+    if note or job.get("error"):
+        result["error"] = note or job.get("error")
+    if (job_dir / job_runner.CANCEL_FILE).exists():
+        result["cancel_requested"] = True
+    if status == "awaiting_user":
+        control = job_runner.read_json(job_dir / "control.json")
+        result["prompt"] = control.get("prompt", "")
+        result["prompt_kind"] = control.get("kind", "line")
+        result["next"] = ("Show the prompt to the user and pass their answer "
+                          "to job_answer; do not answer for them.")
+    return result
+
+
+def call_job_answer(arguments: dict, project: Path) -> dict:
+    job_dir = _job_dir(project, arguments["job_id"])
+    job = job_runner.read_json(job_dir / job_runner.JOB_FILE)
+    status, _ = _job_state(job_dir, job)
+    control_path = job_dir / "control.json"
+    control = job_runner.read_json(control_path)
+    if status != "awaiting_user":
+        raise ToolInputError(f"job {job_dir.name} is not waiting for an answer "
+                             f"(status: {status})")
+    seq = control.get("seq")
+    job_runner.write_json(control_path.with_name(control_path.name + ".reply"),
+                          {"seq": seq, "answer": arguments["answer"]})
+    return {"ok": True, "job_id": job_dir.name, "seq": seq, "delivered": True,
+            "next": "Call job_status to follow the job."}
+
+
+def call_cancel_job(arguments: dict, project: Path) -> dict:
+    job_dir = _job_dir(project, arguments["job_id"])
+    job = job_runner.read_json(job_dir / job_runner.JOB_FILE)
+    status, _ = _job_state(job_dir, job)
+    if status in FINAL_STATUSES:
+        return {"ok": True, "job_id": job_dir.name, "status": status,
+                "note": "the job had already finished"}
+    job_runner.write_json(job_dir / job_runner.CANCEL_FILE,
+                          {"requested_at": job_runner.now_iso()})
+    if (sys.platform != "win32" and not _pid_alive(job.get("runner_pid"))
+            and _pid_alive(job.get("pid"))):
+        # No runner left to act on cancel.json: interrupt the group directly.
+        try:
+            os.killpg(job["pid"], signal.SIGINT)
+        except OSError:
+            pass
+    return {"ok": True, "job_id": job_dir.name, "status": status,
+            "cancel_requested": True,
+            "next": ("The job is interrupted so it can save its progress, then "
+                     "terminated if it does not stop; job_status shows when "
+                     "it has ended.")}
+
+
+def call_list_jobs(arguments: dict, project: Path) -> dict:
+    _reap()
+    jobs = []
+    for job_dir, job in _iter_jobs(project):
+        jobs.append({
+            "job_id": job_dir.name, "tool": job.get("tool"),
+            "status": _job_state(job_dir, job)[0],
+            "started_at": job.get("started_at"),
+            "finished_at": job.get("finished_at"),
+        })
+    jobs.sort(key=lambda j: j.get("started_at") or "", reverse=True)
+    return {"ok": True, "jobs": jobs[:LIST_JOBS_LIMIT], "total": len(jobs)}
+
+
+INTERNAL_HANDLERS = {
+    "job_status": call_job_status,
+    "job_answer": call_job_answer,
+    "cancel_job": call_cancel_job,
+    "list_jobs": call_list_jobs,
+}
+
+
+def check_internal_arguments(tool: reg.Tool, arguments: dict) -> dict:
+    """Validate a server-side tool's arguments the way build_argv does."""
+    if not isinstance(arguments, dict):
+        raise ToolInputError("arguments must be an object")
+    unknown = sorted(set(arguments) - {p.name for p in tool.params})
+    if unknown:
+        raise ToolInputError(f"unknown argument(s): {', '.join(unknown)}")
+    for param in tool.params:
+        value = arguments.get(param.name)
+        if value is None:
+            if param.required:
+                raise ToolInputError(f"{param.name} is required")
+            continue
+        _check_type(param, value, allow_dash=True)
+    return arguments
+
+
 def call_tool(name: str, arguments: dict | None) -> dict:
     """Run tool `name`; return the summary dict that becomes the result."""
     tool = reg.TOOLS_BY_NAME[name]
     project = project_dir()
     arguments = arguments or {}
+    if tool.internal:
+        return INTERNAL_HANDLERS[tool.name](
+            check_internal_arguments(tool, arguments), project)
+    if tool.job:
+        return start_job(tool, arguments, project)
     if tool is reg.CHECK_SETUP:
         return call_check_setup(tool, arguments, project)
     args = build_argv(tool, arguments, project)
@@ -353,7 +756,11 @@ def _initialize(params: dict) -> dict:
             "Tools that run the academic-research plugin's scripts in the "
             "current project. Each description starts with its effect class. "
             "Results are short JSON summaries; the full output of a tool's "
-            "last run is at log_path. Every tool has a terminal equivalent "
+            "last run is at log_path. Long runs (start_*) are background "
+            "jobs: they return a job_id at once; poll job_status, relay any "
+            "question the job asks to the user and send their reply with "
+            "job_answer, stop one with cancel_job. Jobs keep running if "
+            "this server restarts. Every tool has a terminal equivalent "
             "(the script it runs), which stays available."
         ),
     }

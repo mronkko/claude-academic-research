@@ -97,6 +97,9 @@ def script_cli(script: Path) -> tuple[set[str], set[str], dict[str, set]]:
 
 
 TOOL_IDS = [t.name for t in reg.TOOLS]
+SCRIPT_TOOLS = [t for t in reg.TOOLS if not t.internal]
+SCRIPT_TOOL_IDS = [t.name for t in SCRIPT_TOOLS]
+JOB_TOOL_IDS = [t.name for t in reg.JOB_TOOLS]
 
 
 @pytest.mark.parametrize("tool", reg.TOOLS, ids=TOOL_IDS)
@@ -105,7 +108,7 @@ def test_target_scripts_exist(tool: reg.Tool) -> None:
         assert (REPO / script).is_file(), f"{tool.name}: {script} does not exist"
 
 
-@pytest.mark.parametrize("tool", reg.TOOLS, ids=TOOL_IDS)
+@pytest.mark.parametrize("tool", SCRIPT_TOOLS, ids=SCRIPT_TOOL_IDS)
 def test_every_parameter_maps_to_a_real_flag(tool: reg.Tool) -> None:
     options, positionals, choices = script_cli(REPO / tool.script)
     for token in tool.fixed:
@@ -130,6 +133,39 @@ def test_every_parameter_maps_to_a_real_flag(tool: reg.Tool) -> None:
             if p.enum and p.flag in choices:
                 extra = set(p.enum) - choices[p.flag]
                 assert not extra, f"{tool.name}.{p.name}: {tool.script} refuses {extra}"
+
+
+@pytest.mark.parametrize("tool", reg.JOB_TOOLS, ids=JOB_TOOL_IDS)
+def test_job_scripts_take_the_flags_the_server_appends(tool: reg.Tool) -> None:
+    """The server adds `--progress-json` to every job's argv, and
+    `--control-file` to those whose script can ask a question; a script
+    without them would die on argparse the moment the job started."""
+    options, _, _ = script_cli(REPO / tool.script)
+    assert "--progress-json" in options, f"{tool.script} lacks --progress-json"
+    if tool.control:
+        assert "--control-file" in options, f"{tool.script} lacks --control-file"
+
+
+def test_control_flag_matches_the_script() -> None:
+    """A script with --control-file but a tool without `control=True`
+    would ask its question on a TTY nobody is at."""
+    for tool in reg.JOB_TOOLS:
+        assert tool.job and not tool.internal
+        options, _, _ = script_cli(REPO / tool.script)
+        assert tool.control == ("--control-file" in options), tool.name
+    assert all(t.internal and not t.job for t in reg.JOB_CONTROL_TOOLS)
+
+
+@pytest.mark.parametrize("tool", reg.JOB_TOOLS, ids=JOB_TOOL_IDS)
+def test_job_artifacts_are_project_relative(tool: reg.Tool) -> None:
+    for rel in tool.artifacts:
+        assert not Path(rel).is_absolute() and ".." not in Path(rel).parts
+
+
+def test_internal_tools_declare_no_flags() -> None:
+    for tool in reg.JOB_CONTROL_TOOLS:
+        assert tool.scripts() == ()
+        assert all(p.flag == "" for p in tool.params), tool.name
 
 
 def test_scanner_follows_shared_helpers() -> None:

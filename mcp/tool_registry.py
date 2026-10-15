@@ -17,6 +17,11 @@ Rules every tool follows (BACKLOG P21):
 - Summaries are small: counts parsed from the script's own output, never
   the output itself. The full output goes to a log file whose path is
   returned, so nothing is lost and nothing floods the context window.
+- Long runs are jobs (`job=True`): the server starts them detached and
+  appends `--progress-json` (and `--control-file` when `control=True`)
+  to the script's argv, so every job script must accept those flags —
+  the schema-sync test checks it. `job_status` and friends are
+  `internal` tools the server answers itself, with no script.
 
 Stdlib only, and imports nothing from `scripts/`: the server never loads
 pipeline code into its own process.
@@ -104,11 +109,24 @@ class Tool:
     summarise: Callable[[str, int, Path], tuple[dict, list[str]]] | None = None
     #: Extra scripts the tool runs (checked to exist by the guard test).
     extra_scripts: tuple[str, ...] = ()
+    #: A job: started detached, returns a job_id at once (see job_runner).
+    #: The server appends `--progress-json` to the script's argv.
+    job: bool = False
+    #: The job's script can ask the user a question through
+    #: `--control-file`; the server appends it and `job_answer` replies.
+    control: bool = False
+    #: Project-relative files a job writes, reported by `job_status` once
+    #: they exist and are newer than the job's start.
+    artifacts: tuple[str, ...] = ()
+    #: A server-side tool (job_status, …) with no script of its own.
+    internal: bool = False
 
     def full_description(self) -> str:
         return f"[{self.effect}] {self.description}"
 
     def scripts(self) -> tuple[str, ...]:
+        if self.internal:
+            return ()
         return (self.script, *self.extra_scripts)
 
     def input_schema(self) -> dict:
@@ -519,6 +537,313 @@ GENERATE_BIB = Tool(
     summarise=summarise_bib,
 )
 
+# ---------------------------------------------------------------------------
+# Jobs — long runs, started detached; follow them with job_status
+# ---------------------------------------------------------------------------
+
+#: Appended to every job description: how a job is driven.
+JOB_NOTE = (
+    " Runs as a background job: returns a job_id at once; follow it with "
+    "job_status, relay any question it asks with job_answer, stop it with "
+    "cancel_job."
+)
+
+CONFIG = Param(
+    "config", "Project-relative screening config (default: "
+    "./screening_config.py).", kind="option", flag="--config", path=True,
+)
+TAG_PREFIX = Param(
+    "tag_prefix", "This review's tag namespace, overriding TAG_PREFIX in "
+    "screening_config.py.", kind="option", flag="--tag-prefix",
+)
+COLLECTION_KEY = Param(
+    "collection", "Zotero collection key of the review.", kind="option",
+    flag="--collection", required=True, pattern=r"^[A-Z0-9]{8}$",
+)
+MODEL = Param(
+    "model", "Model alias (haiku, sonnet, opus, flash, pro, …) or a full "
+    "model ID. Default: the stage's model in screening_config.py.",
+    kind="option", flag="--model", pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/@-]*$",
+)
+DRY_RUN_LLM = Param(
+    "dry_run", "Print the first prompt and a cost estimate; no model calls, "
+    "no Zotero writes.", kind="switch", flag="--dry-run", type="boolean",
+)
+LIBRARY_PAIR = (("group", "user"),)
+
+START_SEARCH = Tool(
+    name="start_search",
+    title="Run the systematic search",
+    effect=WRITES_PROJECT,
+    description=(
+        "Runs the formal search from search_config.py across the citation "
+        "databases (network; uses their API quotas) and writes the raw and "
+        "deduplicated result CSVs plus search_metadata.json and "
+        "search_run.json. Changes nothing in Zotero." + JOB_NOTE
+    ),
+    script="scripts/pipelines/search.py",
+    params=(
+        Param("config", "Project-relative search config (default: "
+              "./search_config.py).", kind="option", flag="--config",
+              path=True),
+        Param("databases", "Comma-separated databases to search (scopus, "
+              "wos, openalex, semantic_scholar). Default: every database "
+              "with usable credentials.", kind="option", flag="--databases",
+              pattern=r"^[a-z_]+(,[a-z_]+)*$"),
+        Param("streams", "`keyword,citation` (default), `keyword` or "
+              "`citation` (forward snowballing from CITATION_SEEDS only — "
+              "a cheap pilot of a seed).", kind="option", flag="--streams",
+              enum=("keyword,citation", "keyword", "citation")),
+        Param("search_fields", "`all` (default; OpenAlex full text) or "
+              "`title_abstract` (comparable across databases).",
+              kind="option", flag="--search-fields",
+              enum=("all", "title_abstract")),
+    ),
+    job=True,
+    read_only=False,
+    idempotent=False,
+    open_world=True,
+    artifacts=("analysis/raw/search_results.csv",
+               "analysis/raw/search_results_raw.csv",
+               "analysis/raw/search_results_raw.partial.csv",
+               "search_metadata.json", "search_run.json"),
+)
+
+START_IMPORT = Tool(
+    name="start_import",
+    title="Import search results into Zotero",
+    effect=WRITES_ZOTERO,
+    description=(
+        "Imports a deduplicated search-results CSV into the Zotero library: "
+        "creates new items (Crossref metadata), patches existing ones "
+        "(missing abstract, collection, doctype tag), adds them to the "
+        "collection. Use dry_run first to preview." + JOB_NOTE
+    ),
+    script="scripts/pipelines/import_to_zotero.py",
+    params=(
+        GROUP, USER,
+        Param("input", "Project-relative search-results CSV.",
+              kind="option", flag="--input", path=True,
+              default="analysis/raw/search_results.csv"),
+        Param("collection", "Collection to add items to: an 8-character "
+              "key or a display name (created if missing).", kind="option",
+              flag="--collection"),
+        Param("no_create_collection", "Fail instead of creating a missing "
+              "collection.", kind="switch", flag="--no-create-collection",
+              type="boolean"),
+        CONFIG, TAG_PREFIX,
+        Param("dry_run", "Parse and report; write nothing to Zotero.",
+              kind="switch", flag="--dry-run", type="boolean"),
+    ),
+    job=True,
+    read_only=False,
+    idempotent=False,
+    open_world=True,
+    exclusive=LIBRARY_PAIR,
+)
+
+START_ENRICH_ABSTRACTS = Tool(
+    name="start_enrich_abstracts",
+    title="Fetch missing abstracts",
+    effect=WRITES_ZOTERO,
+    description=(
+        "Looks up abstracts for items that have a DOI but no abstract "
+        "(Crossref, Semantic Scholar, Scopus, … in priority order) and "
+        "writes them into Zotero. Resumes past items already done per its "
+        "log." + JOB_NOTE
+    ),
+    script="scripts/pipelines/enrich_abstracts.py",
+    params=(
+        *LIBRARY_ARGS, FILTER_KEYS,
+        Param("sources", "Comma-separated fetchers to ask, replacing the "
+              "default cascade (e.g. to opt into wos).", kind="option",
+              flag="--sources", pattern=r"^[a-z_]+(,[a-z_]+)*$"),
+        Param("dry_run", "Fetch abstracts; do not write them to Zotero.",
+              kind="switch", flag="--dry-run", type="boolean"),
+    ),
+    job=True,
+    read_only=False,
+    open_world=True,
+    exclusive=LIBRARY_PAIR,
+    artifacts=("output/abstract_fetch_log.csv",),
+)
+
+START_ENRICH_DOIS = Tool(
+    name="start_enrich_dois",
+    title="Validate and find DOIs",
+    effect=WRITES_ZOTERO,
+    description=(
+        "Validates existing DOIs against Crossref and searches Crossref for "
+        "items without one. Applies 3/3 matches; for a 2/3 match it asks "
+        "(job_status shows the question; answer y or n with job_answer) "
+        "unless no_prompt is set." + JOB_NOTE
+    ),
+    script="scripts/pipelines/enrich_dois.py",
+    params=(
+        Param("mode", "`all` (default): validate, then find missing; "
+              "`validate` or `find_missing` for one pass.", kind="map",
+              default="all",
+              choices={"all": ("--all",), "validate": ("--validate",),
+                       "find_missing": ("--find-missing",)}),
+        *LIBRARY_ARGS, FILTER_KEYS,
+        Param("dry_run", "Never write to Zotero; report proposals only.",
+              kind="switch", flag="--dry-run", type="boolean"),
+        Param("no_prompt", "Do not ask about 2/3 matches; log them as "
+              "proposed_not_applied.", kind="switch", flag="--no-prompt",
+              type="boolean"),
+        Param("fix_malformed", "Rewrite DOIs stored with URL / doi: "
+              "prefixes or whitespace to the clean form.", kind="switch",
+              flag="--fix-malformed", type="boolean"),
+        Param("replace_invalid", "Overwrite DOIs that fail validation with "
+              "a 3/3 Crossref match.", kind="switch",
+              flag="--replace-invalid", type="boolean"),
+    ),
+    job=True,
+    control=True,
+    read_only=False,
+    idempotent=False,
+    open_world=True,
+    exclusive=LIBRARY_PAIR,
+    artifacts=("output/doi_enrich_log.csv",),
+)
+
+START_ABSTRACT_SCREEN = Tool(
+    name="start_abstract_screen",
+    title="Screen abstracts with an LLM",
+    effect=COSTS_LLM,
+    description=(
+        "Screens each not-yet-screened item in the collection against the "
+        "review's criteria with the configured model, logs every decision "
+        "to the screening CSV and writes this review's abstract:* tags to "
+        "Zotero. Run with dry_run first for the cost estimate." + JOB_NOTE
+    ),
+    script="scripts/pipelines/abstract_screen.py",
+    params=(
+        COLLECTION_KEY, *LIBRARY_ARGS, CONFIG, TAG_PREFIX, MODEL,
+        Param("sample", "Screen a random sample of N items (0 = all).",
+              kind="option", flag="--sample", pattern=r"^[0-9]+$"),
+        Param("search_csv", "Project-relative search_results.csv, for "
+              "query provenance in the log.", kind="option",
+              flag="--search-csv", path=True),
+        DRY_RUN_LLM,
+    ),
+    job=True,
+    read_only=False,
+    idempotent=False,
+    open_world=True,
+    exclusive=LIBRARY_PAIR,
+    artifacts=("screening/abstract_screening.csv",),
+)
+
+START_FULLTEXT_CODE = Tool(
+    name="start_fulltext_code",
+    title="Code full texts with an LLM",
+    effect=COSTS_LLM,
+    description=(
+        "Codes each eligible item's PDF with the configured model: a "
+        "full-text decision plus the coding fields, logged to the CSV and "
+        "written to Zotero as fulltext:* tags and an SLR Coding note. "
+        "full_recode clears this review's coding tags first. Run with "
+        "dry_run first for the cost estimate." + JOB_NOTE
+    ),
+    script="scripts/pipelines/fulltext_code.py",
+    params=(
+        COLLECTION_KEY, *LIBRARY_ARGS, CONFIG, TAG_PREFIX, MODEL,
+        Param("limit", "Code at most N items (0 = all).", kind="option",
+              flag="--limit", pattern=r"^[0-9]+$"),
+        Param("only_keys", "Comma-separated Zotero item keys to code.",
+              kind="option", flag="--only-keys",
+              pattern=r"^[A-Z0-9]{8}(,[A-Z0-9]{8})*$"),
+        Param("rerun", "Retry only items whose last decision was `error`.",
+              kind="switch", flag="--rerun", type="boolean"),
+        Param("full_recode", "Back up the log, clear this review's "
+              "fulltext:* and coding tags, and re-code everything.",
+              kind="switch", flag="--full-recode", type="boolean"),
+        DRY_RUN_LLM,
+    ),
+    job=True,
+    read_only=False,
+    destructive=True,
+    idempotent=False,
+    open_world=True,
+    exclusive=(*LIBRARY_PAIR, ("rerun", "full_recode")),
+    artifacts=("screening/fulltext_screening.csv",),
+)
+
+JOB_ID = Param(
+    "job_id", "The job_id a start_* tool returned (see list_jobs).",
+    kind="option", required=True, pattern=r"^[a-z_]+-[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$",
+)
+
+JOB_STATUS = Tool(
+    name="job_status",
+    title="Job status",
+    effect=READ_ONLY,
+    description=(
+        "Reports a job's status (running, awaiting_user, succeeded, failed, "
+        "cancelled), a short progress summary, the question it is waiting "
+        "on if any, the tail of its log and the files it wrote. When it is "
+        "awaiting_user, show the prompt to the user and pass their answer "
+        "to job_answer — never answer on their behalf."
+    ),
+    script="",
+    params=(JOB_ID,),
+    internal=True,
+)
+
+JOB_ANSWER = Tool(
+    name="job_answer",
+    title="Answer a job's question",
+    effect=WRITES_PROJECT,
+    description=(
+        "Delivers the user's answer to the question a job is waiting on "
+        "(status awaiting_user). The job then acts on it — e.g. applies a "
+        "proposed DOI — so pass only what the user said."
+    ),
+    script="",
+    params=(JOB_ID, Param("answer", "The user's answer, verbatim.",
+                          kind="option", required=True)),
+    read_only=False,
+    idempotent=False,
+    internal=True,
+)
+
+CANCEL_JOB = Tool(
+    name="cancel_job",
+    title="Cancel a job",
+    effect=WRITES_PROJECT,
+    description=(
+        "Stops a running job: interrupts it first so it saves what it has "
+        "done (CSV logs, pending Zotero tags), then terminates it if it "
+        "does not stop. Returns at once; job_status shows when it has "
+        "ended. Work already written stays written."
+    ),
+    script="",
+    params=(JOB_ID,),
+    read_only=False,
+    internal=True,
+)
+
+LIST_JOBS = Tool(
+    name="list_jobs",
+    title="List jobs",
+    effect=READ_ONLY,
+    description="Lists this project's recent jobs, newest first, with "
+                "their status.",
+    script="",
+    internal=True,
+)
+
+JOB_TOOLS: tuple[Tool, ...] = (
+    START_SEARCH,
+    START_IMPORT,
+    START_ENRICH_ABSTRACTS,
+    START_ENRICH_DOIS,
+    START_ABSTRACT_SCREEN,
+    START_FULLTEXT_CODE,
+)
+JOB_CONTROL_TOOLS: tuple[Tool, ...] = (JOB_STATUS, JOB_ANSWER, CANCEL_JOB, LIST_JOBS)
+
 TOOLS: tuple[Tool, ...] = (
     CHECK_SETUP,
     SCAFFOLD_PROJECT,
@@ -528,5 +853,7 @@ TOOLS: tuple[Tool, ...] = (
     AUDIT_LIBRARY,
     EXPORT_CODED_INCLUDES,
     GENERATE_BIB,
+    *JOB_TOOLS,
+    *JOB_CONTROL_TOOLS,
 )
 TOOLS_BY_NAME = {t.name: t for t in TOOLS}

@@ -126,6 +126,9 @@ def test_initialize_then_tools_list(project, stub, tmp_path) -> None:
         "check_setup", "scaffold_project", "enrich_pdfs_plan",
         "enrich_pdfs_report", "screening_report", "audit_library",
         "export_coded_includes", "generate_bib",
+        "start_search", "start_import", "start_enrich_abstracts",
+        "start_enrich_dois", "start_abstract_screen", "start_fulltext_code",
+        "job_status", "job_answer", "cancel_job", "list_jobs",
     ]
     for t in tools:
         assert t["description"].startswith((
