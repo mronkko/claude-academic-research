@@ -150,6 +150,31 @@ def test_replace_keeps_a_cached_copy_that_differs(harness) -> None:
     assert any(w[0] == "attach_pdf" for w in zot.writes)
 
 
+def _log_attached(log_csv) -> None:
+    import csv
+
+    with open(log_csv, "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=enrich_pdfs.LOG_FIELDS)
+        w.writeheader()
+        w.writerow({"run_date": "2026-01-01", "item_key": "K1", "doi": DOI,
+                    "title": "T", "status": "attached", "source": "crossref"})
+
+
+def test_a_logged_attach_whose_pdf_is_gone_is_refetched(harness, tmp_path) -> None:
+    """The log gate ran before the Zotero check: an `attached` row kept
+    an item out for good, even after the user deleted its bad PDF so it
+    would be refetched. Zotero's state decides now."""
+    _log_attached(tmp_path / "log.csv")
+    assert harness.run(_Zot(has_pdf=False)) == 0
+    assert harness.calls["cascade"] == [["K1"]]
+
+
+def test_a_logged_attach_that_still_has_its_pdf_is_skipped(harness, tmp_path) -> None:
+    _log_attached(tmp_path / "log.csv")
+    assert harness.run(_Zot(has_pdf=True, md5="m")) == 0
+    assert harness.calls["cascade"] == []
+
+
 def test_dry_run_skips_the_connector_pass() -> None:
     """The Connector saves into Zotero, merges and trashes — there is no
     dry form of it, and --dry-run ran it anyway."""

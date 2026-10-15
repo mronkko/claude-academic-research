@@ -495,6 +495,27 @@ def _load_replace_done_items(path: str) -> set[str]:
         }
 
 
+def _logged_done_without_pdf(
+    all_items: list[dict],
+    done_items: set[str],
+    pdf_map: dict[str, tuple[bool, list[str]]],
+) -> list[dict]:
+    """Items the run-log calls done that Zotero says have no real PDF.
+
+    The log gate ran *before* the Zotero check, so an item with an
+    `attached` row was skipped for good — including after the user
+    deleted a bad PDF to have it refetched, which is exactly when it is
+    not done. Zotero's state decides; the log only short-circuits items
+    that still carry a PDF.
+    """
+    return [
+        it for it in all_items
+        if (it.get("data", {}).get("DOI") or "").strip()
+        and it["key"].strip().lower() in done_items
+        and not pdf_map.get(it["key"], (False, []))[0]
+    ]
+
+
 def _load_done_items(path: str) -> set[str]:
     """Zotero item keys this log records as already carrying a PDF.
 
@@ -5013,7 +5034,9 @@ def main() -> int:
 
     print("Checking for existing PDF attachments...", end=" ", flush=True)
     pdf_map = zot.pdf_map()
-    md5_map = zot.real_pdf_md5_map() if args.replace else {}
+    if not args.replace:
+        candidates += _logged_done_without_pdf(all_items, done_items, pdf_map)
+    md5_map =zot.real_pdf_md5_map() if args.replace else {}
     real_map = {parent: list(atts) for parent, atts in md5_map.items()}
     to_process, stub_keys, replace_targets = _partition_by_attachment(
         candidates, pdf_map, real_map, replace=args.replace,
