@@ -70,6 +70,17 @@ CONFIG_PATH = CONFIG_DIR / "config.toml"
 AGY_HOME = Path.home() / ".gemini"
 AGY_MCP_CONFIG_PATH = AGY_HOME / "config" / "mcp_config.json"
 
+# Codex CLI. Registration there is offered but UNTESTED by policy: the
+# plugin is developed against Claude Code and Antigravity only.
+CODEX_HOME = Path.home() / ".codex"
+CODEX_CONFIG_PATH = CODEX_HOME / "config.toml"
+
+# The plugin's own MCP server (mcp/server.py), which exposes the pipeline
+# scripts as tools. Claude Code gets it from `mcpServers` in
+# .claude-plugin/plugin.json; the hosts below need it registered by path.
+PLUGIN_ROOT = _SCRIPTS_ROOT.parent
+SELF_MCP_NAME = "academic-research"
+
 # MCP server connection statuses, parsed from `claude mcp list` output.
 MCP_STATUS_CONNECTED = "connected"
 MCP_STATUS_NEEDS_AUTH = "needs_auth"
@@ -2358,6 +2369,177 @@ def _write_agy_mcp_config(data: dict) -> None:
     AGY_MCP_CONFIG_PATH.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
+# ---------------------------------------------------------------------------
+# The plugin's own MCP server, for hosts that cannot find it by themselves.
+#
+# Antigravity plugins *can* bundle MCP servers (`plugins/<name>/mcp_config.json`,
+# per the docs embedded in the `agy` binary), but that file has no
+# documented plugin-root variable like Claude Code's ${CLAUDE_PLUGIN_ROOT},
+# so a bundled entry could not name server.py's path. The wizard knows the
+# path — it runs from inside the plugin — so it registers the server in the
+# global config instead, and re-running it after the plugin moves fixes a
+# stale path.
+# ---------------------------------------------------------------------------
+
+
+_SELF_STATUS_TEXT = {
+    "registered": "registered",
+    "current": "registered (already up to date)",
+    "skipped": "not registered",
+    "manual": "not registered (add it by hand; see above)",
+}
+
+
+def _self_mcp_entry() -> dict:
+    """The launch command for mcp/server.py, as an mcpServers entry.
+
+    The same `uv run --no-project` launch as plugin.json uses for Claude
+    Code, with the absolute path in place of ${CLAUDE_PLUGIN_ROOT}.
+    """
+    return {
+        "command": "uv",
+        "args": ["run", "--no-project", "--quiet",
+                 str(PLUGIN_ROOT / "mcp" / "server.py")],
+    }
+
+
+def _ask_yes(prompt: str) -> bool:
+    try:
+        answer = input(prompt).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    return answer in ("", "y", "yes")
+
+
+def _register_self_agy(interactive: bool) -> str:
+    """Add or refresh the plugin's server in Antigravity's mcp_config.json.
+
+    Returns "registered", "current" (already right), or "skipped".
+    """
+    entry = _self_mcp_entry()
+    if AGY_MCP_CONFIG_PATH.exists():
+        try:
+            current = json.loads(AGY_MCP_CONFIG_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            current = None  # _load_agy_mcp_config reports it below
+        if isinstance(current, dict):
+            existing = (current.get("mcpServers") or {}).get(SELF_MCP_NAME)
+            if existing == entry:
+                return "current"
+    if not interactive:
+        return "skipped"
+    print()
+    print(_wrap_body(
+        "The plugin's own MCP server exposes the pipeline scripts as tools "
+        "(setup check, project scaffold, PDF plan and report, library audit, "
+        f"screening report, export, bibliography). Add it to "
+        f"{AGY_MCP_CONFIG_PATH}?",
+    ))
+    if not _ask_yes("    Register now? [Y/n] "):
+        print("    Skipped.")
+        return "skipped"
+    config = _load_agy_mcp_config()
+    config.setdefault("mcpServers", {})[SELF_MCP_NAME] = entry
+    _write_agy_mcp_config(config)
+    print(f"    ✓ Registered {SELF_MCP_NAME}.")
+    return "registered"
+
+
+def _codex_block() -> str:
+    """The TOML table registering the plugin's server with Codex."""
+    entry = _self_mcp_entry()
+    render = _config_writer._render
+    return (
+        f"[mcp_servers.{SELF_MCP_NAME}]\n"
+        f"command = {render(entry['command'])}\n"
+        f"args = {render(entry['args'])}\n"
+    )
+
+
+def _replace_codex_block(text: str) -> str | None:
+    """`text` with our `[mcp_servers.academic-research]` table (and any of
+    its sub-tables) swapped for the current one, or appended when absent.
+
+    Edits the file as text rather than parse-and-dump, because
+    ~/.codex/config.toml is the user's own file and a round-trip through
+    tomllib would drop its comments and ordering. Returns None when the
+    table exists in a form this cannot find as a header (e.g. written as an
+    inline table) — the caller then leaves the file alone.
+    """
+    header = re.compile(
+        rf'^\s*\[\s*mcp_servers\s*\.\s*(?:{re.escape(SELF_MCP_NAME)}|"{re.escape(SELF_MCP_NAME)}")'
+        r'\s*(?:\.[^\]]*)?\]\s*(?:#.*)?$'
+    )
+    any_header = re.compile(r"^\s*\[")
+    lines = text.splitlines(keepends=True)
+    kept: list[str] = []
+    found = False
+    skipping = False
+    for line in lines:
+        if header.match(line):
+            found = skipping = True
+            continue
+        if skipping and any_header.match(line):
+            skipping = False
+        if not skipping:
+            kept.append(line)
+    if not found:
+        try:
+            import tomllib
+            parsed = tomllib.loads(text)
+        except Exception:
+            return None
+        if SELF_MCP_NAME in (parsed.get("mcp_servers") or {}):
+            return None
+    body = "".join(kept).rstrip("\n")
+    return (body + "\n\n" if body else "") + _codex_block()
+
+
+def _register_self_codex(interactive: bool) -> str:
+    """Add or refresh the plugin's server in ~/.codex/config.toml.
+
+    Only when ~/.codex exists — the wizard never creates a Codex install.
+    UNTESTED against a real Codex by policy; the TOML shape follows Codex's
+    documented `[mcp_servers.<name>]` table. Returns "registered",
+    "current", "skipped", "manual" (could not edit safely) or "absent".
+    """
+    import tomllib
+
+    if not CODEX_HOME.is_dir():
+        return "absent"
+    text = ""
+    if CODEX_CONFIG_PATH.exists():
+        text = CODEX_CONFIG_PATH.read_text(encoding="utf-8")
+        try:
+            current = tomllib.loads(text).get("mcp_servers", {}).get(SELF_MCP_NAME)
+        except tomllib.TOMLDecodeError:
+            print(f"  {CODEX_CONFIG_PATH} does not parse; not touching it.")
+            return "manual"
+        if current == _self_mcp_entry():
+            return "current"
+    if not interactive:
+        return "skipped"
+    print()
+    print(_wrap_body(
+        f"Codex detected. Add the plugin's MCP server to {CODEX_CONFIG_PATH}? "
+        "(Codex support is untested.)",
+    ))
+    if not _ask_yes("    Register now? [Y/n] "):
+        print("    Skipped.")
+        return "skipped"
+    updated = _replace_codex_block(text)
+    if updated is None:
+        print(f"    Could not edit {CODEX_CONFIG_PATH} safely. Add this by hand:")
+        print(textwrap.indent(_codex_block(), "      "))
+        return "manual"
+    if CODEX_CONFIG_PATH.exists():
+        shutil.copy2(CODEX_CONFIG_PATH, CODEX_CONFIG_PATH.with_suffix(".toml.bak-wizard"))
+    CODEX_CONFIG_PATH.write_text(updated, encoding="utf-8")
+    print(f"    ✓ Registered {SELF_MCP_NAME} (Codex, untested).")
+    return "registered"
+
+
 def _print_mcp_offer(spec: McpServerSpec, status: str, register_line: str | None = None) -> None:
     if status == MCP_STATUS_MISSING:
         headline = f"{spec.name} — not registered"
@@ -2711,6 +2893,7 @@ def main() -> int:
     agy_available = _agy_available()
     agy_mcp: dict[str, str] = {}
     agy_registered = 0
+    agy_self = "skipped"
     if agy_available:
         agy_mcp = _check_agy_mcp_servers()
         if interactive:
@@ -2722,6 +2905,8 @@ def main() -> int:
             agy_registered, agy_mcp = _offer_register_agy_mcp(
                 EXPECTED_MCP, agy_mcp, interactive=True,
             )
+        agy_self = _register_self_agy(interactive)
+    codex_self = _register_self_codex(interactive)
 
     current_mcp = _merge_mcp_status(current_mcp, agy_mcp)
 
@@ -2733,6 +2918,9 @@ def main() -> int:
         print(f"    Gitignore: added .claude/ entry to {gitignore_updated}")
     if agy_available:
         print(f"    Antigravity MCP: {AGY_MCP_CONFIG_PATH} (+{agy_registered} registered)")
+        print(f"    Pipeline tools (Antigravity): {_SELF_STATUS_TEXT[agy_self]}")
+    if codex_self != "absent":
+        print(f"    Pipeline tools (Codex, untested): {_SELF_STATUS_TEXT[codex_self]}")
     glyph = "✓" if zotero_local_status == ZOTERO_LOCAL_STATUS_OK else "✗"
     print(f"    Zotero local API: {glyph} {zotero_local_message}")
     bbt_glyph = "✓" if zotero_bbt_status == ZOTERO_BBT_STATUS_OK else "✗"
