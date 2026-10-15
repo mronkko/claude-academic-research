@@ -61,10 +61,16 @@ def test_tags_item_when_recovered_pdf_is_attached(tmp_path: Path) -> None:
     _run_api_cascade([item], [source], args, "2026-06-13", zot, _make_log_writer())
 
     zot.attach_pdf.assert_called_once_with("ITEM1", str(recovered_path))
-    zot.update_tags.assert_called_once_with("ITEM1", add=[TDM_RECOVERED_TAG])
+    # The XML recovery is the version of record's text, so `published`
+    # rides beside the recovered tag (the suffix decides it, not the
+    # source name).
+    zot.update_tags.assert_called_once_with(
+        "ITEM1", add=[TDM_RECOVERED_TAG, "pdf:version:published"],
+        remove=["pdf:version:accepted", "pdf:version:submitted"],
+    )
 
 
-def test_does_not_tag_item_when_native_pdf_is_attached(tmp_path: Path) -> None:
+def test_native_pdf_gets_only_a_version_tag(tmp_path: Path) -> None:
     native_path = tmp_path / "10.1016_j.example.2020.01.002.pdf"
     native_path.write_bytes(_fake_pdf(b"native"))
 
@@ -79,7 +85,12 @@ def test_does_not_tag_item_when_native_pdf_is_attached(tmp_path: Path) -> None:
     _run_api_cascade([item], [source], args, "2026-06-13", zot, _make_log_writer())
 
     zot.attach_pdf.assert_called_once_with("ITEM2", str(native_path))
-    zot.update_tags.assert_not_called()
+    # No provenance tag. The version tag is there, and `accepted`: a
+    # source the version map does not know is never trusted with more.
+    zot.update_tags.assert_called_once_with(
+        "ITEM2", add=["pdf:version:accepted"],
+        remove=["pdf:version:published", "pdf:version:submitted"],
+    )
 
 
 def test_does_not_tag_on_dry_run(tmp_path: Path) -> None:

@@ -86,6 +86,7 @@ import pdf_run_report  # noqa: E402
 import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
 from core.config_loader import get, require  # noqa: E402
+from fetchers import pdf_version  # noqa: E402
 from log_schemas import PDF_FETCH_FIELDS  # noqa: E402
 
 DEFAULT_LOG_CSV = os.path.join("output", "pdf_attach_log.csv")
@@ -1339,7 +1340,47 @@ _PROVENANCE_TAGS = (
     fetchers.TDM_RECOVERED_TAG,
     fetchers.REPOSITORY_COPY_TAG,
     fetchers.PREPRINT_VERSION_TAG,
+    *pdf_version.VERSION_TAGS,
 )
+
+
+def _version_tag_op(version: str) -> tuple[list[str], list[str]]:
+    """`(add, remove)` that leaves exactly one `pdf:version:*` tag.
+
+    The tag describes the attachment the item now holds. Any other
+    version tag on it is left over from a copy that is gone — `--replace`
+    trashed it, or the user deleted it by hand, which is why the item was
+    back in the queue.
+    """
+    tag = pdf_version.tag_for(version)
+    return [tag], [t for t in pdf_version.VERSION_TAGS if t != tag]
+
+
+def _connector_version(entry: dict) -> str:
+    """The version a Connector save carries: the one pass 3 decided from
+    the resolver route, or — for a pending-merge row queued before rows
+    carried it — the conservative reading of what is left."""
+    version = entry.get("pdf_version") or ""
+    if version in pdf_version.VERSIONS:
+        return version
+    return pdf_version.for_connector_target(
+        None, entry.get("resolver_target_url", ""), entry.get("doi", ""),
+    )
+
+
+def _finish_connector_attach(
+    zot, item_key: str, new_pdfs: set[str], version: str,
+) -> None:
+    """Complete a Connector save that moved `new_pdfs` onto `item_key`:
+    finish a `--replace` swap, then tag the version. Tagging is
+    best-effort, as on the API route — the PDF is attached either way."""
+    add, remove = _version_tag_op(version)
+    _finish_replacement(zot, item_key, keep=new_pdfs, provenance=add)
+    try:
+        zot.update_tags(item_key, add=add, remove=remove)
+    except Exception as exc:
+        print(f"  WARN: attached, but tagging failed: {_failure_detail(exc)}",
+              flush=True)
 
 
 def _finish_replacement(zot, item_key: str, *, keep: set[str], provenance: list[str]) -> None:
@@ -1524,6 +1565,13 @@ def _attach_and_log(
             (fetchers.is_preprint_path, fetchers.PREPRINT_VERSION_TAG),
         ) if predicate(pdf_path)
     ]
+    # Decided when the file was fetched (`pdf_version.settle`) and read
+    # back here from the cache sidecar, so the cache-recovery pass — which
+    # knows only a path — tags as precisely as the cascade did.
+    version_add, version_remove = _version_tag_op(
+        pdf_version.version_of(pdf_path, doi=doi),
+    )
+    provenance_tags += version_add
     _finish_replacement(
         zot, item_key, keep={new_attachment_key}, provenance=provenance_tags,
     )
@@ -1531,7 +1579,7 @@ def _attach_and_log(
     # Everything below is best-effort annotation.
     if provenance_tags:
         try:
-            zot.update_tags(item_key, add=provenance_tags)
+            zot.update_tags(item_key, add=provenance_tags, remove=version_remove)
         except Exception as exc:
             print(f"  WARN: attached, but tagging failed: {_failure_detail(exc)}",
                   flush=True)
@@ -2004,6 +2052,12 @@ async def _drive_handler(
                 return
 
             pdf_path, source_url = result
+            # Every handler here drives a publisher platform (or EBSCOhost)
+            # and saves that platform's own PDF.
+            pdf_version.settle(
+                pdf_path, source=lane_handler.name, source_url=source_url,
+                doi=doi, static=pdf_version.BROWSER_HANDLER_VERSION,
+            )
             if args.dry_run:
                 log_writer.writerow({
                     "run_date": run_date, "item_key": item["item_key"],
@@ -2376,8 +2430,8 @@ async def _connector_item_loop(
                 getattr(handler, "last_merge", {}).get("moved_pdf_keys") or [],
             )
             if new_pdfs:
-                _finish_replacement(
-                    zot, item["item_key"], keep=new_pdfs, provenance=[],
+                _finish_connector_attach(
+                    zot, item["item_key"], new_pdfs, _connector_version(item),
                 )
             status = "attached_via_connector"
         elif getattr(handler, "last_outcome", "") == "merge_background":
@@ -2696,8 +2750,8 @@ async def _drive_connector(
                     if new_pdfs:
                         # After `merge_saved_item` verified the move, never
                         # before: that is what --replace's delete hangs on.
-                        _finish_replacement(
-                            zot, row["keeper"], keep=new_pdfs, provenance=[],
+                        _finish_connector_attach(
+                            zot, row["keeper"], new_pdfs, _connector_version(row),
                         )
                     print(f"  ⤷ {row['keeper']}: ATTACHED "
                           f"({(stats or {}).get('moved', 0)} moved from "
@@ -3720,7 +3774,14 @@ def _run_browser_in_process(
                 if origin == "upfront":
                     failed_open += 1
                 target = f"https://doi.org/{it['doi']}"
-            entry_with_target = {**it, "resolver_target_url": target}
+            entry_with_target = {
+                **it, "resolver_target_url": target,
+                # Decided now, while the resolver route is in hand; the
+                # Connector and the EBSCO handler only ever see the URL.
+                "pdf_version": pdf_version.for_connector_target(
+                    chosen, target, it.get("doi", ""),
+                ),
+            }
             if lookup.journal_page_replaced:
                 journal_pages_replaced += 1
                 entry_with_target["resolver_target_note"] = (
@@ -3831,7 +3892,9 @@ def _run_browser_in_process(
         def _on_merged(row: dict, stats: dict) -> None:
             new_pdfs = set(stats.get("moved_pdf_keys") or [])
             if new_pdfs:
-                _finish_replacement(zot, row["keeper"], keep=new_pdfs, provenance=[])
+                _finish_connector_attach(
+                    zot, row["keeper"], new_pdfs, _connector_version(row),
+                )
             status = "attached_via_connector" if new_pdfs else "connector_save_failed"
             print(f"  Queued merge {row['new_key']} → {row['keeper']}: "
                   f"{'attached' if new_pdfs else 'no PDF in the saved item'}.",
@@ -4046,7 +4109,8 @@ def _try_cascade(
             continue
         if result is None:
             continue
-        path, _ = result
+        path, source_url = result
+        pdf_version.settle(path, source=src.name, source_url=source_url, doi=doi)
         return path, src.name
 
     # Cascade exhausted. Classify and persist if a log path was given.
@@ -4305,7 +4369,8 @@ def _pass2_api_retry(
             continue
         if result is None:
             continue
-        pdf_path, _source_url = result
+        pdf_path, source_url = result
+        pdf_version.settle(pdf_path, source=src.name, source_url=source_url, doi=doi)
         title70 = (entry.get("title") or "")[:70]
         if args.dry_run:
             log_writer.writerow({

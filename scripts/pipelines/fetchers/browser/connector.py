@@ -335,7 +335,11 @@ class PendingMerges:
     A JSON list in the cache directory, so a pair queued by one run is
     merged by the next: that is what the old "will be auto-merged next
     time" message promised and nothing implemented. Rows are
-    `{"keeper", "new_key", "doi", "queued_at"}`; one per `new_key`.
+    `{"keeper", "new_key", "doi", "pdf_version", "queued_at"}`; one per
+    `new_key`. `pdf_version` is the route's version
+    (`pdf_version.for_connector_target`), carried so a merge finished by
+    a later run still tags the item correctly; rows queued before it
+    existed lack it.
     """
 
     FILENAME = "connector_pending_merges.json"
@@ -366,12 +370,14 @@ class PendingMerges:
         with self._lock:
             return frozenset(r.get("new_key", "") for r in self._rows) - {""}
 
-    def add(self, *, keeper: str, new_key: str, doi: str) -> None:
+    def add(self, *, keeper: str, new_key: str, doi: str,
+            pdf_version: str = "") -> None:
         with self._lock:
             if new_key in self.new_keys():
                 return
             self._rows.append({
                 "keeper": keeper, "new_key": new_key, "doi": doi,
+                "pdf_version": pdf_version,
                 "queued_at": _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds"),
             })
             self._save()
@@ -1330,10 +1336,14 @@ class ZoteroConnectorHandler(PublisherHandler):
             # Queue first, then submit: the queue is what keeps this save
             # from being claimed by the next item's poll, and what
             # survives a kill.
-            self.pending.add(keeper=item["item_key"], new_key=new_key, doi=doi)
+            self.pending.add(
+                keeper=item["item_key"], new_key=new_key, doi=doi,
+                pdf_version=item.get("pdf_version", ""),
+            )
             self.background.submit({
                 "keeper": item["item_key"], "new_key": new_key, "doi": doi,
                 "title": item.get("title", ""),
+                "pdf_version": item.get("pdf_version", ""),
             })
             self.last_outcome = "merge_background"
             counter.queued += 1
@@ -1361,6 +1371,7 @@ class ZoteroConnectorHandler(PublisherHandler):
             if self.pending is not None:
                 self.pending.add(
                     keeper=item["item_key"], new_key=new_key, doi=doi,
+                    pdf_version=item.get("pdf_version", ""),
                 )
                 self.last_outcome = "merge_pending"
                 counter.queued += 1
@@ -1397,7 +1408,10 @@ class ZoteroConnectorHandler(PublisherHandler):
             # trashed the only item holding the PDF. The queue merges once
             # a PDF child is visible, and gives up on a save that never
             # grows one (a genuinely metadata-only page).
-            self.pending.add(keeper=item["item_key"], new_key=new_key, doi=doi)
+            self.pending.add(
+                keeper=item["item_key"], new_key=new_key, doi=doi,
+                pdf_version=item.get("pdf_version", ""),
+            )
             self.last_outcome = "merge_pending"
             counter.queued += 1
             print(
@@ -1424,7 +1438,10 @@ class ZoteroConnectorHandler(PublisherHandler):
                 # The temporary item is still live and holds the PDF, so
                 # a failed merge (a 412 that outlasted the retries, a
                 # transient API error) is a retry, not a verdict.
-                self.pending.add(keeper=item["item_key"], new_key=new_key, doi=doi)
+                self.pending.add(
+                    keeper=item["item_key"], new_key=new_key, doi=doi,
+                    pdf_version=item.get("pdf_version", ""),
+                )
                 self.last_outcome = "merge_pending"
                 counter.queued += 1
                 print(f"  └─ QUEUED: merge errored ({str(e)[:80]}); queued to "
@@ -1442,7 +1459,10 @@ class ZoteroConnectorHandler(PublisherHandler):
         if moved == 0 and dup == 0 and stats.get("kept_unmoved_pdf") and self.pending:
             # A PDF appeared after the merge listed children; the merge
             # left the item in place rather than trash it. Try again later.
-            self.pending.add(keeper=item["item_key"], new_key=new_key, doi=doi)
+            self.pending.add(
+                keeper=item["item_key"], new_key=new_key, doi=doi,
+                pdf_version=item.get("pdf_version", ""),
+            )
             self.last_outcome = "merge_pending"
             counter.queued += 1
             print(f"  └─ QUEUED: {new_key}'s PDF arrived mid-merge; queued to "

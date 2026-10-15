@@ -260,7 +260,10 @@ def test_a_real_pdf_replacing_a_recovery_drops_the_recovered_tag(tmp_path, monke
         zot, log_writer, run_date="2026-09-23", item_key="A",
         doi="10.1/A", title="A", source="t", pdf_path=pdf, check_text=False,
     )
-    removed = set(zot.update_tags.call_args.kwargs.get("remove", ()))
+    removed = {
+        t for c in zot.update_tags.call_args_list
+        for t in c.kwargs.get("remove", ())
+    }
     assert "pdf:tdm-recovered" in removed
 
 
@@ -284,16 +287,21 @@ def test_no_swap_means_no_tag_changes(monkeypatch) -> None:
 
 def test_the_connector_success_path_calls_finish_replacement() -> None:
     import inspect
+    # `_finish_connector_attach` is `_finish_replacement` plus the
+    # version tag; it must stay a wrapper round it.
+    assert "_finish_replacement(" in inspect.getsource(
+        enrich_pdfs._finish_connector_attach,
+    )
     src = inspect.getsource(enrich_pdfs._connector_item_loop)
-    assert "_finish_replacement(" in src
+    assert "_finish_connector_attach(" in src
     ok_at = src.index("if ok:")
-    assert src.index("_finish_replacement(", ok_at) < src.index(
+    assert src.index("_finish_connector_attach(", ok_at) < src.index(
         "log_row(item, status)", ok_at,
     )
     # The background path finishes the swap only on a verified merge.
     driver = inspect.getsource(enrich_pdfs._drive_connector)
     merged_at = driver.index('if outcome == "merged":')
-    assert merged_at < driver.index("_finish_replacement(", merged_at) < driver.index(
+    assert merged_at < driver.index("_finish_connector_attach(", merged_at) < driver.index(
         'elif outcome == "no_pdf":', merged_at,
     )
 
