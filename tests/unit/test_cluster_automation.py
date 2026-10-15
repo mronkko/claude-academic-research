@@ -563,52 +563,8 @@ def test_the_writer_and_the_checker_share_one_description(ccc) -> None:
 
 
 # ---------------------------------------------------------------------------
-# The negative guard
+# Wizard and checker agree
 # ---------------------------------------------------------------------------
-
-
-def test_the_wizard_never_allow_lists_a_remote_command(ccc) -> None:
-    """`confirm` is not enforced by any code in this plugin. It is the
-    claim that `ssh`, `scp`, `rsync` and `sbatch` reach the permission
-    system without a matching allow rule, so that the prompt Claude Code
-    raises *is* the approval step.
-
-    An allow rule added here — reasonably, to spare somebody a prompt —
-    would delete that mechanism on every machine that re-runs the wizard,
-    while every level name and every paragraph describing them stayed
-    exactly as written. Nothing would look different until a job ran
-    that nobody approved.
-
-    The check reuses `check_cluster_config._rule_command`, so a rule
-    written in a form the detector cannot read (`Bash(/usr/bin/ssh …)`)
-    fails here too rather than slipping past both.
-    """
-    wizard = _load_setup_script("wizard")
-    categories, _deny = wizard._permission_categories()
-    offenders = [
-        (cat.name, rule)
-        for cat in categories
-        for rule, _ in cat.rules
-        if ccc._rule_command(rule) in ccc.GATED_COMMANDS
-    ]
-    assert not offenders, (
-        f"the wizard would allow-list remote commands: {offenders}. The "
-        f"plugin must never do this — absent an allow rule the permission "
-        f"prompt IS the approval, and adding one silently promotes every "
-        f"user of that machine to `auto`."
-    )
-
-
-def test_the_wizard_never_allow_lists_every_command(ccc) -> None:
-    """A blanket `Bash(*)` would allow-list the remote commands without
-    naming them, defeating the test above by covering everything."""
-    wizard = _load_setup_script("wizard")
-    categories, _deny = wizard._permission_categories()
-    blanket = [
-        rule for cat in categories for rule, _ in cat.rules
-        if ccc._rule_command(rule) == "*"
-    ]
-    assert not blanket, f"the wizard ships a blanket Bash rule: {blanket}"
 
 
 def test_the_wizard_offers_the_same_levels_as_the_checker(ccc) -> None:

@@ -1,5 +1,5 @@
 """Guard against zotero-mcp's MCP tool surface drifting out from under this
-plugin's skills, wizard permission rules, and CLI references.
+plugin's skills and CLI references.
 
 zotero-mcp 0.9.0 merged/renamed fifteen tools into six and gated several
 groups behind ``ZOTERO_MCP_TOOLSETS`` (upstream commit ``2823c5a``, "cut the
@@ -231,39 +231,13 @@ def test_e3_weekly_drift_workflow_exists() -> None:
 
 
 # ---------------------------------------------------------------------------
-# E4 — wizard permission allowlist coverage
-# ---------------------------------------------------------------------------
-
-
-def test_e4_wizard_allowlist_tools_exist() -> None:
-    wizard = _load_wizard()
-    categories, _deny = wizard._permission_categories()
-    live = _live_tool_names(all_toolsets=True)
-
-    missing = []
-    for cat in categories:
-        for pattern, purpose in cat.rules:
-            if not pattern.startswith("mcp__zotero__"):
-                continue
-            name = pattern[len("mcp__zotero__"):]
-            if name.endswith("*"):
-                continue  # wildcard rule (e.g. a future mcp__zotero__*), not a tool name
-            if name not in live:
-                missing.append(f"{pattern!r} in category {cat.name!r} ({purpose})")
-    assert not missing, (
-        "wizard.py's permission allow list references zotero MCP tool(s) "
-        f"that no longer exist: {missing}"
-    )
-
-
-# ---------------------------------------------------------------------------
 # E5 — zotero-cli subcommand references
 # ---------------------------------------------------------------------------
 
 # Matches the subcommand token immediately after `zotero-cli` inside an
 # inline-code span, e.g. "zotero-cli edit <key> ..." -> "edit".
 _CLI_SPAN_RE = re.compile(r"^zotero-cli\s+([a-zA-Z][a-zA-Z-]*)")
-# Matches the subcommand token in a wizard.py Bash() permission rule, e.g.
+# Matches the subcommand token in a `Bash(zotero-cli ...)` rule, e.g.
 # "Bash(zotero-cli duplicates find:*)" -> "duplicates".
 _CLI_BASH_RULE_RE = re.compile(r"Bash\(zotero-cli\s+([a-zA-Z][a-zA-Z-]*)")
 

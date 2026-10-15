@@ -3,9 +3,11 @@
 
 Runs in the user's terminal. Prompts for API keys with hidden input
 (getpass), tests each key against its provider, writes
-~/.config/academic-research/config.toml mode 0600, patches
-~/.claude/settings.json with the permission rules the plugin needs,
-and reports status.
+~/.config/academic-research/config.toml mode 0600, and reports status.
+
+It writes no Claude Code permission rules: ~/.claude/settings.json is
+the user's file, and what to auto-approve is theirs to decide. Rules an
+older version of this wizard added are left as they are.
 
 API keys entered here NEVER pass through the invoking AI assistant's
 context (Claude Code or Antigravity) — the wizard is a normal process
@@ -53,6 +55,7 @@ if str(_SCRIPTS_ROOT) not in sys.path:
 
 from check_cluster_config import LEVEL_HELP as _CLUSTER_LEVEL_HELP  # noqa: E402
 from check_cluster_config import LEVELS as _CLUSTER_LEVELS  # noqa: E402
+from core import config_writer as _config_writer  # noqa: E402
 from core import providers  # noqa: E402
 from zotero_mcp_floor import (  # noqa: E402
     PIP_INSTALL_CMD as ZOTERO_MCP_PIP_INSTALL_CMD,
@@ -63,12 +66,9 @@ from zotero_mcp_floor import (  # noqa: E402
 
 CONFIG_DIR = Path.home() / ".config" / "academic-research"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
-SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 
 AGY_HOME = Path.home() / ".gemini"
 AGY_MCP_CONFIG_PATH = AGY_HOME / "config" / "mcp_config.json"
-
-PLUGIN_ROOT_ENV = "${CLAUDE_PLUGIN_ROOT}"
 
 # MCP server connection statuses, parsed from `claude mcp list` output.
 MCP_STATUS_CONNECTED = "connected"
@@ -1003,7 +1003,6 @@ def _print_header() -> None:
     print("    1. Ask which LLM provider should run your screening pipelines")
     print("    2. Collect API keys (hidden input) and verify each one")
     print(f"    3. Write {CONFIG_PATH} (mode 0600)")
-    print(f"    4. Patch {SETTINGS_PATH} with permission rules")
     print()
     print("  Your keys stay on this machine. They do not pass through")
     print("  your AI assistant's context at any point.")
@@ -1611,11 +1610,21 @@ def _llm_credential_present(
 
     if _value("api_key"):
         return True, ""
+    # The key may live in an environment variable instead: the registry's
+    # own for a named provider, or the one a gateway declares through
+    # `[gateway] api_key_env` (see `llm_provider.credential_env`). The
+    # wizard used to ignore the declared one and warn about a gateway
+    # whose key was set exactly where the user had said it would be.
+    env_name = spec.api_key_env or (
+        _value("api_key_env") if spec.byo_endpoint else ""
+    )
+    if env_name and os.environ.get(env_name, "").strip():
+        return True, ""
     # A local endpoint speaking the Anthropic Messages API ignores the
     # key, so a base URL alone is a working setup (issue #1).
     if spec.transport == "anthropic" and _value("base_url"):
         return True, ""
-    where = providers.credential_location(spec)
+    where = providers.credential_location(spec, env_name)
     hint = f"{where} is not set"
     # Name the URL variable when the provider has one; a bring-your-own
     # provider has no name to give, so describe the setting instead.
@@ -1629,16 +1638,105 @@ def _llm_credential_present(
     return False, hint
 
 
+EXIT_CONFIG_UNREADABLE = 5
+
+
 def _load_existing_config() -> dict[str, dict[str, str]]:
+    """The current config.toml, or `{}` when there is none.
+
+    An existing file that cannot be parsed stops the wizard. It used to
+    be read as empty, and the rewrite at the end of the run then replaced
+    every key the user had with whatever this run collected — a
+    hand-edit with one stray quote cost the whole file. Now the file is
+    copied to a timestamped backup, left untouched, and the user is told
+    what to fix.
+    """
     if not CONFIG_PATH.exists():
         return {}
+    import tomllib
     try:
-        import tomllib
         with CONFIG_PATH.open("rb") as f:
             return tomllib.load(f)
-    except Exception as e:
-        print(f"  Warning: could not parse existing {CONFIG_PATH}: {e}", file=sys.stderr)
-        return {}
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError, OSError) as e:
+        backup = _backup_unreadable_config()
+        print(f"\n  ERROR: cannot parse {CONFIG_PATH}:", file=sys.stderr)
+        print(f"    {type(e).__name__}: {e}", file=sys.stderr)
+        if backup is not None:
+            print(f"  A copy was saved to {backup}.", file=sys.stderr)
+        print(
+            "  The wizard has not changed the file. Fix the line named above,\n"
+            "  or move the file aside to start over, then re-run setup.",
+            file=sys.stderr,
+        )
+        sys.exit(EXIT_CONFIG_UNREADABLE)
+
+
+def _backup_unreadable_config() -> Path | None:
+    """Copy config.toml to `config.toml.unreadable-<timestamp>`.
+
+    The copy keeps the original's 0600 mode (`copy2` copies it), since it
+    holds the same keys.
+    """
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup = CONFIG_PATH.with_name(f"{CONFIG_PATH.name}.unreadable-{stamp}")
+    try:
+        shutil.copy2(CONFIG_PATH, backup)
+    except OSError:
+        return None
+    return backup
+
+
+# `[zotero]` values `_verify_zotero` derives from the key. They describe
+# the account the key belongs to, so they go stale when the key changes.
+_ZOTERO_DERIVED_KEYS = ("user_id", "username", "accessible_group_ids")
+
+
+def _merge_config(
+    existing: dict,
+    values: dict[str, dict],
+    removals: set[tuple[str, str]] = frozenset(),
+) -> dict:
+    """The config to write: `existing`, with this run's answers on top.
+
+    `_write_config` rewrites the whole file, and it used to be handed
+    only what this run collected. Anything the run did not ask about was
+    deleted — `[zotero] user_id` on a run that skipped verification
+    (which every pipeline that `require`s it then failed on), the
+    gateway's `api_key_env` / `base_url_env`, `[cluster] host`, and any
+    section the user added by hand. Starting from the existing file
+    makes preservation the default and removal the explicit act:
+    `removals` names the `(section, key)` pairs this run deliberately
+    cleared. A section left empty by a removal is dropped.
+    """
+    import copy
+    merged = copy.deepcopy(existing)
+    for section, key in removals:
+        sect = merged.get(section)
+        if isinstance(sect, dict):
+            sect.pop(key, None)
+            if not sect:
+                merged.pop(section, None)
+    for section, items in values.items():
+        target = merged.get(section)
+        if not isinstance(target, dict):
+            target = merged[section] = {}
+        target.update(items)
+    return merged
+
+
+def _stale_zotero_identity(existing: dict, values: dict) -> set[tuple[str, str]]:
+    """Derived `[zotero]` keys to drop because the key itself changed.
+
+    Preserving `user_id` across re-runs is right for the same key and
+    wrong for a different one: a new key that was not verified this run
+    would otherwise be filed under the previous account's user ID.
+    """
+    old = str((existing.get("zotero", {}) or {}).get("api_key") or "")
+    new_section = values.get("zotero", {}) or {}
+    new = str(new_section.get("api_key") or "")
+    if not new or new == old:
+        return set()
+    return {("zotero", k) for k in _ZOTERO_DERIVED_KEYS if k not in new_section}
 
 
 def _carry_forward(
@@ -1646,8 +1744,8 @@ def _carry_forward(
 ) -> None:
     """Preserve a key this run did not ask about.
 
-    `_write_config` rewrites the file from `values` alone, so anything
-    not collected is deleted. A user who configured Anthropic last month
+    `_merge_config` would keep it anyway; this also puts it in `values`,
+    so the credential check below sees it. A user who configured Anthropic last month
     and selects OpenAI today must not lose the Anthropic key — providers
     get compared and switched back, and re-issuing a key is a trip to a
     console the wizard cannot make for them.
@@ -1714,418 +1812,16 @@ def _stored_bool(val: object) -> bool:
     return bool(val)
 
 
-def _escape_toml(s: str) -> str:
-    return s.replace("\\", "\\\\").replace('"', '\\"')
-
-
-def _render_toml_value(val: object) -> str:
-    """Render one TOML value: a string, a list of strings, or a boolean.
-
-    Booleans used to go through `str()` and come out as the strings
-    "True"/"False". Read back, "False" is a non-empty string, so every
-    `_stored_bool(current)` below turned a stored *no* into *yes*: a declined
-    opt-in (Elsevier PDF synthesis, the paid OpenAlex API) re-enabled
-    itself on the next wizard run."""
-    if isinstance(val, bool):
-        return "true" if val else "false"
-    if isinstance(val, list):
-        inner = ", ".join(f'"{_escape_toml(str(v))}"' for v in val)
-        return f"[{inner}]"
-    return f'"{_escape_toml(str(val))}"'
+# One TOML serialiser for the wizard and the runtime helpers. It keeps
+# every value's type (a stored `false` used to come back as the truthy
+# string "False") and escapes control characters, so a whole-file rewrite
+# preserves what it does not touch.
+_escape_toml = _config_writer._escape
+_render_toml_value = _config_writer._render
 
 
 def _write_config(values: dict[str, dict]) -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    # POSIX permission bits don't apply on Windows (os.chmod only toggles
-    # the read-only flag there). The config path is under the user's home
-    # directory, which NTFS protects per-user by default, so skipping is
-    # safe on Windows.
-    if sys.platform != "win32":
-        os.chmod(CONFIG_DIR, 0o700)
-
-    lines = [
-        "# academic-research plugin configuration.",
-        "# Mode 0600. Never commit to git. If leaked, rotate every key below.",
-        "",
-    ]
-    for section, items in values.items():
-        lines.append(f"[{section}]")
-        for key, val in items.items():
-            lines.append(f"{key} = {_render_toml_value(val)}")
-        lines.append("")
-
-    CONFIG_PATH.write_text("\n".join(lines), encoding="utf-8")
-    if sys.platform != "win32":
-        os.chmod(CONFIG_PATH, 0o600)
-
-
-@dataclass(frozen=True)
-class PermissionCategory:
-    """One bucket of permission allow rules the wizard offers as a
-    single Y/n decision. Each rule carries its own one-line purpose
-    so the user sees exactly what is being added.
-    """
-    name: str
-    purpose: str
-    skip_impact: str
-    rules: tuple[tuple[str, str], ...]   # (rule, per-rule purpose)
-
-
-def _permission_categories() -> tuple[list[PermissionCategory], list[str]]:
-    """Return (categorised allow rules, flat deny list).
-
-    Allow rules are grouped so the wizard can prompt category-by-
-    category. Deny rules are non-optional security guardrails — they
-    are added unconditionally.
-    """
-    home = str(Path.home())
-    absolute_home_pattern = f"//{home.lstrip('/')}"
-
-    categories = [
-        PermissionCategory(
-            name="Pipeline script execution",
-            purpose=(
-                "Lets the agent run the plugin's shipped pipeline "
-                "scripts (search, screening, coding) via uv or "
-                "python3, plus the one-time Playwright install for "
-                "browser-based PDF retrieval."
-            ),
-            skip_impact=(
-                "Every pipeline-stage call (and every helper script "
-                "the skills invoke) will trigger a permission prompt."
-            ),
-            rules=(
-                (f"Bash(uv run {PLUGIN_ROOT_ENV}/scripts/**)",
-                 "uv run + script path (default invocation)"),
-                (f"Bash(uv run -s {PLUGIN_ROOT_ENV}/scripts/**)",
-                 "uv run -s (PEP 723 inline-deps marker, alt form)"),
-                (f"Bash(uv run --script {PLUGIN_ROOT_ENV}/scripts/**)",
-                 "uv run --script (newer alternate form)"),
-                (f"Bash(python3 {PLUGIN_ROOT_ENV}/scripts/**)",
-                 "Direct python3 invocation (used by skill helpers)"),
-                (f"Bash({PLUGIN_ROOT_ENV}/scripts/**.py:*)",
-                 "Direct script execution when shebang resolves"),
-                ("Bash(playwright install chromium)",
-                 "One-time browser install for browser PDF fetch"),
-                ("Bash(uvx playwright@latest install chromium)",
-                 "Same install via uvx (no playwright CLI on PATH)"),
-                ("Bash(playwright install-deps)",
-                 "One-time system dependencies for Playwright"),
-                ("Bash(uvx playwright@latest install-deps)",
-                 "Same system-deps install via uvx"),
-            ),
-        ),
-        PermissionCategory(
-            name="Safe read-only command-line inspection",
-            purpose=(
-                "Lets the agent run common read-only tools the SLR "
-                "skills routinely invoke — grep, head, tail, wc, file, "
-                "find, which, etc. None of these mutate state. "
-                "Conservative by design: state-changing commands "
-                "(curl, mkdir, cp, mv, rm, ln) are intentionally NOT "
-                "auto-approved — those operations are the job of "
-                "shipped scripts, not ad-hoc Bash."
-            ),
-            skip_impact=(
-                "Every grep / head / tail / wc / etc. invocation will "
-                "trigger a permission prompt. SLR work involves dozens "
-                "of these per session (CSV inspection, screening "
-                "audits, diff comparisons)."
-            ),
-            rules=(
-                ("Bash(grep:*)",
-                 "grep with any arguments (project-file search)"),
-                ("Bash(rg:*)",
-                 "ripgrep — faster grep alternative"),
-                ("Bash(sed -n:*)",
-                 "sed in print-only mode (no in-place edits)"),
-                ("Bash(awk:*)",
-                 "awk text processing (read-only)"),
-                ("Bash(head:*)",
-                 "Show first N lines of a file"),
-                ("Bash(tail:*)",
-                 "Show last N lines of a file"),
-                ("Bash(wc:*)",
-                 "Word / line / byte counts"),
-                ("Bash(cat:*)",
-                 "Print file contents (read-only — config.toml is "
-                 "still denied below)"),
-                ("Bash(ls:*)",
-                 "List directory contents"),
-                ("Bash(file:*)",
-                 "Identify file type"),
-                ("Bash(stat:*)",
-                 "Show file metadata"),
-                ("Bash(find:*)",
-                 "Locate files matching a pattern (read-only)"),
-                ("Bash(which:*)",
-                 "Locate an executable"),
-                ("Bash(command -v:*)",
-                 "Shell-built-in alternative to which"),
-                ("Bash(python3 -c:*)",
-                 "Single-line Python introspection (no improvised "
-                 "pipelines — those go through shipped scripts)"),
-                ("Bash(python --version)",
-                 "Check Python version"),
-                ("Bash(python3 --version)",
-                 "Check Python 3 version"),
-            ),
-        ),
-        PermissionCategory(
-            name="Plugin file inspection",
-            purpose=(
-                "Lets the agent list directories under the plugin "
-                "root. Plugin source is public on GitHub; agents "
-                "routinely `ls scripts/pipelines/` to orient "
-                "themselves to the available stages."
-            ),
-            skip_impact=(
-                "Every `ls` of a plugin directory will trigger a "
-                "permission prompt."
-            ),
-            rules=(
-                (f"Bash(ls {PLUGIN_ROOT_ENV}/**)",
-                 "List directories under the plugin root"),
-                (f"Bash(ls -l {PLUGIN_ROOT_ENV}/**)",
-                 "Long-form list under the plugin root"),
-                (f"Bash(ls -la {PLUGIN_ROOT_ENV}/**)",
-                 "Long-form list with hidden files"),
-                (f"Read({absolute_home_pattern}/.config/academic-research/)",
-                 "Read the config DIRECTORY (the config file itself "
-                 "stays denied — see the deny rules below)"),
-            ),
-        ),
-        PermissionCategory(
-            name="MCP citation databases (read-only)",
-            purpose=(
-                "Auto-approves search and metadata-lookup calls to "
-                "Scopus, OpenAlex, Semantic Scholar, and the two "
-                "paper-search MCP servers. All tools in these "
-                "servers are read-only."
-            ),
-            skip_impact=(
-                "Every search / abstract-fetch call (typically "
-                "dozens per screening run) will trigger a "
-                "permission prompt."
-            ),
-            rules=(
-                ("mcp__scopus__*",
-                 "All Scopus tools (search, get_abstract, etc.)"),
-                ("mcp__openalex__*",
-                 "All OpenAlex tools (~30; search, analyze, find)"),
-                ("mcp__semantic-scholar__*",
-                 "All Semantic Scholar tools (search, citations)"),
-                ("mcp__paper-search__*",
-                 "Paper-search Python MCP (arXiv, PubMed, etc.)"),
-                ("mcp__paper-search-nodejs__*",
-                 "Paper-search Node.js MCP (broader publishers)"),
-            ),
-        ),
-        PermissionCategory(
-            name="MCP Zotero (read-only)",
-            purpose=(
-                "Auto-approves Zotero queries (search, list, get_*). "
-                "Zotero WRITES are deliberately NOT auto-approved — "
-                "your library is user-owned data and write tools "
-                "(add, update, delete, merge) keep prompting so you "
-                "see every change before it lands."
-            ),
-            skip_impact=(
-                "Every metadata read, search, and listing of your "
-                "Zotero library will trigger a prompt."
-            ),
-            rules=(
-                ("mcp__zotero__scite_check_retractions",
-                 "Check for retractions via Scite (read-only)"),
-                ("mcp__zotero__zotero_advanced_search",
-                 "Advanced query"),
-                ("mcp__zotero__zotero_find_duplicates",
-                 "Find duplicates (read-only; merge stays denied)"),
-                ("mcp__zotero__zotero_get_annotations",
-                 "Get annotations on items"),
-                ("mcp__zotero__zotero_get_collection_items",
-                 "Items in a collection"),
-                ("mcp__zotero__zotero_get_collections",
-                 "List collections"),
-                ("mcp__zotero__zotero_get_item_children",
-                 "Children of an item, one key or many in one call"),
-                ("mcp__zotero__zotero_get_item_fulltext",
-                 "Full-text of an item (if attached)"),
-                ("mcp__zotero__zotero_get_item_metadata",
-                 "Metadata for an item"),
-                ("mcp__zotero__zotero_get_notes",
-                 "List notes on items, or search note text with query="),
-                ("mcp__zotero__zotero_get_pdf_outline",
-                 "Table of contents of a PDF"),
-                ("mcp__zotero__zotero_get_recent",
-                 "Recently added items"),
-                ("mcp__zotero__zotero_get_search_database_status",
-                 "Search index status"),
-                ("mcp__zotero__zotero_get_tags",
-                 "All tags in the library"),
-                ("mcp__zotero__zotero_list_libraries",
-                 "List accessible libraries (you + groups)"),
-                ("mcp__zotero__zotero_search_by_citation_key",
-                 "Find by BBT citekey"),
-                ("mcp__zotero__zotero_search_by_tag",
-                 "Find by tag"),
-                ("mcp__zotero__zotero_search_collections",
-                 "Search collection names"),
-                ("mcp__zotero__zotero_search_items",
-                 "Search items"),
-                ("mcp__zotero__zotero_semantic_search",
-                 "Semantic search"),
-            ),
-        ),
-        PermissionCategory(
-            name="zotero-cli (read-only)",
-            purpose=(
-                "Auto-approves read-only zotero-cli subcommands. "
-                "zotero-cli ships with the zotero-mcp-server package "
-                "installed above and gives the agent a Bash-callable "
-                "path to Zotero for one-off operations MCP doesn't "
-                "cover (see the zotero-operations skill's IRON RULE). "
-                "Writes (edit, add, tags, notes, duplicates merge) "
-                "deliberately stay prompt-gated, matching the MCP "
-                "Zotero write policy above."
-            ),
-            skip_impact=(
-                "Every read-only zotero-cli call (search, get, "
-                "config, duplicates find) will trigger a permission "
-                "prompt."
-            ),
-            rules=(
-                ("Bash(zotero-cli search:*)",
-                 "Search the library (items, tag, citekey, semantic)"),
-                ("Bash(zotero-cli s:*)",
-                 "Short alias for search"),
-                ("Bash(zotero-cli get:*)",
-                 "Read metadata, collections, tags, recent, etc."),
-                ("Bash(zotero-cli g:*)",
-                 "Short alias for get"),
-                ("Bash(zotero-cli config)",
-                 "Show current Zotero configuration"),
-                ("Bash(zotero-cli duplicates find:*)",
-                 "Find duplicates (read-only; merge stays denied)"),
-                ("Bash(zotero-cli outline:*)",
-                 "Get a PDF's table of contents"),
-            ),
-        ),
-    ]
-
-    # Deny patterns for the config file. Claude Code's permission matcher
-    # is prefix-based, so we enumerate the common shapes (absolute path,
-    # tilde, with/without redirects). Not exhaustive — reading `~/.claude/`
-    # config via an obscure tool (xxd, od, strings, inline python) can slip
-    # through. The skill-level "never read config.toml" red flags are the
-    # first line of defence; these deny patterns are belt-and-suspenders.
-    config_abs = f"{home}/.config/academic-research/config.toml"
-    config_tilde = "~/.config/academic-research/config.toml"
-    deny_paths = [config_abs, config_tilde]
-    deny = [
-        f"Read({absolute_home_pattern}/.config/academic-research/config.toml)",
-        "Read(~/.config/academic-research/config.toml)",
-    ]
-    for path in deny_paths:
-        for cmd in ("cat", "head", "tail", "grep", "less", "more",
-                    "awk", "sed", "od", "xxd", "strings", "bat"):
-            deny.append(f"Bash({cmd} {path}:*)")
-            deny.append(f"Bash({cmd} {path})")
-    return categories, deny
-
-
-def _permission_patterns() -> tuple[list[str], list[str]]:
-    """Backwards-compat wrapper for tests that consume a flat allow list."""
-    categories, deny = _permission_categories()
-    allow = [rule for cat in categories for rule, _ in cat.rules]
-    return allow, deny
-
-
-def _patch_settings(interactive: bool = True) -> tuple[int, int]:
-    if not (Path.home() / ".claude").exists():
-        if interactive:
-            print("\n  No Claude Code environment (~/.claude) detected; skipping settings.json patch.")
-        return 0, 0
-
-    categories, deny_new = _permission_categories()
-
-    if SETTINGS_PATH.exists():
-        try:
-            data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
-        except Exception as e:
-            print(f"  ERROR: cannot parse {SETTINGS_PATH}: {e}", file=sys.stderr)
-            print("  Back up your settings.json, then re-run the wizard.", file=sys.stderr)
-            sys.exit(3)
-        backup = SETTINGS_PATH.with_suffix(".json.bak-wizard")
-        shutil.copy2(SETTINGS_PATH, backup)
-    else:
-        data = {}
-
-    perms = data.setdefault("permissions", {})
-    allow_list = perms.setdefault("allow", [])
-    deny_list = perms.setdefault("deny", [])
-
-    if interactive:
-        print()
-        print(_wrap_body(
-            "Permission allow rules. The wizard groups them by purpose; "
-            "each category is a single Y/n decision. Skip any category "
-            "you don't want auto-approved — the agent will then prompt "
-            "you on every relevant call instead.",
-        ))
-
-    allow_added = 0
-    for cat in categories:
-        new_rules = [(r, p) for r, p in cat.rules if r not in allow_list]
-        if not new_rules:
-            continue
-
-        if interactive:
-            print()
-            print(f"  ── {cat.name} ({len(new_rules)} new rule"
-                  f"{'' if len(new_rules) == 1 else 's'}) ──")
-            print(_wrap_body(cat.purpose, indent=4))
-            print(_wrap_body(f"Skipping these means: {cat.skip_impact}",
-                             indent=4))
-            print()
-            for rule, purpose in new_rules:
-                print(f"      + {rule}")
-                print(f"        → {purpose}")
-            print()
-            try:
-                answer = input("    Add all? [Y/n] ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                print("\n    Skipped.")
-                continue
-            if answer in ("n", "no"):
-                print("    Skipped.")
-                continue
-
-        for rule, _ in new_rules:
-            allow_list.append(rule)
-            allow_added += 1
-        if interactive:
-            print(f"    Added {len(new_rules)} rule"
-                  f"{'' if len(new_rules) == 1 else 's'}.")
-
-    deny_added = 0
-    for p in deny_new:
-        if p not in deny_list:
-            deny_list.append(p)
-            deny_added += 1
-    if interactive and deny_added:
-        print()
-        print(_wrap_body(
-            f"Added {deny_added} security deny rules (non-optional). "
-            "These block the Read tool from `~/.config/academic-research"
-            "/config.toml` and block common Bash readers (cat, head, "
-            "grep, ...) from the same path so API keys cannot reach "
-            "Claude's context.",
-        ))
-
-    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_PATH.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    return allow_added, deny_added
+    _config_writer.write_private(CONFIG_PATH, _config_writer._dump(values))
 
 
 def _maybe_add_claude_to_gitignore(cwd: Path | None = None) -> Path | None:
@@ -2601,7 +2297,7 @@ def _check_agy_mcp_servers() -> dict[str, str]:
 
 def _load_agy_mcp_config() -> dict:
     """Load `~/.gemini/config/mcp_config.json`, backing up first if it
-    exists. Mirrors `_patch_settings`'s read-backup-merge-write pattern."""
+    exists. Read, back up, merge, write."""
     if not AGY_MCP_CONFIG_PATH.exists():
         return {}
     try:
@@ -2887,9 +2583,15 @@ def main() -> int:
     # Keep any other `[llm]` key the user set by hand (`max_retries`).
     values["llm"] = {**(existing_cfg.get("llm", {}) or {}), "provider": provider}
 
+    # Keys this run deliberately clears. Everything else already in the
+    # file is kept — see `_merge_config`.
+    removals: set[tuple[str, str]] = _stale_zotero_identity(existing_cfg, values)
+
     connector_entry = _detect_and_prompt_connector(interactive, existing_cfg)
     if connector_entry:
         values["zotero_connector"] = connector_entry
+    else:
+        removals.add(("zotero_connector", "extension_dir"))
 
     # Merge rather than assign: `[elsevier]` already carries `api_key`
     # from _collect_keys, and overwriting the section would drop it.
@@ -2914,17 +2616,21 @@ def main() -> int:
     cluster_entry = _prompt_cluster_automation(interactive, existing_cfg)
     if cluster_entry:
         values.setdefault("cluster", {}).update(cluster_entry)
+    else:
+        # "No cluster" clears the level only; `host` and anything else
+        # under `[cluster]` was set elsewhere and stays.
+        removals.add(("cluster", "automation"))
 
-    updated_no_access = _offer_no_access_editor(interactive, existing_cfg)
-    if updated_no_access:
-        values.setdefault("library", {})["no_access"] = updated_no_access
+    for key, updated in (
+        ("no_access", _offer_no_access_editor(interactive, existing_cfg)),
+        ("direct_access", _offer_direct_access_editor(interactive, existing_cfg)),
+    ):
+        if updated:
+            values.setdefault("library", {})[key] = updated
+        else:
+            removals.add(("library", key))
 
-    updated_direct_access = _offer_direct_access_editor(interactive, existing_cfg)
-    if updated_direct_access:
-        values.setdefault("library", {})["direct_access"] = updated_direct_access
-
-    _write_config(values)
-    allow_added, deny_added = _patch_settings(interactive=interactive)
+    _write_config(_merge_config(existing_cfg, values, removals))
     gitignore_updated = _maybe_add_claude_to_gitignore()
 
     # Local Zotero API probe. Pipeline scripts default to local reads for
@@ -2958,8 +2664,8 @@ def main() -> int:
             # Re-poll so the final summary reflects post-registration state.
             current_mcp = _check_mcp_servers() or current_mcp
 
-    # MCP registration only — Antigravity has no per-project permission/allow-list
-    # file analogous to `~/.claude/settings.json` for `_patch_settings` to target.
+    # MCP registration only: the wizard writes no permission rules for
+    # any host.
     agy_available = _agy_available()
     agy_mcp: dict[str, str] = {}
     agy_registered = 0
@@ -2981,7 +2687,6 @@ def main() -> int:
     print("  Setup complete.")
     print(f"    Config:   {CONFIG_PATH} (mode 0600)")
     print(f"    LLM:      {providers.require(provider).label}")
-    print(f"    Settings: {SETTINGS_PATH} (+{allow_added} allow, +{deny_added} deny)")
     if gitignore_updated is not None:
         print(f"    Gitignore: added .claude/ entry to {gitignore_updated}")
     if agy_available:

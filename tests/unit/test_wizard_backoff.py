@@ -203,11 +203,10 @@ def test_backoff_never_exceeds_the_cap() -> None:
 def test_setup_scripts_import_only_the_stdlib() -> None:
     """`scripts/setup/` runs under bare `python3`, with no venv.
 
-    The wizard's allow rule is
-    `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/**)`, so a third-party
-    import here fails at skill-load time on a machine that has not run
-    `uv sync`. That is why this backoff is hand-rolled instead of
-    reusing `pipelines/http_client.py`.
+    Skills invoke these as `python3 <plugin>/scripts/setup/<name>.py`,
+    so a third-party import here fails at skill-load time on a machine
+    that has not run `uv sync`. That is why this backoff is hand-rolled
+    instead of reusing `pipelines/http_client.py`.
     """
     import ast
 

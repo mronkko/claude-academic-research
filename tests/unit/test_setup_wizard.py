@@ -1,8 +1,8 @@
 """Smoke tests for the setup wizard.
 
 The wizard is mostly interactive, but we can check the static pieces:
-permission-pattern generation, the key schema, verify-function behaviour,
-and module import.
+the key schema, verify-function behaviour, and module import. Full
+non-interactive runs against a scratch HOME are in test_wizard_rerun.py.
 """
 
 from __future__ import annotations
@@ -74,50 +74,6 @@ def test_every_key_has_a_verify_callable() -> None:
     mod = _load()
     for k in mod.KEYS:
         assert callable(k.verify), f"{k.env_var} has no verify callable"
-
-
-def test_permission_patterns_cover_plugin_scripts() -> None:
-    mod = _load()
-    allow, deny = mod._permission_patterns()
-    assert any("uv run" in p and "scripts/**" in p for p in allow)
-    assert any("python3" in p and "scripts/**" in p for p in allow)
-    assert any("playwright install chromium" in p for p in allow)
-    assert any("config.toml" in p for p in deny)
-
-
-def test_permission_patterns_deny_covers_read_and_shell() -> None:
-    mod = _load()
-    _, deny = mod._permission_patterns()
-    assert any(p.startswith("Read(") for p in deny), "deny list missing Read()"
-    assert any("cat " in p for p in deny), "deny list missing `cat` Bash"
-
-
-def test_permission_categories_have_purpose_and_per_rule_explanations() -> None:
-    """Every category has a purpose + skip_impact, and every rule has a
-    one-line explanation. The wizard prints these in interactive mode
-    so the user can audit each allow rule."""
-    mod = _load()
-    cats, _ = mod._permission_categories()
-    assert len(cats) >= 4, "expected at least 4 permission categories"
-    for cat in cats:
-        assert cat.name, "category missing name"
-        assert cat.purpose, f"{cat.name}: missing purpose"
-        assert cat.skip_impact, f"{cat.name}: missing skip_impact"
-        assert cat.rules, f"{cat.name}: no rules"
-        for rule, purpose in cat.rules:
-            assert rule, f"{cat.name}: empty rule string"
-            assert purpose, f"{cat.name}: rule '{rule}' missing per-rule purpose"
-
-
-def test_permission_categories_match_flat_list() -> None:
-    """The legacy `_permission_patterns()` flat list must equal the
-    concatenation of category rule lists — no rule lost or duplicated
-    by the categorisation refactor."""
-    mod = _load()
-    flat_allow, _ = mod._permission_patterns()
-    cats, _ = mod._permission_categories()
-    cat_rules = [rule for cat in cats for rule, _ in cat.rules]
-    assert flat_allow == cat_rules
 
 
 def test_config_path_is_under_home() -> None:
@@ -1201,9 +1157,10 @@ def test_collect_keys_no_warning_when_the_key_is_present(monkeypatch, capsys) ->
     assert "WARNING" not in capsys.readouterr().out
 
 
-def test_llm_credential_hint_points_at_the_key_when_only_a_url_is_set() -> None:
+def test_llm_credential_hint_points_at_the_key_when_only_a_url_is_set(monkeypatch) -> None:
     """An OpenAI-compatible gateway still needs *a* key value: the SDK
     requires one even when the endpoint ignores it."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     mod = _load()
     ok, hint = mod._llm_credential_present(
         "openai", {}, {"openai": {"base_url": "http://localhost:8000"}},
