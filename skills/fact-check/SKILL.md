@@ -10,7 +10,7 @@ description: Use when the user asks to fact-check a manuscript, verify or audit 
 Before any step below, verify the plugin has been configured:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/check_configured.py"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"
 ```
 
 If the result is `NOT CONFIGURED`, stop immediately and tell the user:
@@ -32,14 +32,14 @@ Before running the audit, check that the regression-test backstop
 this skill relies on is installed in the project:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/check_project_scaffold.py" \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_project_scaffold.py" \
     scripts/test_common.py scripts/test_citations.py
 ```
 
 If the output lists missing files, install them:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/install_templates.py" \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/install_templates.py" \
     test_common.py:scripts/test_common.py \
     test_citations.py:scripts/test_citations.py
 ```
@@ -207,7 +207,7 @@ Two formats, picked by the output mode chosen in Step 1.
 Create the directory first if needed:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/ensure_dir.py" fact-check-reports
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/ensure_dir.py" fact-check-reports
 ```
 
 Report layout:
@@ -310,7 +310,7 @@ asked for an inline check.
 
 Fact-check is a one-shot audit. The recurring companion is
 `scripts/test_citations.py` (installed by Bootstrap above; source at
-`${CLAUDE_PLUGIN_ROOT:-.}/templates/test_citations.py`) — it catches the
+`${CLAUDE_PLUGIN_ROOT}/templates/test_citations.py`) — it catches the
 regressions that would show up on the *next* audit: unresolved
 `@citekey`s, bare *Author (YYYY)* mentions without a governing `@key`,
 and BBT-key drift in `coded_papers.csv`. Run it in the `critic-loop`

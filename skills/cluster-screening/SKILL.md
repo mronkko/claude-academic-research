@@ -18,8 +18,8 @@ round trip.
 ## Pre-flight (ALWAYS run first, both of them, in this order)
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/check_configured.py"
-python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/check_cluster_config.py"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_cluster_config.py"
 ```
 
 If the first says `NOT CONFIGURED`, stop and hand off to `/setup`.
@@ -101,7 +101,7 @@ Same selection flags as a normal run — the screening protocol,
 the prompt at this moment.
 
 ```bash
-uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/abstract_screen.py \
+uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/abstract_screen.py \
     --group <id> --collection <key> --config ./screening_config.py \
     --emit-manifest .claude/batch/abstract_requests.jsonl
 ```
@@ -109,7 +109,7 @@ uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/abstract_screen.py \
 Full-text coding is the same shape, plus `--pdf-dir`:
 
 ```bash
-uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/fulltext_code.py \
+uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_code.py \
     --group <id> --collection <key> --config ./screening_config.py \
     --pdf-dir ./pdfs \
     --emit-manifest .claude/batch/fulltext_requests.jsonl
@@ -201,7 +201,7 @@ whole GPU pass to repeat.
 ### 5. Apply
 
 ```bash
-uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/abstract_screen.py \
+uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/abstract_screen.py \
     --group <id> --collection <key> --config ./screening_config.py \
     --apply-responses .claude/batch/abstract_responses.jsonl \
     --manifest .claude/batch/abstract_requests.jsonl

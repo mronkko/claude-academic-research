@@ -30,10 +30,15 @@ canonical longer entry.
 - **Plugin** — this repository, packaged for `/plugin marketplace` or
   direct integration. Ships skills, pipeline scripts, and templates
   that agentic environments use.
-- **`${CLAUDE_PLUGIN_ROOT}`** — environment variable resolving to the active
-  plugin version's absolute directory. Always use the POSIX fallback
-  `${CLAUDE_PLUGIN_ROOT:-.}` in pasted shell commands to ensure compatibility
-  across both Claude Code and other agentic environments (such as Antigravity).
+- **`${CLAUDE_PLUGIN_ROOT}`** — the active plugin version's absolute
+  directory. Claude Code supplies it; skills write every plugin path as
+  `${CLAUDE_PLUGIN_ROOT}/scripts/...`. On a host that does not (such as
+  Antigravity), substitute the plugin's install directory — the
+  directory two levels above the skill's own `SKILL.md`. Never fall back
+  to `.`: that is the user's project, which has no `scripts/setup/` or
+  `scripts/pipelines/`. A command handed to the user for their own
+  terminal must carry the resolved absolute path, since the variable is
+  not set there.
 - **glob** — a shell-pattern wildcard like `*.py` or
   `./scripts/...`. Globs expand to multiple paths;
   passing one to `python3` errors with "ambiguous arguments".

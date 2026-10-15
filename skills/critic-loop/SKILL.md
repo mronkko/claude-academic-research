@@ -12,7 +12,7 @@ description: Use when the user asks to revise, polish, critique, or finalize an 
 Before any step below, verify the plugin has been configured:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/check_configured.py"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"
 ```
 
 If the result is `NOT CONFIGURED`, stop immediately and tell the user:
@@ -131,7 +131,7 @@ sibling `.md`, pass `--rendered-path` to match. They vary together.
 Create the iteration working directory up front (project-local; portable):
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/ensure_dir.py" critic-reviews
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/ensure_dir.py" critic-reviews
 ```
 
 Then:

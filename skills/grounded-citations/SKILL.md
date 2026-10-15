@@ -28,14 +28,14 @@ Before applying the rules below, check that this skill's regression
 tests are installed in the project:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/check_project_scaffold.py" \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_project_scaffold.py" \
     scripts/test_common.py scripts/test_citations.py
 ```
 
 If the output lists missing files, install them:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/install_templates.py" \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/install_templates.py" \
     test_common.py:scripts/test_common.py \
     test_citations.py:scripts/test_citations.py
 ```
@@ -112,7 +112,7 @@ existing draft is `fact-check`'s job.
 ## Regression backstop
 
 `scripts/test_citations.py` (installed by Bootstrap above; source at
-`${CLAUDE_PLUGIN_ROOT:-.}/templates/test_citations.py`) is the recurring
+`${CLAUDE_PLUGIN_ROOT}/templates/test_citations.py`) is the recurring
 test that catches violations of the rules above: unresolved
 `@citekey`s, bare *Author (YYYY)* mentions without a governing `@key`,
 and BBT-key uniqueness. Runs in the `critic-loop` test gate alongside

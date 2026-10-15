@@ -14,7 +14,7 @@ description: Use when the user asks to work with a Zotero library — adding abs
 Before any step below, verify the plugin has been configured:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/check_configured.py"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"
 ```
 
 If the result is `NOT CONFIGURED`, stop immediately and tell the user:
@@ -32,7 +32,7 @@ Also check the installed `zotero-mcp-server` version — a stale pre-0.9
 install silently loses the tool names this skill documents:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/check_zotero_mcp_version.py"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_zotero_mcp_version.py"
 ```
 
 A `WARNING` line means the user should upgrade before relying on
@@ -84,14 +84,14 @@ exact invocation.
 
 | User intent | Script | Invocation |
 |---|---|---|
-| Audit a library for items missing abstracts / PDFs / empty stubs | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/audit_zotero_library.py --group <id>` |
-| Add missing abstracts to items | `enrich_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_abstracts.py --filter-keys-file .claude/audit/audit.missing_abstract.keys` |
-| Repair stored abstracts (copyright notices, HTML entities, "Abstract" headings) | `clean_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/clean_abstracts.py` (dry run; read the CSV it writes, then add `--write` with the user's OK) |
-| Attach missing PDFs (fast HTTP cascade) | `enrich_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
-| Attach PDFs from Wiley journals (TDM token route) | `enrich_pdfs.py --sources wiley` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --sources wiley --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
-| Attach PDFs from Cloudflare-gated publishers (Sage, APA, T&F, Emerald, …) | `enrich_pdfs.py --sources browser` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --sources browser --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
-| Replace PDFs an item already has (repair a bad or superseded copy) | `enrich_pdfs.py --replace` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --replace --filter-keys-file <keys>` |
-| Generate `references.bib` from a manuscript's citation keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/generate_bib.py` from the project root (scans `manuscript/`, writes `manuscript/references.bib`; `--chapters-dir` / `--bib-out` for other layouts) |
+| Audit a library for items missing abstracts / PDFs / empty stubs | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group <id>` |
+| Add missing abstracts to items | `enrich_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_abstracts.py --filter-keys-file .claude/audit/audit.missing_abstract.keys` |
+| Repair stored abstracts (copyright notices, HTML entities, "Abstract" headings) | `clean_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/clean_abstracts.py` (dry run; read the CSV it writes, then add `--write` with the user's OK) |
+| Attach missing PDFs (fast HTTP cascade) | `enrich_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
+| Attach PDFs from Wiley journals (TDM token route) | `enrich_pdfs.py --sources wiley` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --sources wiley --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
+| Attach PDFs from Cloudflare-gated publishers (Sage, APA, T&F, Emerald, …) | `enrich_pdfs.py --sources browser` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --sources browser --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
+| Replace PDFs an item already has (repair a bad or superseded copy) | `enrich_pdfs.py --replace` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --replace --filter-keys-file <keys>` |
+| Generate `references.bib` from a manuscript's citation keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py` from the project root (scans `manuscript/`, writes `manuscript/references.bib`; `--chapters-dir` / `--bib-out` for other layouts) |
 
 **An item that already holds a PDF never reaches a fetcher.** That is
 usually right — it is what stops every run re-downloading a whole
@@ -495,7 +495,7 @@ anything about to be written back.
 - BBT keys are auto-generated from author/year/title (e.g.,
   `brownUsingDailyStock1985a`).
 - Generate the project's bibliography with
-  `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/generate_bib.py`, run
+  `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py`, run
   from the project root.
 - Never hand-craft keys like `Smith2019`.
 - Never write to the Zotero `Extra` field to override or pin BBT keys.
