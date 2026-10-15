@@ -144,6 +144,25 @@ def _http_status_of(exc: BaseException) -> int | None:
     return None
 
 
+def auth_failure_status(exc: BaseException) -> int | None:
+    """401 or 403 when `exc` is Zotero rejecting the API key, else None.
+
+    Both mean the request will fail identically however often it is
+    retried or whatever the caller does next — "Invalid key", or a valid
+    key without access to the library — so callers treat them as fatal
+    rather than as an unavailable lookup.
+    """
+    status = _http_status_of(exc)
+    if status in (401, 403):
+        # pyzotero maps 401 *and* 403 to one class, so the type alone
+        # cannot tell them apart; its message's `Code:` line can.
+        match = _PYZOTERO_CODE_RE.search(str(exc))
+        if match and int(match.group(1)) in (401, 403):
+            return int(match.group(1))
+        return status
+    return None
+
+
 def _is_transient_write_error(exc: BaseException) -> bool:
     """True for transient failures of a Zotero write: worth another try.
 

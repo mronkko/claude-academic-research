@@ -81,7 +81,8 @@ SCRIPTS_ROOT = SCRIPT_DIR.parent
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
-from core.config_loader import require  # noqa: E402
+from core import config_loader  # noqa: E402
+from core.config_loader import get, require, value_source  # noqa: E402
 
 try:
     import requests
@@ -700,6 +701,54 @@ def _dois_conflict(a: str, b: str) -> bool:
     return bool(a and b and a != b)
 
 
+def _auth_error_message(status: int, exc: BaseException,
+                        key_source: str | None, library: str) -> str:
+    """Why Zotero refused the key, and which copy of the key it refused.
+
+    `ZOTERO_API_KEY` overrides `[zotero].api_key` in config.toml, so a
+    stale export in a shell profile masks a good key in the file and
+    looks exactly like a bad key there. Naming the source is the whole
+    diagnosis; the value is never printed.
+    """
+    config = config_loader.CONFIG_PATH.as_posix().replace(
+        Path.home().as_posix(), "~", 1)
+    text = str(exc).strip()
+    detail = text.splitlines()[-1] if text else type(exc).__name__
+    lines = [f"ERROR: Zotero rejected the API key for {library} "
+             f"(HTTP {status}: {detail})."]
+    if key_source == "env":
+        lines.append(
+            "The key came from the ZOTERO_API_KEY environment variable, which "
+            f"overrides [zotero].api_key in {config}. If that variable is "
+            "stale (for example exported in ~/.zshenv, ~/.bashrc or another "
+            "shell profile), remove the export and open a new shell, or set "
+            "it to a current key.")
+    elif key_source == "config":
+        lines.append(
+            f"The key came from [zotero].api_key in {config} (ZOTERO_API_KEY "
+            "is not set). Re-run the setup wizard with a current key from "
+            "https://www.zotero.org/settings/keys.")
+    else:
+        lines.append("No key is configured: set one with the setup wizard.")
+    if status == 403:
+        lines.append(
+            "A 403 can also mean the key is valid but has no access to this "
+            "library: give it read/write access to the group at "
+            "https://www.zotero.org/settings/keys.")
+    lines.append("Nothing was imported.")
+    return "\n".join(lines)
+
+
+def _exit_if_auth_error(exc: BaseException, zot, key_source: str | None) -> None:
+    status = zotero_io.auth_failure_status(exc)
+    if status is not None:
+        try:
+            library = zot.describe_library()
+        except Exception:  # noqa: BLE001 — the message must still print
+            library = "the library"
+        sys.exit(_auth_error_message(status, exc, key_source, library))
+
+
 #: True when a dry run could not read the library, so the "already in
 #: library" figure is unknown rather than zero. Module state because the
 #: summary is printed far from the lookup, and a count that silently
@@ -729,7 +778,8 @@ def _print_existing_summary(*, n_to_add: int, n_to_create: int) -> None:
 
 
 def _fetch_existing_items(
-    zot: zotero_io.ZoteroClient, dry_run: bool,
+    zot: zotero_io.ZoteroClient, dry_run: bool, *,
+    key_source: str | None = None,
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Return (doi_map, title_map) for existing items in the library.
 
@@ -752,6 +802,12 @@ def _fetch_existing_items(
     thing a dry run is for. A dry run that cannot reach the API degrades
     to "not checked"; a real run still raises, because proceeding blind
     is how the duplicate-creation incident above happened.
+
+    **Except a rejected key (HTTP 401/403), which exits in both modes.**
+    That is not an unavailable lookup but a misconfiguration the real run
+    will hit too, and a dry run that reports "NOT CHECKED" counts for it
+    hides the one thing the operator needs to fix. `key_source` ("env" /
+    "config") names which copy of the key was refused.
     """
     global _existing_lookup_failed
     _existing_lookup_failed = False
@@ -764,6 +820,7 @@ def _fetch_existing_items(
     try:
         items = zot.cloud_journal_articles()
     except Exception as exc:  # noqa: BLE001
+        _exit_if_auth_error(exc, zot, key_source)
         if not dry_run:
             # A real run that cannot see the library would re-create
             # everything already in it. That is the incident this
@@ -1123,8 +1180,14 @@ def main() -> int:
     # prefix should stop the run at the first line, not after the import.
     ns = screening_common.load_tag_namespace(args.tag_prefix, args.config)
 
-    api_key = "" if args.dry_run else require("zotero", "api_key",
-                                              env="ZOTERO_API_KEY")
+    # A dry run uses the real key when there is one: the patch-versus-
+    # create preview needs to read the library, and a placeholder key is
+    # refused with the same 403 as a bad one.
+    key_source = value_source("zotero", "api_key", env="ZOTERO_API_KEY")
+    if args.dry_run:
+        api_key = get("zotero", "api_key", env="ZOTERO_API_KEY")
+    else:
+        api_key = require("zotero", "api_key", env="ZOTERO_API_KEY")
     zot = zotero_io.ZoteroClient.from_args(args, api_key=api_key or "dummy")
 
     csv_path = Path(args.input)
@@ -1136,9 +1199,22 @@ def main() -> int:
     print(f"Records to import into {zot.describe_library()}: {len(rows)}",
           flush=True)
 
-    collection_key = _resolve_collection(zot, args)
+    try:
+        collection_key = _resolve_collection(zot, args)
+    except Exception as exc:  # noqa: BLE001 — re-raised unless a rejected key
+        _exit_if_auth_error(exc, zot, key_source)
+        raise
 
-    doi_map, title_map = _fetch_existing_items(zot, args.dry_run)
+    if args.dry_run and not api_key:
+        global _existing_lookup_failed
+        _existing_lookup_failed = True
+        print("  WARNING: no Zotero API key configured, so the dry run "
+              "cannot read the library; the counts below are unchecked.",
+              flush=True)
+        doi_map, title_map = {}, {}
+    else:
+        doi_map, title_map = _fetch_existing_items(
+            zot, args.dry_run, key_source=key_source)
     doi_by_key = {key: doi for doi, key in doi_map.items()}
 
     to_add: list[tuple[str, str, str]] = []

@@ -52,6 +52,24 @@ def get(section: str, key: str, env: str | None = None, default: str = "") -> st
     return val.strip() if isinstance(val, str) else val
 
 
+def value_source(section: str, key: str, env: str | None = None) -> str | None:
+    """Which source `get` would take this value from: "env", "config", or
+    None when neither has it.
+
+    For error messages, not for reading: an API key the server rejects is
+    only actionable if the user knows *which* copy was sent, and the
+    environment variable silently overriding a good key in config.toml
+    (a stale export in a shell profile) is a failure that otherwise looks
+    like a bad key in the config. Returns a label, never the value.
+    """
+    if env and os.environ.get(env, "").strip():
+        return "env"
+    val = load_config().get(section, {}).get(key, "")
+    if isinstance(val, str):
+        val = val.strip()
+    return "config" if val else None
+
+
 def require(section: str, key: str, env: str | None = None) -> str:
     """Like `get`, but raise RuntimeError if the value is empty.
 
