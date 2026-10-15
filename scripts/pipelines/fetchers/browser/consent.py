@@ -49,10 +49,12 @@ CONNECTOR_ONLY_SITES: dict[str, tuple[str, str]] = {
     # TODO(consent terms): no verified URL (candidate:
     # https://about.proquest.com/en/about/terms-and-conditions/).
     "proquest": ("ProQuest", ""),
-    # TODO(consent terms): Elsevier's site terms for ScienceDirect pages
-    # (the Connector path, not the TDM API) — candidate
-    # https://www.elsevier.com/legal/elsevier-website-terms-and-conditions.
-    "sciencedirect": ("ScienceDirect (Elsevier)", ""),
+    # Elsevier's site terms for ScienceDirect pages (the Connector path,
+    # not the TDM API). Checked 2026-10-15: HTTP 200.
+    "sciencedirect": (
+        "ScienceDirect (Elsevier)",
+        "https://www.elsevier.com/legal/elsevier-website-terms-and-conditions",
+    ),
 }
 
 #: `PLATFORM_PRIORITY` keys whose consent site is spelled differently.
