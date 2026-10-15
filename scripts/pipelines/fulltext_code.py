@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "anthropic>=0.40",
-#     "pyzotero>=1.15.1",
+#     "pyzotero>=1.16",
 #     "pdfplumber>=0.10",
 #     "pypdf>=4.0",
 #     "tenacity>=8.0",

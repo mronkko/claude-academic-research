@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "pyzotero>=1.15.1",
+#     "pyzotero>=1.16",
 #     "requests>=2.31",
 #     "urllib3>=2.0",
 #     "tenacity>=8.0",
