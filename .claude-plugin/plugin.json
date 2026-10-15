@@ -4,5 +4,16 @@
   "description": "Rule-books and procedures for academic research with Claude Code and Antigravity: MCP-grounded citations, empirical integrity, systematic reviews, Zotero operations, and a parallel-critic manuscript revision loop. Includes a guided /setup wizard that registers the MCP servers and stores API keys locally.",
   "author": { "name": "Mikko Rönkkö", "email": "mikko.ronkko@jyu.fi" },
   "license": "MIT",
-  "homepage": "https://github.com/mronkko/claude-academic-research"
+  "homepage": "https://github.com/mronkko/claude-academic-research",
+  "mcpServers": {
+    "academic-research": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--no-project",
+        "--quiet",
+        "${CLAUDE_PLUGIN_ROOT}/mcp/server.py"
+      ]
+    }
+  }
 }

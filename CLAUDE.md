@@ -8,7 +8,7 @@ Deferred development ideas — things consciously not done yet but worth revisit
 
 An academic research **plugin** for Claude Code and Antigravity — not an application. It ships skills (prose rule-books), pipeline scripts, and templates for academic-research workflows. Claude Code users install via `/plugin marketplace add mronkko/claude-academic-research`, while Antigravity users install via `agy plugin install <url>`. Anything you change here is consumed by downstream agentic instances in user projects.
 
-**This is primarily a personal-use project.** The author is the main user, and that changes the working norm: commit to `main` directly, and accept that `main` may be temporarily broken. A red `main` here is not an incident — do not revert someone else's commit to green it, do not open a branch purely to avoid breaking it, and do not stop mid-task to stabilise something you were not asked to touch. Fix forward. The one cost worth knowing is that CI (`ruff check scripts tests templates editorial-tools` then `pytest tests -v`, lint a hard gate) goes red on push and stays red until the next commit, so run both locally when it is cheap; that is courtesy to the next session, not a gate you must pass before committing.
+**This is primarily a personal-use project.** The author is the main user, and that changes the working norm: commit to `main` directly, and accept that `main` may be temporarily broken. A red `main` here is not an incident — do not revert someone else's commit to green it, do not open a branch purely to avoid breaking it, and do not stop mid-task to stabilise something you were not asked to touch. Fix forward. The one cost worth knowing is that CI (`ruff check scripts tests templates editorial-tools mcp` then `pytest tests -v`, lint a hard gate) goes red on push and stays red until the next commit, so run both locally when it is cheap; that is courtesy to the next session, not a gate you must pass before committing.
 
 **The repo is a marketplace hosting more than one plugin.** `.claude-plugin/marketplace.json` lists them. The main plugin, `academic-research`, is sourced at the repo root (`./`) and is what most of this CLAUDE.md describes. A second, smaller plugin, `editorial-tools`, lives under `editorial-tools/` with its own `.claude-plugin/plugin.json` and `skills/` — it ships the `suggesting-reviewers` skill (peer-reviewer suggestion for journal editors/AEs, with a bundled ORM editorial-board roster). The two are independent installs: the root plugin only scans `./skills/`, so `editorial-tools/` does not leak into it, and users who install only `academic-research` never load the editorial skill. Do not assume one-plugin-per-repo.
 
@@ -27,10 +27,10 @@ uv run --group dev python -m pytest -m live tests/live/
 uv run --group dev python -m pytest -m live_browser tests/live/test_browser_publishers.py
 
 # Lint (CI blocker). templates/ and editorial-tools/scripts/ are Python too.
-uv run --group dev ruff check scripts tests templates editorial-tools
+uv run --group dev ruff check scripts tests templates editorial-tools mcp
 
 # Lint with auto-fix for I001/UP037/F401/F541 etc.
-uv run --group dev ruff check scripts tests templates editorial-tools --fix
+uv run --group dev ruff check scripts tests templates editorial-tools mcp --fix
 
 # Set up / refresh the dev environment.
 uv sync --group dev
@@ -38,7 +38,7 @@ uv sync --group dev
 
 Run tests via `.venv/bin/pytest` or `uv run pytest`, never a bare `pytest` on `PATH` — see BACKLOG S11 for why.
 
-CI (`.github/workflows/ci.yml`) runs `ruff check scripts tests templates editorial-tools` then `pytest tests -v` on Python 3.11, 3.12, 3.13. Lint is a hard gate — a single error fails the whole matrix.
+CI (`.github/workflows/ci.yml`) runs `ruff check scripts tests templates editorial-tools mcp` then `pytest tests -v` on Python 3.11, 3.12, 3.13. Lint is a hard gate — a single error fails the whole matrix.
 
 **Test dependencies live in exactly one place:** `[dependency-groups] dev` in `pyproject.toml`. CI installs it with `pip install --group dev` (PEP 735). Do not add a hand-written package list to `ci.yml` — that second source of truth already drifted once and left `uv sync` unable to collect 14 test modules while CI stayed green. `tests/unit/test_ci_dependencies.py` guards this.
 
@@ -48,7 +48,7 @@ CI (`.github/workflows/ci.yml`) runs `ruff check scripts tests templates editori
 
 Multiple agent instances still work this repo concurrently, now sharing one checkout. Before editing, check what is already in flight — `git status` and the recent commits — so two sessions do not edit the same files at once; that collision, not a broken `main`, is the thing worth avoiding. Expect `main` to move under you mid-task: this session watched another instance land two commits on it, so re-check before assuming the HEAD you started from is still current.
 
-The default test run is hermetic — `addopts` in `pyproject.toml` deselects the `live`, `live_browser`, `live_slr` and `live_cluster` markers — so `pytest tests/ -q` and `ruff check scripts tests templates editorial-tools` are safe to run from any number of checkouts at once.
+The default test run is hermetic — `addopts` in `pyproject.toml` deselects the `live`, `live_browser`, `live_slr` and `live_cluster` markers — so `pytest tests/ -q` and `ruff check scripts tests templates editorial-tools mcp` are safe to run from any number of checkouts at once.
 
 **Live work is single-lane.** `pytest -m live`, `pytest -m live_browser`, anything under `scripts/pipelines/`, and the `/setup` wizard all contend for resources that exist exactly once on the machine: one Zotero desktop holding `localhost:23119` and one Web API library (concurrent writers interleave badly, and the HTTP 412 retry in `zotero_io.py` masks rather than resolves it), one shared API quota per publisher key, one Playwright Chromium profile, and one `~/.config/academic-research/config.toml`. Confirm no other instance holds that lane before starting.
 

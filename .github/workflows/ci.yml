@@ -33,11 +33,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install --group dev
 
-      # Every tracked Python tree: templates/ is copied into user projects
-      # and editorial-tools/ is a second plugin, so neither is exempt.
+      # Every tracked Python tree: templates/ is copied into user projects,
+      # editorial-tools/ is a second plugin and mcp/ is the plugin's MCP
+      # server, so none is exempt.
       # tests/unit/test_ci_dependencies.py keeps this list complete.
       - name: Ruff lint
-        run: ruff check scripts tests templates editorial-tools
+        run: ruff check scripts tests templates editorial-tools mcp
 
       - name: Run tests
         run: pytest tests -v
