@@ -312,3 +312,52 @@ def test_a_second_covering_target_on_the_same_platform_still_matches() -> None:
     assert targets_match_domains(
         targets, ("springer.com",), _cfg(), pub_date="1988",
     ) is True
+
+
+# ---------------------------------------------------------------------------
+# Month moving walls — parsed as *no* wall before 0.25.0.
+# ---------------------------------------------------------------------------
+
+
+def test_a_month_wall_is_parsed() -> None:
+    win = parse_coverage(
+        "Available from 1990.<br>Most recent 6 month(s) not available.<br>"
+    )
+    assert win is not None
+    assert win.embargo_months == 6
+
+
+@pytest.mark.parametrize("months, today_month, year, expected", [
+    # 6-month wall in October 2026: the wall starts in April 2026, so
+    # 2026 straddles it and 2025 is released.
+    (6, 10, 2026, None),
+    (6, 10, 2025, True),
+    # 6-month wall in March 2026: the wall starts in September 2025.
+    (6, 3, 2026, False),
+    (6, 3, 2025, None),
+    (6, 3, 2024, True),
+    # 18 months in October 2026: the wall starts April 2025.
+    (18, 10, 2026, False),
+    (18, 10, 2025, None),
+])
+def test_a_month_wall_excludes_embargoed_years(
+    months, today_month, year, expected,
+) -> None:
+    """An embargoed route used to rank as confidently covering."""
+    text = f"Available from 1990.<br>Most recent {months} month(s) not available.<br>"
+    window = parse_coverage(text)
+    assert window is not None
+    assert window.covers_year(
+        year, today_year=2026, today_month=today_month,
+    ) is expected
+
+
+def test_a_year_wall_is_unchanged_by_the_month() -> None:
+    window = parse_coverage(
+        "Available from 1990.<br>Most recent 1 year(s) not available.<br>"
+    )
+    assert window is not None
+    for month in (1, 6, 12):
+        assert window.covers_year(2026, today_year=2026, today_month=month) is False
+        assert window.covers_year(2025, today_year=2026, today_month=month) is None
+        assert window.covers_year(2024, today_year=2026, today_month=month) is True

@@ -60,10 +60,12 @@ from dataclasses import dataclass
 # ignored, so the `until` lookup must not run past the next segment.
 _FROM_RE = re.compile(r"\bfrom\s+(\d{1,2}\.\d{1,2}\.(\d{4})|(\d{4}))", re.I)
 _UNTIL_RE = re.compile(r"\buntil\s+(\d{1,2}\.\d{1,2}\.(\d{4})|(\d{4}))", re.I)
-# "Most recent 1 year(s) not available" — a moving wall on the newest
-# content, expressed in whole years.
+# "Most recent 1 year(s) not available" / "Most recent 6 month(s) not
+# available" — a moving wall on the newest content. Months used to be
+# ignored entirely, so a 6- or 18-month wall parsed as *no* wall and the
+# embargoed route ranked as confidently covering this year's articles.
 _EMBARGO_RE = re.compile(
-    r"most\s+recent\s+(\d+)\s*year", re.I,
+    r"most\s+recent\s+(\d+)\s*(year|month)", re.I,
 )
 
 
@@ -83,9 +85,13 @@ class CoverageWindow:
 
     ranges: tuple[tuple[int, int | None], ...]
     embargo_years: int = 0
+    #: Additional moving wall in months ("Most recent 6 month(s)"),
+    #: on top of `embargo_years`.
+    embargo_months: int = 0
 
     def covers_year(
         self, year: int, *, today_year: int | None = None,
+        today_month: int | None = None,
     ) -> bool | None:
         """Whether an article published in `year` is inside this holding.
 
@@ -102,9 +108,15 @@ class CoverageWindow:
         moves — an embargo assertion pinned to a literal year would start
         failing on 1 January otherwise.
         """
-        current = today_year if today_year is not None else _dt.date.today().year
-        if self.embargo_years:
-            wall_start = current - self.embargo_years
+        today = _dt.date.today()
+        current = today_year if today_year is not None else today.year
+        month = today_month if today_month is not None else today.month
+        wall_months = self.embargo_years * 12 + self.embargo_months
+        if wall_months:
+            # The calendar year the wall starts in. For whole-year walls
+            # this is `current - embargo_years` whatever the month, as
+            # before; a month wall needs the month to place it.
+            wall_start = (current * 12 + (month - 1) - wall_months) // 12
             if year > wall_start:
                 return False
             if year == wall_start:
@@ -124,8 +136,12 @@ def parse_coverage(text: str) -> CoverageWindow | None:
         return None
 
     embargo = 0
-    if (m := _EMBARGO_RE.search(text)) is not None:
-        embargo = int(m.group(1))
+    embargo_months = 0
+    for amount, unit in _EMBARGO_RE.findall(text):
+        if unit.lower() == "year":
+            embargo += int(amount)
+        else:
+            embargo_months += int(amount)
 
     ranges: list[tuple[int, int | None]] = []
     # Split on <br> so a second "Available from" starts a second range
@@ -145,7 +161,10 @@ def parse_coverage(text: str) -> CoverageWindow | None:
 
     if not ranges:
         return None
-    return CoverageWindow(ranges=tuple(ranges), embargo_years=embargo)
+    return CoverageWindow(
+        ranges=tuple(ranges), embargo_years=embargo,
+        embargo_months=embargo_months,
+    )
 
 
 def covers_year(
