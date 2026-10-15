@@ -40,8 +40,18 @@ directory — not checked in because it references machine-local paths).
   `add_deny_rules.py` — a data-integrity guard, not a convenience.
 
 - **P21 — the pipeline as tools of a plugin-bundled MCP server.**
-  **Status: in progress for 0.25.0.** (Called P18 in the release plan;
-  renumbered because P18 here is taken.) Spec, in short:
+  **Status: in progress for 0.25.0 — 3a done** (server, short tools,
+  registration; skills not yet rewired). Two settled deviations from the
+  spec below: Claude Code registration is `mcpServers` in
+  `.claude-plugin/plugin.json`, not a root `.mcp.json` (gitignored here
+  as a local override, and a tracked one would load as a broken project
+  server in this repo); and the launch is `uv run --no-project --quiet`
+  with the script's own `requires-python >=3.11`, not `--python 3.11`,
+  which would download 3.11 for users who have only a newer Python.
+  Antigravity plugins can bundle MCP servers, but with no plugin-root
+  variable, so the wizard registers the server globally there.
+  (Called P18 in the release plan; renumbered because P18 here is
+  taken.) Spec, in short:
   - `mcp/server.py` at the plugin root, a **stdlib-only** stdio MCP
     server (hand-rolled JSON-RPC 2.0: `initialize`, `ping`, `tools/list`,
     `tools/call`), launched with `uv run --no-project --python 3.11`, so

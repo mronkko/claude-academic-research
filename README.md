@@ -67,6 +67,34 @@ share one citation-verification rule-book between the two callers.
 The separate `editorial-tools` plugin ships one skill,
 `suggesting-reviewers`, for journal editors and associate editors.
 
+## Pipeline tools (MCP server)
+
+The plugin bundles a small MCP server, `mcp/server.py`, that exposes the
+short pipeline steps as tools, so an agent can call them directly rather
+than pasting long `uv run` commands for you to approve one by one:
+
+| Tool | Effect | Runs |
+|---|---|---|
+| `check_setup` | read-only | `scripts/setup/check_configured.py`, `check_database_access.py` |
+| `scaffold_project` | writes project files | `scripts/setup/scaffold_project.py` |
+| `enrich_pdfs_plan` | read-only | `scripts/pipelines/enrich_pdfs.py --plan` |
+| `enrich_pdfs_report` | read-only | `scripts/pipelines/enrich_pdfs.py --report` |
+| `screening_report` | read-only | `scripts/pipelines/screening_report.py` |
+| `audit_library` | read-only | `scripts/pipelines/audit_zotero_library.py` |
+| `export_coded_includes` | writes project files | `scripts/pipelines/export_coded_includes.py` |
+| `generate_bib` | writes project files | `scripts/pipelines/generate_bib.py` |
+
+Every tool's description starts with its effect class, so you can decide
+per tool whether to "always allow" it. Each one runs the script listed
+above, unchanged, in your project directory and returns a short summary;
+the full output of its last run is kept in `.claude/mcp/logs/`. **Every
+script remains runnable from a terminal** exactly as before — the tools
+are a front end, not a replacement. Only `uv` is required.
+
+Claude Code picks the server up from the plugin automatically. For
+Antigravity, and for Codex (untested), the setup wizard offers to
+register it.
+
 ## Runtime model
 
 - Plugin scripts run with `uv` and use PEP 723 inline dependency declarations
@@ -109,6 +137,7 @@ scripts/
   dev/                     # developer tools (live mini-SLR driver, handler probe)
 editorial-tools/           # second, independently-versioned plugin (peer-reviewer
                             #   suggestion skill) — see Install and Load above
+mcp/                       # stdlib-only MCP server exposing pipeline scripts as tools
 tests/unit/                # hermetic pytest suite (the default run)
 tests/live/                # opt-in live tests against real APIs (pytest -m live ...)
 .github/workflows/ci.yml   # ruff + pytest on Linux, macOS, Windows
