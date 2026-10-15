@@ -183,3 +183,30 @@ def test_openalex_unknown_doi_is_a_miss(monkeypatch) -> None:
     fake.Works.return_value.__getitem__.side_effect = _http_error(404)
     monkeypatch.setitem(sys.modules, "pyalex", fake)
     assert src.fetch_abstract("10.1/x") is None
+
+
+def test_openalex_grobid_cache_stores_only_xml(tmp_path) -> None:
+    """Any 200 body was cached — an HTML error page, a truncated gzip —
+    and served from disk on every later run as GROBID XML."""
+    src = _openalex()
+    src.http.get.return_value = MagicMock(
+        status_code=200, content=b"<html><body>Service unavailable",
+    )
+    src._download_grobid_xml("W1", tmp_path)
+    assert not (tmp_path / "W1.xml").exists()
+
+    src.http.get.return_value = MagicMock(
+        status_code=200, content=b"<TEI><text>ok</text></TEI>",
+    )
+    src._download_grobid_xml("W2", tmp_path)
+    assert (tmp_path / "W2.xml").exists()
+
+
+def test_openalex_grobid_cache_drops_a_bad_entry(tmp_path) -> None:
+    (tmp_path / "W1.xml").write_bytes(b"<html>not xml")
+    src = _openalex()
+    src.http.get.return_value = MagicMock(
+        status_code=200, content=b"<TEI><text>fresh</text></TEI>",
+    )
+    assert b"fresh" in src._download_grobid_xml("W1", tmp_path)
+    assert src.http.get.called

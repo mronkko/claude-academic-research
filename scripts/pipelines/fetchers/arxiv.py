@@ -51,6 +51,10 @@ def _cache_pdf_path(cache_dir: str | Path, doi: str) -> Path:
 
 class ArxivSource(PdfFetcher):
     name = "arxiv"
+    # Without this `handles_doi` said True for every DOI, so a
+    # `--sources arxiv` run logged a "no PDF" miss and a failure row for
+    # each non-arXiv item it was never going to ask about.
+    doi_prefixes = (_ARXIV_PREFIX,)
 
     def fetch_pdf(
         self, doi: str, *, cache_dir, bypass_prefix_filter: bool = False,

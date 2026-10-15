@@ -49,3 +49,11 @@ def test_it_runs_by_default_ahead_of_the_aggregators() -> None:
     names = [s.name for s in fetchers.pdf_sources(MagicMock(), None)]
     assert "arxiv" in names
     assert names.index("arxiv") < names.index("openalex")
+
+
+def test_it_claims_only_arxiv_dois() -> None:
+    """Without `doi_prefixes`, `handles_doi` said True for everything, so a
+    `--sources arxiv` run logged a miss for every item it never asked."""
+    src = ArxivSource(MagicMock(), None)
+    assert src.handles_doi("10.48550/arXiv.2007.05443")
+    assert not src.handles_doi("10.1016/j.x.2020.1")

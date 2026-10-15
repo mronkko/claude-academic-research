@@ -105,6 +105,15 @@ def _cache_pdf_path(cache_dir: str | Path, doi: str) -> Path:
     return Path(cache_dir) / f"{_doi_safe(doi)}.pdf"
 
 
+def _is_xml(data: bytes) -> bool:
+    """True when `data` parses as XML — the bar for caching GROBID output."""
+    try:
+        ET.fromstring(data)
+    except ET.ParseError:
+        return False
+    return True
+
+
 def _serve_cached_pdf(
     path: Path, doi: str, who: str,
 ) -> tuple[Path, str] | None:
@@ -317,9 +326,14 @@ class OpenAlexSource(_OpenAlexClient, AbstractFetcher, PdfFetcher):
             cache_path = Path(cache_dir) / f"{work_id}.xml"
             if cache_path.exists():
                 try:
-                    return cache_path.read_bytes()
+                    cached = cache_path.read_bytes()
                 except Exception:
-                    cache_path.unlink(missing_ok=True)
+                    cached = None
+                if cached is not None and _is_xml(cached):
+                    return cached
+                # Unreadable or not XML (an earlier run cached an error
+                # page): drop it and ask again rather than fail forever.
+                cache_path.unlink(missing_ok=True)
         else:
             cache_path = None
 
@@ -340,7 +354,11 @@ class OpenAlexSource(_OpenAlexClient, AbstractFetcher, PdfFetcher):
             xml_bytes = gzip.decompress(resp.content)
         except Exception:
             xml_bytes = resp.content
-        if cache_path is not None:
+        # Cache only what parses. Any 200 body used to be stored — an
+        # HTML error page, a truncated gzip — and then served from disk
+        # on every later run as "GROBID XML", so the item could never get
+        # its abstract from this source again.
+        if cache_path is not None and _is_xml(xml_bytes):
             cache_path.write_bytes(xml_bytes)
         return xml_bytes
 
