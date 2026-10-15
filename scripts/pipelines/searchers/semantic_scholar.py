@@ -16,6 +16,7 @@ higher tier and is strongly recommended for systematic searches.
 from __future__ import annotations
 
 import time
+from urllib.parse import quote
 
 from .base import (
     CREDENTIAL_OPTIONAL,
@@ -34,6 +35,8 @@ CITATIONS_PER_PAGE = 1000  # /citations max
 #: The `/citations` endpoint refuses `offset + limit > 10000`.
 CITATIONS_MAX = 10000
 RATE_LIMIT_SLEEP = 0.5   # unauthenticated tier is aggressive
+#: Where the bulk keyword search stops paging (see `_fetch_all`).
+BULK_MAX = 10000
 
 #: Semantic Scholar `publicationTypes` entry → Crossref type vocabulary
 #: (see `base.CROSSREF_TYPES`). S2 attaches several types to one paper
@@ -75,6 +78,19 @@ class SemanticScholarSearch(SearchSource):
             blocks.append(("block_b", config.BLOCK_B_TERMS))
         if not blocks:
             return []
+        if (any(i.strip() for i in ctx.issns if i)
+                and not ctx.journal_title_keys()):
+            # S2 returns no ISSN, so an ISSN-only scope rejects every
+            # paper. Searching anyway spent the whole (throttled) quota
+            # and then printed a "rejected all" warning; fail up front
+            # instead, before a single request.
+            raise RuntimeError(
+                "Semantic Scholar cannot apply this journal scope: JOURNALS "
+                "gives ISSNs but no journal titles, and S2 returns no ISSN, "
+                "so every paper would be rejected. Add titles to JOURNALS "
+                "(ISSN -> (rating, full title)), or leave semantic_scholar "
+                "out of --keyword-databases."
+            )
 
         # Optional: a key lifts the rate limit, but anonymous calls work.
         api_key, _ = resolve_credential(
@@ -183,7 +199,10 @@ class SemanticScholarSearch(SearchSource):
         headers: dict = {}
         if api_key and not self._key_rejected:
             headers["x-api-key"] = api_key
-        url = f"{GRAPH_BASE}/paper/DOI:{doi.strip()}/citations"
+        # Percent-encoded: a SICI DOI's `<>#;` would otherwise end the
+        # path or start a fragment, and the request would ask for a
+        # different (nonexistent) paper.
+        url = f"{GRAPH_BASE}/paper/DOI:{quote(doi.strip(), safe='/')}/citations"
         papers: list[dict] = []
         offset = 0
         while True:
@@ -371,8 +390,23 @@ class SemanticScholarSearch(SearchSource):
                 break
             time.sleep(RATE_LIMIT_SLEEP)
             # The bulk endpoint caps at 1000 pages of 1000 rows; stop
-            # well before that for sanity on an exploratory search.
-            if len(papers) >= 10000:
+            # well before that for sanity on an exploratory search. The
+            # cap is applied *before* the journal-scope filter, so a
+            # capped query can lose in-scope papers it never fetched —
+            # which used to happen in silence, the truncated count
+            # printed as if it were the whole answer.
+            if len(papers) >= BULK_MAX:
+                total = data.get("total")
+                of_total = f" of {total}" if isinstance(total, int) else ""
+                print(
+                    f"\n  WARNING: Semantic Scholar stopped at its "
+                    f"{BULK_MAX}-record cap ({len(papers)}{of_total} "
+                    f"matches fetched, before the journal-scope filter). "
+                    f"Papers past the cap are missing from this database's "
+                    f"results. Narrow BLOCK_A_TERMS / BLOCK_B_TERMS or the "
+                    f"year window so the query fits under the cap.",
+                    flush=True,
+                )
                 break
         return papers
 
