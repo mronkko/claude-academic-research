@@ -47,8 +47,8 @@ def extract_json_from_response(text: str) -> dict | None:
 
     Strategy:
       a) Strip markdown fences and try the whole string.
-      b) Walk the string for the first balanced {...} block (handling
-         escaped quotes inside strings) and try parsing each candidate.
+      b) Decode from each "{" in turn and return the first object found,
+         so prose before the JSON may contain quotes and braces freely.
 
     Returns the parsed dict on success, None otherwise.
 
@@ -68,37 +68,21 @@ def extract_json_from_response(text: str) -> dict | None:
     except json.JSONDecodeError:
         pass
 
-    # Walk for the first balanced top-level {...} block.
-    depth = 0
-    start = -1
-    in_str = False
-    esc = False
-    for i, ch in enumerate(stripped):
-        if in_str:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_str = False
+    # Try a JSON decode starting at each "{" in turn; the first that
+    # yields an object wins. This replaced a hand-rolled brace/quote
+    # walker, which lost the JSON whenever the prose before it had an odd
+    # number of double quotes (the walker thought it was still inside a
+    # string) or a stray "}" (depth went negative and never recovered).
+    # The decoder does its own string and nesting handling, so prose can
+    # contain anything.
+    decoder = json.JSONDecoder()
+    for m in re.finditer(r"\{", stripped):
+        try:
+            obj, _ = decoder.raw_decode(stripped, m.start())
+        except json.JSONDecodeError:
             continue
-        if ch == '"':
-            in_str = True
-        elif ch == "{":
-            if depth == 0:
-                start = i
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0 and start >= 0:
-                candidate = stripped[start:i + 1]
-                try:
-                    obj = json.loads(candidate)
-                    if isinstance(obj, dict):
-                        return obj
-                except json.JSONDecodeError:
-                    start = -1
-                    continue
+        if isinstance(obj, dict):
+            return obj
     return None
 
 
