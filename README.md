@@ -56,7 +56,7 @@ Eleven user-invocable skills:
 | `systematic-review` | procedure (explicit) | End-to-end SLR pipeline from search → screening → coding → export. |
 | `cluster-screening` | procedure (explicit) | Screening / coding on a GPU cluster or batch scheduler: emit a manifest, run it under SLURM, apply the responses. |
 | `zotero-operations` | procedure (explicit) | Import, dedup, enrich abstracts and DOIs, maintain BBT keys. |
-| `retrieving-pdfs` | procedure (explicit) | Find and attach PDFs: plan the retrieval with you (what the API cascade, paid OpenAlex, the browser / Connector passes and manual download would each get), record the agreed strategy, run it step by step, diagnose what is left. Loaded by `systematic-review` and `zotero-operations`. |
+| `retrieving-pdfs` | procedure (explicit) | Find and attach PDFs: plan the retrieval with you (what the API cascade, paid OpenAlex, the browser / Connector passes — attended, or as a long unattended run after a short setup with you — and manual download would each get), record the agreed strategy, run it step by step, diagnose what is left. Loaded by `systematic-review` and `zotero-operations`. |
 | `fact-check` | procedure (explicit) | Verify citations and quantitative claims against sources. |
 | `critic-loop` | procedure (explicit) | Run 4 parallel critics (evidence / method / argument / expert) until no MAJOR issues remain. |
 | `setup` | procedure (explicit) | Hands you the terminal configuration wizard (API keys, LLM provider, MCP servers); switches LLM provider. |
@@ -82,6 +82,8 @@ than pasting long `uv run` commands for you to approve one by one:
 | `pdf_strategy_show` | read-only | `scripts/pipelines/pdf_strategy.py show` |
 | `pdf_strategy_write` / `pdf_strategy_update` | writes project files | `scripts/pipelines/pdf_strategy.py init` / `update` (`.claude/pdf/strategy.toml`) |
 | `pdf_policy_write` | writes project files | `scripts/pipelines/pdf_strategy.py policy` (`PDF_*` in `screening_config.py`) |
+| `pdf_consent_show` | read-only | `scripts/pipelines/pdf_consent.py show` (automated-download consent per site) |
+| `pdf_consent_set` | writes user config | `scripts/pipelines/pdf_consent.py set` (`[publisher_consent.<site>]`) |
 | `enrich_pdfs_plan` | read-only | `scripts/pipelines/enrich_pdfs.py --plan` (the browser pass's publisher queue) |
 | `enrich_pdfs_report` | read-only | `scripts/pipelines/enrich_pdfs.py --report` |
 | `pdf_manual_next` | writes Zotero, opens browser tabs | `scripts/pipelines/enrich_pdfs.py --manual next` |
@@ -103,7 +105,14 @@ are a front end, not a replacement. Only `uv` is required.
 The long steps run as **background jobs**: `start_pdf_plan` (read-only), `start_search`, `start_import`,
 `start_enrich_abstracts`, `start_enrich_dois` (writes Zotero),
 `start_abstract_screen` and `start_fulltext_code` (cost LLM credits, write
-Zotero) each return a job id at once. `job_status` reports progress, the
+Zotero), and for PDFs `start_enrich_pdfs` (the free API cascade; writes
+Zotero), `start_enrich_pdfs_paid` (costs money — the OpenAlex Content API
+at $0.01 a PDF; writes Zotero), `start_pdf_unattended_setup` (opens a
+browser for you to solve each publisher's challenge once; writes only the
+setup record and, if you say "always skip", `[library] no_access`) and
+`start_pdf_unattended_run` (the browser pass with no prompts — what needs
+a person is deferred to manual download; writes Zotero) each return a job
+id at once. One job at a time may write to Zotero. `job_status` reports progress, the
 log tail and any question the job is waiting on (relayed to you and
 answered with `job_answer`); `cancel_job` interrupts a job so it saves its
 progress before stopping; `list_jobs` shows recent ones. A job lives in
