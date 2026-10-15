@@ -4,6 +4,7 @@
 # dependencies = [
 #     "pyzotero>=1.15.1",
 #     "requests>=2.31",
+#     "urllib3>=2.0",
 #     "tenacity>=8.0",
 #     "urllib3>=2.0",
 #     "httpx>=0.25",
