@@ -81,15 +81,29 @@ def _tag_prefix() -> str:
     pins above — the config is a user-authored file and this test suite
     runs without the plugin's `sys.path` set up.
 
-    Returns `""` when the config or the constant is absent, which makes the
-    tag checks below skip rather than fail: a project that has not reached
-    screening yet has nothing to check.
+    Returns `""` when the config or the constant is absent. The tag checks
+    below then skip only if screening has not started (no screening log
+    yet — nothing to check); once a log exists, a missing or unreadable
+    prefix fails instead, because silently skipping would report a
+    review's tag/log drift as a pass.
     """
     if not os.path.exists(SCREENING_CONFIG):
         return ""
     with open(SCREENING_CONFIG, encoding="utf-8") as f:
-        m = re.search(r'^TAG_PREFIX\s*=\s*"([^"]+)"', f.read(), re.M)
-    return f"{m.group(1)}/" if m else ""
+        m = re.search(r'^TAG_PREFIX\s*=\s*(["\'])([^"\']+)\1', f.read(), re.M)
+    return f"{m.group(2)}/" if m else ""
+
+
+def _tag_prefix_or_skip() -> str:
+    """The prefix, `""` to skip (screening not started), or a failure."""
+    ns = _tag_prefix()
+    if not ns and (os.path.exists(ABSTRACT_LOG) or os.path.exists(FULLTEXT_LOG)):
+        raise AssertionError(
+            "screening logs exist but TAG_PREFIX in screening_config.py is "
+            "missing, empty or not a plain string literal — the tag checks "
+            "cannot find this review's tags."
+        )
+    return ns
 
 
 # Legacy-layout scripts kept for projects that copied the screening
@@ -191,9 +205,10 @@ def test_temperature_zero_pinned() -> None:
     """Every Claude API call must have temperature=0 — reproducibility invariant.
 
     Checks any local copy of `abstract_screen.py` / `fulltext_code.py`
-    (legacy layout). Projects that invoke the plugin scripts by path get
-    this invariant enforced by the plugin's own test suite, so this test
-    silently passes when no local copies exist.
+    (legacy layout). Projects that invoke the plugin scripts by path —
+    the normal case — have nothing local to check here; the plugin's own
+    `tests/unit/test_temperature_pinned.py` enforces the invariant on the
+    shipped scripts.
     """
     for script in (ABSTRACT_SCRIPT, FULLTEXT_SCRIPT):
         if not os.path.exists(script):
@@ -320,7 +335,7 @@ def test_fulltext_tags_consistent_with_csv_log() -> None:
     items = _live_zotero_items()
     if items is None:
         return
-    ns = _tag_prefix()
+    ns = _tag_prefix_or_skip()
     if not ns:
         return
     tag_decision: dict[str, str] = {}
@@ -381,7 +396,7 @@ def test_fulltext_include_items_have_slr_coding_note() -> None:
     items = _live_zotero_items()
     if items is None:
         return
-    ns = _tag_prefix()
+    ns = _tag_prefix_or_skip()
     if not ns:
         return
     marker = f"<h1>SLR Coding: {ns.rstrip('/')}</h1>"

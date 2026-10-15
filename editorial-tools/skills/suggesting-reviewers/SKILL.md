@@ -52,7 +52,7 @@ ${CLAUDE_PLUGIN_ROOT}/skills/suggesting-reviewers/rosters/orm/
 Read `index.md`. Report to the user the `snapshot_date` (membership) and the
 oldest profile `checked` date. If **either is older than 3 months**, warn with
 the age and **ask whether to refresh before continuing** — do not silently
-re-fetch. (Refresh procedure: Step 5.)
+re-fetch. (Refresh procedure: "Refreshing the roster and profiles" below.)
 
 For a journal other than ORM, ask the user to point at (or build) the
 equivalent `rosters/<journal>/` directory.
@@ -96,8 +96,8 @@ board officer). Match and ground each AE exactly as Step 4 describes for board
 reviewers below — methods filter (Step 3), topical fit against the profile's
 topics / representative method papers / `## ORM publications`, drilling into
 `mcp__openalex__get_author_works` only when a profile is thin or stale. AE
-profiles are built the **same way as ERB profiles** (see "Full profile build"
-under Step 5/Refresh); if a sitting AE has no profile yet, build one on first
+profiles are built the **same way as ERB profiles** (see the full profile
+build under "Refreshing the roster and profiles"); if a sitting AE has no profile yet, build one on first
 use and commit it. Then go to Step 5 (AE output). The career-stage tilt and
 the rest of this step apply to **reviewer mode**.
 
@@ -166,6 +166,11 @@ mcp__openalex__collect_works(
     sort       = "publication_year:desc",
     max_results = 2000)                                          # verify meta.truncated == false
 ```
+
+`collect_works` is not in every OpenAlex MCP server build. If it is not in
+your tool list, say so and fall back to `mcp__openalex__get_author_works` per
+member (`from_year` = the year of their `orm_swept`), keeping only works whose
+source is ORM — slower, same result.
 
 Each returned work carries author OpenAlex IDs, so **ID-join** to members
 locally (no name matching). For each member, rewrite the `## ORM publications`
