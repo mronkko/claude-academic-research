@@ -39,7 +39,7 @@ File layout (version 1):
     where = "project"        # project | global | default | strategy
 
     [[steps]]                # in order
-    mode = "api"             # api | paid | browser | connector | manual
+    mode = "api"             # api | paid | browser | connector | unattended | manual
     status = "pending"       # pending | running | done | skipped | failed
     started = ""  finished = ""  result = ""
 
@@ -49,15 +49,24 @@ step of its own, in which case `api` runs with `--paid off`); `paid` is
 `--sources openalex_content --paid prefer` on its own, so the user can
 put paying after the browser pass but before their own time; `browser`
 is the browser pass (publisher handlers, the library route to EBSCOhost
-and the Zotero Connector fallback); `connector` is the Connector pass
-alone; `manual` is the manual-download cycle. `MODES[mode]` holds each
-one's command and MCP tool, so the skill never composes them.
+and the Zotero Connector fallback), attended; `connector` is the
+Connector pass alone; `unattended` is the same browser pass as a long
+unattended run in two phases — `setup` with the user (consent, one
+solve per publisher, Connector hosts confirmed) and then `run` with
+nobody (`enrich_pdfs.py --unattended setup|run`); `manual` is the
+manual-download cycle. `MODES[mode]` holds each one's command and MCP
+tool, and `describe_step` the exact tool arguments, so the skill never
+composes them.
 
 **Who must be present.** `api` and `paid` run unattended. `browser`,
 `connector` and `manual` need the user at the keyboard: the manual cycle
-always (they download), the browser and Connector passes until the
-unattended run exists (build step 6). `unattended_possible` is recorded
-now so step 6 can act on it; nothing reads it as permission yet.
+always (they download), the attended browser and Connector passes
+because a Chromium window asks them to solve challenges. `unattended`
+needs them for its setup phase only: once `.claude/pdf/unattended.json`
+records a finished setup, the step's next phase is `run`, which needs
+nobody — so `blocked_until_user_present` is then false. An `unattended`
+step is only accepted when the user said an unattended run can be left
+going (`unattended_possible`); that answer is what it rests on.
 
 **Policy.** `policy` records the `[pdf]` values agreed. Where they live is
 `where`: already stored (`global` from /setup, `project` from
@@ -95,6 +104,8 @@ DEFAULT_PROJECT_CONFIG = "screening_config.py"
 SCHEMA_VERSION = 1
 
 STATUSES: tuple[str, ...] = ("pending", "running", "done", "skipped", "failed")
+#: Written by `enrich_pdfs.py --unattended setup` (`pdf_unattended`).
+UNATTENDED_STATE = Path(".claude") / "pdf" / "unattended.json"
 OPEN_STATUSES = ("pending", "running")
 POLICY_WHERE: tuple[str, ...] = ("project", "global", "default", "strategy")
 
@@ -102,6 +113,7 @@ POLICY_WHERE: tuple[str, ...] = ("project", "global", "default", "strategy")
 ENRICH = "uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py"
 CONTROL = ".claude/pdf/browser.json"
 PROGRESS = ".claude/pdf/browser-progress.jsonl"
+UNATTENDED_PROGRESS = ".claude/pdf/unattended-progress.jsonl"
 
 
 @dataclass(frozen=True)
@@ -111,7 +123,8 @@ class Mode:
     needs_user: bool
     #: argv after the script, before scope / library / policy flags.
     args: tuple[str, ...]
-    #: MCP tool(s) that run it, "" where none exists yet.
+    #: MCP tool(s) that run it; `describe_step` names the one for the
+    #: next phase and the arguments to pass.
     tool: str
     #: Long-running: start it in the background.
     background: bool
@@ -119,20 +132,27 @@ class Mode:
 
 
 MODES: dict[str, Mode] = {m.name: m for m in (
-    Mode("api", False, (), "", False,
+    Mode("api", False, (), "start_enrich_pdfs, start_enrich_pdfs_paid", True,
          "API cascade: publisher APIs, Crossref TDM, PMC, open-access sources "
-         "(and the paid OpenAlex source unless it is a step of its own). No "
-         "MCP job tool yet (BACKLOG P21) — run the command."),
-    Mode("paid", False, ("--sources", "openalex_content", "--paid", "prefer"), "",
-         False, "Paid OpenAlex Content API only, $0.01 per PDF."),
+         "(and the paid OpenAlex source unless it is a step of its own)."),
+    Mode("paid", False, ("--sources", "openalex_content", "--paid", "prefer"),
+         "start_enrich_pdfs_paid", True,
+         "Paid OpenAlex Content API only, $0.01 per PDF."),
     Mode("browser", True, ("--sources", "browser", "--browser-workers", "4",
                            "--control-file", CONTROL, "--progress-json", PROGRESS),
          "", True,
          "Browser pass: publisher handlers (a Cloudflare / SSO solve each), "
-         "the library route to EBSCOhost, then the Zotero Connector."),
+         "the library route to EBSCOhost, then the Zotero Connector. Attended: "
+         "relay its prompts from the control file."),
     Mode("connector", True, ("--sources", "connector", "--control-file", CONTROL,
                              "--progress-json", PROGRESS),
          "", True, "Zotero Connector over the library link resolver only."),
+    Mode("unattended", True, ("--unattended", "run", "--browser-workers", "4",
+                              "--progress-json", UNATTENDED_PROGRESS),
+         "start_pdf_unattended_setup, start_pdf_unattended_run", True,
+         "The browser pass as a long unattended run: setup with the user "
+         "(consent, one solve per publisher, Connector hosts confirmed), then "
+         "the run with nobody — whatever needs a person is deferred to manual."),
     Mode("manual", True, ("--manual", "next"), "pdf_manual_next, pdf_manual_collect",
          False, "Manual download in batches: the user downloads, the plugin "
                 "opens the tabs, collects and attaches."),
@@ -224,6 +244,10 @@ def validate(strategy: dict) -> None:
         if mode in seen:
             raise StrategyError(f"mode {mode!r} appears twice in the order")
         seen.add(mode)
+        if mode == "unattended" and not strategy.get("unattended_possible", False):
+            raise StrategyError(
+                "an unattended step needs the user's say-so that an unattended "
+                "run can be left going (--unattended yes)")
         if step.get("status", "pending") not in STATUSES:
             raise StrategyError(f"{mode}: unknown status {step.get('status')!r}")
     policy = strategy.get("policy") or {}
@@ -337,10 +361,25 @@ def next_step(strategy: dict) -> dict | None:
     return None
 
 
-def command_for(strategy: dict, mode: str) -> list[str]:
-    """The terminal invocation of one step, as a token list."""
+def unattended_phase(state_path: Path = UNATTENDED_STATE) -> str:
+    """`setup` until `enrich_pdfs.py --unattended setup` has recorded a
+    finished setup, then `run`."""
+    try:
+        state = json.loads(Path(state_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "setup"
+    finished = (state.get("setup") or {}).get("finished") if isinstance(state, dict) else ""
+    return "run" if finished else "setup"
+
+
+def command_for(strategy: dict, mode: str, *, phase: str = "") -> list[str]:
+    """The terminal invocation of one step, as a token list. For
+    `unattended`, `phase` picks setup or run (default: the next one)."""
     spec = MODES[mode]
     args = list(spec.args)
+    if mode == "unattended" and (phase or unattended_phase()) == "setup":
+        args = ["--unattended", "setup", "--control-file", CONTROL,
+                "--progress-json", UNATTENDED_PROGRESS]
     modes = [s["mode"] for s in strategy["steps"]]
     policy = strategy.get("policy") or {}
     if mode == "api" and "paid" in modes:
@@ -354,24 +393,79 @@ def command_for(strategy: dict, mode: str) -> list[str]:
         args.append("--user")
     elif library.startswith("group:"):
         args += ["--group", library.split(":", 1)[1]]
-    if strategy.get("institution") and mode in ("browser", "connector", "manual"):
+    if strategy.get("institution") and mode in ("browser", "connector", "unattended",
+                                                 "manual"):
         args += ["--library", strategy["institution"]]
     if strategy.get("scope_keys_file"):
         args += ["--filter-keys-file", strategy["scope_keys_file"]]
     return [ENRICH, *args]
 
 
+def tool_for(strategy: dict, mode: str, *, phase: str = "") -> tuple[str, dict]:
+    """(MCP tool, its arguments) for one step — what the skill calls, so it
+    never composes them. ("", {}) where no tool runs the mode (the attended
+    browser and Connector passes: the agent relays their control file)."""
+    modes = [s["mode"] for s in strategy["steps"]]
+    policy = strategy.get("policy") or {}
+    by_strategy = policy.get("where") == "strategy"
+    out: dict = {}
+    library = strategy.get("library", "")
+    if library == "user":
+        out["user"] = True
+    elif library.startswith("group:"):
+        out["group"] = library.split(":", 1)[1]
+    if strategy.get("scope_keys_file"):
+        out["filter_keys_file"] = strategy["scope_keys_file"]
+    if mode == "api":
+        if by_strategy:
+            out["min_version"] = str(policy.get("min_version", "accepted"))
+        # Paying inside the cascade is a cost the tool's effect class must
+        # say; with `paid` a step of its own the cascade runs --paid off.
+        paid_inside = "paid" not in modes and str(policy.get("paid", "prefer")) != "off"
+        if not paid_inside:
+            return "start_enrich_pdfs", out
+        out["scope"] = (f"cascade_{policy.get('paid', 'prefer')}" if by_strategy
+                        else "cascade")
+        return "start_enrich_pdfs_paid", out
+    if mode == "paid":
+        out["scope"] = "paid_only"
+        return "start_enrich_pdfs_paid", out
+    if mode == "unattended":
+        if by_strategy:
+            out["min_version"] = str(policy.get("min_version", "accepted"))
+        if strategy.get("institution"):
+            out["institution"] = [strategy["institution"]]
+        name = ("start_pdf_unattended_setup"
+                if (phase or unattended_phase()) == "setup"
+                else "start_pdf_unattended_run")
+        return name, out
+    if mode == "manual":
+        return "pdf_manual_next", out
+    return "", {}
+
+
 def describe_step(strategy: dict, step: dict) -> dict:
     spec = MODES[step["mode"]]
-    blocked = spec.needs_user and not strategy.get("user_present", False)
+    needs_user = spec.needs_user
+    extra: dict = {}
+    if step["mode"] == "unattended":
+        # The setup phase needs the user; the run needs nobody.
+        phase = unattended_phase()
+        needs_user = phase == "setup"
+        extra["phase"] = phase
+    blocked = needs_user and not strategy.get("user_present", False)
+    tool, tool_args = tool_for(strategy, step["mode"], phase=extra.get("phase", ""))
     return {
         **step,
-        "needs_user": spec.needs_user,
+        **extra,
+        "needs_user": needs_user,
         "blocked_until_user_present": blocked,
-        "tool": spec.tool,
+        "tool": tool or spec.tool,
+        "tool_arguments": tool_args,
         "background": spec.background,
         "what": spec.what,
-        "command": " ".join(command_for(strategy, step["mode"])),
+        "command": " ".join(command_for(strategy, step["mode"],
+                                        phase=extra.get("phase", ""))),
     }
 
 
@@ -451,12 +545,14 @@ def _print_view(v: dict) -> None:
     if nxt is None:
         print("  All steps finished. Run the audit and diagnose what is left.")
     else:
-        print(f"  Next: {nxt['mode']} — {nxt['what']}")
+        phase = f" ({nxt['phase']} phase)" if nxt.get("phase") else ""
+        print(f"  Next: {nxt['mode']}{phase} — {nxt['what']}")
         if nxt["blocked_until_user_present"]:
             print("  This step needs the user at the keyboard; they said they "
                   "are not. Ask before starting it.")
         if nxt["tool"]:
-            print(f"  MCP tool: {nxt['tool']}")
+            print(f"  MCP tool: {nxt['tool']} "
+                  f"{json.dumps(nxt.get('tool_arguments') or {})}")
         print(f"  Command: {nxt['command']}")
     print("STRATEGY_JSON: " + json.dumps(v, ensure_ascii=False))
 

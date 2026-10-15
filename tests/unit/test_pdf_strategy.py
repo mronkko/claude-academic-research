@@ -206,3 +206,71 @@ def test_policy_refuses_a_bad_value(tmp_path, capsys) -> None:
     (tmp_path / "screening_config.py").write_text("", encoding="utf-8")
     with pytest.raises(SystemExit):
         ps.main(["policy", "--paid", "always"])
+
+
+# ---------------------------------------------------------------------------
+# The unattended mode (build step 6) and the enrich_pdfs job tools
+# ---------------------------------------------------------------------------
+
+def _finish_setup(tmp_path) -> None:
+    path = tmp_path / ps.UNATTENDED_STATE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"version": 1, "setup": {
+        "started": "2026-10-15T10:00:00+00:00",
+        "finished": "2026-10-15T10:20:00+00:00"}}), encoding="utf-8")
+
+
+def test_unattended_step_needs_the_users_say_so(tmp_path, capsys) -> None:
+    _plan(tmp_path)
+    assert ps.main(["init", "--order", "api,unattended,manual", "--present", "yes"]) == 2
+    assert "unattended run can be left going" in capsys.readouterr().err
+    assert ps.main(["init", "--order", "api,unattended,manual", "--present", "yes",
+                    "--unattended", "yes"]) == 0
+    # …and the say-so cannot be withdrawn under a strategy that rests on it.
+    assert ps.main(["update", "--unattended", "no"]) == 2
+
+
+def test_unattended_setup_needs_the_user_and_the_run_does_not(tmp_path, capsys) -> None:
+    _plan(tmp_path)
+    ps.main(["init", "--order", "unattended,manual", "--present", "no",
+             "--unattended", "yes"])
+    nxt = _view(capsys)["next"]
+    assert nxt["phase"] == "setup" and nxt["needs_user"] is True
+    assert nxt["blocked_until_user_present"] is True
+    assert nxt["tool"] == "start_pdf_unattended_setup"
+    assert "--unattended setup --control-file" in nxt["command"]
+    _finish_setup(tmp_path)
+    ps.main(["show"])
+    nxt = _view(capsys)["next"]
+    assert nxt["phase"] == "run" and nxt["needs_user"] is False
+    assert nxt["blocked_until_user_present"] is False      # user away: fine
+    assert nxt["tool"] == "start_pdf_unattended_run"
+    assert nxt["tool_arguments"] == {"group": "9"}
+    assert "--unattended run" in nxt["command"]
+    assert "--control-file" not in nxt["command"]
+
+
+def test_attended_browser_still_needs_the_user_even_if_unattended_is_possible(
+    tmp_path, capsys,
+) -> None:
+    _plan(tmp_path)
+    ps.main(["init", "--order", "browser", "--present", "no", "--unattended", "yes"])
+    nxt = _view(capsys)["next"]
+    assert nxt["needs_user"] is True and nxt["blocked_until_user_present"] is True
+
+
+def test_api_and_paid_steps_name_their_job_tools(tmp_path, capsys) -> None:
+    _plan(tmp_path)
+    ps.main(["init", "--order", "api,paid,manual", "--present", "yes"])
+    strategy = ps.load()
+    assert ps.tool_for(strategy, "api") == ("start_enrich_pdfs", {"group": "9"})
+    assert ps.tool_for(strategy, "paid") == ("start_enrich_pdfs_paid",
+                                             {"group": "9", "scope": "paid_only"})
+    # Paying inside the cascade: the tool that says it costs money.
+    ps.main(["init", "--order", "api,manual", "--present", "yes", "--force"])
+    assert ps.tool_for(ps.load(), "api") == ("start_enrich_pdfs_paid",
+                                             {"group": "9", "scope": "cascade"})
+    ps.main(["init", "--order", "api,manual", "--present", "yes", "--force",
+             "--paid", "off", "--policy-where", "strategy"])
+    assert ps.tool_for(ps.load(), "api") == ("start_enrich_pdfs",
+                                             {"group": "9", "min_version": "accepted"})
