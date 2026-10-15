@@ -124,7 +124,8 @@ def test_initialize_then_tools_list(project, stub, tmp_path) -> None:
     names = [t["name"] for t in tools]
     assert names == [
         "check_setup", "scaffold_project", "enrich_pdfs_plan",
-        "enrich_pdfs_report", "screening_report", "audit_library",
+        "enrich_pdfs_report", "pdf_manual_next", "pdf_manual_collect",
+        "pdf_manual_assign", "pdf_manual_ignore", "screening_report", "audit_library",
         "export_coded_includes", "generate_bib",
         "start_search", "start_import", "start_enrich_abstracts",
         "start_enrich_dois", "start_abstract_screen", "start_fulltext_code",
@@ -355,3 +356,54 @@ def test_real_scaffold_project(project, tmp_path) -> None:
     # Re-running is a no-op that overwrites nothing.
     assert p2["summary"]["copied_templates"] == []
     assert p2["summary"]["kept_existing"] == len(p1["summary"]["copied_templates"])
+
+
+# --- manual PDF download tools ----------------------------------------------
+
+MANUAL_OUTPUT = (
+    "Manual download — next:\n"
+    "  Unmatched 1 — NOT attached; tell me which item each is:\n"
+    "    random.pdf: no DOI, title or file-name hint matches\n"
+    "MANUAL: action=next opened=25 batch=3 login_first=0 collected=7 "
+    "in_progress=1 attached=5 duplicates=1 rejected=0 below_policy=0 "
+    "unmatched=1 remaining=120 unopened=95\n"
+)
+
+
+def test_pdf_manual_next_argv_and_summary(project, stub, tmp_path) -> None:
+    record = tmp_path / "rec"
+    [reply] = _session(
+        [_call(1, "pdf_manual_next", {"group": "123", "batch_size": "10",
+                                      "institution": ["aalto"]})],
+        _env(project, [sys.executable, str(stub)], record, output=MANUAL_OUTPUT))
+    [run] = _records(record)
+    assert run["argv"][1:] == ["--manual", "next", "--group", "123",
+                               "--library", "aalto", "--batch-size", "10"]
+    payload = _payload(reply)
+    assert payload["summary"]["attached"] == 5
+    assert payload["summary"]["unmatched_files"] == ["random.pdf"]
+    assert "output/pdf_staging/unmatched.json" in payload["artifacts"]
+
+
+def test_pdf_manual_assign_confines_the_file(project, stub, tmp_path) -> None:
+    record = tmp_path / "rec"
+    staged = project / "output" / "pdf_staging" / "batch-1"
+    staged.mkdir(parents=True)
+    (staged / "x.pdf").write_bytes(b"%PDF")
+    _session([_call(1, "pdf_manual_assign", {
+        "file": "output/pdf_staging/batch-1/x.pdf", "item_key": "ABCD1234"})],
+        _env(project, [sys.executable, str(stub)], record))
+    [run] = _records(record)
+    assert run["argv"][1:] == [
+        "--manual", "assign", "--assign-file",
+        str((staged / "x.pdf").resolve()), "--assign-item", "ABCD1234"]
+    [reply] = _session([_call(2, "pdf_manual_assign", {
+        "file": "/etc/passwd", "item_key": "ABCD1234"})],
+        _env(project, [sys.executable, str(stub)], record))
+    assert "outside the project" in json.dumps(reply)
+
+
+def test_pdf_manual_batch_size_must_be_a_number(project, stub, tmp_path) -> None:
+    [reply] = _session([_call(1, "pdf_manual_next", {"batch_size": "lots"})],
+                       _env(project, [sys.executable, str(stub)], tmp_path / "rec"))
+    assert "does not match" in json.dumps(reply)

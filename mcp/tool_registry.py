@@ -334,6 +334,24 @@ def summarise_bib(out: str, rc: int, project: Path) -> tuple[dict, list[str]]:
     return summary, artifacts
 
 
+def summarise_pdf_manual(out: str, rc: int, project: Path) -> tuple[dict, list[str]]:
+    """The fixed `MANUAL: key=value …` line `manual_pdfs` prints, plus the
+    names of files waiting for the user to say which item they are."""
+    m = re.search(r"^MANUAL: (.+)$", out, re.MULTILINE)
+    summary: dict = {}
+    if m:
+        for pair in m.group(1).split():
+            key, _, value = pair.partition("=")
+            summary[key] = int(value) if value.isdigit() else value
+    unmatched = re.findall(r"^    (\S.*?\.pdf): ", out, re.MULTILINE)
+    if unmatched:
+        summary["unmatched_files"] = unmatched
+    artifacts = []
+    if summary.get("unmatched"):
+        artifacts.append("output/pdf_staging/unmatched.json")
+    return summary, artifacts
+
+
 # ---------------------------------------------------------------------------
 # The tools
 # ---------------------------------------------------------------------------
@@ -436,6 +454,118 @@ ENRICH_PDFS_REPORT = Tool(
     ),
     fixed=("--report",),
     summarise=summarise_pdf_report,
+)
+
+MANUAL_NOTE = (
+    " The user downloads in their own browser; nothing is guessed: a file "
+    "that matches no item, or several, is listed (unmatched_files, and "
+    "output/pdf_staging/unmatched.json) for the user to assign with "
+    "pdf_manual_assign."
+)
+INSTITUTION = Param(
+    "institution", "Follow only this institution's link-resolver routes (a "
+    "label from the run banner, e.g. 'aalto'); repeatable. Maps to --library.",
+    kind="repeat", flag="--library",
+)
+
+PDF_MANUAL_NEXT = Tool(
+    name="pdf_manual_next",
+    title="Manual PDF download: next batch",
+    effect=WRITES_ZOTERO,
+    description=(
+        "Opens browser tabs. One manual-download cycle: opens the next batch "
+        "of articles still without a PDF in the user's default browser "
+        "(library route, else doi.org), then moves the PDFs the user "
+        "downloaded for the previous batch out of their Downloads folder, "
+        "matches them to items and attaches them (tag pdf:manual). Run it "
+        "when the user says they are done with the open tabs. If the "
+        "summary says login_first=1, only a sign-in tab opened; the rest "
+        "open on the next call." + MANUAL_NOTE
+    ),
+    script="scripts/pipelines/enrich_pdfs.py",
+    params=(
+        *LIBRARY_ARGS, FILTER_KEYS, INSTITUTION,
+        Param("batch_size", "Tabs to open (default: [pdf] manual_batch_size, "
+              "else 25).", kind="option", flag="--batch-size",
+              pattern=r"^[1-9][0-9]{0,2}$"),
+    ),
+    fixed=("--manual", "next"),
+    timeout=600,
+    read_only=False,
+    idempotent=False,
+    open_world=True,
+    exclusive=(("group", "user"),),
+    summarise=summarise_pdf_manual,
+)
+
+PDF_MANUAL_COLLECT = Tool(
+    name="pdf_manual_collect",
+    title="Manual PDF download: collect",
+    effect=WRITES_ZOTERO,
+    description=(
+        "Finishes a manual-download session without opening more tabs: "
+        "moves the PDFs downloaded since the last batch opened out of the "
+        "Downloads folder, matches them to items and attaches them (tag "
+        "pdf:manual)." + MANUAL_NOTE
+    ),
+    script="scripts/pipelines/enrich_pdfs.py",
+    params=(*LIBRARY_ARGS, FILTER_KEYS),
+    fixed=("--manual", "collect"),
+    timeout=600,
+    read_only=False,
+    idempotent=False,
+    open_world=True,
+    exclusive=(("group", "user"),),
+    summarise=summarise_pdf_manual,
+)
+
+PDF_MANUAL_ASSIGN = Tool(
+    name="pdf_manual_assign",
+    title="Manual PDF download: assign a file",
+    effect=WRITES_ZOTERO,
+    description=(
+        "Attaches one downloaded file that the manual-download cycle could "
+        "not match, to the item the user names. Only on the user's say-so — "
+        "never pick the item yourself."
+    ),
+    script="scripts/pipelines/enrich_pdfs.py",
+    params=(
+        Param("file", "The staged file, as listed in unmatched_files or "
+              "output/pdf_staging/unmatched.json.", kind="option",
+              flag="--assign-file", required=True, path=True),
+        Param("item_key", "The Zotero item key the user says the file is.",
+              kind="option", flag="--assign-item", required=True,
+              pattern=r"^[A-Z0-9]{8}$"),
+        *LIBRARY_ARGS,
+    ),
+    fixed=("--manual", "assign"),
+    timeout=300,
+    read_only=False,
+    idempotent=False,
+    open_world=True,
+    exclusive=(("group", "user"),),
+    summarise=summarise_pdf_manual,
+)
+
+PDF_MANUAL_IGNORE = Tool(
+    name="pdf_manual_ignore",
+    title="Manual PDF download: ignore a file",
+    effect=WRITES_PROJECT,
+    description=(
+        "Marks a downloaded file the user says belongs to no item, so the "
+        "manual-download cycle stops listing it. The file stays in "
+        "output/pdf_staging/."
+    ),
+    script="scripts/pipelines/enrich_pdfs.py",
+    params=(
+        Param("file", "The staged file, as listed in unmatched_files.",
+              kind="option", flag="--assign-file", required=True, path=True),
+        *LIBRARY_ARGS,
+    ),
+    fixed=("--manual", "ignore"),
+    read_only=False,
+    open_world=True,
+    exclusive=(("group", "user"),),
 )
 
 SCREENING_REPORT = Tool(
@@ -849,6 +979,10 @@ TOOLS: tuple[Tool, ...] = (
     SCAFFOLD_PROJECT,
     ENRICH_PDFS_PLAN,
     ENRICH_PDFS_REPORT,
+    PDF_MANUAL_NEXT,
+    PDF_MANUAL_COLLECT,
+    PDF_MANUAL_ASSIGN,
+    PDF_MANUAL_IGNORE,
     SCREENING_REPORT,
     AUDIT_LIBRARY,
     EXPORT_CODED_INCLUDES,
