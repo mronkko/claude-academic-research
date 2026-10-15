@@ -134,16 +134,12 @@ Walk the target document and extract three lists:
 
 ### 3. Verify cited claims (per-citation parallel dispatch)
 
-**REQUIRED SUB-SKILLS:**
-
-- `verifying-citations` — defines the staged resolve-then-abstract-then-
-  fulltext rule, the VERIFIED / MINOR / MAJOR / UNVERIFIABLE
-  classification, the always-escalate triggers (quoted passages,
-  specific statistics, method details, subgroup findings), the
-  multiple-mentions handling, and the cross-mention consistency check.
-  Every dispatched subagent loads it.
-- `superpowers:dispatching-parallel-agents` — the pattern for fanning
-  work out to subagents in a single assistant message.
+**REQUIRED SUB-SKILL: verifying-citations** — defines the staged
+resolve-then-abstract-then-fulltext rule, the VERIFIED / MINOR / MAJOR /
+UNVERIFIABLE classification, the always-escalate triggers (quoted
+passages, specific statistics, method details, subgroup findings), the
+multiple-mentions handling, and the cross-mention consistency check.
+Every dispatched subagent loads it.
 
 **Decide audit scope** (once, before dispatching):
 
@@ -158,9 +154,10 @@ Walk the target document and extract three lists:
   references. Record `n` of `total_unique` in the first line of the
   output.
 
-**Dispatch.** In a single assistant message, launch **one `Agent`
-per unique citation** with `subagent_type="general-purpose"`. Each
-subagent receives:
+**Dispatch.** Launch **one `Agent` per unique citation** with
+`subagent_type="general-purpose"`, and **send all per-citation `Agent`
+calls in a single message so they run in parallel** — calls spread over
+several messages run one after another. Each subagent receives:
 
 - The citation identifier — `@citekey` for rendered docs, the
   Author-Year surface form for console mode — and **every mention of
@@ -344,8 +341,8 @@ procedure.)
   report file in file mode. Mode is decided in Step 1; do not switch
   mid-run.
 - You are about to dispatch citation checks sequentially instead of in
-  one parallel `Agent`-call batch — re-read
-  `superpowers:dispatching-parallel-agents`.
+  one parallel batch — put every per-citation `Agent` call in a single
+  message.
 - You are about to read `~/.config/academic-research/config.toml` via
   `cat`, `head`, `tail`, `grep`, `less`, `more`, `awk`, `sed`, a
   Python script, or any other command. **NEVER read that file.** It
