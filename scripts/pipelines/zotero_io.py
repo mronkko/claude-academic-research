@@ -1630,12 +1630,9 @@ class ZoteroClient:
 
         return note_key
 
-    @retry(
-        stop=stop_after_attempt(3),
-        retry=retry_if_exception(_is_retryable_upload_error),
-        wait=wait_exponential(multiplier=1, max=10),
-        reraise=True,
-    )
+    #: Upload attempts per PDF, the first included.
+    UPLOAD_ATTEMPTS = 3
+
     def attach_pdf(self, item_key: str, pdf_path: str | Path) -> str | None:
         """Upload a PDF as a child attachment of `item_key`.
 
@@ -1684,10 +1681,22 @@ class ZoteroClient:
         ended up in each bucket.
 
         Retries transient transport / 429 / 5xx failures (see
-        `_is_retryable_upload_error`). A live run once lost 48
+        `_is_transient_write_error`). A live run once lost 48
         successfully-downloaded PDFs here because a single unretried
         upload blip was terminal for the item; the bytes were still on
         disk, but nothing ever tried again.
+
+        **A retry reuses the attachment item the first attempt created.**
+        `Zupload` writes the new key into the template dict it was handed,
+        and skips item creation when the template already carries one, so
+        handing the same dict back resumes at the auth / PUT step. The
+        retry used to start from a fresh template, creating one more
+        file-less attachment per attempt; `pdf_map` read those as real
+        for its one-hour grace window (so a rerun skipped the parent) and
+        as stubs after it. If every attempt fails, the item that was
+        created is checked: bytes that did land after all (an answer lost
+        in transit) make it a success; otherwise it is moved to the trash
+        so it cannot pose as a PDF, and the error is raised.
         """
         path = Path(pdf_path)
         # Refuse to upload a file that cannot be a PDF. Zotero accepts a
@@ -1707,9 +1716,36 @@ class ZoteroClient:
         template = dict(_IMPORTED_FILE_TEMPLATE)
         template["title"] = path.name
         template["filename"] = path.name
-        result = Zupload(
-            self._upload_client(), [template], item_key, basedir=path.parent,
-        ).upload()
+        z = self._upload_client()
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                result = Zupload(
+                    z, [template], item_key, basedir=path.parent,
+                ).upload()
+                break
+            except Exception as exc:
+                if (attempt < self.UPLOAD_ATTEMPTS
+                        and _is_transient_write_error(exc)):
+                    logger.warning(
+                        "attach_pdf: %s upload failed (%s: %s); retrying "
+                        "(attempt %d of %d)", item_key, type(exc).__name__,
+                        exc, attempt + 1, self.UPLOAD_ATTEMPTS,
+                    )
+                    _write_sleep(min(2 ** (attempt - 1), 10))
+                    continue
+                created = template.get("key")
+                if created and self._upload_landed(z, created):
+                    logger.info(
+                        "attach_pdf: %s — %s holds the bytes although the "
+                        "upload reported %s", item_key, created,
+                        type(exc).__name__,
+                    )
+                    return str(created)
+                if created:
+                    self._discard_fileless_attachment(z, created)
+                raise
 
         # `unchanged` is NOT a no-op, and reading it as one misreports the
         # library. `Zupload` creates the attachment item first, on every
@@ -1747,6 +1783,36 @@ class ZoteroClient:
 
         failure = result.get("failure") or []
         raise RuntimeError(f"attach_pdf failed for {item_key}: {failure!r}")
+
+    @staticmethod
+    def _upload_landed(z, attachment_key: str) -> bool:
+        """Whether `attachment_key` holds bytes (has an md5) on `z`."""
+        try:
+            item = z.item(attachment_key)
+        except Exception:  # noqa: BLE001 — unknown is not "landed"
+            return False
+        return bool((item.get("data") or {}).get("md5"))
+
+    def _discard_fileless_attachment(self, z, attachment_key: str) -> None:
+        """Trash the attachment item a failed upload left without a file.
+
+        Best effort: the upload error is what the caller needs to see, so
+        a failure here is logged, never raised over it. Trash rather than
+        delete, so nothing is unrecoverable if the guess is wrong.
+        """
+        try:
+            status = self._set_deleted(attachment_key, 1, client=z)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "attach_pdf: could not trash file-less attachment %s: %s",
+                attachment_key, exc,
+            )
+            return
+        if status not in (200, 204):
+            logger.warning(
+                "attach_pdf: trashing file-less attachment %s returned "
+                "HTTP %s", attachment_key, status,
+            )
 
     def update_item(self, payload: dict) -> bool:
         """Generic item PATCH (used by import_to_zotero for bulk field updates).
@@ -2036,7 +2102,7 @@ class ZoteroClient:
                 data.pop(field, None)
             client.update_item(item)
 
-    def _set_deleted(self, item_key: str, deleted: int) -> int:
+    def _set_deleted(self, item_key: str, deleted: int, *, client=None) -> int:
         """PATCH `{"deleted": 0|1}` on the write surface; returns the HTTP
         status. Hand-built because pyzotero rejects `deleted` as an
         invalid field.
@@ -2054,8 +2120,14 @@ class ZoteroClient:
         the missing header, which is why it went unnoticed.
         """
         from pyzotero.zotero import build_url
-        local = self.local_writes_enabled
-        z = self._write_client()
+        if client is None:
+            local = self.local_writes_enabled
+            z = self._write_client()
+        else:
+            # An explicit surface: `attach_pdf` cleaning up on the upload
+            # client, which is the cloud even when writes go local.
+            z = client
+            local = getattr(z, "local", False) is True
         latest = z.item(item_key)
         url = build_url(
             z.endpoint, f"/{z.library_type}/{z.library_id}/items/{item_key}",
