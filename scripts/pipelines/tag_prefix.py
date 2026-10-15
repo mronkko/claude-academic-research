@@ -21,7 +21,7 @@ and is mandatory.
 **What is deliberately NOT namespaced.** Tags that state a fact about the
 *item* rather than a judgement about it — ``predatory:flag``,
 ``retracted:flag``, ``pdf:tdm-recovered``, ``pdf:preprint-version``,
-``pdf:repository-copy``. Those are true regardless of who is reviewing the
+``pdf:repository-copy``, ``pdf:version:*``. Those are true regardless of who is reviewing the
 paper, so two reviews sharing an item should share them rather than each
 stamping a private copy. The practical corollary is that ``enrich_pdfs.py``
 and ``enrich_dois.py`` stay library-wide and need no prefix at all.

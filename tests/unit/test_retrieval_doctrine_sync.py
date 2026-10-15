@@ -96,7 +96,9 @@ def test_only_unavailable_justifies_the_unavailable_tag() -> None:
 #: written with a namespace it must not have.
 _TAG = re.compile(
     r"`(<prefix>/)?"
-    r"(fulltext:[a-z*-]+|abstract:[a-z*-]+|pdf:[a-z*-]+|qa-[a-z*-]+"
+    # `pdf:` takes an optional second `:segment` for `pdf:version:*`,
+    # which the single-segment form could not see at all.
+    r"(fulltext:[a-z*-]+|abstract:[a-z*-]+|pdf:[a-z*-]+(?::[a-z*-]+)?|qa-[a-z*-]+"
     r"|predatory:flag|retracted:flag)`"
 )
 
@@ -114,6 +116,7 @@ NAMESPACED_FAMILIES = ("abstract:", "fulltext:", "qa-")
 GLOBAL_TAGS = {
     "predatory:flag", "retracted:flag",
     "pdf:tdm-recovered", "pdf:preprint-version", "pdf:repository-copy",
+    "pdf:version:published", "pdf:version:accepted", "pdf:version:submitted",
 }
 
 #: Every retrieval/stage tag the plugin defines, in bare form (the
@@ -224,10 +227,12 @@ def test_known_tags_covers_every_pdf_tag_in_code() -> None:
     the list, and the next skill to document the tag fails the build for
     the wrong reason."""
     from fetchers.core import REPOSITORY_COPY_TAG
+    from fetchers.pdf_version import VERSION_TAGS
     from fetchers.preprint import PREPRINT_VERSION_TAG
     from fetchers.sciencedirect import TDM_RECOVERED_TAG
 
-    in_code = {REPOSITORY_COPY_TAG, PREPRINT_VERSION_TAG, TDM_RECOVERED_TAG}
+    in_code = {REPOSITORY_COPY_TAG, PREPRINT_VERSION_TAG, TDM_RECOVERED_TAG,
+               *VERSION_TAGS}
     assert in_code <= KNOWN_TAGS, (
         f"code defines pdf tag(s) missing from KNOWN_TAGS: "
         f"{in_code - KNOWN_TAGS}"

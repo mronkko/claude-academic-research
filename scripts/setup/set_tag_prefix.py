@@ -64,6 +64,7 @@ GLOBAL_TAGS: tuple[str, ...] = (
     "pdf:tdm-recovered",
     "pdf:preprint-version",
     "pdf:repository-copy",
+    "pdf:version:published|accepted|submitted",
 )
 
 
