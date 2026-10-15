@@ -5,6 +5,7 @@
 #     "pyzotero>=1.15.1",
 #     "requests>=2.31",
 #     "tenacity>=8.0",
+#     "urllib3>=2.0",
 #     "httpx>=0.25",
 #     "zotero-mcp-server>=0.9,<0.10",
 # ]
@@ -70,6 +71,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from pathlib import Path
 from urllib.parse import quote
 
@@ -81,7 +83,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
 from core.config_loader import require  # noqa: E402
 
 try:
-    import requests  # noqa: F401  # imported for the availability check below
+    import requests
 except ImportError:
     sys.exit(
         "ERROR: dependencies not available. Run via `uv run`; the PEP 723 "
@@ -647,8 +649,15 @@ def build_item(
 
 
 def _title_author_key(title: str, authors) -> str:
-    """Normalised 'title|first_author_lastname' for fuzzy dedup."""
+    """Normalised 'title|first_author_lastname' for fuzzy dedup.
+
+    Empty when the title is: `"|smith"` (or `"|"` with no author either)
+    used to be a key, so every untitled row by the same first author —
+    or every untitled row at all — collapsed into one item.
+    """
     t = re.sub(r"\W+", " ", (title or "").lower()).strip()
+    if not t:
+        return ""
     first_last = ""
     if isinstance(authors, list) and authors:
         first_last = (
@@ -657,6 +666,11 @@ def _title_author_key(title: str, authors) -> str:
     elif isinstance(authors, str) and authors:
         first_last = authors.split(";")[0].split(",")[0].strip().lower()
     return f"{t}|{first_last}"
+
+
+def _dois_conflict(a: str, b: str) -> bool:
+    """True when both DOIs are present and differ (both already keyed)."""
+    return bool(a and b and a != b)
 
 
 #: True when a dry run could not read the library, so the "already in
@@ -760,14 +774,14 @@ def _patch_existing_items(
     to_add: list[tuple[str, str]],
     zot: zotero_io.ZoteroClient,
     collection_key: str | None,
-) -> None:
+) -> int:
     """Patch existing items to add missing abstracts and/or collection
     membership. Uses ZoteroClient.update_item (pyzotero) — the custom
     If-Unmodified-Since-Version requests.patch() that used to live here
-    is gone.
+    is gone. Returns the number of items whose patch failed.
     """
     if not to_add:
-        return
+        return 0
     # Same backend as `_fetch_existing_items`, for the same reason —
     # plus these patches carry an item `version`, and a stale local one
     # is rejected by the API's If-Unmodified-Since-Version check.
@@ -776,9 +790,19 @@ def _patch_existing_items(
     all_items = zot.cloud_journal_articles()
     item_by_key = {it["key"]: it for it in all_items}
 
+    # Several rows can resolve to one existing item (a DOI hit and a
+    # title hit, or the same paper from two databases). Patching it once
+    # per row sent the second PATCH with the version the first had just
+    # superseded; Zotero answered 412 and the import aborted. One patch
+    # per item, carrying the first non-empty abstract.
+    abstract_by_key: dict[str, str] = {}
+    for item_key, abstract in to_add:
+        if not abstract_by_key.get(item_key):
+            abstract_by_key[item_key] = abstract
+
     need_patch: list[tuple[str, int, dict]] = []
     abstract_patched = 0
-    for item_key, abstract in to_add:
+    for item_key, abstract in abstract_by_key.items():
         item = item_by_key.get(item_key)
         if not item:
             continue
@@ -797,11 +821,17 @@ def _patch_existing_items(
     print(f"  Items needing patch: {len(need_patch)} "
           f"(abstracts to backfill: {abstract_patched}).", flush=True)
 
+    failed = 0
     for i, (item_key, version, patch) in enumerate(need_patch, 1):
         if i % 50 == 0 or i == len(need_patch):
             print(f"  [{i}/{len(need_patch)}] patching...", flush=True)
-        zot.update_item({"key": item_key, "version": version, **patch})
+        try:
+            zot.update_item({"key": item_key, "version": version, **patch})
+        except Exception as exc:  # noqa: BLE001 — one item must not sink the import
+            failed += 1
+            print(f"  FAILED to patch {item_key}: {exc}", flush=True)
         time.sleep(0.15)
+    return failed
 
 
 # Universal item-object keys that aren't part of a type's field schema
@@ -835,7 +865,24 @@ def _filter_valid_fields(item: dict) -> tuple[dict, list[str]]:
 def _create_new_items(
     to_create: list[dict],
     zot: zotero_io.ZoteroClient,
+    created_keys: list[str] | None = None,
 ) -> tuple[int, int, list[str]]:
+    """POST `to_create` in batches. Returns `(created, failed, keys)`.
+
+    `created_keys`, when given, is appended to as each batch succeeds, so
+    a caller holding the list still knows what was created if a later
+    batch raises (see `main`'s `--created-keys-out`).
+
+    Every batch carries a fresh `Zotero-Write-Token`. Zotero applies a
+    token at most once and answers a replay with 412, so even a request
+    that reached the server twice cannot create its items twice. The
+    shared session also no longer replays POST on 5xx or read errors
+    (`http_client.VerboseRetry.is_retry`) — only on 429, which Zotero
+    sends instead of applying the write.
+
+    A batch that fails outright (HTTP error, network error) is counted as
+    failed and the remaining batches still run; the caller exits non-zero.
+    """
     filtered_to_create = []
     for item in to_create:
         filtered, rejected = _filter_valid_fields(item)
@@ -854,24 +901,35 @@ def _create_new_items(
         "Content-Type": "application/json",
     }
     created = failed = 0
-    created_keys: list[str] = []
+    if created_keys is None:
+        created_keys = []
     n_batches = (len(to_create) + BATCH_SIZE - 1) // BATCH_SIZE
     # Zotero asks clients to honour `Backoff` / `Retry-After` and returns
     # 429 under load. A bare `requests.post` honours neither, so a single
     # throttled batch used to abort the whole import; the shared session
-    # retries 429/5xx with exponential backoff instead. Retrying this POST
-    # is safe: Zotero rejects a throttled write outright rather than
-    # applying it, and the per-item `success`/`failed` maps below are what
-    # decide the outcome either way.
+    # retries 429 with exponential backoff instead.
     session = http_client.build_session()
     for batch_num, i in enumerate(range(0, len(to_create), BATCH_SIZE), 1):
         batch = to_create[i:i + BATCH_SIZE]
         print(f"  batch {batch_num}/{n_batches} ({len(batch)} items)...", flush=True)
-        resp = session.post(
-            f"{base_url}/items", headers=headers, json=batch, timeout=60,
-        )
-        resp.raise_for_status()
-        result = resp.json()
+        batch_headers = {**headers, "Zotero-Write-Token": uuid.uuid4().hex}
+        try:
+            resp = session.post(
+                f"{base_url}/items", headers=batch_headers, json=batch,
+                timeout=60,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+        except (requests.RequestException, ValueError) as exc:
+            failed += len(batch)
+            print(
+                f"  FAILED batch {batch_num}: {exc}. Its {len(batch)} item(s) "
+                f"may or may not have been written; re-running the import "
+                f"is safe — it finds existing items by DOI and patches them "
+                f"rather than creating them again.",
+                flush=True,
+            )
+            continue
         success = result.get("success", {})
         created += len(success)
         created_keys.extend(str(v) for v in success.values())
@@ -1036,6 +1094,7 @@ def main() -> int:
     collection_key = _resolve_collection(zot, args)
 
     doi_map, title_map = _fetch_existing_items(zot, args.dry_run)
+    doi_by_key = {key: doi for doi, key in doi_map.items()}
 
     to_add: list[tuple[str, str]] = []
     to_create: list[dict] = []
@@ -1063,7 +1122,13 @@ def main() -> int:
             continue
 
         tk = _title_author_key(row.get("title", ""), row.get("authors", ""))
-        if tk and tk in title_map:
+        # A title+first-author match is a fallback for a missing DOI,
+        # never an override of a present one: two rows (or a row and a
+        # library item) carrying *different* DOIs are different works —
+        # a paper and its erratum, a conference and a journal version —
+        # however alike their titles. Merging them lost one silently.
+        if (tk and tk in title_map
+                and not _dois_conflict(doi, doi_by_key.get(title_map[tk], ""))):
             to_add.append((title_map[tk], abstract))
             continue
 
@@ -1074,7 +1139,9 @@ def main() -> int:
                 to_create[idx]["abstractNote"] = abstract
             dropped_within_batch += 1
             continue
-        if tk and tk in batch_title_seen:
+        if tk and tk in batch_title_seen and not _dois_conflict(
+            doi, _normalize_doi_key(to_create[batch_title_seen[tk]].get("DOI") or ""),
+        ):
             idx = batch_title_seen[tk]
             if doi and not to_create[idx].get("DOI"):
                 to_create[idx]["DOI"] = doi
@@ -1096,7 +1163,7 @@ def main() -> int:
         if doi:
             batch_doi_seen[doi] = idx
         if tk:
-            batch_title_seen[tk] = idx
+            batch_title_seen.setdefault(tk, idx)
 
     _print_existing_summary(n_to_add=len(to_add), n_to_create=len(to_create))
     if dropped_within_batch:
@@ -1109,21 +1176,38 @@ def main() -> int:
         print("\n[DRY RUN] No changes written.", flush=True)
         return 0
 
-    _patch_existing_items(to_add, zot, collection_key or None)
+    patch_failed = _patch_existing_items(to_add, zot, collection_key or None)
 
-    created = 0
+    created = failed = 0
     created_keys: list[str] = []
-    if to_create:
-        print(f"\nCreating {len(to_create)} new items...", flush=True)
-        created, failed, created_keys = _create_new_items(to_create, zot)
-        print(f"  Created: {created}  Failed: {failed}", flush=True)
+    try:
+        if to_create:
+            print(f"\nCreating {len(to_create)} new items...", flush=True)
+            created, failed, _ = _create_new_items(
+                to_create, zot, created_keys,
+            )
+            print(f"  Created: {created}  Failed: {failed}", flush=True)
+    finally:
+        # Written even when a batch raises part-way: the keys of the
+        # batches that did succeed are exactly what a caller needs to
+        # clean up, and losing them is how a test harness leaks items.
+        if args.created_keys_out:
+            Path(args.created_keys_out).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.created_keys_out).write_text(
+                "\n".join(created_keys) + ("\n" if created_keys else ""),
+                encoding="utf-8",
+            )
 
-    if args.created_keys_out:
-        Path(args.created_keys_out).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.created_keys_out).write_text(
-            "\n".join(created_keys) + ("\n" if created_keys else ""),
-            encoding="utf-8",
+    if failed or patch_failed:
+        # Exit non-zero: a caller (or an agent) reading only the exit
+        # status used to see success with items missing from Zotero.
+        print(
+            f"\nERROR: {failed} item(s) could not be created and "
+            f"{patch_failed} existing item(s) could not be patched — see "
+            f"the FAILED lines above. Re-running the import is safe.",
+            flush=True,
         )
+        return 1
 
     total = len(to_add) + created
     print(f"\nDone. {total} items now in target collection/library.", flush=True)
