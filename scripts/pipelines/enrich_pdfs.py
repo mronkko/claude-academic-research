@@ -3808,17 +3808,7 @@ def _run_browser_in_process(
     # Pass 4b — single Connector session for whatever is left.
     # ------------------------------------------------------------------
 
-    if connector_items and getattr(args, "dry_run", False):
-        # The Connector's whole mechanism is a save *into Zotero* (then a
-        # merge and a trash), so there is no dry form of it. --dry-run
-        # promises no Zotero writes; skipping is the only way to keep it.
-        print(
-            f"\n  --dry-run: skipping the Zotero Connector for "
-            f"{len(connector_items)} item(s) — it saves into Zotero by "
-            f"design. Re-run without --dry-run to try them.",
-            flush=True,
-        )
-        connector_items = []
+    connector_items = _connector_items_for_run(connector_items, args)
 
     if connector_items:
         connector_handler = ZoteroConnectorHandler(
@@ -4273,6 +4263,72 @@ def _cached_pdf_for(doi: str, cache_dir: str) -> Path | None:
         if path.exists() and _pdf_validate.file_defect(path) is None:
             return path
     return None
+
+
+def _connector_items_for_run(
+    connector_items: list[dict], args: argparse.Namespace,
+) -> list[dict]:
+    """The Connector queue, or nothing under --dry-run.
+
+    The Connector's whole mechanism is a save *into Zotero* (then a merge
+    and a trash), so there is no dry form of it. --dry-run promises no
+    Zotero writes; skipping the pass is the only way to keep that.
+    """
+    if connector_items and getattr(args, "dry_run", False):
+        print(
+            f"\n  --dry-run: skipping the Zotero Connector for "
+            f"{len(connector_items)} item(s) — it saves into Zotero by "
+            f"design. Re-run without --dry-run to try them.",
+            flush=True,
+        )
+        return []
+    return connector_items
+
+
+def _purge_replaced_copies(
+    to_process: list[dict],
+    replace_md5: dict[str, set[str]],
+    cache_dir: str,
+) -> int:
+    """Delete cached files byte-identical to an attachment `--replace` is
+    replacing. Returns how many were removed.
+
+    `--replace` exists because the attached copy is bad. That same copy
+    is usually still in the cache — it is where the attachment came from
+    — and every route reads the cache first: `_attach_from_cache`
+    offered it back, `_attach_and_log` saw identical bytes and logged
+    `unchanged`, and the item was marked done. The flag was a silent
+    no-op for exactly the items it was run for. With the bad bytes gone,
+    the cascade has to fetch a fresh copy.
+
+    Only identical files go. A cached copy that differs from the
+    attachment is a genuine alternative, and attaching it is a
+    replacement.
+    """
+    import hashlib
+
+    from fetchers.cache_names import all_cache_paths
+
+    removed = 0
+    for item in to_process:
+        bad = replace_md5.get(item["key"])
+        if not bad:
+            continue
+        doi = doi_utils.strip_doi_prefixes(
+            (item.get("data", {}).get("DOI") or "").strip()
+        )[0]
+        if not doi:
+            continue
+        for path in all_cache_paths(cache_dir, doi):
+            try:
+                if not path.is_file():
+                    continue
+                if hashlib.md5(path.read_bytes()).hexdigest() in bad:
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                continue
+    return removed
 
 
 def _attach_from_cache(
@@ -4790,6 +4846,16 @@ def main() -> int:
         )
         return 2
 
+    if args.plan and not (browser_modes or args.all):
+        # The API cascade has no read-only form: without this, --plan was
+        # silently ignored and the run downloaded and attached.
+        print(
+            "ERROR: --plan plans the browser pass. Combine it with "
+            "--sources browser, --sources connector or --all.",
+            file=sys.stderr,
+        )
+        return 2
+
     if (browser_modes or args.all) and not args.plan:
         rc = _check_browser_ready()
         if rc:
@@ -4950,11 +5016,25 @@ def main() -> int:
         _print_run_report(args, zot, scope_keys)
         return 0
 
+    # --replace: the bad copy must not be served back from the cache.
+    # Not under --plan, which promises to change nothing.
+    if args.replace and _REPLACE_MD5 and not args.plan:
+        purged = _purge_replaced_copies(to_process, _REPLACE_MD5, args.cache_dir)
+        if purged:
+            print(
+                f"  --replace: dropped {purged} cached copy(ies) identical to "
+                f"the attachment being replaced, so a fresh one is fetched.",
+                flush=True,
+            )
+
     # Recover PDFs already on disk before fetching anything. A fetch that
     # succeeded but whose upload failed leaves a perfectly good file in
     # the cache; nothing used to go back for it, so a live run lost 48
     # PDFs it had already paid to download.
-    if not args.dry_run:
+    #
+    # Never under --plan: this uploads (and under --replace, trashes the
+    # old attachment), and --plan is documented read-only.
+    if not args.dry_run and not args.plan:
         log_fh, log_writer = _open_log(args.log_csv, replace=args.replace)
         try:
             recovered = _attach_from_cache(
@@ -4990,6 +5070,27 @@ def main() -> int:
 
     # --all: run API cascade first, then re-read pdf_map for residuals
     # and run the browser pipeline.
+    if args.all and args.plan:
+        # Pass 1 downloads and attaches; it has no read-only form. Plan
+        # the browser pass over everything Pass 1 would be given — an
+        # upper bound, since a real run hands Pass 2 only its residue.
+        print(
+            "\n--plan: Pass 1 (API cascade) is not run — it downloads and "
+            "attaches. Planning the browser pass over all "
+            f"{len(to_process)} item(s); a real --all run sends it only "
+            "what Pass 1 leaves.",
+            flush=True,
+        )
+        _install_interaction_channel(args)
+        log_fh, log_writer = _open_log(args.log_csv, replace=args.replace)
+        try:
+            return _run_browser_in_process(
+                to_process, zot, log_writer, args, run_date,
+                session=session, config=config, log_fh=log_fh,
+            )
+        finally:
+            log_fh.close()
+
     if args.all:
         print("\n--- Pass 1: API cascade ---", flush=True)
         sources = fetchers.pdf_sources(
