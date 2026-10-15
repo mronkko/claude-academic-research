@@ -157,6 +157,40 @@ def test_none_only_when_no_library_answered(answers) -> None:
     assert LR._query_targets("10.1/x", _cfg(additional_resolvers=(SFX,))) is None
 
 
+def test_one_library_down_and_the_rest_empty_is_could_not_ask(answers) -> None:
+    """An empty answer claims *no* library has a route, which only holds
+    if every library was asked. It used to return [], logged downstream
+    as "no access" — while the unasked library may be the one with it."""
+    table, _ = answers
+    table[ALMA.openurl_base] = None
+    table[SFX.openurl_base] = []
+    assert LR._query_targets("10.1/x", _cfg(additional_resolvers=(SFX,))) is None
+
+
+def test_alma_doi_failure_then_empty_issn_is_not_cached_as_a_miss(
+    tmp_path, monkeypatch,
+) -> None:
+    """The DOI query failed; the weaker ISSN fallback came back empty.
+    That was cached as a 7-day miss, so one transport blip skipped the
+    item for a week."""
+    def fake(url, cfg, doi, resolver=None):
+        return [] if "rft.issn" in url else None
+
+    monkeypatch.setattr(LR, "_fetch_and_parse", fake)
+    cache = LR.ResolverCache(tmp_path)
+    got = LR._query_targets("10.1/x", _cfg(cache=cache), issn="1234-5678")
+    assert got is None
+    key = LR._cache_key("10.1/x", False, ALMA.resolver_id)
+    assert cache.get(key) is None
+
+
+def test_alma_both_queries_empty_is_still_a_cached_miss(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(LR, "_fetch_and_parse", lambda *a, **k: [])
+    cache = LR.ResolverCache(tmp_path)
+    assert LR._query_targets("10.1/x", _cfg(cache=cache), issn="1234-5678") == []
+    assert cache.get(LR._cache_key("10.1/x", False, ALMA.resolver_id)) == []
+
+
 def test_both_answering_empty_is_a_real_no_route(answers) -> None:
     """Distinct from the above: everyone was asked and nobody has it."""
     table, _ = answers

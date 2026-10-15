@@ -721,6 +721,12 @@ def classify_direct_route(
         return "1a-unknown"
     full = _classify_routes(dual, domains, resolver_cfg, pub_date,
                             handler_name, direct_access)
+    if getattr(dual, "query_ok", True) is False and full != "3-in-coverage":
+        # One of the two coverage queries could not be asked, so the
+        # lists are partial: an empty in-range list is a failed question,
+        # not "out of coverage" or "no entitlement". Only a positive
+        # in-coverage route is trustworthy; anything else fails open.
+        return "1a-unknown"
     if resolver_cfg is None or resolver_cfg.active_ids is None:
         return full
     active = replace(

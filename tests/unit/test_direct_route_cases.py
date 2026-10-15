@@ -168,6 +168,27 @@ def test_right_platform_wrong_year_still_diverts(cfg) -> None:
     assert enrich_pdfs.DIRECT_ROUTE_CASES["2-out-of-coverage"] is False
 
 
+def test_a_failed_coverage_query_never_diverts(cfg) -> None:
+    """The pre-flight ignored `query_ok`. With the in-range query failed
+    (empty list) and the any-range one answered, the partial lists read
+    as 1b / 2 and the item skipped its publisher on a failed question."""
+    dual = DualResult(
+        in_range=[], any_range=[EBSCO, PROQUEST], query_ok=False,
+    )
+    assert enrich_pdfs.classify_direct_route(
+        dual, AOM_DOMAINS, cfg, pub_date="2011", handler_name="aom",
+    ) == "1a-unknown"
+
+
+def test_a_positive_route_survives_a_partial_failure(cfg) -> None:
+    dual = DualResult(
+        in_range=[WILEY_1996], any_range=[], query_ok=False,
+    )
+    assert enrich_pdfs.classify_direct_route(
+        dual, WILEY_DOMAINS, cfg, pub_date="2001", handler_name="wiley",
+    ) == "3-in-coverage"
+
+
 def test_every_case_says_whether_to_open_the_publisher() -> None:
     """A new case with no entry would raise KeyError mid-run."""
     for case in ("1a-unknown", "1b-no-entitlement",

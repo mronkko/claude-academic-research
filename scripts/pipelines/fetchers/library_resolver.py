@@ -595,22 +595,25 @@ def _query_targets(
     )
 
     merged: list[FulltextTarget] = []
-    answered = False
+    unasked = False
     for resolver in resolvers:
         one = _query_one(
             resolver, doi, cfg, req,
             ignore_date_threshold=ignore_date_threshold,
         )
         if one is None:
-            continue          # this library could not be asked
-        answered = True
+            unasked = True    # this library could not be asked
+            continue
         merged.extend(one)
 
-    # None only when *no* library answered. One institution being down
-    # must not read as "nobody has this": with several configured, a
-    # partial answer is still an answer, and the alternative is a
-    # transport blip at one library gating access at the other.
-    if not answered:
+    # A route from any library is an answer, even if another was down:
+    # one institution's transport blip must not gate access at the other.
+    # But an *empty* answer is a claim that no library has a route, and
+    # it can only be made if every library was actually asked. With one
+    # down and the rest empty this used to return [], which the callers
+    # log as "no access" (ACCESS_BLOCKED) — while the library that went
+    # unasked may well be the one that licenses it.
+    if not merged and unasked:
         return None
     return _dedupe_targets(merged)
 
@@ -632,18 +635,29 @@ def _query_one(
             return _stamp(cached, resolver)
 
     targets: list[FulltextTarget] | None = None
+    some_query_failed = False
     for url in resolver.query_urls(req):
         result = _fetch_and_parse(url, cfg, doi, resolver)
         if result:
             targets = result
             break
-        if result is not None and targets is None:
+        if result is None:
+            some_query_failed = True
+        elif targets is None:
             # Reached the resolver, which said nothing. Keep the empty
             # list so "no route" stays distinct from "could not ask",
             # but keep trying any remaining query shapes.
             targets = result
 
     if targets is None:
+        return None
+    if not targets and some_query_failed:
+        # Alma: the DOI query failed and the ISSN fallback came back
+        # empty. That empty is the weaker question's answer — an ISSN
+        # query misses aggregator routes the DOI query finds — so it is
+        # not "this library has nothing", and caching it as a miss for
+        # `miss_ttl_s` (7 days) turned one transport blip into a week of
+        # skipped items. Report "could not ask" and cache nothing.
         return None
     # Stamp every route with its library, even with one configured:
     # which login opens a link is never obvious from the link, and a
