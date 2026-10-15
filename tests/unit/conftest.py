@@ -24,18 +24,49 @@ import socket
 import pytest
 
 
-class NetworkAccessInUnitTest(RuntimeError):
-    """A unit test tried to open a socket."""
+class NetworkAccessInUnitTest(BaseException):
+    """A unit test tried to open a socket or resolve a host name.
+
+    A `BaseException`, not an `Exception`: the first version derived from
+    `RuntimeError`, and production code that catches broad exceptions —
+    which network code does on purpose, to degrade gracefully — swallowed
+    it. Three tests reached the network that way and passed. Deriving
+    from `BaseException` gets past `except Exception`; recording every
+    violation and failing at teardown (see `_no_network`) catches the
+    rest, including a bare `except:`.
+    """
+
+
+#: Violations recorded during the current test. Read by `_no_network`'s
+#: teardown; tests that provoke the guard on purpose clear it through the
+#: `network_violations` fixture.
+_VIOLATIONS_KEY = pytest.StashKey[list]()
+
+
+@pytest.fixture
+def network_violations(request: pytest.FixtureRequest) -> list[str]:
+    """The current test's recorded violations, for tests of the guard
+    itself: a test that expects a block clears this list once it has
+    asserted on it, so teardown does not fail it."""
+    return request.node.stash.setdefault(_VIOLATIONS_KEY, [])
 
 
 @pytest.fixture(autouse=True)
 def _no_network(request: pytest.FixtureRequest,
-                monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail any unit test that opens a real connection.
+                monkeypatch: pytest.MonkeyPatch):
+    """Fail any unit test that opens a real connection or resolves a name.
 
-    Patches at `socket.socket.connect`, the chokepoint every HTTP client
-    in this project funnels through — httpx, urllib and requests alike —
-    rather than at each client, so a new dependency cannot slip past it.
+    Patches at the socket layer — `socket.socket.connect`/`connect_ex`/
+    `sendto` and the resolver functions — the chokepoint every HTTP
+    client in this project funnels through (httpx, urllib and requests
+    alike), rather than at each client, so a new dependency cannot slip
+    past it. Name resolution is blocked too: a DNS lookup is network
+    traffic even when nothing connects afterwards, and it goes out over
+    UDP from C code that never calls `socket.connect`.
+
+    Every attempt is recorded, and the test fails at teardown if any
+    were, so code that catches the raised error and carries on does not
+    turn the guard into a no-op.
 
     `socket.socketpair` and AF_UNIX are left alone: they are local IPC,
     used by tooling rather than by code under test.
@@ -56,8 +87,12 @@ def _no_network(request: pytest.FixtureRequest,
     call that escaped went to Zotero on 127.0.0.1.
     """
     if request.node.get_closest_marker("allow_network"):
+        yield
         return
+    violations: list[str] = request.node.stash.setdefault(_VIOLATIONS_KEY, [])
     real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+    real_sendto = socket.socket.sendto
     real_socketpair = socket.socketpair
     # Set while CPython's own socketpair fallback runs, so the loopback
     # connect it makes internally is not mistaken for a test reaching out.
@@ -71,15 +106,51 @@ def _no_network(request: pytest.FixtureRequest,
         finally:
             building_socketpair = False
 
-    def guarded(self, address, *args, **kwargs):  # type: ignore[no-untyped-def]
-        if building_socketpair or self.family == getattr(socket, "AF_UNIX", object()):
-            return real_connect(self, address, *args, **kwargs)
-        raise NetworkAccessInUnitTest(
-            f"unit test attempted a network connection to {address!r}. "
-            f"Stub the client method the code under test calls — see this "
-            f"file's docstring for the failure this prevents. If the test "
-            f"genuinely needs a live service, it belongs in tests/live/."
+    def is_local_ipc(sock: socket.socket) -> bool:
+        return building_socketpair or sock.family == getattr(socket, "AF_UNIX", object())
+
+    def block(what: str) -> NetworkAccessInUnitTest:
+        violations.append(what)
+        return NetworkAccessInUnitTest(
+            f"unit test attempted {what}. "
+            f"Stub the client method the code under test calls — see "
+            f"tests/unit/conftest.py's docstring for the failure this "
+            f"prevents. If the test genuinely needs a live service, it "
+            f"belongs in tests/live/."
         )
 
-    monkeypatch.setattr(socket.socket, "connect", guarded)
+    def guarded_connect(self, address, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if is_local_ipc(self):
+            return real_connect(self, address, *args, **kwargs)
+        raise block(f"a network connection to {address!r}")
+
+    def guarded_connect_ex(self, address, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if is_local_ipc(self):
+            return real_connect_ex(self, address, *args, **kwargs)
+        raise block(f"a network connection (connect_ex) to {address!r}")
+
+    def guarded_sendto(self, data, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if is_local_ipc(self):
+            return real_sendto(self, data, *args, **kwargs)
+        raise block(f"a datagram send (sendto) to {args[-1] if args else '?'!r}")
+
+    def resolver(name: str):  # type: ignore[no-untyped-def]
+        def guarded(host, *args, **kwargs):  # type: ignore[no-untyped-def]
+            raise block(f"a name lookup ({name}) for {host!r}")
+        return guarded
+
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", guarded_connect_ex)
+    monkeypatch.setattr(socket.socket, "sendto", guarded_sendto)
     monkeypatch.setattr(socket, "socketpair", guarded_socketpair)
+    for fn in ("getaddrinfo", "gethostbyname", "gethostbyname_ex", "gethostbyaddr"):
+        monkeypatch.setattr(socket, fn, resolver(fn))
+    yield
+    if violations:
+        pytest.fail(
+            "unit test reached the network and the error was swallowed by "
+            "the code under test (it never reached the test):\n  "
+            + "\n  ".join(violations)
+            + "\nStub the client call — see tests/unit/conftest.py.",
+            pytrace=False,
+        )
