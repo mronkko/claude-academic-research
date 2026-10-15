@@ -22,6 +22,76 @@ directory — not checked in because it references machine-local paths).
 
 ---
 
+## 0.25.0 release — audit fixes and agent-first redesign (2026-10-15)
+
+- **P20 — the setup wizard writes no permission rules.** **Status: done
+  in 0.25.0.** The wizard used to patch `~/.claude/settings.json` with
+  allow rules (`Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/**)` and
+  friends) and a Read-deny on `config.toml`. It now leaves the file
+  alone: which tool calls to allow is the user's decision, and the
+  rules were a recurring source of defects (Windows spellings, `.bak`
+  overwrites, rules that no longer matched renamed scripts). No
+  migration — rules written by older versions are left in place. Skills
+  keep the "shipped scripts only, no inline `python -c` / POSIX
+  one-liners" rule, now justified as auditable, cross-platform, no
+  improvised code; and they keep keys out of the transcript by never
+  reading `config.toml`. Unchanged and deliberate: `empirical-integrity`
+  still writes the project-level `analysis/results/**` deny rules via
+  `add_deny_rules.py` — a data-integrity guard, not a convenience.
+
+- **P21 — the pipeline as tools of a plugin-bundled MCP server.**
+  **Status: in progress for 0.25.0.** (Called P18 in the release plan;
+  renumbered because P18 here is taken.) Spec, in short:
+  - `mcp/server.py` at the plugin root, a **stdlib-only** stdio MCP
+    server (hand-rolled JSON-RPC 2.0: `initialize`, `ping`, `tools/list`,
+    `tools/call`), launched with `uv run --no-project --python 3.11`, so
+    uv is the only prerequisite and Windows avoids the `python3` stub.
+  - The server never imports pipeline code or reads `config.toml`: each
+    tool builds an argv list and runs the existing script as a
+    subprocess in the project directory (resolved from
+    `CLAUDE_PROJECT_DIR`, not cwd). Scripts stay fully terminal-runnable.
+  - Every tool states its effect class first in its description —
+    `[read-only]`, `[writes project files]`, `[writes Zotero]`,
+    `[costs LLM credits]` — and sets MCP annotations, so per-tool
+    "always allow" is a safe offer.
+  - Short tools return a small JSON summary (`ok`, `exit_code`,
+    `summary`, `artifacts`, `log_tail`); long runs are **jobs**
+    (`start_*` → `job_id`), stored under `.claude/jobs/<id>/` with
+    `job.json`, `run.log`, `progress.jsonl` and the existing
+    control-file handshake, spawned detached by a tiny `job_runner.py`.
+    `job_status` / `job_answer` / `cancel_job` (SIGINT first so CSVs
+    flush) / `list_jobs`; the server is stateless, so jobs survive
+    restarts. Job scripts gain `--progress-json` / `--control-file`.
+  - First tools: `check_setup`, `scaffold_project`, search plan/start,
+    import, the three enrich jobs plus the PDF plan/report, abstract and
+    full-text screening, `screening_report`, `audit_library`,
+    `export_coded_includes`, `generate_bib`. Parameters expose user
+    decisions only; tuning flags stay CLI-only; paths are confined to
+    the project.
+  - Registration: plugin-root `.mcp.json` for Claude Code; the wizard
+    adds the server for Antigravity and (untested) Codex.
+  - Guards: subprocess-level protocol tests with a stubbed `uv`, a
+    schema-sync test mapping every tool parameter to a real argparse
+    flag, job-runner tests including cancel.
+  - Phases: 3a server + registration + read-only tools; 3b job runner
+    and job tools; 3c rewire skills to call the tools (CLI shown as the
+    terminal equivalent). Setup itself stays in the terminal (S27).
+  Full spec: the coordinator's `release-0.25.0.md` plan, "## P18 spec".
+
+- **S27 — the setup hand-off gives one command that works, and says
+  why.** **Status: done in 0.25.0.** The setup skill handed the user
+  `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup/wizard.py` (the variable
+  is unset in the user's terminal) with a `./scripts/setup/wizard.py`
+  fallback (no project has one), while forbidding the agent any tool
+  call that could find the real path. Now the skill opens with the one
+  reason setup is a terminal program — keys typed in chat reach the
+  model provider and the transcript — resolves the absolute wizard path
+  itself, confirms it with a single `Read`, and hands over one quoted
+  command (`python3` on macOS/Linux, `py` on Windows). A local web form
+  for keys was considered and rejected as overkill.
+
+---
+
 ## Open — four reports from the AI-literature-review study (2026-09-06)
 
 Filed by that project's user via its session after the 0.22.0 / 0.23.0
@@ -522,7 +592,12 @@ planned, and "it's a scan" should not be anyone's first hypothesis.
 
 ---
 
-## In progress — live end-to-end SLR test (branch `feat/live-mini-slr`)
+## Done — live end-to-end SLR test (L1; was branch `feat/live-mini-slr`)
+
+**Status (2026-10-15): done.** L1 is merged: `scripts/dev/mini_slr.py`,
+`tests/live/test_mini_slr.py` and the `live_slr` marker are on `main`,
+and the branch, worktrees and 2026-08-13 Zotero state described below
+are history. Kept as the design record.
 
 **L1** — a live, opt-in mini systematic review that runs the whole
 pipeline against real APIs and a real Zotero library, then asserts the
@@ -612,7 +687,7 @@ still shells out to `filter_search_results.py` (per-journal, then
 merge) or needs new logic directly in `mini_slr.py` — the shipped
 script has no per-group/stratified mode today.
 
-**Live Zotero state still open as of 2026-08-13:** run `20260813T082726Z`
+**Live Zotero state (historical — no longer open):** as of 2026-08-13, run `20260813T082726Z`
 was NOT torn down (verify failure aborts before the `teardown` stage
 runs, by design — so a failed run's Zotero state stays inspectable).
 Group `academic-research-e2e` (id `6637302`) currently holds collection
@@ -623,7 +698,7 @@ Group `academic-research-e2e` (id `6637302`) currently holds collection
 just let the next full `--stage all` run reuse a fresh run-id and
 leave this one for manual comparison.
 
-**Also still open:** most of L1's own files are uncommitted (only the
+**Historical, resolved:** at the time, most of L1's own files were uncommitted (only the
 Semantic Scholar key-fallback fix — see below — landed as a commit so
 far). `git status` on this branch shows `scripts/dev/` (mini_slr.py),
 `scripts/pipelines/zotero_io.py`, `scripts/pipelines/import_to_zotero.py`,
