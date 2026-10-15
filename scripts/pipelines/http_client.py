@@ -2,7 +2,9 @@
 
 `build_session()` returns a `requests.Session` configured with:
   - A `urllib3.Retry` transport that retries on 429 / 5xx with
-    exponential backoff, honouring `Retry-After` headers.
+    exponential backoff, honouring `Retry-After` headers. POST and
+    PATCH are retried on 429 only — a 5xx or a dropped response may
+    mean the write was applied, and replaying it duplicates it.
   - A sane default User-Agent, including an optional Crossref mailto so
     the plugin lands in Crossref's polite pool.
   - A shared cookie jar — PMC's proof-of-work flow needs cookies to
@@ -41,6 +43,10 @@ DEFAULT_TIMEOUT = 30
 #: exactly like a hung process from the outside.
 ANNOUNCE_BACKOFF_OVER = 3.0
 
+#: Methods a replay can apply twice. Retried on 429 only — see
+#: `VerboseRetry.is_retry`.
+NON_IDEMPOTENT_METHODS = frozenset({"POST", "PATCH"})
+
 
 class VerboseRetry(Retry):
     """`urllib3.Retry` that says out loud when it is about to wait.
@@ -58,6 +64,25 @@ class VerboseRetry(Retry):
     `type(self)(**params)`, which preserves the subclass, so overriding
     `sleep()` alone is enough — no extra state to carry across.
     """
+
+    def is_retry(self, method: str, status_code: int,
+                 has_retry_after: bool = False) -> bool:
+        """Retry a non-idempotent write only on 429.
+
+        A 429 is a refusal: the server did not apply the request, so
+        replaying it is safe. A 5xx is not — the server may have applied
+        the write before failing to answer — and a replayed `POST /items`
+        to Zotero created every item of the batch a second time. POST and
+        PATCH are therefore left out of `allowed_methods` (which also
+        stops read-error retries for them) and let back in here for 429
+        alone. Connection errors are still retried for every method by
+        urllib3 itself: the request never left the client.
+        """
+        if method and method.upper() in NON_IDEMPOTENT_METHODS:
+            return status_code == 429 and status_code in (
+                self.status_forcelist or ()
+            )
+        return super().is_retry(method, status_code, has_retry_after)
 
     def increment(self, method=None, url=None, response=None, error=None,  # noqa: ANN001, PLR0913 — urllib3's signature
                   _pool=None, _stacktrace=None):
@@ -121,7 +146,9 @@ def build_session(mailto: str | None = None) -> requests.Session:
         total=5,
         backoff_factor=1.0,          # 1s, 2s, 4s, 8s, 16s
         status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset(["GET", "POST", "HEAD", "PUT", "PATCH"]),
+        # POST / PATCH are deliberately absent: they are retried on 429
+        # only, via `VerboseRetry.is_retry`, never on 5xx or read errors.
+        allowed_methods=frozenset(["GET", "HEAD", "PUT"]),
         respect_retry_after_header=True,
         raise_on_status=False,
     )

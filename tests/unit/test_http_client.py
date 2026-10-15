@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http_client
+import pytest
 import requests
 
 
@@ -96,3 +97,44 @@ def test_get_bytes_returns_body_and_content_type(monkeypatch) -> None:
     body, ct = result
     assert body == b"%PDF-1.7 fake"
     assert ct == "application/pdf"
+
+
+# --- non-idempotent writes are retried on 429 only ---------------------
+
+
+def _retry_policy():
+    return http_client.build_session().get_adapter("https://x").max_retries
+
+
+@pytest.mark.parametrize("method", ["POST", "PATCH"])
+def test_post_is_not_retried_on_5xx(method) -> None:
+    """A replayed `POST /items` after a 5xx re-created every item of the
+    batch: the server may have applied the write before failing."""
+    retry = _retry_policy()
+    for status in (500, 502, 503, 504):
+        assert not retry.is_retry(method, status, has_retry_after=True)
+
+
+@pytest.mark.parametrize("method", ["POST", "PATCH"])
+def test_post_is_still_retried_on_429(method) -> None:
+    """A 429 is a refusal — nothing was applied — so backing off and
+    replaying is safe, and Zotero asks clients to do exactly that."""
+    assert _retry_policy().is_retry(method, 429)
+
+
+def test_post_is_not_retried_on_a_read_error() -> None:
+    from urllib3.exceptions import ReadTimeoutError
+
+    retry = _retry_policy()
+    err = ReadTimeoutError(None, "https://x/items", "read timed out")
+    with pytest.raises(ReadTimeoutError):
+        retry.increment("POST", "https://x/items", error=err)
+
+
+def test_get_keeps_its_5xx_and_read_error_retries() -> None:
+    from urllib3.exceptions import ReadTimeoutError
+
+    retry = _retry_policy()
+    assert retry.is_retry("GET", 503)
+    err = ReadTimeoutError(None, "https://x/y", "read timed out")
+    assert retry.increment("GET", "https://x/y", error=err).total == retry.total - 1
