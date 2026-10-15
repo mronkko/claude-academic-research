@@ -71,13 +71,22 @@ The separate `editorial-tools` plugin ships one skill,
 ## Pipeline tools (MCP server)
 
 The plugin bundles a small MCP server, `mcp/server.py`, that exposes the
-short pipeline steps as tools, so an agent can call them directly rather
-than pasting long `uv run` commands for you to approve one by one:
+pipeline steps as tools, so an agent can call them directly rather
+than pasting long `uv run` commands for you to approve one by one. **The
+skills call these tools by default**: every skill that runs a pipeline
+step names the tool (by its bare name — in Claude Code the full name is
+`mcp__plugin_academic-research_academic-research__<tool>`) and gives the
+shipped script beside it as the *terminal equivalent*. An agent falls
+back to that command only when the tools are not available (no `uv`, or
+the server not registered on that host), and then says how to enable
+them. A few steps have no tool yet — pilot analysis, tag pruning, LLM
+provider and model pinning, the cluster round trip, the attended browser
+pass, `--replace` — and the skills run those as scripts.
 
 | Tool | Effect | Runs |
 |---|---|---|
 | `check_setup` | read-only | `scripts/setup/check_configured.py`, `check_database_access.py` |
-| `scaffold_project` | writes project files | `scripts/setup/scaffold_project.py` |
+| `scaffold_project` | writes project files | `scripts/setup/scaffold_project.py` (the template `CLAUDE.md` only with `claude_md: "install"`) |
 | `pdf_plan` | read-only | `scripts/pipelines/enrich_pdfs.py --plan-strategy` (the retrieval plan; `start_pdf_plan` adds the resolver lookups as a job) |
 | `pdf_strategy_show` | read-only | `scripts/pipelines/pdf_strategy.py show` |
 | `pdf_strategy_write` / `pdf_strategy_update` | writes project files | `scripts/pipelines/pdf_strategy.py init` / `update` (`.claude/pdf/strategy.toml`) |
@@ -112,7 +121,9 @@ browser for you to solve each publisher's challenge once; writes only the
 setup record and, if you say "always skip", `[library] no_access`) and
 `start_pdf_unattended_run` (the browser pass with no prompts — what needs
 a person is deferred to manual download; writes Zotero) each return a job
-id at once. One job at a time may write to Zotero. `job_status` reports progress, the
+id at once. One job at a time may write to Zotero, and one at a time may
+drive the plugin's browser (the project's single Playwright Chromium
+profile) — the server refuses a second. `job_status` reports progress, the
 log tail and any question the job is waiting on (relayed to you and
 answered with `job_answer`); `cancel_job` interrupts a job so it saves its
 progress before stopping; `list_jobs` shows recent ones. A job lives in
