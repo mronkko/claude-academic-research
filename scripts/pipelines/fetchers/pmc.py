@@ -39,16 +39,30 @@ def _cache_pdf_path(cache_dir: str | Path, doi: str) -> Path:
     return Path(cache_dir) / f"{_doi_safe(doi)}.pdf"
 
 
-def _solve_pow(challenge: str, difficulty: int) -> int:
-    """SHA-256 nonce-search. Returns smallest nonce where the hash has
-    `difficulty` leading hex zeros."""
+#: Hardest challenge we will attempt. Each extra hex zero is 16x the
+#: work: PMC serves 4 (~65k hashes), 6 is ~17M (seconds), 8 would be
+#: ~4.3G — a worker thread pinned for an hour on one item. The loop used
+#: to be unbounded, so a changed or hostile page could hang the run.
+_MAX_POW_DIFFICULTY = 6
+
+#: Search this many times the expected work before giving up. A solution
+#: exists with overwhelming probability well inside it.
+_POW_BUDGET_FACTOR = 64
+
+
+def _solve_pow(challenge: str, difficulty: int) -> int | None:
+    """SHA-256 nonce-search. Returns the smallest nonce whose hash has
+    `difficulty` leading hex zeros, or None when the challenge is out of
+    bounds or the search budget runs out."""
+    if difficulty < 0 or difficulty > _MAX_POW_DIFFICULTY:
+        return None
     prefix = "0" * difficulty
-    nonce = 0
-    while True:
+    budget = (16 ** difficulty) * _POW_BUDGET_FACTOR
+    for nonce in range(budget):
         h = hashlib.sha256((challenge + str(nonce)).encode()).hexdigest()
         if h.startswith(prefix):
             return nonce
-        nonce += 1
+    return None
 
 
 class PmcSource(PdfFetcher):
@@ -81,8 +95,15 @@ class PmcSource(PdfFetcher):
             return None
         if conv.status_code != 200:
             return None
-        records = (conv.json() or {}).get("records") or []
-        if not records or "pmcid" not in records[0]:
+        try:
+            payload = conv.json()
+        except ValueError:
+            # A 200 with an HTML error page (NCBI maintenance) used to
+            # raise out of the fetcher.
+            logger.debug("PMC idconv %s: response is not JSON", doi)
+            return None
+        records = (payload.get("records") if isinstance(payload, dict) else None) or []
+        if not records or not isinstance(records[0], dict) or "pmcid" not in records[0]:
             return None
         pmcid = records[0]["pmcid"]
 
@@ -125,6 +146,10 @@ class PmcSource(PdfFetcher):
 
         # Step 4: solve.
         nonce = _solve_pow(challenge, difficulty)
+        if nonce is None:
+            logger.warning("PMC: proof-of-work difficulty %d for %s is out "
+                           "of bounds; skipping", difficulty, doi)
+            return None
         cookie_value = f"{challenge},{nonce}"
 
         # Step 5: set the cookie on the session and re-request. requests
