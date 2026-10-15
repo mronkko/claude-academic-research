@@ -60,6 +60,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import doctype  # noqa: E402
+import progress_json  # noqa: E402
 import screening_common  # noqa: E402
 from doi_utils import doi_key  # noqa: E402
 from plugin_version import plugin_version  # noqa: E402
@@ -350,6 +351,7 @@ def _run_citation_stream(
     return source.run_citations(seeds, ctx)
 
 
+@progress_json.reports_done
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="./search_config.py",
@@ -406,7 +408,9 @@ def main() -> int:
                              "CITATION_SEEDS). Default: both. Use "
                              "`--streams citation` to pilot a seed before "
                              "committing to a full run.")
+    progress_json.add_argument(parser)
     args = parser.parse_args()
+    progress_json.configure(args.progress_json)
 
     streams = [s.strip() for s in args.streams.split(",") if s.strip()]
     unknown_streams = [s for s in streams if s not in ("keyword", "citation")]
@@ -524,6 +528,8 @@ def main() -> int:
                   "in the config — citation stream will find nothing)")
     print()
 
+    progress_json.emit("start", script="search", databases=selected,
+                       streams=streams, queued=len(selected))
     all_rows: list[dict] = []
     counts: dict = {}
     citation_counts: dict = {}
@@ -532,7 +538,7 @@ def main() -> int:
     explicit = _explicitly_named(
         args.databases, args.keyword_databases, args.citation_databases,
     )
-    for name in selected:
+    for done, name in enumerate(selected):
         source = registry[name]
         wants_keyword = "keyword" in streams and name in keyword_dbs
         wants_citation = ("citation" in streams and name in citation_dbs
@@ -556,6 +562,11 @@ def main() -> int:
                 skipped[name] = reason
                 print(f"SKIP {name}: {reason}", flush=True)
             print()
+            progress_json.emit(
+                "item", database=name,
+                outcome="failed" if name in failed else "skipped",
+                reason=reason, done=done + 1, queued=len(selected),
+            )
             continue
         print(f"── {name} ──", flush=True)
         try:
@@ -574,6 +585,9 @@ def main() -> int:
             failed[name] = f"{type(e).__name__}: {e}"
             print(f"  FAILED: {e}", flush=True)
             print()
+            progress_json.emit("item", database=name, outcome="failed",
+                               reason=failed[name][:300], done=done + 1,
+                               queued=len(selected))
             continue
         counts[name] = len(rows)
         citation_counts[name] = sum(
@@ -581,6 +595,9 @@ def main() -> int:
         )
         all_rows.extend(rows)
         print()
+        progress_json.emit("item", database=name, outcome="ok",
+                           rows=len(rows), citation_rows=citation_counts[name],
+                           done=done + 1, queued=len(selected))
 
     if failed:
         # Deliberately still a hard failure. A corpus assembled from a
@@ -594,6 +611,9 @@ def main() -> int:
                                extrasaction="ignore")
             w.writeheader()
             w.writerows(all_rows)
+        progress_json.emit("summary", per_database_counts=counts,
+                           failed=failed, raw_rows=len(all_rows),
+                           partial_csv=str(partial))
         detail = "\n".join(f"  {n}: {msg}" for n, msg in failed.items())
         ok = ", ".join(f"{n}={c}" for n, c in counts.items()) or "none"
         sys.exit(
@@ -709,6 +729,13 @@ def main() -> int:
         encoding="utf-8",
     )
 
+    progress_json.emit(
+        "summary", per_database_counts=counts, skipped=skipped,
+        raw_rows=len(all_rows), unique_records=len(deduped),
+        records_without_doi=no_doi_count, doctypes=doctype_counts,
+        artifacts=[str(csv_dedup), str(csv_raw), str(metadata_path),
+                   str(run_marker)],
+    )
     print(f"\nDone. {len(deduped)} unique records.")
     print(f"  Metadata:   {metadata_path}")
     print(f"  Run marker: {run_marker}")

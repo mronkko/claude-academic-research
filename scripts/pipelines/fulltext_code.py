@@ -91,6 +91,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
 import batch_manifest  # noqa: E402
 import csv_io  # noqa: E402
 import pdf_text_cache  # noqa: E402
+import progress_json  # noqa: E402
 import screening_common  # noqa: E402
 import tag_prefix  # noqa: E402
 import worker_pool  # noqa: E402
@@ -1609,6 +1610,7 @@ def emit_manifest(
 # ---------------------------------------------------------------------------
 
 
+@progress_json.reports_done
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         try:
@@ -1714,7 +1716,9 @@ def main() -> int:
                              "screening decisions. Targets items already tagged "
                              "fulltext:include. Other fields in each note are "
                              "preserved. Use --only-keys to restrict to a subset.")
+    progress_json.add_argument(parser)
     args = parser.parse_args()
+    progress_json.configure(args.progress_json)
 
     if args.rerun and args.full_recode:
         # "Only the failures" and "all of it again" cannot both hold, and
@@ -1968,6 +1972,8 @@ def main() -> int:
         _warn_on_preprint_attachments(to_code)
         if not to_code:
             print("Nothing to code.", flush=True)
+            progress_json.emit("start", script="fulltext_code", queued=0,
+                               already_tagged=len(tagged))
             return 0
 
         if args.dry_run:
@@ -1978,6 +1984,8 @@ def main() -> int:
             print(f"TITLE: {first.get('title', '')}\n\nFULL TEXT: <{pdf_dir}/...>")
             print(f"\n[DRY RUN] Would code {len(to_code)} items with {model}",
                   flush=True)
+            progress_json.emit("summary", dry_run=True,
+                               would_code=len(to_code), model=model)
             print(cost_estimate_line(
                 model, stage="fulltext_coding", n_items=len(to_code),
             ), flush=True)
@@ -2052,6 +2060,8 @@ def main() -> int:
         )
         if not to_update:
             print("Nothing to update.", flush=True)
+            progress_json.emit("start", script="fulltext_code", queued=0,
+                               mode="update_fields")
             return 0
 
         # Update mode targets items whose include decision is already final
@@ -2118,6 +2128,9 @@ def main() -> int:
         counts: dict[str, int] = {"updated": 0, "no_pdf": 0, "error": 0}
         done_count = 0
         total = len(to_update)
+        progress_json.emit("start", script="fulltext_code", queued=total,
+                           model=model, mode="update_fields",
+                           fields=sorted(target_fields))
 
         def update_worker(item: dict) -> dict:
             pdf_path = _find_pdf_path(
@@ -2181,6 +2194,9 @@ def main() -> int:
                            else "updated")
                 print(f"[{done_count}/{total}] {title:<60} → {outcome}",
                       flush=True)
+                progress_json.emit("item", key=row.get("item_key", ""),
+                                   outcome=outcome, done=done_count,
+                                   queued=total)
 
                 if update_fatal:
                     for pending in futures:
@@ -2189,6 +2205,10 @@ def main() -> int:
                     print(update_fatal[0], file=sys.stderr, flush=True)
                     break
 
+        progress_json.emit("summary", mode="update_fields",
+                           processed=done_count, queued=total, counts=counts,
+                           stopped_early=bool(update_fatal),
+                           log_csv=str(output_path))
         print(f"\n{'=' * 60}")
         print(f"Done. Updated {done_count} of {total} item(s).")
         for k in ("updated", "error", "no_pdf"):
@@ -2225,6 +2245,8 @@ def main() -> int:
         ), flush=True)
     print(f"Coding with {args.workers} parallel workers (model={model})...",
           flush=True)
+    progress_json.emit("start", script="fulltext_code", queued=total,
+                       model=model, mode="code")
 
     fatal: list[str] = []
     # Cancels queued calls on any exception or Ctrl+C (worker_pool).
@@ -2255,6 +2277,8 @@ def main() -> int:
             title = row.get("title", "")[:60]
             print(f"[{done_count}/{total}] {title:<60} → {decision}",
                   flush=True)
+            progress_json.emit("item", key=row.get("item_key", ""),
+                               outcome=decision, done=done_count, queued=total)
 
             if fatal:
                 for pending in futures:
@@ -2270,6 +2294,9 @@ def main() -> int:
                 )
                 break
 
+    progress_json.emit("summary", mode="code", processed=done_count,
+                       queued=total, counts=counts, stopped_early=bool(fatal),
+                       log_csv=str(output_path))
     print(f"\n{'=' * 60}")
     print(f"Done. Coded {done_count} of {total} items.")
     for k in ("include", "exclude", "error", "no_pdf"):

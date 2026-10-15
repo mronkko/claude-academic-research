@@ -67,6 +67,7 @@ for _p in (str(SCRIPT_DIR), str(SCRIPTS_ROOT)):
 
 import fetchers  # noqa: E402
 import http_client  # noqa: E402
+import progress_json  # noqa: E402
 import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
 from abstract_clean import clean_abstract, not_an_abstract  # noqa: E402
@@ -430,6 +431,7 @@ def _select_items(
     return items
 
 
+@progress_json.reports_done
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -464,7 +466,9 @@ def main() -> int:
     parser.add_argument("--filter-keys-file",
                         help="Text file with Zotero item keys, one per line.")
     zotero_io.add_library_args(parser)
+    progress_json.add_argument(parser)
     args = parser.parse_args()
+    progress_json.configure(args.progress_json)
 
     source_names = [s.strip() for s in args.sources.split(",") if s.strip()]
     require("zotero", "api_key", env="ZOTERO_API_KEY")
@@ -502,6 +506,8 @@ def main() -> int:
     ]
     print(f"Missing abstracts (with DOI): {len(missing)}", flush=True)
     if not missing:
+        progress_json.emit("start", script="enrich_abstracts", queued=0,
+                           items_scanned=len(all_items))
         return 0
 
     by_doi = group_by_doi(missing)
@@ -527,6 +533,10 @@ def main() -> int:
               file=sys.stderr)
         return 2
     print(f"Active fetchers: {[s.name for s in sources]}", flush=True)
+    progress_json.emit("start", script="enrich_abstracts", queued=len(missing),
+                       items_scanned=len(all_items), distinct_dois=len(by_doi),
+                       sources=[s.name for s in sources],
+                       dry_run=bool(args.dry_run))
 
     log_fh, log_writer = _open_log(args.log_csv)
     log_lock = threading.Lock()
@@ -541,7 +551,12 @@ def main() -> int:
 
         with log_lock:
             counters["done"] += 1
-            prefix = f"[{counters['done']}/{total}]"
+            done_n = counters["done"]
+            prefix = f"[{done_n}/{total}]"
+
+        def _emit(outcome: str, source: str = "") -> None:
+            progress_json.emit("item", key=key, doi=doi, outcome=outcome,
+                               source=source, done=done_n, queued=total)
 
         if not result.found:
             if not doi:
@@ -566,6 +581,7 @@ def main() -> int:
                     "detail": result.detail(), "surface": "",
                 })
             print(f"{prefix} {title:<70} {note}", flush=True)
+            _emit(status)
             return
 
         abstract, source = result.abstract, result.source
@@ -580,6 +596,7 @@ def main() -> int:
                 })
             print(f"{prefix} {title:<70} found ({source}) [dry-run]",
                   flush=True)
+            _emit("dry_run", source)
             return
 
         detail = ""
@@ -606,6 +623,7 @@ def main() -> int:
             })
         if ok:
             print(f"{prefix} {title:<70} ({source}) → updated", flush=True)
+        _emit(status, source)
 
     def _process_group(group: list[dict]) -> None:
         """Look the DOI up once, then record the outcome for every copy.
@@ -624,6 +642,9 @@ def main() -> int:
             fut.result()          # re-raise unexpected exceptions
 
     log_fh.close()
+    progress_json.emit("summary", counts={
+        k: counters[k] for k in ("updated", "skipped", "withheld", "failed")
+    }, log_csv=args.log_csv)
     print(
         f"\nDone. updated={counters['updated']}, "
         f"confirmed-absent={counters['skipped']}, "

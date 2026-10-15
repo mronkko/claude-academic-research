@@ -95,6 +95,7 @@ except ImportError:
 import doctype  # noqa: E402
 import doi_utils  # noqa: E402
 import http_client  # noqa: E402
+import progress_json  # noqa: E402
 import screening_common  # noqa: E402
 import tag_prefix  # noqa: E402
 import zotero_io  # noqa: E402
@@ -921,9 +922,13 @@ def _patch_existing_items(
             print(f"  [{i}/{len(need_patch)}] patching...", flush=True)
         try:
             zot.update_fields(item_key, patch)
+            outcome = "patched"
         except Exception as exc:  # noqa: BLE001 — one item must not sink the import
             failed += 1
+            outcome = "patch_failed"
             print(f"  FAILED to patch {item_key}: {exc}", flush=True)
+        progress_json.emit("item", phase="patch", key=item_key,
+                           outcome=outcome, done=i, queued=len(need_patch))
         time.sleep(0.15)
     return failed
 
@@ -1021,6 +1026,9 @@ def _create_new_items(
             result = resp.json()
         except (requests.RequestException, ValueError) as exc:
             failed += len(batch)
+            progress_json.emit("item", phase="create", batch=batch_num,
+                               outcome="batch_failed", items=len(batch),
+                               done=i + len(batch), queued=len(to_create))
             print(
                 f"  FAILED batch {batch_num}: {exc}. Its {len(batch)} item(s) "
                 f"may or may not have been written; re-running the import "
@@ -1036,6 +1044,11 @@ def _create_new_items(
             for pos, key in success.items():
                 key_by_index[i + int(pos)] = str(key)
         failed += len(result.get("failed", {}))
+        progress_json.emit("item", phase="create", batch=batch_num,
+                           outcome="created", items=len(batch),
+                           created=len(success),
+                           failed=len(result.get("failed", {})),
+                           done=i + len(batch), queued=len(to_create))
         if result.get("failed"):
             for idx, err in result["failed"].items():
                 print(f"  FAILED item {idx}: {err}", flush=True)
@@ -1145,6 +1158,7 @@ def _resolve_collection(zot: zotero_io.ZoteroClient, args) -> str:
     return key
 
 
+@progress_json.reports_done
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     zotero_io.add_library_args(parser)
@@ -1174,7 +1188,9 @@ def main() -> int:
              "delete exactly what this run created, never anything it "
              "merely touched.",
     )
+    progress_json.add_argument(parser)
     args = parser.parse_args()
+    progress_json.configure(args.progress_json)
 
     # Resolve the namespace before anything reads or writes: a missing
     # prefix should stop the run at the first line, not after the import.
@@ -1198,6 +1214,8 @@ def main() -> int:
         rows = list(csv.DictReader(f))
     print(f"Records to import into {zot.describe_library()}: {len(rows)}",
           flush=True)
+    progress_json.emit("start", script="import_to_zotero", records=len(rows),
+                       dry_run=bool(args.dry_run))
 
     try:
         collection_key = _resolve_collection(zot, args)
@@ -1317,6 +1335,11 @@ def main() -> int:
               f"(to be linked as related items): {n_linkable} of "
               f"{len(supplement_dois)}", flush=True)
 
+    progress_json.emit(
+        "summary", phase="plan", records=len(rows), to_patch=len(to_add),
+        to_create=len(to_create), merged_within_batch=dropped_within_batch,
+        build_sources=build_counts, doctypes=doctype_counts,
+    )
     if args.dry_run:
         _print_dry_run_preview(preview_samples)
         print("\n[DRY RUN] No changes written.", flush=True)
@@ -1359,6 +1382,9 @@ def main() -> int:
             cloud=True,
         )
 
+    progress_json.emit("summary", phase="write", existing_matched=len(to_add),
+                       patch_failed=patch_failed, created=created,
+                       create_failed=failed)
     if failed or patch_failed:
         # Exit non-zero: a caller (or an agent) reading only the exit
         # status used to see success with items missing from Zotero.

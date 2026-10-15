@@ -40,7 +40,14 @@ Write policy:
     wrong replacement is worse than a broken DOI).
   - `--dry-run`: never write; just report proposals in the CSV.
   - `--no-prompt`: skip the 2/3-ambiguity prompt (log and continue).
-  - Non-TTY stdin forces `--no-prompt` behaviour regardless.
+  - Non-TTY stdin forces `--no-prompt` behaviour, unless
+    `--control-file` gives the prompt somewhere else to go: then each
+    2/3 question is written there (the `ControlFileChannel` protocol in
+    `fetchers/browser/interaction.py`) for an agent to relay. With no
+    reply before its timeout the run stops asking and logs the rest as
+    `proposed_not_applied`.
+  - `--progress-json PATH`: one JSON event per line (see
+    `progress_json.py`).
 """
 
 from __future__ import annotations
@@ -48,6 +55,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -59,6 +67,7 @@ for _p in (str(SCRIPT_DIR), str(SCRIPTS_ROOT)):
         sys.path.insert(0, _p)
 
 import doi_utils  # noqa: E402
+import progress_json  # noqa: E402
 import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
 from core.config_loader import get, require  # noqa: E402
@@ -197,27 +206,41 @@ def _zot_first_author(item: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
+#: Asks the user one question and returns the answer, or None when nobody
+#: answered (a control-file prompt that timed out).
+Ask = Callable[[str], str | None]
+
+
 def _prompt_confirm(
     zot_item: dict, zot_title: str, zot_year: str,
     cr: DoiResolution, cr_doi: str,
-) -> bool:
+    ask: Ask | None = None,
+) -> bool | None:
     """Show the proposed match and return True on user confirm.
 
-    Reached only after the caller has confirmed `sys.stdin.isatty()`
-    (see the 2/3-match branch above) — stdin is already a real
-    terminal at that point, so there's no need to open `/dev/tty`
-    separately (which doesn't exist on Windows anyway).
+    Without `ask`, reached only after the caller has confirmed
+    `sys.stdin.isatty()` (see the 2/3-match branch above) — stdin is
+    already a real terminal at that point, so there's no need to open
+    `/dev/tty` separately (which doesn't exist on Windows anyway).
+
+    With `ask` (`--control-file`), the same proposal goes through it
+    instead, and None comes back when nobody answered.
     """
     cr_authors = ", ".join(cr.author_surnames[:3]) or "(no authors)"
-    print(
+    proposal = (
         f"\n  Proposed DOI for: {zot_title[:70]}\n"
         f"    Zotero: {zot_year or '(no year)'}, "
         f"{_zot_first_author(zot_item) or '(no author)'}\n"
         f"    Crossref: {cr.issued_year or '(no year)'}, "
         f"{cr_authors}, title={cr.title[:70]!r}\n"
-        f"    DOI: {cr_doi}",
-        flush=True,
+        f"    DOI: {cr_doi}"
     )
+    if ask is not None:
+        answer = ask(proposal.lstrip("\n") + "\n  Apply? [y/N]")
+        if answer is None:
+            return None
+        return answer.strip().lower() in ("y", "yes")
+    print(proposal, flush=True)
     sys.stdout.write("  Apply? [y/N] ")
     sys.stdout.flush()
     raw = sys.stdin.readline()
@@ -371,6 +394,7 @@ def _find_missing_doi(
     zot_item: dict, crossref_client, zot,
     *, is_replacement: bool,
     replace_invalid: bool, dry_run: bool, no_prompt: bool,
+    ask: Ask | None = None,
 ) -> FindResult:
     zot_title = _zot_title(zot_item)
     if not zot_title:
@@ -434,18 +458,21 @@ def _find_missing_doi(
         )
         return _do_write(status_applied)
 
-    # 2/3: prompt (unless non-TTY or --no-prompt).
+    # 2/3: prompt (unless --no-prompt, or non-TTY with no control file).
     if top_score == 2:
-        if no_prompt or not sys.stdin.isatty():
+        verdict = None
+        if not (no_prompt or (ask is None and not sys.stdin.isatty())):
+            verdict = _prompt_confirm(
+                zot_item, zot_title, zot_year, top_cr, top_doi, ask=ask,
+            )
+        if verdict is None:
             return FindResult(
                 status="proposed_not_applied",
                 crossref_doi=top_doi,
                 crossref_title=top_cr.title,
                 crossref_authors=cr_authors_str,
             )
-        if _prompt_confirm(
-            zot_item, zot_title, zot_year, top_cr, top_doi,
-        ):
+        if verdict:
             status_applied = (
                 "replaced_after_prompt"
                 if is_replacement else "applied_after_prompt"
@@ -491,6 +518,37 @@ def _write_log(
     })
 
 
+class _ControlFileAsker:
+    """`--control-file` prompts, through the browser pass's channel.
+
+    One timeout means nobody is relaying questions, so the rest of the
+    run stops asking rather than waiting the full timeout per item.
+    """
+
+    def __init__(self, path: str) -> None:
+        # Imported here: the channel lives with the browser pass, and a
+        # run without --control-file has no use for it.
+        from fetchers.browser.interaction import (
+            ControlFileChannel,
+            ControlFileTimeout,
+        )
+        self._timeout_error = ControlFileTimeout
+        self._channel = ControlFileChannel(path)
+        self.gave_up = False
+
+    def __call__(self, prompt: str) -> str | None:
+        if self.gave_up:
+            return None
+        try:
+            return self._channel.read_line(prompt)
+        except self._timeout_error as e:
+            self.gave_up = True
+            print(f"  {e}\n  Not asking again this run; remaining 2/3 "
+                  f"matches are logged as proposed_not_applied.", flush=True)
+            return None
+
+
+@progress_json.reports_done
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode_group = parser.add_argument_group("mode (default: --all)")
@@ -530,7 +588,18 @@ def main() -> int:
     parser.add_argument("--replace-invalid", action="store_true",
                         help="Overwrite invalid DOIs with 3/3-match Crossref "
                              "candidates (off by default).")
+    parser.add_argument(
+        "--control-file", default="",
+        help="Ask the 2/3-match question through this file instead of the "
+             "terminal (for an agent relaying it): the script writes "
+             '{"state": "awaiting_user", "prompt": ..., "seq": N} and '
+             'waits for {"seq": N, "answer": "y"} in <file>.reply.',
+    )
+    progress_json.add_argument(parser)
     args = parser.parse_args()
+    progress_json.configure(args.progress_json)
+    ask = (_ControlFileAsker(args.control_file)
+           if args.control_file and not args.no_prompt else None)
 
     # Mode resolution: explicit flags win; else default to --all.
     if not (args.validate or args.find_missing or args.all):
@@ -577,6 +646,12 @@ def main() -> int:
     ]
 
     log_fh, log_writer = _open_log(args.log_csv)
+    progress_json.emit(
+        "start", script="enrich_dois",
+        validate=len(with_doi) if do_validate else 0,
+        find_missing=len(without_doi) if do_find_missing else 0,
+        dry_run=bool(args.dry_run),
+    )
 
     # Pass 1 — validate existing DOIs. Collect keys of items whose
     # DOI failed validation — Pass 2 can re-route them through
@@ -604,6 +679,9 @@ def main() -> int:
                 )
                 print(f"  [{i}/{len(with_doi)}] {result.status:<40} "
                       f"{title70}", flush=True)
+                progress_json.emit("item", phase="validate", key=item["key"],
+                                   outcome=result.status, done=i,
+                                   queued=len(with_doi))
                 if result.status in (
                     "validate_not_in_crossref",
                     "validate_title_mismatch",
@@ -631,6 +709,7 @@ def main() -> int:
                     replace_invalid=args.replace_invalid,
                     dry_run=args.dry_run,
                     no_prompt=args.no_prompt,
+                    ask=ask,
                 )
                 counts[result.status] = counts.get(result.status, 0) + 1
                 _write_log(
@@ -641,10 +720,14 @@ def main() -> int:
                 )
                 print(f"  [{i}/{len(missing_pool)}] {result.status:<40} "
                       f"{title70}", flush=True)
+                progress_json.emit("item", phase="find_missing",
+                                   key=item["key"], outcome=result.status,
+                                   done=i, queued=len(missing_pool))
     finally:
         log_fh.close()
 
     # Summary.
+    progress_json.emit("summary", counts=counts, log_csv=args.log_csv)
     print("\nDone. Status counts:", flush=True)
     for status in sorted(counts.keys()):
         print(f"  {status:<40} {counts[status]}", flush=True)

@@ -71,6 +71,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
 
 import batch_manifest  # noqa: E402
 import csv_io  # noqa: E402
+import progress_json  # noqa: E402
 import screening_common  # noqa: E402
 import tag_prefix  # noqa: E402
 import worker_pool  # noqa: E402
@@ -665,6 +666,7 @@ def _load_doi_to_query(search_csv: Path | None) -> dict[str, str]:
     return doi_to_query
 
 
+@progress_json.reports_done
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     tag_prefix.add_argument(parser)
@@ -742,7 +744,9 @@ def main() -> int:
                              "matching <prefix>/abstract:* tags for items that "
                              "don't have one yet. Makes no LLM calls; exits "
                              "after.")
+    progress_json.add_argument(parser)
     args = parser.parse_args()
+    progress_json.configure(args.progress_json)
 
     system_prompt, config_model, prompt_version, config_mod = (
         _load_screening_config(args.config)
@@ -838,6 +842,9 @@ def main() -> int:
 
     if not to_screen:
         print("Nothing to screen.", flush=True)
+        progress_json.emit("start", script="abstract_screen", queued=0,
+                           already_tagged=len(tagged),
+                           skipped_by_doctype=doctype_skipped)
         return 0
 
     if args.emit_manifest:
@@ -900,6 +907,8 @@ def main() -> int:
         print(msg)
         print(f"\n[DRY RUN] Would screen {len(to_screen)} items with {model}",
               flush=True)
+        progress_json.emit("summary", dry_run=True, would_screen=len(to_screen),
+                           model=model, already_tagged=len(tagged))
         print(cost_estimate_line(
             model, stage="abstract_screening", n_items=len(to_screen),
         ), flush=True)
@@ -940,6 +949,9 @@ def main() -> int:
 
     print(f"Screening with {args.workers} parallel workers (model={model})...",
           flush=True)
+    progress_json.emit("start", script="abstract_screen", queued=total,
+                       model=model, already_tagged=len(tagged),
+                       skipped_by_doctype=doctype_skipped)
 
     # `screening_row` builds a row from the item, so the loop needs the
     # item back from the key its worker returned.
@@ -982,6 +994,8 @@ def main() -> int:
 
                 print(f"[{done_count}/{total}] {title[:70]:<70} → {decision}",
                       flush=True)
+                progress_json.emit("item", key=key, outcome=decision,
+                                   done=done_count, queued=total)
 
                 if fatal:
                     # Cancel what has not started. Items already in
@@ -1004,6 +1018,12 @@ def main() -> int:
         # gets tagged so a resume doesn't re-screen already-decided items.
         _flush_tag_buffer(zot, tag_buffer)
 
+    progress_json.emit(
+        "summary", screened=done_count, queued=total,
+        counts={k: counts.get(k, 0) for k in (*VALID_DECISIONS, "error")},
+        reasks=reasks, parse_fallbacks=parse_fallbacks,
+        stopped_early=bool(fatal), log_csv=str(output_path),
+    )
     print(f"\n{'=' * 60}")
     print(f"Done. Screened {done_count} of {total} items.")
     for k in (*VALID_DECISIONS, "error"):
