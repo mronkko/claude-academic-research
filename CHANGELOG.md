@@ -327,6 +327,14 @@ large review.
   by cursor and reports the API's total. A citation seed that fails on
   throttling or a server error fails the run instead of reading as "not
   found".
+- **OpenAlex searches with more than one page of results failed without
+  an API key.** OpenAlex now refuses keyless cursor paging past the first
+  page (HTTP 401), and the searcher never sent the key setup stores. It
+  now sends the configured `OPENALEX_API_KEY` / `[openalex] api_key` on
+  every request and pages by cursor with no cap. Without a key it pages
+  by page number up to OpenAlex's 10,000-result limit and warns, naming
+  the free key at https://openalex.org/settings/api, when a query is
+  capped. Rejections quote OpenAlex's reason with the key masked.
 - **Semantic Scholar warns when it reaches its 10,000-record cap**, and an
   ISSN-only `JOURNALS` stops with a clear error.
 - **Deduplication treats DOIs case-insensitively and ignores doi.org
@@ -456,8 +464,10 @@ large review.
   rather than as a block or a network error (BACKLOG P22).
 - Full-text coding can miss a cached PDF for a SICI-style DOI, because
   it still builds the old cache filename (P23).
-- The OpenAlex content-API key still travels in request URLs. It is not
-  logged (P24).
+- The OpenAlex key still travels in request URLs (OpenAlex takes it as
+  `api_key=`). It is masked in error messages, and the paid PDF fetcher
+  no longer records its download URL, key included, as the PDF's source
+  (P24).
 - Scopus and WoS have no dedicated live search test. Their only live
   coverage is the mini end-to-end SLR (P25).
 - The attended browser and Connector pass still runs through Bash, so
