@@ -41,7 +41,14 @@ directory — not checked in because it references machine-local paths).
 
 - **P21 — the pipeline as tools of a plugin-bundled MCP server.**
   **Status: in progress for 0.25.0 — 3a done** (server, short tools,
-  registration; skills not yet rewired). Two settled deviations from the
+  registration; skills not yet rewired). **3b done (non-PDF jobs);
+  enrich_pdfs jobs follow the PDF redesign (P26)** — `mcp/job_runner.py`,
+  six `start_*` tools plus `job_status` / `job_answer` / `cancel_job` /
+  `list_jobs`, `--progress-json` on the six scripts (stdlib
+  `progress_json.py`), `--control-file` on `enrich_dois` (the only one
+  that asks). Cancel escalation lives in the runner so `cancel_job`
+  returns at once; a second Zotero-writing job is refused while one
+  runs. Two settled deviations from the
   spec below: Claude Code registration is `mcpServers` in
   `.claude-plugin/plugin.json`, not a root `.mcp.json` (gitignored here
   as a local override, and a tracked one would load as a broken project

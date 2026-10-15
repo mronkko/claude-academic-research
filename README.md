@@ -91,6 +91,15 @@ the full output of its last run is kept in `.claude/mcp/logs/`. **Every
 script remains runnable from a terminal** exactly as before — the tools
 are a front end, not a replacement. Only `uv` is required.
 
+The long steps run as **background jobs**: `start_search`, `start_import`,
+`start_enrich_abstracts`, `start_enrich_dois` (writes Zotero),
+`start_abstract_screen` and `start_fulltext_code` (cost LLM credits, write
+Zotero) each return a job id at once. `job_status` reports progress, the
+log tail and any question the job is waiting on (relayed to you and
+answered with `job_answer`); `cancel_job` interrupts a job so it saves its
+progress before stopping; `list_jobs` shows recent ones. A job lives in
+`.claude/jobs/<id>/` and keeps running if the host restarts.
+
 Claude Code picks the server up from the plugin automatically. For
 Antigravity, and for Codex (untested), the setup wizard offers to
 register it.
