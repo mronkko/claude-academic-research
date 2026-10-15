@@ -7,9 +7,9 @@ Used by:
   - `scripts/setup/set_llm_provider.py` (sets `[llm] provider`).
 
 Design notes:
-  - Re-uses the wizard's manual TOML format. Quoted strings and flat
-    lists-of-strings are the only two value shapes; that's all the
-    plugin currently writes.
+  - One serialiser for the wizard and the runtime helpers (`_dump`).
+    It renders every value shape `tomllib` returns, so keys and
+    sections this module does not know about survive a rewrite.
   - Does NOT preserve comments or key ordering from an existing
     file — parses with `tomllib` and re-serialises. The file this
     touches is short and owned by the plugin.
@@ -21,34 +21,104 @@ Design notes:
 
 from __future__ import annotations
 
+import datetime as _dt
 import os
+import re
 import sys
+import tempfile
+from pathlib import Path
 
 from core.config_loader import CONFIG_PATH, load_config
 
+_BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
+
 
 def _escape(s: str) -> str:
-    return s.replace("\\", "\\\\").replace('"', '\\"')
+    """Escape `s` for a TOML basic string.
+
+    Backslash and quote, plus every control character: a newline or a
+    tab pasted into a key prompt would otherwise end the string early or
+    produce a file `tomllib` refuses, and the next read would treat the
+    whole config as unparseable.
+    """
+    out = []
+    for ch in s:
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append(f"\\u{ord(ch):04X}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _key(k: str) -> str:
+    return k if _BARE_KEY.fullmatch(k) else f'"{_escape(k)}"'
 
 
 def _render(val: object) -> str:
+    """Render one TOML value, keeping its type.
+
+    Booleans and numbers used to go through `str()` and come back as
+    strings, so a stored `false` read back as the non-empty, truthy
+    string "False", and `max_retries = 3` became `"3"`. Everything
+    `tomllib` can return is rendered as its own type here, so a
+    read-modify-write cycle preserves what it did not touch.
+    """
+    if isinstance(val, bool):
+        return "true" if val else "false"
+    if isinstance(val, (int, float)):
+        return repr(val)
+    if isinstance(val, (_dt.datetime, _dt.date, _dt.time)):
+        return val.isoformat()
     if isinstance(val, list):
-        inner = ", ".join(f'"{_escape(str(v))}"' for v in val)
-        return f"[{inner}]"
+        return "[" + ", ".join(_render(v) for v in val) + "]"
+    if isinstance(val, dict):
+        inner = ", ".join(f"{_key(str(k))} = {_render(v)}" for k, v in val.items())
+        return "{" + inner + "}"
     return f'"{_escape(str(val))}"'
 
 
+def _dump_table(path: list[str], table: dict, lines: list[str]) -> None:
+    scalars = {k: v for k, v in table.items() if not isinstance(v, dict)}
+    tables = {k: v for k, v in table.items() if isinstance(v, dict)}
+    if path and (scalars or not tables):
+        lines.append("[" + ".".join(_key(p) for p in path) + "]")
+    for key, val in scalars.items():
+        lines.append(f"{_key(str(key))} = {_render(val)}")
+    if path and (scalars or not tables):
+        lines.append("")
+    for key, sub in tables.items():
+        _dump_table([*path, str(key)], sub, lines)
+
+
 def _dump(values: dict) -> str:
+    """Serialise a parsed config back to TOML.
+
+    Handles every shape `tomllib` produces — nested tables become
+    `[a.b]` headers — because the wizard and these helpers rewrite the
+    whole file, and a section or key they do not know about is still the
+    user's and must survive.
+    """
     lines = [
         "# academic-research plugin configuration.",
         "# Mode 0600. Never commit to git. If leaked, rotate every key below.",
         "",
     ]
-    for section, items in values.items():
-        lines.append(f"[{section}]")
-        for key, val in items.items():
-            lines.append(f"{key} = {_render(val)}")
+    top_scalars = {k: v for k, v in values.items() if not isinstance(v, dict)}
+    for key, val in top_scalars.items():
+        lines.append(f"{_key(str(key))} = {_render(val)}")
+    if top_scalars:
         lines.append("")
+    _dump_table([], {k: v for k, v in values.items() if isinstance(v, dict)}, lines)
     return "\n".join(lines)
 
 
@@ -58,17 +128,35 @@ def _read() -> dict:
     return dict(load_config())
 
 
-def _write(values: dict) -> None:
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+def write_private(path: Path, text: str) -> None:
+    """Replace `path` with `text`, mode 0600 from the first byte.
+
+    Written to a temporary file in the same directory and moved into
+    place, so the file never exists with the umask's default mode (it
+    holds API keys) and a crash mid-write leaves the old file intact
+    rather than a truncated one.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
     # POSIX permission bits don't apply on Windows (os.chmod only toggles
     # the read-only flag there). The config file is under the user's home
     # directory, which NTFS protects per-user by default, so skipping is
     # safe on Windows.
     if sys.platform != "win32":
-        os.chmod(CONFIG_PATH.parent, 0o700)
-    CONFIG_PATH.write_text(_dump(values), encoding="utf-8")
+        os.chmod(path.parent, 0o700)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
     if sys.platform != "win32":
-        os.chmod(CONFIG_PATH, 0o600)
+        os.chmod(path, 0o600)
+
+
+def _write(values: dict) -> None:
+    write_private(CONFIG_PATH, _dump(values))
     load_config.cache_clear()
 
 
@@ -123,10 +211,9 @@ def set_value(section: str, key: str, value: str) -> None:
     ValueError if the key currently holds a list, since flattening one
     silently would lose data.
 
-    Scalars only, and deliberately: `_dump` emits exactly one
-    `[section]` header per top-level key, so a dict value here would
-    serialise as `key = {...}` and fail to round-trip. Everything the
-    plugin stores is flat.
+    Strings only, deliberately: every value the plugin sets this way is
+    one, and a non-string here is far more likely a caller's mistake
+    than a schema change.
     """
     if not isinstance(value, str):
         raise TypeError(

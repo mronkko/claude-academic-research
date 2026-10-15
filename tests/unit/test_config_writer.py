@@ -366,3 +366,56 @@ def test_promote_scalar_leaves_an_existing_list_alone(_redirect_config) -> None:
     assert config_writer._read()["library"]["openurl_base"] == [
         "https://a.example/x", "https://b.example/y",
     ]
+
+
+# ---------------------------------------------------------------------------
+# G6 / G7 — the serialiser keeps types, nested tables and odd strings
+# ---------------------------------------------------------------------------
+
+
+def test_rewrite_keeps_types_and_unknown_tables(_redirect_config) -> None:
+    """A runtime mutation rewrites the whole file. Booleans and numbers
+    used to come back as strings ("False" is truthy), and a nested table
+    would not serialise at all."""
+    from core import config_writer
+
+    _write_initial(_redirect_config, (
+        "[elsevier]\nrender_xml_to_pdf = false\n"
+        "[llm]\nmax_retries = 3\ntemperature = 0.5\n"
+        "[custom.nested]\nflag = true\nids = [1, 2]\n"
+    ))
+    config_writer.set_value("llm", "provider", "openai")
+
+    data = tomllib.loads(_redirect_config.read_text(encoding="utf-8"))
+    assert data["elsevier"]["render_xml_to_pdf"] is False
+    assert data["llm"] == {"max_retries": 3, "temperature": 0.5, "provider": "openai"}
+    assert data["custom"]["nested"] == {"flag": True, "ids": [1, 2]}
+
+
+def test_control_characters_are_escaped(_redirect_config) -> None:
+    from core import config_writer
+
+    _write_initial(_redirect_config, "")
+    nasty = 'a\nb\tc\r"d"\\e\x00\x1f\x7f'
+    config_writer.set_value("custom", "v", nasty)
+    data = tomllib.loads(_redirect_config.read_text(encoding="utf-8"))
+    assert data["custom"]["v"] == nasty
+
+
+def test_quoted_keys_round_trip(_redirect_config) -> None:
+    from core import config_writer
+
+    _write_initial(_redirect_config, '["odd section"]\n"a key" = "v"\n')
+    config_writer.set_value("llm", "provider", "x")
+    data = tomllib.loads(_redirect_config.read_text(encoding="utf-8"))
+    assert data["odd section"] == {"a key": "v"}
+
+
+def test_write_leaves_no_temp_file_and_is_private(_redirect_config) -> None:
+    from core import config_writer
+
+    _write_initial(_redirect_config, "")
+    config_writer.set_value("llm", "provider", "x")
+    assert not list(_redirect_config.parent.glob(".config.toml.*"))
+    if sys.platform != "win32":
+        assert stat.S_IMODE(_redirect_config.stat().st_mode) == 0o600
