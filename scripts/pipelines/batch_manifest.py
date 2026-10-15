@@ -441,6 +441,43 @@ def run_record_path(responses_path: Path) -> Path:
     return responses_path.parent / f"{name}.run.json"
 
 
+def _output_tokens(response: dict) -> int:
+    """The response's output-token count, estimated when it carries none.
+
+    An external executor may not report usage at all. Treating a missing
+    count as zero would make every such run look degenerate; a character
+    proxy (the same ~4 chars/token `run_manifest.py` uses) does not.
+    """
+    n = response.get("output_tokens")
+    if n is None:
+        return len(response.get("response_text") or "") // 4
+    return int(n or 0)
+
+
+def run_record_for_apply(
+    responses_path: Path, header: dict, responses: list[dict],
+) -> dict:
+    """The run record `apply` checks for degeneracy.
+
+    The `.run.json` beside the responses when there is one; otherwise one
+    computed here from the responses themselves. Only `run_manifest.py`
+    and the cluster runner write that file — a response file from any
+    other executor arrived without it, and the degeneracy guard used to
+    be skipped entirely, so a broken gateway run tagged the whole corpus
+    `borderline`. The guard is too important to depend on the executor.
+    """
+    record = load_run_record(run_record_path(responses_path))
+    if record:
+        return record
+    return summarise_run(
+        header.get("run_id", ""),
+        stage="",
+        model=header.get("model", ""),
+        responses=responses,
+        extra={"computed_at_apply": True},
+    )
+
+
 def summarise_run(
     run_id: str,
     *,
@@ -461,8 +498,7 @@ def summarise_run(
         s = str(r.get("call_status", "error"))
         statuses[s] = statuses.get(s, 0) + 1
     out_tokens = [
-        int(r.get("output_tokens") or 0) for r in responses
-        if r.get("call_status") == "ok"
+        _output_tokens(r) for r in responses if r.get("call_status") == "ok"
     ]
     mean_out = (sum(out_tokens) / len(out_tokens)) if out_tokens else 0.0
     record: dict[str, Any] = {
@@ -478,7 +514,12 @@ def summarise_run(
         "recorded_at": datetime.now(UTC).isoformat(),
     }
     record.update(extra or {})
-    if responses and mean_out <= DEGENERATE_OUTPUT_TOKENS:
+    # Only a run the model actually answered can be degenerate. A run of
+    # nothing but failed or cut-off calls is a different problem, already
+    # visible in `status_counts`, and its rows are `error` — untagged and
+    # re-runnable — so there is nothing for this guard to protect.
+    answered = statuses.get("ok", 0) + statuses.get("empty", 0)
+    if answered and mean_out <= DEGENERATE_OUTPUT_TOKENS:
         record["degenerate_output"] = True
         record["degenerate_output_note"] = (
             f"mean output {mean_out:.2f} tokens per answered request. The "

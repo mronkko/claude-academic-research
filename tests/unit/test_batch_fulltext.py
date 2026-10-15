@@ -443,6 +443,31 @@ def test_a_degenerate_run_is_refused_before_anything_is_written(
     assert zot.tags == []
 
 
+def test_a_degenerate_run_is_refused_even_without_a_run_record(
+    tmp_path,
+) -> None:
+    """Executors other than run_manifest.py write no `.run.json`; the
+    guard is computed from the responses instead of being skipped (D1)."""
+    item = _item()
+    rows, _ = _emit([item], tmp_path)
+    manifest = tmp_path / "m.jsonl"
+    bm.write_manifest(manifest, rows)
+    responses = tmp_path / "r.jsonl"
+    bm._write_jsonl(responses, [_response(rows[0], "", output_tokens=1)])
+    assert not bm.run_record_path(responses).exists()
+
+    out = tmp_path / "log.csv"
+    zot = FakeZot()
+    with pytest.raises(SystemExit, match="REFUSING"):
+        fc.apply_responses(
+            zot, manifest_path=manifest, manifest_rows=rows,
+            responses_path=responses, output_path=out, items=[item],
+            fields=FIELDS, csv_columns=COLS, force=False, ns=NS,
+        )
+    assert not out.exists()
+    assert zot.tags == []
+
+
 def test_items_coded_since_the_manifest_was_emitted_can_be_left_alone(
     tmp_path, capsys,
 ) -> None:

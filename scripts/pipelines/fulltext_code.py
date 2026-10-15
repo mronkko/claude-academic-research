@@ -1300,16 +1300,19 @@ def apply_responses(
     """
     header, _ = batch_manifest.read_manifest(manifest_path)
     batch_manifest.check_tag_prefix(header, ns, manifest_path)
-    _, responses = batch_manifest.read_responses(responses_path)
+    resp_header, responses = batch_manifest.read_responses(responses_path)
     paired, unanswered, orphaned = batch_manifest.join_responses(
         manifest_rows, responses,
     )
 
-    record = batch_manifest.load_run_record(
-        batch_manifest.run_record_path(responses_path),
+    # Computed from the responses when the executor wrote no run record:
+    # the guard must not depend on which executor ran the manifest.
+    batch_manifest.refuse_if_degenerate(
+        batch_manifest.run_record_for_apply(
+            responses_path, resp_header, responses,
+        ),
+        force=force,
     )
-    if record:
-        batch_manifest.refuse_if_degenerate(record, force=force)
 
     if orphaned:
         print(
