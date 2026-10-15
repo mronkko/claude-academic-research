@@ -45,7 +45,7 @@ every commit against `windows-latest`.
 
 ## What's in the plugin
 
-Ten user-invocable skills:
+Eleven user-invocable skills:
 
 | Skill | Mode | Purpose |
 |---|---|---|
@@ -55,7 +55,8 @@ Ten user-invocable skills:
 | `academic-style` | rule-book (eager) | House-style conventions at drafting time — APA citations, voice, tense, hedging, synthesis-over-enumeration, terminology. |
 | `systematic-review` | procedure (explicit) | End-to-end SLR pipeline from search → screening → coding → export. |
 | `cluster-screening` | procedure (explicit) | Screening / coding on a GPU cluster or batch scheduler: emit a manifest, run it under SLURM, apply the responses. |
-| `zotero-operations` | procedure (explicit) | Import, dedup, enrich, attach PDFs, maintain BBT keys. |
+| `zotero-operations` | procedure (explicit) | Import, dedup, enrich abstracts and DOIs, maintain BBT keys. |
+| `retrieving-pdfs` | procedure (explicit) | Find and attach PDFs: plan the retrieval with you (what the API cascade, paid OpenAlex, the browser / Connector passes and manual download would each get), record the agreed strategy, run it step by step, diagnose what is left. Loaded by `systematic-review` and `zotero-operations`. |
 | `fact-check` | procedure (explicit) | Verify citations and quantitative claims against sources. |
 | `critic-loop` | procedure (explicit) | Run 4 parallel critics (evidence / method / argument / expert) until no MAJOR issues remain. |
 | `setup` | procedure (explicit) | Hands you the terminal configuration wizard (API keys, LLM provider, MCP servers); switches LLM provider. |
@@ -77,7 +78,11 @@ than pasting long `uv run` commands for you to approve one by one:
 |---|---|---|
 | `check_setup` | read-only | `scripts/setup/check_configured.py`, `check_database_access.py` |
 | `scaffold_project` | writes project files | `scripts/setup/scaffold_project.py` |
-| `enrich_pdfs_plan` | read-only | `scripts/pipelines/enrich_pdfs.py --plan` |
+| `pdf_plan` | read-only | `scripts/pipelines/enrich_pdfs.py --plan-strategy` (the retrieval plan; `start_pdf_plan` adds the resolver lookups as a job) |
+| `pdf_strategy_show` | read-only | `scripts/pipelines/pdf_strategy.py show` |
+| `pdf_strategy_write` / `pdf_strategy_update` | writes project files | `scripts/pipelines/pdf_strategy.py init` / `update` (`.claude/pdf/strategy.toml`) |
+| `pdf_policy_write` | writes project files | `scripts/pipelines/pdf_strategy.py policy` (`PDF_*` in `screening_config.py`) |
+| `enrich_pdfs_plan` | read-only | `scripts/pipelines/enrich_pdfs.py --plan` (the browser pass's publisher queue) |
 | `enrich_pdfs_report` | read-only | `scripts/pipelines/enrich_pdfs.py --report` |
 | `pdf_manual_next` | writes Zotero, opens browser tabs | `scripts/pipelines/enrich_pdfs.py --manual next` |
 | `pdf_manual_collect` | writes Zotero | `scripts/pipelines/enrich_pdfs.py --manual collect` |
@@ -95,7 +100,7 @@ the full output of its last run is kept in `.claude/mcp/logs/`. **Every
 script remains runnable from a terminal** exactly as before — the tools
 are a front end, not a replacement. Only `uv` is required.
 
-The long steps run as **background jobs**: `start_search`, `start_import`,
+The long steps run as **background jobs**: `start_pdf_plan` (read-only), `start_search`, `start_import`,
 `start_enrich_abstracts`, `start_enrich_dois` (writes Zotero),
 `start_abstract_screen` and `start_fulltext_code` (cost LLM credits, write
 Zotero) each return a job id at once. `job_status` reports progress, the
