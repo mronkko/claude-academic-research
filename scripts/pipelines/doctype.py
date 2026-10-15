@@ -83,7 +83,8 @@ def _norm_title(title: str | None) -> str:
     return t.rstrip(" .:;")
 
 
-def _norm_doi(doi: str | None) -> str:
+def norm_doi(doi: str | None) -> str:
+    """Bare, lower-cased DOI — the key `supplement_links` matches on."""
     s = (doi or "").strip().lower()
     for prefix in ("https://doi.org/", "http://doi.org/",
                    "https://dx.doi.org/", "http://dx.doi.org/", "doi:"):
@@ -95,13 +96,13 @@ def _norm_doi(doi: str | None) -> str:
 
 def is_supplement_doi(doi: str | None) -> bool:
     """True for an APA-style supplement DOI (`<parent>.supp`)."""
-    d = _norm_doi(doi)
+    d = norm_doi(doi)
     return d.endswith(_SUPP_DOI_SUFFIX) and len(d) > len(_SUPP_DOI_SUFFIX)
 
 
 def parent_doi(doi: str | None) -> str:
     """The parent article's DOI for a supplement DOI, lower-cased; else ""."""
-    d = _norm_doi(doi)
+    d = norm_doi(doi)
     return d[: -len(_SUPP_DOI_SUFFIX)] if is_supplement_doi(d) else ""
 
 
@@ -205,7 +206,7 @@ def supplement_links(
     """
     pairs: list[tuple[str, str]] = []
     for doi in supplement_dois:
-        d = _norm_doi(doi)
+        d = norm_doi(doi)
         parent = parent_doi(d)
         if parent and d in key_by_doi and parent in key_by_doi:
             pair = (key_by_doi[d], key_by_doi[parent])
