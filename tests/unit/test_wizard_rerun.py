@@ -262,3 +262,51 @@ def test_value_with_newline_and_control_chars_round_trips(home, monkeypatch) -> 
     nasty = 'line one\nline two\t"quoted" \\ \x01 end'
     mod._write_config({"custom": {"v": nasty}})
     assert _read_cfg(mod)["custom"]["v"] == nasty
+
+
+# ---------------------------------------------------------------------------
+# G9 — closed stdin and bare-array listings
+# ---------------------------------------------------------------------------
+
+
+def _eof(*_a, **_k):
+    raise EOFError
+
+
+def test_prompts_survive_end_of_input(home, monkeypatch) -> None:
+    mod = _load(home)
+    monkeypatch.setattr("builtins.input", _eof)
+    existing = {
+        "library": {"no_access": ["wiley"], "direct_access": ["aom"]},
+        "elsevier": {"render_xml_to_pdf": False},
+        "zotero": {"local_api_key": "kept"},
+    }
+    assert mod._offer_no_access_editor(True, existing) == ["wiley"]
+    assert mod._offer_direct_access_editor(True, existing) == ["aom"]
+    assert mod._prompt_elsevier_xml_pdf(True, existing) == {"render_xml_to_pdf": False}
+    assert mod._prompt_zotero_local_writes(True, existing) == {"local_api_key": "kept"}
+
+
+def test_end_of_input_never_opens_the_zotero_consent_dialog(home, monkeypatch) -> None:
+    mod = _load(home)
+    monkeypatch.setattr("builtins.input", _eof)
+    monkeypatch.setattr(mod, "_check_zotero_local", lambda *a, **k: (mod.ZOTERO_LOCAL_STATUS_OK, ""))
+
+    def _boom(*_a, **_k):
+        raise AssertionError("asked Zotero for a key with nobody at the keyboard")
+
+    monkeypatch.setattr(mod, "_authorize_zotero_local", _boom)
+    assert mod._prompt_zotero_local_writes(True, {}) == {}
+
+
+@pytest.mark.parametrize("verify, payload", [
+    ("_verify_ollama_base_url", [{"name": "llama3:8b"}]),
+    ("_verify_lmstudio_base_url", [{"id": "qwen"}]),
+    ("_verify_ollama_base_url", {"models": [{"name": "llama3:8b"}]}),
+])
+def test_local_endpoint_accepts_a_bare_array(home, monkeypatch, verify, payload) -> None:
+    mod = _load(home)
+    monkeypatch.setattr(mod, "_http_json", lambda *a, **k: (200, payload, ""))
+    ok, msg, _ = getattr(mod, verify)("http://localhost:1")
+    assert ok
+    assert "1 model(s)" in msg

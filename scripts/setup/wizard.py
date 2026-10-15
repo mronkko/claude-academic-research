@@ -288,7 +288,14 @@ def _verify_local_endpoint(
         ), {}
     if status != 200:
         return False, f"{label} returned HTTP {status} from {path}", {}
-    models = (data or {}).get(payload_key) or []
+    # Some servers answer with the bare array instead of an envelope —
+    # the same shape `_verify_gateway_base_url` already accepts.
+    if isinstance(data, list):
+        models = data
+    elif isinstance(data, dict):
+        models = data.get(payload_key) or []
+    else:
+        models = []
     if not models:
         return True, f"{label} is running but has no models loaded yet", {}
     return True, f"{label} reachable; {len(models)} model(s) available", {}
@@ -1023,6 +1030,24 @@ def _print_header() -> None:
     print()
 
 
+def _ask(prompt: str, on_eof: str = "") -> str:
+    """`input()` that survives a closed stdin.
+
+    An interactive run whose input ends (piped, or Ctrl-D) used to die
+    with an EOFError traceback halfway through, before the config was
+    written. End of input now takes `on_eof` — the prompt's default
+    unless the caller passes a safer one — and Ctrl-C aborts cleanly.
+    """
+    try:
+        return input(prompt)
+    except EOFError:
+        print()
+        return on_eof
+    except KeyboardInterrupt:
+        print("\n  Aborted.")
+        sys.exit(1)
+
+
 def _prompt_key(spec: KeySpec, existing: str | None, interactive: bool,
                 verify: bool) -> tuple[str, dict]:
     env_value = os.environ.get(spec.env_var, "").strip() if spec.env_var else ""
@@ -1072,7 +1097,7 @@ def _prompt_key(spec: KeySpec, existing: str | None, interactive: bool,
     ok, msg, extras = spec.verify(value)
     print(f"{'✓' if ok else '✗'} {msg}")
     if not ok and spec.required:
-        retry = input("    Try again with a different key? [Y/n] ").strip().lower()
+        retry = _ask("    Try again with a different key? [Y/n] ", "n").strip().lower()
         if retry in ("", "y", "yes"):
             return _prompt_key(spec, existing, interactive, verify)
         print("    Continuing with unverified key.")
@@ -1157,7 +1182,7 @@ def _prompt_elsevier_xml_pdf(interactive: bool, existing: dict) -> dict[str, obj
         "    '-tdm-recovered' so they can be told apart from real PDFs.",
     )
     suffix = "[Y/n]" if default_yes else "[y/N]"
-    answer = input(f"    Recover these as generated PDFs? {suffix} ").strip().lower()
+    answer = _ask(f"    Recover these as generated PDFs? {suffix} ").strip().lower()
     if not answer:
         enabled = default_yes
     else:
@@ -1380,7 +1405,7 @@ def _detect_and_prompt_connector(
     print(f"    Detected extension at: {detected}")
     if detected_base != detected:
         print(f"    Recording the version-independent base: {detected_base}")
-    answer = input("    Use this? [Y/n] ").strip().lower()
+    answer = _ask("    Use this? [Y/n] ").strip().lower()
     if answer in ("", "y", "yes"):
         return {"extension_dir": str(detected_base)}
     return {}
@@ -1430,7 +1455,7 @@ def _offer_no_access_editor(
         "  Remove any from this list? Enter numbers separated by spaces,\n"
         "  or press Enter to keep all.",
     )
-    raw = input("    > ").strip()
+    raw = _ask("    > ").strip()
     if not raw:
         return current
 
@@ -1502,7 +1527,7 @@ def _offer_direct_access_editor(
             "  informs, oup, sage, springer, tandf, wiley.\n"
             "  Enter names separated by spaces, or press Enter to skip."
         )
-    raw = input("    > ").strip()
+    raw = _ask("    > ").strip()
     if not raw:
         return current
     if raw == "-":
@@ -2069,7 +2094,7 @@ def _prompt_zotero_local_writes(interactive: bool, existing: dict) -> dict[str, 
         return {"local_api_key": current} if current else {}
     if current:
         print("\n  Zotero local writes: already authorized (key on file).")
-        answer = input("    Request a new key? [y/N] ").strip().lower()
+        answer = _ask("    Request a new key? [y/N] ").strip().lower()
         if answer not in ("y", "yes"):
             return {"local_api_key": current}
 
@@ -2094,7 +2119,9 @@ def _prompt_zotero_local_writes(interactive: bool, existing: dict) -> dict[str, 
         "    'Allow' grants a key good for a single write, which cannot "
         "be stored.",
     )
-    answer = input("    Request local write access now? [Y/n] ").strip().lower()
+    # On end of input, "no": a yes opens a modal dialog in Zotero that
+    # nobody is there to answer.
+    answer = _ask("    Request local write access now? [Y/n] ", "n").strip().lower()
     if answer in ("n", "no"):
         return {"local_api_key": current} if current else {}
 
