@@ -244,6 +244,37 @@ def test_pdf_map_unparseable_dateadded_protects_attachment() -> None:
     assert result["PARENT_Y"][1] == []
 
 
+def test_a_server_id_mismatch_is_not_retried_as_a_version_conflict() -> None:
+    """A `ServerIDMismatchError` is a 412 subclass but no re-read of the
+    version can cure it — the local API now answers for another database.
+    Built with pyzotero's own error handler from the response the local
+    API sends, so the exception is exactly what pyzotero raises."""
+    import httpx2
+    from pyzotero import errors as pz_errors
+
+    request = httpx2.Request("PATCH", "http://127.0.0.1:23119/api/users/0/items/X1")
+    response = httpx2.Response(
+        412, text="Zotero-Server-ID does not match", request=request,
+    )
+    with pytest.raises(pz_errors.ServerIDMismatchError) as info:
+        pz_errors.error_handler(MagicMock(), response)
+    mismatch = info.value
+
+    stale = pz_errors.PreConditionFailedError("\nCode: 412\n")
+    assert zotero_io._is_version_conflict(stale) is True
+    assert zotero_io._is_version_conflict(mismatch) is False
+
+    zc = _client()
+    fake = MagicMock()
+    fake.item.return_value = {"key": "X1", "version": 3,
+                              "data": {"key": "X1", "tags": []}}
+    fake.update_item.side_effect = mismatch
+    zc._cloud = fake
+    with pytest.raises(pz_errors.ServerIDMismatchError):
+        zc.update_tags("X1", add=["t"])
+    assert fake.update_item.call_count == 1
+
+
 def _cloud_with_template():
     """A fake pyzotero client whose attachment template is a real dict.
 
@@ -837,179 +868,8 @@ def test_get_tags_returns_empty_set_for_untagged_item() -> None:
     assert zc.get_tags("X1") == set()
 
 
-# ---------------------------------------------------------------------------
-# batch_update_tags — bulk path used by --csv-backfill. Fetches items in
-# one call per batch, sends one multi-item PATCH per batch.
-# ---------------------------------------------------------------------------
-
-
-def _data_item(key: str, version: int, tags: list[str]) -> dict:
-    """Item shape that comes back from `cloud.items(itemKey=...)` —
-    flat (no nested `data` wrapper), matches Zotero's read API."""
-    return {
-        "key": key,
-        "version": version,
-        "data": {"key": key, "version": version,
-                 "tags": [{"tag": t} for t in tags]},
-    }
-
-
-def test_batch_update_tags_returns_zeroes_on_empty_input() -> None:
-    zc = _client()
-    zc._cloud = MagicMock()
-    stats = zc.batch_update_tags([])
-    assert stats == {"applied": 0, "unchanged": 0, "failed": 0}
-
-
-def test_batch_update_tags_sends_one_multi_item_patch() -> None:
-    """Two items, three chunks at most one API call each: one bulk
-    items() fetch + one update_items() PATCH."""
-    zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.items.return_value = [
-        _data_item("A", 5, ["abstract:borderline"]),
-        _data_item("B", 7, []),
-    ]
-    fake_cloud.update_items.return_value = {
-        "success": {"0": "A", "1": "B"},
-        "unchanged": {},
-        "failed": {},
-    }
-    zc._cloud = fake_cloud
-
-    stats = zc.batch_update_tags([
-        ("A", {"add": ["abstract:include"],
-               "remove_prefixed": ["abstract:"]}),
-        ("B", {"add": ["abstract:exclude"]}),
-    ])
-
-    assert stats == {"applied": 2, "unchanged": 0, "failed": 0}
-    # One bulk fetch with both keys.
-    fake_cloud.items.assert_called_once_with(itemKey="A,B")
-    # One multi-item PATCH.
-    fake_cloud.update_items.assert_called_once()
-    payloads = fake_cloud.update_items.call_args[0][0]
-    assert len(payloads) == 2
-    # A flipped: borderline removed, include added.
-    a = next(p for p in payloads if p["key"] == "A")
-    assert a["version"] == 5
-    assert {t["tag"] for t in a["tags"]} == {"abstract:include"}
-    # B tagged from scratch.
-    b = next(p for p in payloads if p["key"] == "B")
-    assert {t["tag"] for t in b["tags"]} == {"abstract:exclude"}
-
-
-def test_batch_update_tags_skips_noops_without_patching() -> None:
-    """Items already in the desired state should not appear in the
-    PATCH payload at all."""
-    zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.items.return_value = [
-        _data_item("A", 5, ["abstract:include"]),
-    ]
-    zc._cloud = fake_cloud
-
-    stats = zc.batch_update_tags([
-        ("A", {"add": ["abstract:include"],
-               "remove_prefixed": ["abstract:"]}),
-    ])
-
-    assert stats == {"applied": 0, "unchanged": 1, "failed": 0}
-    fake_cloud.update_items.assert_not_called()
-
-
-def test_batch_update_tags_counts_missing_items_as_failed() -> None:
-    """If the bulk fetch doesn't return an item (deleted between the
-    audit scan and backfill), the update is marked failed. Never
-    silently dropped."""
-    zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.items.return_value = [_data_item("A", 5, [])]  # B missing
-    fake_cloud.update_items.return_value = {
-        "success": {"0": "A"}, "unchanged": {}, "failed": {},
-    }
-    zc._cloud = fake_cloud
-
-    stats = zc.batch_update_tags([
-        ("A", {"add": ["t1"]}),
-        ("B", {"add": ["t2"]}),
-    ])
-
-    assert stats == {"applied": 1, "unchanged": 0, "failed": 1}
-
-
-def test_batch_update_tags_chunks_to_batch_size() -> None:
-    """A 150-item backfill with batch_size=50 produces 3 fetches + 3 PATCHes."""
-    zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.items.side_effect = lambda itemKey: [
-        _data_item(k, 1, []) for k in itemKey.split(",")
-    ]
-    fake_cloud.update_items.side_effect = lambda payloads: {
-        "success": {str(i): p["key"] for i, p in enumerate(payloads)},
-        "unchanged": {}, "failed": {},
-    }
-    zc._cloud = fake_cloud
-
-    updates = [(f"K{i:03d}", {"add": ["x"]}) for i in range(150)]
-    stats = zc.batch_update_tags(updates, batch_size=50)
-
-    assert stats["applied"] == 150
-    assert fake_cloud.items.call_count == 3
-    assert fake_cloud.update_items.call_count == 3
-
-
-def test_batch_update_tags_handles_bool_true_return() -> None:
-    """Some pyzotero versions (e.g. 1.13.x) return a bare bool from
-    `update_items` instead of a `{success, unchanged, failed}` dict —
-    calling `.get()` on that bool used to raise AttributeError mid-batch.
-    A truthy bool means pyzotero's own `_post_check` didn't raise, so
-    the whole chunk of payloads is counted as applied."""
-    zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.items.return_value = [
-        _data_item("A", 5, ["abstract:borderline"]),
-        _data_item("B", 7, []),
-    ]
-    fake_cloud.update_items.return_value = True
-    zc._cloud = fake_cloud
-
-    stats = zc.batch_update_tags([
-        ("A", {"add": ["abstract:include"],
-               "remove_prefixed": ["abstract:"]}),
-        ("B", {"add": ["abstract:exclude"]}),
-    ])
-
-    assert stats == {"applied": 2, "unchanged": 0, "failed": 0}
-
-
-def test_batch_update_tags_handles_bool_false_return() -> None:
-    """Defensive branch: a falsy non-dict return counts the chunk as
-    failed rather than raising or silently dropping it."""
-    zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.items.return_value = [_data_item("A", 5, [])]
-    fake_cloud.update_items.return_value = False
-    zc._cloud = fake_cloud
-
-    stats = zc.batch_update_tags([("A", {"add": ["t1"]})])
-
-    assert stats == {"applied": 0, "unchanged": 0, "failed": 1}
-
-
-def test_batch_update_tags_falls_back_when_update_items_missing() -> None:
-    """Older pyzotero without update_items should still work via the
-    per-item fallback path."""
-    zc = _client()
-    fake_cloud = MagicMock(spec=["items", "update_item"])  # no update_items
-    fake_cloud.items.return_value = [_data_item("A", 5, [])]
-    fake_cloud.update_item.return_value = True
-    zc._cloud = fake_cloud
-
-    stats = zc.batch_update_tags([("A", {"add": ["t1"]})])
-
-    assert stats == {"applied": 1, "unchanged": 0, "failed": 0}
-    fake_cloud.update_item.assert_called_once()
+# batch_update_tags: see tests/unit/test_batch_update_tags.py, which drives
+# a real pyzotero client rather than mocking a return shape it never has.
 
 
 # ---------------------------------------------------------------------------

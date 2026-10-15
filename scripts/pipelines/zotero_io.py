@@ -144,20 +144,49 @@ def _http_status_of(exc: BaseException) -> int | None:
     return None
 
 
-def _is_retryable_upload_error(exc: BaseException) -> bool:
-    """True for transient failures of the 3-step S3 attachment upload.
+def _is_transient_write_error(exc: BaseException) -> bool:
+    """True for transient failures of a Zotero write: worth another try.
 
-    The upload is three network round-trips (register → auth → PUT), so
-    a transport blip or a 503 anywhere in the chain aborts the whole
-    thing while the local PDF is perfectly good. Those are worth
-    retrying. A `RuntimeError` from `attach_pdf` is NOT — it means the
-    Zotero API accepted the request and explicitly reported the file in
-    its `failure` bucket, which retrying reproduces verbatim.
+    The attachment upload is three network round-trips (register → auth
+    → PUT), so a transport blip or a 503 anywhere in the chain aborts
+    the whole thing while the local PDF is perfectly good; a batched tag
+    PATCH dies the same way. Those are worth retrying. A `RuntimeError`
+    from `attach_pdf` is NOT — it means the Zotero API accepted the
+    request and explicitly reported the file in its `failure` bucket,
+    which retrying reproduces verbatim.
+
+    pyzotero's `UploadError` is transient by construction: 1.16 raises it
+    in exactly two places, both in the S3 PUT, for `httpx2.ConnectError`
+    and `httpx2.TimeoutException` — re-raised `from None`, so there is no
+    status and no httpx class left in the chain to recognise. Before it
+    was named here the upload retry never fired for the very failure it
+    was written for.
     """
+    upload_error = getattr(_pyzotero_errors, "UploadError", None)
+    if upload_error is not None and isinstance(exc, upload_error):
+        return True
     status = _http_status_of(exc)
     if status is not None:
         return status in _RETRYABLE_UPLOAD_STATUSES
     return _is_httpx_error(exc, "TransportError")
+
+
+#: The upload path's original name for the same test.
+_is_retryable_upload_error = _is_transient_write_error
+
+
+def _is_version_conflict(exc: BaseException) -> bool:
+    """A 412 that a fresh read of the item's version can cure.
+
+    `ServerIDMismatchError` is a 412 subclass, but it means the local
+    API now answers for a different Zotero database: no re-read of a
+    version fixes that, so retrying it three times only delays the
+    error the user needs to see.
+    """
+    if _http_status_of(exc) != 412:
+        return False
+    mismatch = getattr(_pyzotero_errors, "ServerIDMismatchError", None)
+    return not (mismatch is not None and isinstance(exc, mismatch))
 
 
 def _is_httpx_error(exc: BaseException, *names: str) -> bool:
@@ -198,6 +227,59 @@ _PAGE_ATTEMPTS = 4
 #: Indirection so tests can skip the backoff: tenacity binds its own
 #: `sleep` when `retry` is defined, out of reach of a monkeypatch.
 _page_sleep = time.sleep
+
+#: The same indirection for the write paths' backoff (batched tag
+#: writes, attachment uploads).
+_write_sleep = time.sleep
+
+#: Attempts for one batched tag write that fails transiently (429/5xx,
+#: transport). Each attempt re-reads the items, so a retry after a write
+#: that landed but whose answer was lost finds them already tagged and
+#: counts them unchanged rather than failing them on a stale version.
+_TAG_BATCH_ATTEMPTS = 4
+
+#: Passes over objects Zotero rejected one by one with a 412 (another
+#: writer touched the item between our read and our write). Each pass
+#: re-reads just those items.
+_TAG_CONFLICT_ROUNDS = 3
+
+
+def _post_items(z, payloads: list[dict]) -> dict:
+    """POST `payloads` to the library's `/items` and return Zotero's
+    per-object result map: `{"success": {idx: key}, "unchanged": {idx:
+    key}, "failed": {idx: {"key", "code", "message"}}}`.
+
+    Not pyzotero's `update_items`. Through 1.16 that discards the
+    response body and returns `True` whenever the HTTP status is 2xx
+    (`_batch_update`), and Zotero answers a multi-object write with 200
+    *even when every object in it was rejected* — the rejections are in
+    the body's `failed` map. Every per-object failure was therefore
+    counted as applied. It also returns normally on a 429 that carries a
+    Backoff header, having written nothing.
+
+    Raises pyzotero's typed error for a non-2xx answer (via its own
+    error handler, so `_http_status_of` reads it like any other), and
+    `TooManyRequestsError` for that 429.
+    """
+    from pyzotero.zotero import build_url
+    check_backoff = getattr(z, "_check_backoff", None)
+    if callable(check_backoff):
+        check_backoff()
+    # Trailing slash as pyzotero's own `_batch_update` sends it.
+    url = build_url(z.endpoint, f"/{z.library_type}/{z.library_id}/items/")
+    resp = z._write("POST", url=url, json=payloads)
+    if resp.status_code >= 400:
+        # Raises for everything but a 429 with a Backoff header, which
+        # it records on `z` so the next attempt's `_check_backoff` waits.
+        _pyzotero_errors.error_handler(z, resp)
+        raise _pyzotero_errors.TooManyRequestsError(
+            f"\nCode: {resp.status_code}\nURL: {url}\nMethod: POST\n"
+            f"Response: {resp.text}"
+        )
+    body = resp.json()
+    if not isinstance(body, dict):
+        raise ValueError(f"unexpected multi-object write response: {body!r}")
+    return body
 
 
 def _read_page(fetch):
@@ -1159,7 +1241,7 @@ class ZoteroClient:
             # pyzotero >= 1.15 raises its own typed errors, which are
             # not httpx subclasses and carry no response; see
             # `_http_status_of`.
-            if _http_status_of(exc) == 412:
+            if _is_version_conflict(exc):
                 raise VersionConflictError(
                     f"{item_key}: version {current['version']} was stale"
                 ) from exc
@@ -1234,7 +1316,7 @@ class ZoteroClient:
             # pyzotero >= 1.15 raises its own typed errors, which are
             # not httpx subclasses and carry no response; see
             # `_http_status_of`.
-            if _http_status_of(exc) == 412:
+            if _is_version_conflict(exc):
                 raise VersionConflictError(
                     f"{item_key}: version {current['version']} was stale "
                     f"during tag update"
@@ -1260,117 +1342,177 @@ class ZoteroClient:
         *,
         batch_size: int = 50,
     ) -> dict[str, int]:
-        """Apply tag changes to many items via pyzotero's multi-item
-        PATCH. Intended for bulk paths like `--csv-backfill` where N
-        tag writes over N separate PATCH calls would be slow and
-        412-prone; the steady-state per-worker path continues to use
-        `update_tags()`.
+        """Apply tag changes to many items, one multi-object write per
+        batch. The bulk path behind `--csv-backfill`, abstract
+        screening's steady-state tag flush, `manage_tags --apply` and
+        `apply_qa_adjudications`; single writes use `update_tags()`.
 
         Each entry in `updates` is `(item_key, op)` where `op` is a
         dict with any of `add`, `remove`, `remove_prefixed` (same
         semantics as `update_tags`). Items are fetched in one call
-        per batch, new tag sets are computed, and the batch is sent
-        as a single PATCH. `batch_size` caps per-PATCH size at 50
-        (Zotero's per-request limit).
+        per batch from the write surface, new tag sets are computed,
+        and the batch is sent as one POST. `batch_size` is capped at
+        50, Zotero's per-request limit.
 
         Returns `{applied, unchanged, failed}` counts across all
-        batches. When pyzotero's `update_items` returns a dict,
-        partial-batch failures are surfaced individually via its
-        success / failed buckets; when it returns a bool (some
-        pyzotero versions report only whole-call success), the whole
-        chunk is counted as applied or failed accordingly. This
-        method does not retry on 412 (callers should re-invoke after
-        fetching fresh state).
-        """
-        if not updates:
-            return {"applied": 0, "unchanged": 0, "failed": 0}
+        batches, read from Zotero's per-object answer — see
+        `_post_items` for why pyzotero's `update_items` cannot be used
+        to get them. An item counts as failed when the bulk read did not
+        return it, when Zotero rejected it, or when its write still
+        could not land after the retries below; failures are logged with
+        Zotero's reason.
 
+        Retries, so one bad moment does not kill a long screening run:
+        - a transient failure of the whole request (429, 5xx,
+          transport) is retried up to `_TAG_BATCH_ATTEMPTS` times,
+          re-reading the batch each time;
+        - objects Zotero rejected individually with 412 (edited since
+          our read) are re-read and re-sent, up to
+          `_TAG_CONFLICT_ROUNDS` passes.
+        If transient failures outlast the attempts, that batch's
+        pending items are counted failed and the run moves on, since the
+        callers treat a failed item as "re-run will redo it". Any other
+        error (403, a bad key) raises: it would fail every batch alike.
+        """
         stats = {"applied": 0, "unchanged": 0, "failed": 0}
+        if not updates:
+            return stats
+        batch_size = max(1, min(batch_size, 50))
 
         for i in range(0, len(updates), batch_size):
-            chunk = updates[i:i + batch_size]
-            keys = [k for k, _ in chunk]
-            # One bulk fetch per batch: `items` filtered by itemKey.
-            fetched = self._write_client().items(itemKey=",".join(keys))
-            fetched_by_key = {it.get("key"): it for it in fetched}
-
-            payloads: list[dict] = []
-            for item_key, op in chunk:
-                item = fetched_by_key.get(item_key)
-                if item is None:
-                    stats["failed"] += 1
-                    continue
-
-                data = item.get("data", {})
-                existing = {
-                    t.get("tag", "")
-                    for t in data.get("tags", [])
-                    if t.get("tag")
-                }
-                add_set = {t for t in op.get("add", ()) if t}
-                remove_set = {t for t in op.get("remove", ()) if t}
-                prefix_tuple = tuple(
-                    p for p in op.get("remove_prefixed", ()) if p
+            pending = updates[i:i + batch_size]
+            for _ in range(_TAG_CONFLICT_ROUNDS):
+                try:
+                    chunk_stats, pending = self._apply_tag_batch(pending)
+                except Exception as exc:
+                    if not _is_transient_write_error(exc):
+                        raise
+                    logger.warning(
+                        "zotero_io: %d tag write(s) not applied after %d "
+                        "attempts (%s); counted as failed",
+                        len(pending), _TAG_BATCH_ATTEMPTS, exc,
+                    )
+                    stats["failed"] += len(pending)
+                    pending = []
+                    break
+                for k, v in chunk_stats.items():
+                    stats[k] += v
+                if not pending:
+                    break
+            if pending:
+                logger.warning(
+                    "zotero_io: %d tag write(s) still in version conflict "
+                    "after %d passes: %s",
+                    len(pending), _TAG_CONFLICT_ROUNDS,
+                    ", ".join(k for k, _ in pending),
                 )
-
-                def _matches_prefix(tag: str, _pt=prefix_tuple) -> bool:
-                    return any(tag.startswith(p) for p in _pt)
-
-                target = {
-                    t for t in existing
-                    if t not in remove_set and not _matches_prefix(t)
-                } | add_set
-
-                if target == existing:
-                    stats["unchanged"] += 1
-                    continue
-
-                payloads.append({
-                    "key": item_key,
-                    "version": data.get("version", 0),
-                    "tags": [{"tag": t} for t in sorted(target)],
-                })
-
-            if not payloads:
-                continue
-
-            if not hasattr(self._write_client(), "update_items"):
-                # Fallback for older pyzotero without multi-item PATCH.
-                for p in payloads:
-                    try:
-                        self._write_client().update_item(p)
-                        stats["applied"] += 1
-                    except Exception:  # noqa: BLE001
-                        stats["failed"] += 1
-                continue
-
-            # pyzotero's update_items return shape varies by version:
-            # some releases return a dict `{success, unchanged, failed}`
-            # each keyed by batch index, while others (e.g. 1.13.x,
-            # which just POSTs each chunk and raises on any non-2xx
-            # response) return a plain bool for the whole call. Branch
-            # on the actual runtime type rather than assuming one
-            # shape — a bare `.get()` on a bool blows up with
-            # AttributeError mid-batch.
-            resp = self._write_client().update_items(payloads)
-            if isinstance(resp, dict):
-                stats["applied"] += len(resp.get("success") or {})
-                stats["unchanged"] += len(resp.get("unchanged") or {})
-                failed = resp.get("failed") or resp.get("failure") or {}
-                stats["failed"] += len(failed)
-            else:
-                # Bool (or any other non-dict) result: treat it as an
-                # all-or-nothing signal for this chunk. pyzotero raises
-                # on a failed PATCH rather than returning False, so a
-                # truthy return here means the whole chunk of
-                # `payloads` succeeded; a falsy return is handled
-                # defensively as a whole-chunk failure.
-                if resp:
-                    stats["applied"] += len(payloads)
-                else:
-                    stats["failed"] += len(payloads)
+                stats["failed"] += len(pending)
 
         return stats
+
+    def _apply_tag_batch(
+        self, chunk: list[tuple[str, dict]],
+    ) -> tuple[dict[str, int], list[tuple[str, dict]]]:
+        """One read-compute-write pass over ≤50 tag ops, retried whole on
+        transient failure. Returns this pass's counts and the ops Zotero
+        rejected with a per-object 412, for the caller to re-run."""
+        return retry(
+            stop=stop_after_attempt(_TAG_BATCH_ATTEMPTS),
+            retry=retry_if_exception(_is_transient_write_error),
+            wait=wait_exponential(multiplier=1, max=10),
+            sleep=lambda s: _write_sleep(s),
+            reraise=True,
+            before_sleep=lambda rs: logger.warning(
+                "zotero_io: batched tag write failed (%s); retrying "
+                "(attempt %d of %d)",
+                rs.outcome.exception(), rs.attempt_number + 1,
+                _TAG_BATCH_ATTEMPTS,
+            ),
+        )(self._apply_tag_batch_once)(chunk)
+
+    def _apply_tag_batch_once(
+        self, chunk: list[tuple[str, dict]],
+    ) -> tuple[dict[str, int], list[tuple[str, dict]]]:
+        stats = {"applied": 0, "unchanged": 0, "failed": 0}
+        z = self._write_client()
+        keys = ",".join(k for k, _ in chunk)
+        fetched = _read_page(lambda: z.items(itemKey=keys))
+        fetched_by_key = {it.get("key"): it for it in fetched}
+
+        payloads: list[dict] = []
+        sent: list[tuple[str, dict]] = []
+        for item_key, op in chunk:
+            item = fetched_by_key.get(item_key)
+            if item is None:
+                logger.warning(
+                    "zotero_io: %s not found for tag write; counted as failed",
+                    item_key,
+                )
+                stats["failed"] += 1
+                continue
+
+            data = item.get("data", {})
+            existing = {
+                t.get("tag", "")
+                for t in data.get("tags", [])
+                if t.get("tag")
+            }
+            add_set = {t for t in op.get("add", ()) if t}
+            remove_set = {t for t in op.get("remove", ()) if t}
+            prefix_tuple = tuple(p for p in op.get("remove_prefixed", ()) if p)
+
+            def _matches_prefix(tag: str, _pt=prefix_tuple) -> bool:
+                return any(tag.startswith(p) for p in _pt)
+
+            target = {
+                t for t in existing
+                if t not in remove_set and not _matches_prefix(t)
+            } | add_set
+
+            if target == existing:
+                stats["unchanged"] += 1
+                continue
+
+            payloads.append({
+                "key": item_key,
+                "version": data.get("version", item.get("version", 0)),
+                "tags": [{"tag": t} for t in sorted(target)],
+            })
+            sent.append((item_key, op))
+
+        if not payloads:
+            return stats, []
+
+        body = _post_items(z, payloads)
+        success = body.get("success") or {}
+        unchanged = body.get("unchanged") or {}
+        failed = body.get("failed") or {}
+        conflicted: list[tuple[str, dict]] = []
+        for idx, (item_key, op) in enumerate(sent):
+            slot = str(idx)
+            if slot in success:
+                stats["applied"] += 1
+            elif slot in unchanged:
+                stats["unchanged"] += 1
+            elif slot in failed:
+                reason = failed[slot] if isinstance(failed[slot], dict) else {}
+                if reason.get("code") == 412:
+                    conflicted.append((item_key, op))
+                    continue
+                logger.warning(
+                    "zotero_io: tag write for %s rejected: %s %s",
+                    item_key, reason.get("code", "?"),
+                    reason.get("message", failed[slot]),
+                )
+                stats["failed"] += 1
+            else:
+                # Absent from every bucket: nothing says it landed.
+                logger.warning(
+                    "zotero_io: no result for tag write on %s; counted as failed",
+                    item_key,
+                )
+                stats["failed"] += 1
+        return stats, conflicted
 
     def items_with_tag(
         self,
@@ -1479,7 +1621,7 @@ class ZoteroClient:
             # pyzotero >= 1.15 raises its own typed errors, which are
             # not httpx subclasses and carry no response; see
             # `_http_status_of`.
-            if _http_status_of(exc) == 412:
+            if _is_version_conflict(exc):
                 raise VersionConflictError(
                     f"{note_key}: version {note_version} was stale during "
                     f"child-note upsert"
