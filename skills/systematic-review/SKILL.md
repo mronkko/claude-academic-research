@@ -1,6 +1,6 @@
 ---
 name: systematic-review
-description: Use when running a full systematic literature review (SLR) — PRISMA-style search, screening, coding, and export. Trigger phrases "systematic review", "SLR", "PRISMA", "screen papers", "code papers", "full-text screening". Do NOT use for isolated Zotero enrichment — use `zotero-operations`; for screening on a GPU cluster or batch scheduler — use `cluster-screening`. Targets social sciences; medical-SLR instruments (RoB 2, ROBINS-I, evidence hierarchies, PRISMA-P) are out of scope.
+description: Use when running a full systematic literature review (SLR) — PRISMA-style search, screening, coding, and export. Trigger phrases "systematic review", "SLR", "PRISMA", "screen papers", "code papers", "full-text screening". Do NOT use for isolated Zotero enrichment — use `zotero-operations`; for PDF retrieval alone — use `retrieving-pdfs`; for cluster screening — use `cluster-screening`. Targets social sciences; medical-SLR instruments (RoB 2, ROBINS-I, PRISMA-P) are out of scope.
 ---
 
 # systematic-review
@@ -66,7 +66,9 @@ Then ask once. After a "proceed", the later stages run without further
 questions — the `PAID LLM RUN` banner still prints before each one, so
 the record of what was spent stays in the transcript.
 
-**What is not gated:** search, import, and enrichment. Database APIs
+**What is not gated:** search, import, and enrichment — except that PDF
+retrieval beyond its API step needs the user (`retrieving-pdfs` folds its
+strategy questions into this proposal). Database APIs
 (OpenAlex, Scopus, WoS, Semantic Scholar, Crossref, Unpaywall) are
 covered by keys the user already has, cost nothing per call, and
 produce the counts the proposal needs. Run them first, then propose.
@@ -1093,7 +1095,7 @@ under *Namespacing* above.
 | `pdf:preprint-version` | `enrich_pdfs.py --allow-preprints`, when the only copy found is on arXiv / SSRN / RePEc | **Warning, not exclusion — and the most consequential of these.** The attached PDF is the manuscript *before* peer review. Hypotheses, samples and findings all move between a working paper and the published article, and nothing downstream can tell the difference: the coding note and the CSV row read identically either way. `fulltext_code.py` names these items before it codes them and `audit_zotero_library.py` lists them under `preprint_version`. Verify each coded finding against the published article, or fetch the real one, before the numbers reach a manuscript. Do **not** confuse this with `OUT_OF_SCOPE`, which is about the *item's* type being a preprint; this is a journal article with a preprint file attached. |
 | `pdf:version:published` / `pdf:version:accepted` / `pdf:version:submitted` | `enrich_pdfs.py`, on every PDF it attaches (API sources, browser handlers, Zotero Connector) | **Information, not exclusion.** Which version the attached file is: the publisher's version of record, the author's accepted manuscript, or a preprint. Decided from the source, conservatively — anything uncertain is tagged `accepted`, never `published` — so `published` is reliable and `accepted` may include some typeset publisher PDFs hosted by repositories. Older attachments have no version tag. Additive: `pdf:repository-copy` and `pdf:preprint-version` are still written. |
 | `pdf:manual` | `enrich_pdfs.py --manual` (MCP `pdf_manual_next` / `pdf_manual_collect` / `pdf_manual_assign`) | **Information.** The user downloaded this PDF in their own browser and the manual-download cycle matched and attached it. Its `pdf:version:*` tag comes from the page the tab opened (library platform or doi.org → published), lowered when the file's first page says it is an accepted manuscript or a preprint. |
-| `<prefix>/fulltext:unavailable` | Applied by the agent **only** after `audit_zotero_library.py` reports the item's cause as `UNAVAILABLE` | The full text could not be obtained by any route the plugin has. This one **is** namespaced — it is a `fulltext:*` tag, mutually exclusive with `<prefix>/fulltext:include` / `…:exclude`, and it records a decision about this review rather than a fact about the paper. **Do not invent a spelling for this, and do not omit the prefix** — an unprefixed one belongs to no review and no script will see it. **Do not apply it on a failed enrichment run alone:** a `BROWSER_REQUIRED` or `ACCESS_BLOCKED` item is reachable and this tag would be false. See *Phase 4 — diagnose before you exclude*. |
+| `<prefix>/fulltext:unavailable` | Applied by the agent **only** after `audit_zotero_library.py` reports the item's cause as `UNAVAILABLE` | The full text could not be obtained by any route the plugin has. This one **is** namespaced — it is a `fulltext:*` tag, mutually exclusive with `<prefix>/fulltext:include` / `…:exclude`, and it records a decision about this review rather than a fact about the paper. **Do not invent a spelling for this, and do not omit the prefix** — an unprefixed one belongs to no review and no script will see it. **Do not apply it on a failed enrichment run alone:** a `BROWSER_REQUIRED` or `ACCESS_BLOCKED` item is reachable and this tag would be false. See *Diagnose before you exclude* in `retrieving-pdfs`. |
 
 ### QA and adjudication tags
 
@@ -1210,10 +1212,7 @@ single-item debugging).
 | Summarise screening / coding decisions across passes | `screening_report.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/screening_report.py <log.csv> [--list <decision>] [--list-rescreened] [--search-csv <search_results.csv>]` — `--search-csv` adds the removed-before-screening count |
 | Tag supplements / front matter / notices already in a library | `tag_doctypes.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/tag_doctypes.py --group <id> [--collection <key>]` (dry run) · add `--apply` to write · `--no-link` skips relating supplements to their article |
 | Fetch missing abstracts (multi-source cascade) | `enrich_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_abstracts.py --filter-keys-file <keys> [--remote]` |
-| Attach missing PDFs (multi-source cascade) | `enrich_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --filter-keys-file <keys> [--remote] [--item-types journalArticle,bookSection,book]` — journal articles only unless `--item-types` admits more; an admitted type is never logged `OUT_OF_SCOPE` |
-| Attach Wiley PDFs only (TDM token) | `enrich_pdfs.py --sources wiley` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --sources wiley --filter-keys-file <keys>` |
-| Attach Cloudflare-gated PDFs (Sage, APA, T&F, Emerald, …) | `enrich_pdfs.py --sources browser` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --sources browser --filter-keys-file <keys>` |
-| Manual download in batches (user downloads, plugin attaches) | `enrich_pdfs.py --manual next` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --manual next [--filter-keys-file <keys>] [--library <name>]`, then `--manual collect` after the last batch |
+| Attach missing PDFs (plan with the user, then API / paid / browser / Connector / manual) | `enrich_pdfs.py` | **REQUIRED SUB-SKILL: retrieving-pdfs** — it runs the planning step and every mode |
 | Audit library (missing abstracts / PDFs / stubs) | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group <id> [--remote]` |
 | Export includes-only coded view | `export_coded_includes.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/export_coded_includes.py --group <id> --collection <key> --config ./screening_config.py --out analysis/results/coded_papers.csv` |
 | List / prune this review's Zotero tags | `manage_tags.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/manage_tags.py --group <id> --collection <key> --list` · add `--prune <field> --apply` to drop a coded-value family |
@@ -1518,313 +1517,27 @@ Cascade in order: Crossref → Semantic Scholar (DOI) → Semantic Scholar
 
 ### PDF retrieval
 
-A four-phase cascade that `enrich_pdfs.py` runs automatically. Each
-phase handles a class of item the previous phase can't; nothing is
-ever silently dropped.
+**REQUIRED SUB-SKILL: retrieving-pdfs.** Load it with the Skill tool
+before attaching any PDF, and follow it. It plans retrieval with the user
+(what the API cascade, the paid OpenAlex source, the browser and
+Connector passes and manual download would each get), records the agreed
+order in `.claude/pdf/strategy.toml`, executes it step by step, and owns
+the retrieval doctrine: the source cascade and its traps, the `[pdf]`
+policy, the failure causes, and *diagnose before you exclude*.
 
-**Prefer the API route.** Retrieval through APIs is both faster and far
-less error prone than driving a browser: nothing depends on a page
-layout, a Cloudflare challenge, or the user being at the keyboard. Run
-the API phases to exhaustion before proposing a browser pass, and expect
-the browser to be a remainder-handling step rather than the main event.
+What this skill adds for a review:
 
-The order is ranked by **version quality first, cost second**, and
-within a quality tier free sources always precede paid ones. Only one
-source in the whole sequence bills per item. The full retrieval sequence,
-and which phase runs each stage:
-
-```
-Stage 1 — free version of record            ┐
-  ScienceDirect (Elsevier) → Springer       │
-  → Wiley TDM → Crossref TDM → PMC          │
-Stage 2 — paid version of record            ├─ Phase 1 (API cascade,
-  OpenAlex Content API ($0.01/PDF, opt-in)  │   default mode)
-Stage 3 — open access, often author version │
-  OpenAlex OA metadata → Unpaywall          │
-  → Semantic Scholar → CORE                 │
-  → [preprints, only with --allow-preprints]┘
-Stage 4 — browser handlers for gated publishers  ── Phase 2
-  (APA, Sage, AOM, T&F, OUP, Emerald, INFORMS, …)
-Stage 5 — Zotero Connector + library link resolver ── Phase 3
-```
-
-Wiley TDM (`WILEY_TDM_TOKEN`) is a stage-1 source and runs in the
-default cascade. It used to be excluded, on the reasoning that it needs
-a token — but so does ScienceDirect, and the fetcher already
-self-disables without one. The exclusion cost real coverage silently,
-because `--all` builds its Pass 1 from the same default list: on a live
-1,895-item pass, 47 Wiley PDFs were reachable that no documented
-one-shot invocation would have asked for. `--sources wiley` still works
-for a Wiley-only run.
-
-Expect the token to answer for **current** content only. On that same
-pass its hit rate was ~20% for 1990-onward articles and **zero** for
-anything older — a back-file entitlement gap, not a failure. Pre-1990
-Wiley articles are a browser / EBSCO job.
-
-**Two stage-1 sources fail in ways that look like "article unavailable"
-and are not.** Check for these before concluding anything about an item:
-
-- **Springer is bot-blocked, not network-gated.**
-  `link.springer.com/content/pdf/<doi>.pdf` answers any HTTP client with
-  an identical ~3 KB `Client Challenge` page — an Imperva JavaScript
-  interstitial — regardless of DOI, entitlement, or whether you are on
-  the campus network. Verified from an on-campus IP across ten DOIs,
-  including titles the institution certainly licenses, and unchanged by
-  a full browser header set. So Springer DOIs reliably fall through
-  stage 1 and must be recovered at stage 4 (browser) instead. A VPN does
-  not help; nothing about the failure is about access.
-- **Elsevier may return a one-page preview with HTTP 200.** The TDM
-  endpoint serves `application/pdf` of plausible size (300 KB+) while
-  `X-ELS-Status` reads `WARNING - Response limited to first page because
-  requestor not entitled to resource`. The fetcher detects this and
-  refuses to attach it, which is correct — but the signal is logged at
-  info level, so a run can produce nothing from Elsevier while looking
-  healthy. If Elsevier yields no PDFs, suspect the key's full-text
-  entitlement rather than the articles.
-
-**Why the one paid tier outranks the free ones below it.** The OpenAlex
-Content API serves the publisher's own file — the version of record,
-correctly paginated. Unpaywall, Semantic Scholar and CORE frequently
-hold an author accepted manuscript instead, whose page numbers do not
-match the published article. When the downstream job is quoting text and
-citing pages, a correct version of record is worth $0.01 more than a
-free manuscript. Its position is the `[pdf] paid` policy, asked in
-`/setup`: `prefer` (default, this position), `last_resort` (after every
-free source) or `off` (free and institutionally-subscribed sources only;
-the older `[openalex] use_paid_content_api = false` still means `off`).
-A review that needs the version of record only sets
-`PDF_MIN_VERSION = "published"` in `screening_config.py`. CORE
-sits last of the free sources for the same version-quality reason, and
-its attachments carry `pdf:repository-copy` so the distinction survives
-into coding.
-
-**Phase 2 — browser cascade for Cloudflare-gated publishers**
-(`enrich_pdfs.py --sources browser`). HTTP clients cannot solve the
-Cloudflare JS challenge, so for Sage, OUP, Taylor & Francis, Emerald,
-and similar CF-gated publishers, a Playwright-driven Chromium opens
-visibly. The user passes the Cloudflare challenge once per publisher;
-the authenticated session then captures subsequent downloads
-automatically. First-time use needs a one-time browser install:
-`uvx playwright@latest install chromium` (the setup wizard pre-approves
-this command). If the browser cascade regresses, file an issue and
-attach the run log (`--log-csv`) so the failure can be reproduced.
-
-> **The agent runs this pass; the user only solves the challenges.**
-> The Playwright window opens on the user's screen either way. What the
-> agent lacks is a controlling TTY, so a bare invocation from the Bash
-> tool exits with a paste-in command rather than hanging on the first
-> prompt — pass `--control-file` and the prompts travel through a file
-> and the conversation instead. See *Phase 4* below for the handshake.
-> Most publishers now ask nothing at all: the script waits for the
-> Cloudflare challenge to clear on its own first, and a persistent
-> browser profile usually means there is nothing left to solve. For
-> genuinely unattended runs (cron, no user present) pass `--no-prompt`
-> — it answers every challenge with "skip" and records which publishers
-> were bypassed in the run log.
-
-> **`--plan` is read-only, not free.** It classifies the queue and names
-> the publishers that will need an interactive solve, without opening a
-> browser, fetching anything, or attaching anything — safe to run from
-> the Bash tool. But classification asks the library's link resolver
-> about each item it has no cached answer for, serially, at roughly two
-> seconds each: a few thousand items is an hour. The run prints that
-> estimate before it starts; read it before deciding to wait. If you
-> partition runs by scope — a cache directory per ladder so the logs
-> stay separable — point every one of them at the same
-> `--resolver-cache-dir`, or each pass re-asks the resolver everything
-> the last one already learned.
-
-> **Two libraries, one network at a time.** With several `[library] openurl_base` entries (more than one
-> affiliation), pass `--library <name>` for the institution whose VPN or
-> login is up right now; the run banner lists the names. Every library is
-> still consulted, but only that one's links are opened. Items whose only
-> route is at the other library are deferred, not logged, so re-run with
-> the other `--library` on its network. Switch this way, never by editing
-> config.toml. After upgrading, a warning about cache entries that
-> "predate per-library keys" means to run once with
-> `--adopt-legacy-resolver-cache <name>`, naming the library that was
-> *first* in the list when that cache was built. Ask the user if you
-> don't know.
-
-**Phase 3 — Zotero Connector + institutional SFX/OpenURL**
-(`enrich_pdfs.py` with Connector handlers). For items the browser
-cascade can't reach directly — typically paywalled content accessed via
-library proxy — the script launches Zotero Desktop's Connector
-extension and routes requests through the institution's SFX/OpenURL
-resolver (`scripts/pipelines/fetchers/library_resolver.py`). Requires:
-Zotero Desktop running locally, Zotero Connector installed in the
-Chromium profile, and the institution's OpenURL base URL configured.
-
-#### Manual download in batches — often the fastest route
-
-For whatever the API phases leave, **offer this before a long browser
-pass**: the user downloads in their own browser (their logins, VPN and
-extensions apply, no Cloudflare automation, no terms-of-use question —
-they are the one clicking), and the plugin does the rest. Usually the
-quickest way through a few hundred items.
-
-One command per cycle — `pdf_manual_next` (MCP) or
-`enrich_pdfs.py --manual next`:
-
-1. It opens the next batch (25 tabs by default; `batch_size`,
-   `[pdf] manual_batch_size`) — the library route, else doi.org. If a
-   route needs a proxy sign-in, only that tab opens: tell the user to
-   sign in and download it; the rest open on the next call.
-2. It moves the PDFs downloaded since the *previous* batch opened from
-   the Downloads folder (`[pdf] downloads_dir`, default `~/Downloads`)
-   into `output/pdf_staging/batch-N/`; unfinished downloads wait.
-3. It matches each file to an item still without a PDF (DOI or title on
-   the first page, Elsevier / DOI file names) and attaches it
-   (`pdf:manual`, version-tagged, `[pdf] min_version` applies).
-
-Tell the user to download what they can from the open tabs and say
-"done"; then run the next cycle. Relay the summary line (opened,
-attached, unmatched, remaining). After the last batch run
-`pdf_manual_collect`. **Never assign a file yourself**: an unmatched or
-ambiguous file is listed with its candidates — ask the user which item
-it is, then `pdf_manual_assign` (or `pdf_manual_ignore` for a stray
-file). State is in `.claude/pdf/manual_state.json`, so a later session
-resumes where this one stopped.
-
-**Phase 4 — diagnose before you exclude. This step is mandatory.**
-
-Never go from "the cascade failed" to "tag it unavailable". Most of what
-Phase 1 fails on is *not* unreachable — it is reachable by a route that
-has not been tried yet. On a real 244-item run, 76 of 119 apparent
-failures were Sage and Academy of Management articles that one browser
-pass recovered; the pipeline had reported all 119 as "no fulltext
-available".
-
-After **every** enrichment run, run the audit and read the retrieval
-report:
-
-```bash
-uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py \
-    --group <id>
-```
-
-It prints a per-publisher × cause table and, crucially, a count of how
-many residuals are *recoverable*:
-
-```
-PDF retrieval: 125/244 attached · 110 still missing
-
-  publisher                 n  cause              next step
-  Sage                     48  BROWSER_REQUIRED   --sources browser --publisher sage
-  Academy of Management    28  BROWSER_REQUIRED   --sources browser --publisher aom
-  IEEE                     16  BROWSER_REQUIRED   Not an exclusion — run enrich_pdfs.py --sources browser
-  (unknown)                10  BROWSER_REQUIRED   Not an exclusion — run enrich_pdfs.py --sources browser
-  Wiley                     8  ACCESS_BLOCKED     Flag for ILL — paywall, full text exists
-
-  102 of the 110 are recoverable — they have not been through every route yet.
-```
-
-**Report this table to the user and offer the next step before
-proposing any exclusion.** Say how many items the browser pass would
-recover — that number, not the raw failure count, is what the user needs
-to decide with.
-
-Two things to read correctly. A `BROWSER_REQUIRED` row whose next step
-carries no `--publisher` — the IEEE row above — means no per-publisher
-handler covers that DOI. It does **not** mean nothing can be done: the
-link resolver's licensed platforms (EBSCOhost, JSTOR, ProQuest) and the
-Zotero Connector are keyed on the item, not on the DOI prefix, and the
-plain browser pass reaches both. And after an API-only run, expect *no*
-`UNAVAILABLE` rows at all — that cause means every route was tried, and
-the browser pass has not run yet.
-
-Then act by cause:
-
-| Cause | Meaning | What to do |
-|---|---|---|
-| `BROWSER_REQUIRED` | A route the plain-HTTP cascade cannot take is still untried — either a Cloudflare-gated publisher whose handler has not run, or no handler at all but the browser pass itself has not run, leaving the link resolver and the Connector ahead of the item | Offer the browser pass. **Not an exclusion.** |
-| `ACCESS_BLOCKED` | Paywalled; the full text exists | Offer the ILL list. **Not an exclusion.** |
-| `NETWORK_ERROR` | Transport failure | Re-run. **Not an exclusion.** |
-| `CORRUPT_DOWNLOAD` | A source served bytes that are not a usable PDF — usually a truncated download | Retry via a *different* source, not the same one. **Not an exclusion.** |
-| `NO_PDF_OFFERED` | The Zotero Connector opened the library's route and its translator finished without a PDF — usually an HTML-only galley. Nobody refused access | Open the page by hand (`retry.manual.keys`): save the HTML full text or find the PDF link. Not ILL. **Not an exclusion.** |
-| `VERSION_BELOW_POLICY` | A source returned a copy below the `[pdf] min_version` policy (e.g. an accepted manuscript under `published`); it was set aside in `<cache>/below_policy/`, not attached | Get the published version another way (`retry.below_policy.keys`: browser pass or download by hand), or lower `PDF_MIN_VERSION` for the project. **Not an exclusion.** |
-| `UPLOAD_FAILED` | The PDF was fetched but the Zotero attach failed | The file is already in the local cache; re-run `enrich_pdfs.py` and it attaches without re-downloading. **Not an exclusion.** |
-| `OUT_OF_SCOPE` | Book chapter, thesis, preprint | FE2 / FE3 — exclude on item type, not on retrieval |
-| `UNAVAILABLE` | Every route tried, nothing found | FE6 — the only cause that justifies a full-text-unavailable exclusion |
-
-**Before accepting `UNAVAILABLE`, there is one more route — and it
-changes what the item is.** `enrich_pdfs.py --allow-preprints` looks for
-a copy on arXiv / SSRN / RePEc. It is off by default because what it
-finds is the manuscript *before* peer review: coding a working paper as
-the published article misreports what the journal published, and no
-later stage can detect the substitution. Offer it explicitly, say that
-is what it does, and let the user decide. Every attachment it produces
-is tagged `pdf:preprint-version`; `fulltext_code.py` names those items
-before coding them, and each coded finding must be checked against the
-published article before it reaches a manuscript. A preprint copy is
-better than a hole in the review only if the review says which rows rest
-on one.
-
-**The hard rule: an item may not be tagged `<prefix>/fulltext:unavailable` until
-its cause in the retrieval report is `UNAVAILABLE`.** If you have not run
-the audit, you do not know the cause, and you may not tag. The audit
-writes the retry sets for you as key files
-(`retry.browser[.<publisher>]`, `retry.ill`, `retry.network`,
-`retry.reattach`, `retry.manual`, `true_negative`, `out_of_scope`) — feed them straight
-to `--filter-keys-file`; do not assemble key lists by hand.
-
-The pipeline now enforces the same rule from its side: `pdf_fetch_log`
-will not classify an item `UNAVAILABLE` while the browser pass is still
-ahead of it, however silent the API cascade was. An empty `http_status`
-on such a row is the tell — it means not one source ever answered "not
-found", and it is not evidence of anything. One live run produced 227
-of them across IEEE, JSTOR, ACM and Elsevier articles; three that had
-been written into `true_negative` opened on the first click through
-EBSCOhost.
-
-**Run the browser pass yourself.** Having no controlling terminal is no
-longer a reason to hand the user a command to paste — `--control-file`
-puts the prompts in a file you poll, while the Chromium window opens on
-the user's screen and the user still solves each challenge:
-
-```bash
-uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py \
-    --sources browser --auto-publishers \
-    --browser-workers 4 \
-    --control-file .claude/audit/browser.json \
-    --progress-json .claude/audit/browser-progress.jsonl
-```
-
-`--browser-workers N` drives each publisher on N tabs of **one** Chromium
-profile, so a single Cloudflare / SSO solve covers all of them. Each
-handler caps it at its own `concurrency` — 1 for the direct publisher
-handlers, 4 for EBSCOhost, always 1 for the Zotero Connector — and says
-so when it does, rather than quietly honouring a smaller number. See
-`zotero-operations`, step 7, for why those 1s are measured limits and not
-defaults to raise.
-
-Start it with `run_in_background: true`. When the file's `state` becomes
-`awaiting_user`, relay its `prompt` to the user verbatim and write their
-answer back as `{"seq": <seq from the file>, "answer": "..."}` to
-`.claude/audit/browser.json.reply`. Echo the `seq` you read — a reply
-with a stale `seq` is ignored, which is what stops an old answer from
-clearing a challenge nobody looked at. The full procedure is in
-`zotero-operations`, step 7 of the canonical workflow.
-
-Long silences are expected — the run asks only when a challenge needs a
-human, and most do not. `--progress-json` is how you tell a working run
-from a stuck one: one JSON object per line, newest last.
-
-**Never silently drop items** — a paper with no attached PDF after all
-phases is a data-quality signal, not a failure to hide.
-
-**Cross-cutting tips** (apply at every phase):
-
-- **Always validate `%PDF` magic bytes** *and* parse-test the PDF
-  before caching. Some downloaders save HTML-with-200 or corrupted PDFs.
-- **Disable Chromium's built-in PDF viewer** via a `user_data_dir`
-  with `plugins.always_open_pdf_externally=true` in Preferences —
-  otherwise PDFs open inline and neither `expect_download` nor
-  `expect_response` captures the bytes.
-- **Pilot the browser phases on a small batch** before a full run —
-  Cloudflare challenges and Connector state are session-scoped; if
-  something's misconfigured you want to know after 10 items, not 500.
+- **Scope.** Retrieve for the items the review needs full text for —
+  scope the plan and every step with `--filter-keys-file` (or the
+  `filter_keys_file` tool parameter) when that is narrower than the
+  library.
+- **Policy lives with the review.** The `[pdf]` values the user agrees in
+  the strategy conversation are written to this project's
+  `screening_config.py` (`PDF_MIN_VERSION` / `PDF_RECONSTRUCTED` /
+  `PDF_PAID`), so the version the review codes from is recorded with it.
+- **The exclusion gate.** `<prefix>/fulltext:unavailable` is applied only
+  when retrieving-pdfs' audit reports the item's cause as `UNAVAILABLE`
+  — see the tag table above.
 
 ### Screening
 

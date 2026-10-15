@@ -1,6 +1,6 @@
 ---
 name: zotero-operations
-description: Use when the user asks to work with a Zotero library — adding abstracts, attaching PDFs, enriching metadata, importing items, deduplicating, fixing BBT (Better BibTeX) citation keys, or writing child notes. Trigger phrases "add abstracts to Zotero", "attach PDFs", "enrich Zotero library", "fix citation keys", "find duplicates in Zotero", "update Zotero items". Do NOT use for a full PRISMA-style systematic review — use `systematic-review` instead.
+description: Use when the user asks to work with a Zotero library — adding abstracts, enriching metadata, importing items, deduplicating, fixing BBT (Better BibTeX) citation keys, or writing child notes. Trigger phrases "add abstracts to Zotero", "enrich Zotero library", "fix citation keys", "find duplicates in Zotero", "update Zotero items". Do NOT use for finding or attaching PDFs — use `retrieving-pdfs`; for a full PRISMA-style systematic review — use `systematic-review`.
 ---
 
 # zotero-operations
@@ -71,6 +71,11 @@ A half-SLR library that also needs housekeeping is still SR work:
 delegate to `systematic-review` and note the housekeeping step is
 a sub-task of that pipeline, not an independent operation.
 
+**PDF retrieval belongs to neither.** Finding and attaching PDFs —
+planning the retrieval with the user, the API cascade, paid OpenAlex, the
+browser and Connector passes, manual download, and diagnosing what is
+left — is the `retrieving-pdfs` skill, whichever of the two calls it.
+
 **Overlap is not redundancy.** The same script (`enrich_pdfs.py`)
 behaves identically whether called from SR context or ad-hoc
 context — the scripts don't know which skill invoked them. What
@@ -89,9 +94,7 @@ exact invocation.
 | Audit a library for items missing abstracts / PDFs / empty stubs | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group <id>` |
 | Add missing abstracts to items | `enrich_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_abstracts.py --filter-keys-file .claude/audit/audit.missing_abstract.keys` |
 | Repair stored abstracts (copyright notices, HTML entities, "Abstract" headings) | `clean_abstracts.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/clean_abstracts.py` (dry run; read the CSV it writes, then add `--write` with the user's OK) |
-| Attach missing PDFs (fast HTTP cascade) | `enrich_pdfs.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
-| Attach PDFs from Wiley journals (TDM token route) | `enrich_pdfs.py --sources wiley` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --sources wiley --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
-| Attach PDFs from Cloudflare-gated publishers (Sage, APA, T&F, Emerald, …) | `enrich_pdfs.py --sources browser` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --sources browser --filter-keys-file .claude/audit/audit.missing_pdf.keys` |
+| Attach missing PDFs (any route: API, paid, browser, Connector, manual) | `enrich_pdfs.py` | **REQUIRED SUB-SKILL: retrieving-pdfs** — it plans with the user, then runs each mode; scope it with `.claude/audit/audit.missing_pdf.keys` |
 | Replace PDFs an item already has (repair a bad or superseded copy) | `enrich_pdfs.py --replace` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py --replace --filter-keys-file <keys>` |
 | Generate `references.bib` from a manuscript's citation keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py` from the project root (scans `manuscript/`, writes `manuscript/references.bib`; `--chapters-dir` / `--bib-out` for other layouts) |
 | Tag supplements, front matter and notices (and relate supplements to their article) | `tag_doctypes.py` | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/tag_doctypes.py --group <id> [--collection <key>]` (dry run; add `--apply` with the user's OK) |
@@ -132,39 +135,6 @@ real PDF wherever another source has one, and leaves the rest untouched.
 Only with the option on does it re-render them (one Elsevier API call per
 item; older cached recoveries count as stale and are not reused).
 
-The browser route (`--sources browser`) needs a one-time Playwright
-browser install before first use: `uvx playwright@latest install chromium`
-(the setup wizard pre-approves this command).
-
-**Exhaust the API cascade before reaching for the browser.** APIs are
-much faster and far less error prone — nothing hinges on a page layout,
-a Cloudflare challenge, or the user sitting at the keyboard. The default
-`enrich_pdfs.py` run is ranked by version quality first and cost second:
-free version of record (ScienceDirect, Springer, Crossref TDM, PMC) →
-paid version of record (OpenAlex Content API, $0.01/PDF, opt-in) → open
-access that is often the author's manuscript (OpenAlex OA, Unpaywall,
-Semantic Scholar, CORE) → browser handlers → Zotero Connector. The
-OpenAlex Content API is the only per-item cost anywhere in that
-sequence; it outranks the free open-access tiers because it serves the
-correctly paginated published article rather than an author manuscript,
-and its position is the `[pdf] paid` policy: `off`, `prefer` (default,
-the position above) or `last_resort` (after every free source).
-
-**The `[pdf]` retrieval policy** is asked in `/setup` and printed, with
-the source of each value, at the top of every `enrich_pdfs.py` run:
-`min_version` (`published` | `accepted` default | `preprint`),
-`reconstructed`, `paid`. A project overrides it with `PDF_MIN_VERSION` /
-`PDF_RECONSTRUCTED` / `PDF_PAID` in its `screening_config.py` (read from
-the working directory, or `--config`), and one run with `--min-version`,
-`--paid` or `--allow-preprints`. A copy below `min_version` is refused,
-set aside in `<cache>/below_policy/`, and the cascade asks the next
-source; items left with only such copies are `skipped_below_policy` in
-the run log and `VERSION_BELOW_POLICY` in the failure log. Under
-`published`, open-access copies count only when the publisher hosts
-them — repository copies are refused even when they are the typeset PDF.
-The authoritative ordering lives in `fetchers.pdf_sources`'s docstring —
-read it there rather than restating it from memory.
-
 The audit script writes both a JSON report and five `.keys` files
 (`.claude/audit/audit.{missing_abstract,missing_pdf,missing_doi,
 empty_stubs,tdm_recovered}.keys`), plus a set of `retry.*` /
@@ -183,28 +153,8 @@ Some pipeline stages do things the user may find startling if
 unannounced. **Always tell the user what is about to happen before
 running these stages:**
 
-- `enrich_pdfs.py --sources browser` — opens a visible Chromium window
-  on their desktop; they may need to solve a Cloudflare challenge or
-  sign in via institutional SSO. Tell them *before* launching:
-  *"Next step: browser-based PDF fetcher. A Chromium window will
-  open on your desktop. For each publisher you may need to click
-  through a Cloudflare challenge once. Ready?"* and wait for
-  acknowledgement.
-  With several `[library] openurl_base` entries (more than one
-  affiliation), pass `--library <name>` for the institution whose VPN or
-  login is up right now; the run banner lists the names. Every library is
-  still consulted, but only that one's links are opened. Items whose only
-  route is at the other library are deferred, not logged, so re-run with
-  the other `--library` on its network. Switch this way, never by editing
-  config.toml. After upgrading, a warning about cache entries that
-  "predate per-library keys" means to run once with
-  `--adopt-legacy-resolver-cache <name>`, naming the library that was
-  *first* in the list when that cache was built. Ask the user if you
-  don't know.
-- `enrich_pdfs.py` on a large library — can take 5–15 minutes with
-  the default multi-source cascade. Warn if > 20 items.
-- `enrich_pdfs.py --sources wiley` — silent HTTP via the Wiley TDM
-  token, no warning needed.
+- PDF retrieval — `retrieving-pdfs` announces the browser window, the
+  manual-download tabs and long runs itself, step by step.
 - First run of any `uv run` command installs Python dependencies
   (~1–20 s). Mention it if noticeable.
 
@@ -220,115 +170,16 @@ running these stages:**
 3. Report counts to the user and ask which to fix (missing abstracts,
    missing PDFs, empty stubs, or all).
 4. Run the stage(s) the user chose, passing the matching `.keys` file
-   to `--filter-keys-file`. The audit script prints the exact commands
-   in its "Next steps" output — use those verbatim.
-5. Re-run the audit to confirm counts dropped — **and to read the
-   retrieval report for whatever did not drop.** A count that stayed
-   put is not the end of the workflow; it is the start of step 6.
-6. **Escalate the residuals rather than reporting them as failures.**
-   The audit's per-publisher table names the cause for each item, and
-   the causes map to rungs on a ladder. Work down it, offering each
-   rung to the user:
-
-   | Cause in the report | Next rung |
-   |---|---|
-   | `BROWSER_REQUIRED` | `enrich_pdfs.py --sources browser --filter-keys-file <retry.browser.keys>` — a visible Chromium opens; the user solves one Cloudflare challenge per publisher. Narrow to one publisher with `retry.browser.<publisher>.keys`. Rows that name no publisher belong here too: the link resolver and the Zotero Connector key on the item rather than the DOI prefix, and the same pass reaches both. |
-   | `ACCESS_BLOCKED` (Wiley prefix, no token) | Configure `WILEY_TDM_TOKEN` via `/setup` and re-run — Wiley TDM is in the default cascade, so no separate `--sources wiley` is needed. Note the token covers current content: pre-1990 Wiley articles come back empty and belong on the browser / EBSCO route. |
-   | `ACCESS_BLOCKED` (anything else) | Hand the user `retry.ill.keys` as an interlibrary-loan list |
-   | `NETWORK_ERROR` | Re-run the same stage; the cause is transient |
-   | `CORRUPT_DOWNLOAD` | The source served a broken file (usually truncated). Re-running the *same* source returns the same bad bytes — escalate to a different one: the publisher TDM route, or `--sources browser`. |
-   | `NO_PDF_OFFERED` | The Connector reached the page and it offered no PDF — usually an HTML-only galley, not a paywall. Hand the user `retry.manual.keys` to open by hand (save the HTML full text, or find the PDF link the translator missed). Not an ILL candidate. |
-   | `VERSION_BELOW_POLICY` | A copy was found but is below the `[pdf] min_version` policy, so it was set aside (`<cache>/below_policy/`) and not attached. Items are in `retry.below_policy.keys`: fetch the published version by another route, or ask the user whether to lower `PDF_MIN_VERSION` for the project. Not an exclusion. |
-   | `UPLOAD_FAILED` | The PDF is already in the local cache and only the Zotero attach failed. Re-run `enrich_pdfs.py`; it attaches from cache with no new download. Cheapest rung on the ladder — always offer it first. |
-   | `OUT_OF_SCOPE` | A book chapter, thesis, or preprint. No rung applies — the item is excluded on its type, not on retrieval, and chasing a PDF for it wastes the user's time. |
-   | `UNAVAILABLE` | Genuinely unreachable *as published* — every route was tried, so this cannot appear before a browser pass has run. One route remains — see below — and only after the user declines it is "not available" the honest report. |
-
-   **A publisher the browser pass skips is a finding, not a gap.** The
-   run prints, for example, "16 items skipped the publisher's own site —
-   the link resolver lists a licensed route for them, but not via that
-   publisher (Academy of Management 7, Taylor & Francis 5, …)". Those
-   items are *not* lost: they went to the resolver's own route in the
-   same pass. Report the line rather than treating it as a failure, and
-   only act on it if the user says they can reach one of those
-   publishers by other means — a society membership, a login at a second
-   institution — in which case add that handler name to
-   `[library] direct_access` in config.toml and re-run. Many society
-   publishers (Academy of Management, INFORMS) sell membership rather
-   than institutional access, so this skip is usually correct.
-
-   **The last rung is a different paper, so it is offered, never taken
-   silently.** `enrich_pdfs.py --allow-preprints` looks for a copy on
-   arXiv / SSRN / RePEc. What it finds is the manuscript before peer
-   review: hypotheses, samples and findings all move between a working
-   paper and the published article, and nothing downstream can tell the
-   two apart. Name that when you offer it. Attachments carry
-   `pdf:preprint-version`, `fulltext_code.py` lists those items before
-   coding them, and the audit reports them under `preprint_version`.
-
-   **Say how many items each rung would recover before proposing it.**
-   "76 of these 110 are behind Cloudflare at two publishers and one
-   browser pass gets them" is a decision the user can make; "110 items
-   failed" is not.
-
-7. **Run the browser pass yourself — do not send the user to a
-   terminal.** You have no controlling TTY, but that no longer matters:
-   `--control-file` moves the prompts into a file you poll, while the
-   Chromium window still opens on the user's screen and the user still
-   solves every challenge.
-
-   ```bash
-   uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_pdfs.py \
-       --sources browser --auto-publishers \
-       --browser-workers 4 \
-       --control-file .claude/audit/browser.json \
-       --progress-json .claude/audit/browser-progress.jsonl
-   ```
-
-   **`--browser-workers N` is worth passing on any large queue.** N tabs
-   share one Chromium profile, so one Cloudflare / SSO solve covers them
-   all — an unattended EBSCOhost run of 400 items drops from roughly two
-   hours to well under one. Each publisher caps it at its own
-   `concurrency`, which is 1 for every direct publisher handler and 4 for
-   EBSCOhost, so raising the number cannot get a bot-protected publisher
-   throttled; a request that gets capped is printed rather than silently
-   reduced. Do not raise a handler's `concurrency` to make the flag bite
-   harder — those 1s are measured limits, and the cost of exceeding one
-   is the publisher for the whole run plus the shared profile's
-   clearance.
-
-   Launch it with `run_in_background: true`, then loop:
-
-   - read `.claude/audit/browser.json`;
-   - when `state` is `awaiting_user`, **relay `prompt` to the user
-     verbatim** — it is the text they would have seen on a terminal, and
-     it names the publisher whose challenge is on screen;
-   - write their answer to `.claude/audit/browser.json.reply` as
-     `{"seq": <the seq you just read>, "answer": "<their answer>"}`;
-   - carry on until `state` stays `running` and the process exits.
-
-   Always echo back the `seq` you read. A reply carrying an old `seq` is
-   ignored by design, which is what stops a stale answer from silently
-   clearing a challenge nobody looked at.
-
-   **Expect long stretches with no question.** The run only asks when
-   there is something for the user to solve: it opens each publisher's
-   first page and waits for the Cloudflare challenge to clear on its own,
-   which it usually does — the browser profile persists between runs, and
-   non-interactive challenges pass in seconds. Silence is the normal case,
-   not a hang. Read `--progress-json` to tell the two apart: it is one
-   JSON object per line (`publisher_start`, `item`, `publisher_done`,
-   `routes_start` / `routes_progress` / `routes_done` for the library-route
-   lookups before the Connector pass, `run_done`), so the last line tells you where the run is without
-   parsing stdout. Report progress from there rather than guessing.
-
-   `--auto-publishers` takes the item list from the audit's
-   `retry.browser.keys`, so do not assemble a key list by hand. If it
-   reports no retry set, the audit in step 5 has not been run — run it
-   rather than falling back to a full-library pass.
-
-   Use `--no-prompt` only for genuinely unattended runs. It answers every
-   challenge with "skip", so it is not a substitute for the control file
-   when the user is present.
+   to `--filter-keys-file` — missing PDFs go to step 6 instead. The
+   audit script prints the exact commands in its "Next steps" output —
+   use those verbatim.
+5. Re-run the audit to confirm counts dropped.
+6. **Missing PDFs: REQUIRED SUB-SKILL: retrieving-pdfs.** Load it with
+   the Skill tool and follow it rather than running `enrich_pdfs.py`
+   here: it plans the retrieval with the user, runs the agreed modes one
+   at a time, re-runs the audit after each, and works the residue down
+   the failure causes (`BROWSER_REQUIRED`, `ACCESS_BLOCKED`, …) before
+   anything is reported as unavailable.
 
 ### Optional: retraction check
 

@@ -32,6 +32,7 @@ EXPECTED_SKILLS = {
     "academic-style",
     "systematic-review",
     "zotero-operations",
+    "retrieving-pdfs",
     "fact-check",
     "critic-loop",
     "setup",

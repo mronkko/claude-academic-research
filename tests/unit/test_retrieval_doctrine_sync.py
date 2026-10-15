@@ -9,6 +9,11 @@ cause vocabulary.
 So both directions are pinned. Every `FailureCause` the code can emit is
 named in the skill that has to act on it, and every retrieval tag the
 skill names is one the codebase actually knows about.
+
+PDF retrieval is owned by `retrieving-pdfs`; `systematic-review` and
+`zotero-operations` delegate to it (REQUIRED SUB-SKILL). The doctrine
+checks read that skill, and the last section pins the delegation itself —
+the workflow was moved, and a second copy left behind would drift.
 """
 
 from __future__ import annotations
@@ -21,6 +26,8 @@ import pdf_fetch_log
 ROOT = Path(__file__).resolve().parents[2]
 SR_SKILL = ROOT / "skills" / "systematic-review" / "SKILL.md"
 ZOT_SKILL = ROOT / "skills" / "zotero-operations" / "SKILL.md"
+PDF_SKILL = ROOT / "skills" / "retrieving-pdfs" / "SKILL.md"
+ALL_SKILLS = (SR_SKILL, ZOT_SKILL, PDF_SKILL)
 
 
 def _sr() -> str:
@@ -31,6 +38,10 @@ def _zot() -> str:
     return ZOT_SKILL.read_text(encoding="utf-8")
 
 
+def _pdf() -> str:
+    return PDF_SKILL.read_text(encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Cause vocabulary
 # ---------------------------------------------------------------------------
@@ -39,20 +50,11 @@ def _zot() -> str:
 def test_every_failure_cause_is_documented_for_the_agent() -> None:
     """A cause the code emits but the skill never mentions is a cause the
     agent will not know how to act on."""
-    text = _sr()
+    text = _pdf()
     missing = [c.value for c in pdf_fetch_log.FailureCause if c.value not in text]
     assert not missing, (
         "these causes are emitted by pdf_fetch_log but absent from "
-        f"systematic-review/SKILL.md: {missing}"
-    )
-
-
-def test_the_escalation_ladder_covers_every_cause() -> None:
-    text = _zot()
-    missing = [c.value for c in pdf_fetch_log.FailureCause if c.value not in text]
-    assert not missing, (
-        "zotero-operations/SKILL.md's escalation ladder is missing rungs "
-        f"for: {missing}"
+        f"retrieving-pdfs/SKILL.md: {missing}"
     )
 
 
@@ -63,7 +65,7 @@ def test_recoverable_causes_are_marked_as_non_exclusions() -> None:
     any line mentioning the name, so prose elsewhere can discuss a cause
     without satisfying the check.
     """
-    text = _sr()
+    text = _pdf()
     for cause in pdf_fetch_log.RECOVERABLE_CAUSES:
         row = next(
             (
@@ -79,7 +81,7 @@ def test_recoverable_causes_are_marked_as_non_exclusions() -> None:
 
 
 def test_only_unavailable_justifies_the_unavailable_tag() -> None:
-    text = _sr()
+    text = _pdf()
     assert (
         "may not be tagged `<prefix>/fulltext:unavailable` until\nits cause "
         "in the retrieval report is `UNAVAILABLE`" in text
@@ -164,7 +166,7 @@ def _tags_in(path) -> list[tuple[str, str]]:
 
 
 def test_skills_invent_no_tags() -> None:
-    for path in (SR_SKILL, ZOT_SKILL):
+    for path in ALL_SKILLS:
         found = {
             tag for _, tag in _tags_in(path)
             if _FAMILY_WILDCARD not in tag
@@ -177,7 +179,7 @@ def test_review_scoped_tags_are_namespaced_in_skill_prose() -> None:
     """A bare `fulltext:include` in the docs teaches the agent to write
     one, and a bare tag belongs to no review — no script will see it."""
     offenders = []
-    for path in (SR_SKILL, ZOT_SKILL):
+    for path in ALL_SKILLS:
         for para in _paragraphs(path):
             lowered = para.lower()
             if any(m in lowered for m in _COUNTEREXAMPLE_MARKERS):
@@ -199,7 +201,7 @@ def test_global_tags_are_never_namespaced_in_skill_prose() -> None:
     library-wide `enrich_*` scripts have no config to read a prefix
     from."""
     offenders = []
-    for path in (SR_SKILL, ZOT_SKILL):
+    for path in ALL_SKILLS:
         for ns, tag in _tags_in(path):
             if ns and tag in GLOBAL_TAGS:
                 offenders.append(f"{path.name}: `{ns}{tag}`")
@@ -263,7 +265,7 @@ def test_the_preprint_route_is_offered_before_declaring_unavailable() -> None:
     """A flag documented only in `--help` is a flag the agent never
     offers, which makes the opt-in indistinguishable from not shipping
     it."""
-    text = _sr()
+    text = _pdf()
     assert "--allow-preprints" in text
     assert "peer review" in text, (
         "the skill names the flag without saying what makes it hazardous"
@@ -295,21 +297,21 @@ def test_the_invented_tag_spelling_is_not_used_anywhere() -> None:
 
 
 def test_diagnosis_is_stated_as_mandatory() -> None:
-    text = _sr()
+    text = _pdf()
     assert "diagnose before you exclude" in text.lower()
     assert "mandatory" in text.lower()
 
 
 def test_the_skill_names_the_command_that_produces_the_report() -> None:
     """A procedure the agent cannot run is not a procedure."""
-    assert "audit_zotero_library.py" in _sr()
-    assert "--sources browser --publisher" in _sr()
+    assert "audit_zotero_library.py" in _pdf()
+    assert "--sources browser --publisher" in _pdf()
 
 
 def test_the_retry_key_files_the_audit_writes_are_named() -> None:
     """The audit writes these; the skill must tell the agent to use them
     rather than assembling key lists by hand."""
-    text = _sr()
+    text = _pdf()
     for label in ("retry.browser", "retry.ill", "true_negative"):
         assert label in text, f"{label} key file not mentioned in SKILL.md"
     assert "--filter-keys-file" in text
@@ -331,8 +333,8 @@ def _enrich_parser():
     return enrich_pdfs._build_parser()
 
 
-def test_both_skills_tell_the_agent_to_drive_the_browser_pass() -> None:
-    for name, text in (("systematic-review", _sr()), ("zotero-operations", _zot())):
+def test_the_skill_tells_the_agent_to_drive_the_browser_pass() -> None:
+    for name, text in (("retrieving-pdfs", _pdf()),):
         assert "--control-file" in text, (
             f"{name}/SKILL.md never mentions --control-file, so the agent "
             f"will still hand the user a command to paste"
@@ -346,8 +348,7 @@ def test_both_skills_tell_the_agent_to_drive_the_browser_pass() -> None:
 def test_the_skills_explain_the_seq_echo() -> None:
     """Replying with the wrong seq is silently ignored. An agent that
     does not know why would read it as the script hanging."""
-    for text in (_sr(), _zot()):
-        assert "seq" in text
+    assert "seq" in _pdf()
 
 
 def test_every_browser_flag_the_skills_name_actually_exists() -> None:
@@ -359,11 +360,64 @@ def test_every_browser_flag_the_skills_name_actually_exists() -> None:
     known = {
         opt for action in parser._actions for opt in action.option_strings
     }
-    for name, text in (("systematic-review", _sr()), ("zotero-operations", _zot())):
+    for name, text in (("systematic-review", _sr()), ("zotero-operations", _zot()),
+                       ("retrieving-pdfs", _pdf())):
         for flag in set(re.findall(r"(?<![\w-])--[a-z][a-z0-9-]+", text)):
             # Only check flags in enrich_pdfs' own namespace; the skills
             # also document other scripts.
             if flag in ("--control-file", "--auto-publishers", "--no-prompt",
                         "--filter-keys-file", "--sources", "--plan",
-                        "--control-timeout", "--progress-json"):
+                        "--control-timeout", "--progress-json",
+                        "--plan-strategy", "--plan-lookups", "--manual",
+                        "--browser-workers", "--allow-preprints",
+                        "--min-version", "--paid", "--item-types",
+                        "--adopt-legacy-resolver-cache", "--publisher",
+                        "--replace"):
                 assert flag in known, f"{name}/SKILL.md names unknown {flag}"
+
+
+# ---------------------------------------------------------------------------
+# Delegation: one owner for the retrieval workflow
+# ---------------------------------------------------------------------------
+
+
+def test_both_callers_delegate_with_the_sub_skill_contract() -> None:
+    for name, text in (("systematic-review", _sr()), ("zotero-operations", _zot())):
+        assert "REQUIRED SUB-SKILL: retrieving-pdfs" in text, (
+            f"{name}/SKILL.md does not hand PDF retrieval to retrieving-pdfs"
+        )
+
+
+#: Text that exists to *run* retrieval. Moved to retrieving-pdfs; a copy
+#: left in a caller is a second rule-book that will drift from the first.
+MOVED_MARKERS = (
+    "--control-file", "run_in_background", "Never assign a file yourself",
+    "Client Challenge", "X-ELS-Status", "| `BROWSER_REQUIRED` |",
+    "The hard rule: an item may not be tagged", "Expect long silences",
+)
+
+
+def test_the_retrieval_workflow_is_not_duplicated_in_the_callers() -> None:
+    for name, text in (("systematic-review", _sr()), ("zotero-operations", _zot())):
+        left = [m for m in MOVED_MARKERS if m.lower() in text.lower()]
+        assert not left, f"{name}/SKILL.md still carries moved retrieval text: {left}"
+    pdf = _pdf().lower()
+    assert all(m.lower() in pdf for m in MOVED_MARKERS)
+
+
+def test_the_skill_names_the_planning_and_strategy_tools() -> None:
+    """The tools exist in the MCP registry; a renamed one must not leave
+    the skill naming a tool the server no longer offers."""
+    import sys
+    mcp_dir = ROOT / "mcp"
+    if str(mcp_dir) not in sys.path:
+        sys.path.insert(0, str(mcp_dir))
+    import tool_registry
+
+    named = set(re.findall(r"`((?:start_)?pdf_[a-z_]+|enrich_pdfs_[a-z]+|audit_library"
+                           r"|check_setup|job_status|list_jobs)`", _pdf()))
+    assert {"pdf_plan", "start_pdf_plan", "pdf_strategy_show", "pdf_strategy_write",
+            "pdf_strategy_update", "pdf_policy_write", "pdf_manual_next",
+            "pdf_manual_collect", "pdf_manual_assign"} <= named
+    unknown = named - set(tool_registry.TOOLS_BY_NAME) - {"pdf_fetch_log"}  # a module
+    assert not unknown, f"retrieving-pdfs names tools the server lacks: {unknown}"
