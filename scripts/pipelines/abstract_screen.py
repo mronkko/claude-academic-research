@@ -397,7 +397,7 @@ def apply_responses(
     output_path: Path,
     tag_batch_size: int,
     force: bool,
-    skip_already_tagged: bool,
+    overwrite_tagged: bool = False,
     ns: str,
 ) -> int:
     """Apply an executed manifest: CSV rows, then Zotero stage tags.
@@ -445,7 +445,7 @@ def apply_responses(
     ) if requests[0].get("collection") else set()
     clashes = [r for r, _ in paired if r["item_key"] in tagged_since]
     if clashes:
-        verb = "skipping" if skip_already_tagged else "overwriting"
+        verb = "overwriting" if overwrite_tagged else "skipping"
         print(
             f"  WARNING: {len(clashes)} of {len(paired)} item(s) have been "
             f"tagged since this manifest was emitted; {verb} them.",
@@ -457,7 +457,7 @@ def apply_responses(
     model_seen = ""
     parse_fallbacks = 0
     for req, resp in paired:
-        if skip_already_tagged and req["item_key"] in tagged_since:
+        if not overwrite_tagged and req["item_key"] in tagged_since:
             counts["skipped"] = counts.get("skipped", 0) + 1
             continue
         model_seen = resp.get("model", "") or model_seen
@@ -519,7 +519,7 @@ def apply_responses(
         counts[s["skip_reason"]] = counts.get(s["skip_reason"], 0) + 1
 
     print(f"\n{'=' * 60}")
-    # Not `len(paired)`: with --skip-already-tagged that number can be
+    # Not `len(paired)`: skipping already-tagged items, that number can be
     # every response in the file while nothing was written at all.
     print(
         f"Applied {len(paired) - counts.get('skipped', 0)} of "
@@ -722,10 +722,15 @@ def main() -> int:
                         help="Apply responses even when the run record marks "
                              "the run degenerate. Prints why that is a bad "
                              "idea first.")
+    parser.add_argument("--overwrite-tagged", action="store_true",
+                        help="On apply, overwrite the decision of items "
+                             "tagged in Zotero since the manifest was "
+                             "emitted. By default they are skipped: a "
+                             "decision made after the manifest was made by "
+                             "something else, and is kept.")
+    # Skipping is now the default; the old opt-in is accepted and ignored.
     parser.add_argument("--skip-already-tagged", action="store_true",
-                        help="On apply, skip items tagged in Zotero since the "
-                             "manifest was emitted, rather than overwriting "
-                             "their decision.")
+                        help=argparse.SUPPRESS)
     parser.add_argument("--csv-backfill", action="store_true",
                         help="One-time migration from pre-Zotero-as-truth "
                              "deployments: read CSV decisions and apply "
@@ -796,7 +801,7 @@ def main() -> int:
             output_path=output_path,
             tag_batch_size=args.tag_batch_size,
             force=args.force_apply,
-            skip_already_tagged=args.skip_already_tagged,
+            overwrite_tagged=args.overwrite_tagged,
             ns=ns,
         )
 

@@ -140,6 +140,6 @@ def test_the_batch_applier_counts_parse_fallbacks(tmp_path, capsys) -> None:
     abstract_screen.apply_responses(
         _Zot(), manifest_path=manifest, responses_path=responses,
         output_path=tmp_path / "log.csv", tag_batch_size=50, force=False,
-        skip_already_tagged=False, ns=ns,
+        overwrite_tagged=False, ns=ns,
     )
     assert "unparseable reply, tagged borderline: 1" in capsys.readouterr().out

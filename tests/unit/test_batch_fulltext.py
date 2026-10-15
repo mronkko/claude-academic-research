@@ -358,7 +358,7 @@ def test_a_skipped_no_pdf_comes_back_as_the_row_the_live_path_writes(
         zot, manifest_path=manifest, manifest_rows=rows,
         responses_path=responses, output_path=out, items=[have, lack],
         fields=FIELDS, csv_columns=COLS, force=False,
-        skip_already_tagged=False, ns=NS,
+        overwrite_tagged=False, ns=NS,
     ) == 0
 
     by_key = {r["item_key"]: r for r in _read_csv(out)}
@@ -402,7 +402,7 @@ def test_output_truncation_is_an_error_and_leaves_the_input_column_alone(
         zot, manifest_path=manifest, manifest_rows=rows,
         responses_path=responses, output_path=out, items=[item],
         fields=FIELDS, csv_columns=COLS, force=False,
-        skip_already_tagged=False, ns=NS,
+        overwrite_tagged=False, ns=NS,
     )
     row = _read_csv(out)[0]
     assert row["decision"] == "error"
@@ -437,7 +437,7 @@ def test_a_degenerate_run_is_refused_before_anything_is_written(
             zot, manifest_path=manifest, manifest_rows=rows,
             responses_path=responses, output_path=out, items=[item],
             fields=FIELDS, csv_columns=COLS, force=False,
-            skip_already_tagged=False, ns=NS,
+            overwrite_tagged=False, ns=NS,
         )
     assert not out.exists()
     assert zot.tags == []
@@ -460,13 +460,35 @@ def test_items_coded_since_the_manifest_was_emitted_can_be_left_alone(
     fc.apply_responses(
         zot, manifest_path=manifest, manifest_rows=rows,
         responses_path=responses, output_path=out, items=[item],
-        fields=FIELDS, csv_columns=COLS, force=False,
-        skip_already_tagged=True, ns=NS,
+        fields=FIELDS, csv_columns=COLS, force=False, ns=NS,
     )
-    assert f"tagged {FULLTEXT_TAG}* since this manifest was emitted" in \
-        capsys.readouterr().out
+    out_text = capsys.readouterr().out
+    assert f"tagged {FULLTEXT_TAG}* since this manifest was emitted" in out_text
+    assert "skipping them" in out_text
     assert zot.tags == []
     assert not out.exists()
+
+
+def test_overwriting_a_since_tagged_item_needs_the_explicit_flag(
+    tmp_path, capsys,
+) -> None:
+    """Skipping is the default (D5); --overwrite-tagged is the opt-in."""
+    item = _item(tags=[{"tag": f"{FULLTEXT_TAG}exclude"}])
+    rows, _ = _emit([item], tmp_path)
+    manifest = tmp_path / "m.jsonl"
+    bm.write_manifest(manifest, rows)
+    responses = tmp_path / "r.jsonl"
+    bm._write_jsonl(responses, [_response(rows[0], COMPLETION)])
+
+    zot = FakeZot()
+    fc.apply_responses(
+        zot, manifest_path=manifest, manifest_rows=rows,
+        responses_path=responses, output_path=tmp_path / "log.csv",
+        items=[item], fields=FIELDS, csv_columns=COLS, force=False,
+        overwrite_tagged=True, ns=NS,
+    )
+    assert "overwriting them" in capsys.readouterr().out
+    assert [t[0] for t in zot.tags] == [item["key"]]
 
 
 # ---------------------------------------------------------------------------
@@ -514,7 +536,7 @@ def test_update_mode_survives_the_round_trip_with_its_decision_intact(
         zot, manifest_path=manifest, manifest_rows=rows,
         responses_path=responses, output_path=out, items=[item],
         fields=FIELDS, csv_columns=COLS, force=False,
-        skip_already_tagged=False, ns=NS,
+        overwrite_tagged=False, ns=NS,
     )
     row = _read_csv(out)[0]
     assert row["decision"] == "include"          # adjudication survives
@@ -554,7 +576,7 @@ def test_update_mode_leaves_the_note_alone_when_the_answer_failed(
         zot, manifest_path=manifest, manifest_rows=rows,
         responses_path=responses, output_path=out, items=[item],
         fields=FIELDS, csv_columns=COLS, force=False,
-        skip_already_tagged=False, ns=NS,
+        overwrite_tagged=False, ns=NS,
     )
     assert _read_csv(out)[0]["decision"] == "error"
     assert zot.notes["AAAA1111"] == original

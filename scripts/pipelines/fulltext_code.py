@@ -1289,7 +1289,7 @@ def apply_responses(
     fields: list[dict],
     csv_columns: list[str],
     force: bool,
-    skip_already_tagged: bool,
+    overwrite_tagged: bool = False,
     ns: str,
 ) -> int:
     """Apply an executed manifest: CSV rows, stage tags, coding notes.
@@ -1345,7 +1345,7 @@ def apply_responses(
     )
     clashes = [r for r, _ in paired if r["item_key"] in tagged_since]
     if clashes:
-        verb = "skipping" if skip_already_tagged else "overwriting"
+        verb = "overwriting" if overwrite_tagged else "skipping"
         print(
             f"  WARNING: {len(clashes)} of {len(paired)} item(s) have been "
             f"tagged {stage_prefix}* since this manifest was emitted; {verb} "
@@ -1357,7 +1357,7 @@ def apply_responses(
     counts: dict[str, int] = {}
     total = len(paired)
     for n, (req, resp) in enumerate(paired, start=1):
-        if skip_already_tagged and req["item_key"] in tagged_since:
+        if not overwrite_tagged and req["item_key"] in tagged_since:
             counts["skipped"] = counts.get("skipped", 0) + 1
             continue
         model = resp.get("model", "") or req.get("model_hint", "")
@@ -1439,7 +1439,7 @@ def apply_responses(
         counts[key] = counts.get(key, 0) + 1
 
     print(f"\n{'=' * 60}")
-    # Not `len(paired)`: with --skip-already-tagged that number can be
+    # Not `len(paired)`: skipping already-tagged items, that number can be
     # every response in the file while nothing was written at all.
     print(
         f"Applied {len(paired) - counts.get('skipped', 0)} of "
@@ -1628,10 +1628,14 @@ def main() -> int:
                              "the run degenerate, or when the config's coding "
                              "fields have moved on from the manifest's. "
                              "Prints why that is a bad idea first.")
+    parser.add_argument("--overwrite-tagged", action="store_true",
+                        help="On apply, overwrite the decision of items "
+                             "tagged fulltext:* in Zotero since the manifest "
+                             "was emitted. By default they are skipped, so a "
+                             "decision made in between is kept.")
+    # Skipping is now the default; the old opt-in is accepted and ignored.
     parser.add_argument("--skip-already-tagged", action="store_true",
-                        help="On apply, skip items tagged fulltext:* in "
-                             "Zotero since the manifest was emitted, rather "
-                             "than overwriting their decision.")
+                        help=argparse.SUPPRESS)
     parser.add_argument("--update-fields", default="",
                         help="Comma-separated field names to selectively update "
                              "in existing SLR Coding notes without changing "
@@ -1796,7 +1800,7 @@ def main() -> int:
             fields=fields,
             csv_columns=csv_columns,
             force=args.force_apply,
-            skip_already_tagged=args.skip_already_tagged,
+            overwrite_tagged=args.overwrite_tagged,
             ns=ns,
         )
 
