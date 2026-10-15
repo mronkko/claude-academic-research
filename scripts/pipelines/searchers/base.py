@@ -104,6 +104,12 @@ SEARCH_ROW_FIELDS = (
     # the tuple deliberately: readers use DictReader, but a column
     # inserted mid-schema would still shift every hand-inspected CSV.
     "discovery_source",
+    # Not a research article although typed as one: "supplement",
+    # "front-matter", "notice" or "" — see `doctype.py`. Filled by
+    # `search.py` after the searchers return, not by any searcher, so
+    # every database gets one rule. Appended for the same reason as
+    # `discovery_source`.
+    "doctype",
 )
 
 #: `discovery_source` values. A record reached the corpus either because

@@ -68,7 +68,10 @@ def test_discovery_source_is_appended_not_inserted() -> None:
     """Readers use DictReader, but a column added mid-schema still
     shifts every CSV a human has already eyeballed."""
     assert SEARCH_ROW_FIELDS[:4] == ("db", "query", "doi", "title")
-    assert SEARCH_ROW_FIELDS[-1] == "discovery_source"
+    # Directly after the columns that predate it; anything added later
+    # (`doctype`) goes after it, never before.
+    assert SEARCH_ROW_FIELDS.index("discovery_source") == \
+        SEARCH_ROW_FIELDS.index("oa_url") + 1
 
 
 def test_sources_declare_whether_they_can_do_citation_search() -> None:

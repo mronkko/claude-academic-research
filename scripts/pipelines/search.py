@@ -59,6 +59,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import doctype  # noqa: E402
 import screening_common  # noqa: E402
 from doi_utils import doi_key  # noqa: E402
 from plugin_version import plugin_version  # noqa: E402
@@ -147,6 +148,26 @@ def _dedup_doi_key(raw: str) -> str:
     if not raw:
         return ""
     return doi_key(raw) or raw.lower()
+
+
+def _label_doctypes(rows: list[dict]) -> dict[str, int]:
+    """Fill each row's `doctype` column; return the count per class.
+
+    Labelled, never dropped: supplements, front matter and notices are
+    kept through import and skipped at screening, so the PRISMA flow can
+    show them as removed before screening rather than having them vanish
+    from the identification count.
+    """
+    counts: dict[str, int] = {d: 0 for d in doctype.DOCTYPES}
+    for r in rows:
+        dt = doctype.classify(
+            r.get("title", ""), r.get("doi", ""),
+            has_authors=bool((r.get("authors") or "").strip()),
+        )
+        r["doctype"] = dt
+        if dt:
+            counts[dt] += 1
+    return counts
 
 
 def _dedup(rows: list[dict]) -> tuple[list[dict], int]:
@@ -586,6 +607,7 @@ def main() -> int:
         )
 
     print(f"Total rows before dedup: {len(all_rows)}")
+    _label_doctypes(all_rows)
 
     with csv_raw.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=SEARCH_ROW_FIELDS,
@@ -599,6 +621,12 @@ def main() -> int:
     print(f"After DOI dedup:        {len(deduped) + merged}")
     print(f"  Merged no-DOI → DOI:  {merged}")
     print(f"After full dedup:       {len(deduped)} ({no_doi_count} without DOI)")
+    # Relabel after the merge: a duplicate may have contributed authors,
+    # which the front-matter prefix rule reads.
+    doctype_counts = _label_doctypes(deduped)
+    if any(doctype_counts.values()):
+        print(f"  Not research articles (kept, tagged at import, skipped "
+              f"at screening): {doctype.format_counts(doctype_counts)}")
 
     with csv_dedup.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=SEARCH_ROW_FIELDS,
@@ -652,6 +680,10 @@ def main() -> int:
                        if r.get("discovery_source") == value)
             for value in (DISCOVERY_KEYWORD, DISCOVERY_CITATION)
         },
+        # Supplements, front matter and notices among the unique records.
+        # They stay in the corpus (and in the DOI hash) but are skipped at
+        # screening, so PRISMA reports them as removed before screening.
+        "unique_records_by_doctype": doctype_counts,
     }
     if hasattr(cfg, "QUERY_DEFS"):
         metadata["query_defs"] = [
