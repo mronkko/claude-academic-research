@@ -846,27 +846,27 @@ KEYS: tuple[KeySpec, ...] = (
     ),
     KeySpec(
         "OPENALEX_API_KEY", "openalex", "api_key",
-        "OpenAlex Content API key (paid tier)",
+        "OpenAlex API key (free; also unlocks the paid Content API)",
         required=False, hidden=True,
         what="OpenAlex is a free, open index of scholarly works and authors "
              "(https://openalex.org), the main successor to the shut-down "
-             "Microsoft Academic Graph. The free metadata tier is used "
-             "extensively and needs no key. The paid Content API adds PDF "
-             "downloads at roughly $0.01 each — current rates, the free daily "
-             "allowance, and the annual plans are at "
-             "https://openalex.org/pricing.",
-        used_by="systematic-review and zotero-operations: the paid "
-                "version-of-record tier of the PDF retrieval cascade (stage 2 "
-                "of 5 — see `fetchers.pdf_sources` for the full sequence).",
-        impact="The cascade drops its only paid tier and runs on free and "
-               "institutionally-subscribed sources alone (Elsevier, Springer, "
-               "Crossref, PubMed Central, OpenAlex OA metadata, Unpaywall, "
-               "Semantic Scholar, CORE). Retrieval still works; the few "
-               "articles only OpenAlex holds as a publisher PDF fall through "
-               "to the browser pass, which is slower and needs you present.",
-        where="https://openalex.org/pricing — paid tier only. Skip it unless "
-              "you retrieve PDFs in volume; setup asks separately whether to "
-              "actually spend on it, so a key here does not commit you.",
+             "Microsoft Academic Graph. A free key (its own daily budget) "
+             "lets a search page past OpenAlex's 10,000-result limit: "
+             "without one, OpenAlex refuses cursor paging past the first "
+             "page, so keyless searches stop at 10,000 results. The same "
+             "key reaches the paid Content API, which adds PDF downloads "
+             "at roughly $0.01 each — rates at https://openalex.org/pricing.",
+        used_by="systematic-review: the OpenAlex search stage (every "
+                "request) and the paid version-of-record tier of the PDF "
+                "retrieval cascade (stage 2 of 5 — see "
+                "`fetchers.pdf_sources` for the full sequence).",
+        impact="OpenAlex searches stop at 10,000 results per query (with a "
+               "warning) and share a small per-IP daily budget. The PDF "
+               "cascade drops its only paid tier and runs on free and "
+               "institutionally-subscribed sources alone.",
+        where="https://openalex.org/settings/api — free, takes a minute. "
+              "Setup asks separately whether to spend on the paid Content "
+              "API, so a key here does not commit you to any cost.",
         verify=_verify_none,
     ),
     KeySpec(

@@ -460,4 +460,6 @@ class OpenAlexContentSource(_OpenAlexClient, PdfFetcher):
             return None
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(resp.content)
-        return path, dl_url
+        # The source URL travels on into the fetch log and version
+        # provenance; the key must not travel with it.
+        return path, dl_url.split("?", 1)[0]

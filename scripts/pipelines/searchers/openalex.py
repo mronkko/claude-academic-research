@@ -3,7 +3,17 @@
 Runs two block queries (Block A terms, Block B terms) separately and
 merges, because OpenAlex's `search=` parameter is relevance-ranked —
 a combined A+B query loses recall on papers that match one block
-strongly and the other weakly. Free tier; no API key required.
+strongly and the other weakly.
+
+An API key is optional but lifts a cap. OpenAlex answers the second
+page of a `cursor=` query with HTTP 401 "API key required for cursor
+paging" unless a key rides along, while `page=` paging still works
+keyless up to its own 10,000-result ceiling. So: with a key
+(`OPENALEX_API_KEY` / `[openalex] api_key`, free at
+https://openalex.org/settings/api) every request carries it and results
+are paged by cursor without limit; without one, results are paged by
+page number and a query larger than 10,000 is reported as capped rather
+than presented as complete.
 """
 
 from __future__ import annotations
@@ -12,13 +22,26 @@ import time
 from collections.abc import Callable
 from urllib.parse import quote
 
-import http_client
+from core.providers import redact
 
 from .base import DISCOVERY_CITATION, SearchContext, SearchSource, empty_row
 
 OPENALEX_API = "https://api.openalex.org"
 PER_PAGE = 200           # OpenAlex max
 RATE_LIMIT_SLEEP = 0.2   # polite pool delay between requests
+
+#: The most results `page=` paging can reach: OpenAlex refuses any page
+#: past `page * per_page = 10,000` with HTTP 400 "Cursor pagination is
+#: required for records beyond 10,000" (verified live, 2026-10-15).
+PAGE_PAGING_LIMIT = 10_000
+
+#: Where a free OpenAlex key is issued. Named in every message that is
+#: really "you need a key", because the fix is a one-minute sign-up.
+KEY_URL = "https://openalex.org/settings/api"
+KEY_HOWTO = (
+    f"Get a free OpenAlex API key at {KEY_URL} and set OPENALEX_API_KEY "
+    f"(or `[openalex] api_key` via the setup wizard)."
+)
 
 
 def _filter_safe(term: str) -> str:
@@ -57,6 +80,52 @@ def _page_by_cursor(
         if cursor:
             time.sleep(RATE_LIMIT_SLEEP)
     return works, total
+
+
+def _page_by_number(
+    fetch: Callable[[int], dict],
+) -> tuple[list[dict], int | None]:
+    """Collect a query's results by `page=`, up to `PAGE_PAGING_LIMIT`.
+
+    The keyless path: OpenAlex serves page-number paging without a key
+    but stops it at 10,000 results. Stops early on an empty page or once
+    the reported total is reached, so a small query costs no extra call.
+    """
+    works: list[dict] = []
+    total: int | None = None
+    page = 1
+    while page * PER_PAGE <= PAGE_PAGING_LIMIT:
+        data = fetch(page)
+        if total is None:
+            count = (data.get("meta") or {}).get("count")
+            total = count if isinstance(count, int) else None
+        results = data.get("results", [])
+        if not results:
+            break
+        works.extend(results)
+        if total is not None and len(works) >= total:
+            break
+        if len(results) < PER_PAGE:
+            break
+        page += 1
+        time.sleep(RATE_LIMIT_SLEEP)
+    return works, total
+
+
+def _cap_warning(fetched: int, total: int | None, keyed: bool) -> str:
+    """The one-line warning for a keyless query OpenAlex capped, or "".
+
+    Only fires when the cap is the reason results are missing, so it
+    names the cure; any other shortfall is `_count_line`'s warning.
+    """
+    if keyed or total is None or total <= PAGE_PAGING_LIMIT:
+        return ""
+    return (
+        f"  WARNING: OpenAlex matched {total} works but without an API key "
+        f"only the first {PAGE_PAGING_LIMIT:,} can be paged ({fetched} "
+        f"fetched); {total - fetched} were not retrieved. {KEY_HOWTO} With "
+        f"a key the search pages by cursor and has no cap."
+    )
 
 
 def _count_line(fetched: int, total: int | None, noun: str) -> str:
@@ -131,6 +200,7 @@ class OpenAlexSearch(SearchSource):
             print(f"  OpenAlex {label}: ", end="", flush=True)
             works, total = self._fetch_all(query, block_filter, ctx)
             print(_count_line(len(works), total, "results"), flush=True)
+            self._print_cap_warning(len(works), total, ctx)
             for w in works:
                 rows.append(self._work_to_row(w, label))
         return rows
@@ -164,8 +234,9 @@ class OpenAlexSearch(SearchSource):
                 if scope:
                     filter_str += f",primary_location.source.issn:{scope}"
             print(f"  OpenAlex cites:{doi} ({work_id}): ", end="", flush=True)
-            works = self._fetch_all_cursor(filter_str, ctx)
+            works, total = self._fetch_all("", filter_str, ctx)
             print(f"{len(works)} citing works", flush=True)
+            self._print_cap_warning(len(works), total, ctx)
             for w in works:
                 row = self._work_to_row(w, f"cites:{doi}")
                 row["discovery_source"] = DISCOVERY_CITATION
@@ -189,6 +260,8 @@ class OpenAlexSearch(SearchSource):
         params: dict = {"select": "id"}
         if ctx.mailto:
             params["mailto"] = ctx.mailto
+        if ctx.openalex_api_key:
+            params["api_key"] = ctx.openalex_api_key
         bare = doi.strip().lower()
         url = f"{OPENALEX_API}/works/doi:{quote(bare, safe='/')}"
         response = ctx.http().get(url, params=params, timeout=60)
@@ -208,25 +281,6 @@ class OpenAlexSearch(SearchSource):
             ) from exc
         return str((data or {}).get("id", "")).rsplit("/", 1)[-1]
 
-    def _fetch_all_cursor(self, filter_str: str,
-                          ctx: SearchContext) -> list[dict]:
-        """Page a filter-only query (the citation stream) by cursor.
-
-        Page-number paging stops at OpenAlex's 10,000-result ceiling. A
-        seminal method paper — the kind a protocol names as a seed
-        precisely because everything applying the method cites it — can
-        have more citing works than that, and silently returning the
-        first 10,000 would understate the search while looking complete.
-        """
-        works, _total = _page_by_cursor(
-            lambda cursor: self._fetch_page_cursor(filter_str, cursor, ctx),
-        )
-        return works
-
-    def _fetch_page_cursor(self, filter_str: str, cursor: str,
-                           ctx: SearchContext) -> dict:
-        return self._fetch_page("", filter_str, cursor, ctx)
-
     def _build_filter(self, issns: list[str], from_year: int,
                       to_year: int) -> str:
         """The keyword stream's journal/year/type filter.
@@ -245,23 +299,37 @@ class OpenAlexSearch(SearchSource):
 
     def _fetch_all(self, query: str, filter_str: str,
                    ctx: SearchContext) -> tuple[list[dict], int | None]:
-        """Every work for a keyword query, and OpenAlex's own total.
+        """Every work for a query, and OpenAlex's own total.
 
-        Cursor paging, like the citation stream: `page=` paging stops at
-        10,000 results, and the loop used to stop there without a word,
-        printing the truncated count as if it were the whole answer. The
-        API total is returned so the caller can print it beside the
-        number actually fetched.
+        Both streams — keyword and citation — come through here. With an
+        API key, cursor paging: no ceiling, which matters for a keyword
+        query past 10,000 hits and for a seminal method paper whose
+        citing works outnumber that. Without one, page-number paging up
+        to `PAGE_PAGING_LIMIT`, because OpenAlex now refuses keyless
+        cursor paging past the first page. The API total is returned so
+        the caller can print it beside the number actually fetched, and
+        warn when the keyless cap is why the two differ.
         """
-        return _page_by_cursor(
-            lambda cursor: self._fetch_page(query, filter_str, cursor, ctx),
+        if ctx.openalex_api_key:
+            return _page_by_cursor(
+                lambda cursor: self._fetch_page(query, filter_str, cursor, ctx),
+            )
+        return _page_by_number(
+            lambda page: self._fetch_page(query, filter_str, page, ctx),
         )
 
-    def _fetch_page(self, query: str, filter_str: str, cursor: str,
+    def _print_cap_warning(self, fetched: int, total: int | None,
+                           ctx: SearchContext) -> None:
+        warning = _cap_warning(fetched, total, bool(ctx.openalex_api_key))
+        if warning:
+            print(warning, flush=True)
+
+    def _fetch_page(self, query: str, filter_str: str, position: str | int,
                     ctx: SearchContext) -> dict:
+        """One page of `/works`. `position` is a cursor (`str`, keyed
+        paging) or a 1-based page number (`int`, keyless paging)."""
         params: dict = {
             "filter": filter_str,
-            "cursor": cursor,
             "per_page": PER_PAGE,
             "select": ",".join([
                 "id", "doi", "title", "publication_year", "publication_date",
@@ -269,6 +337,10 @@ class OpenAlexSearch(SearchSource):
                 "primary_location", "open_access", "abstract_inverted_index",
             ]),
         }
+        if isinstance(position, int):
+            params["page"] = position
+        else:
+            params["cursor"] = position
         # A citation search has no search terms — the `cites:` filter is
         # the whole query. Sending `search=` empty makes OpenAlex
         # relevance-rank against nothing and drops results.
@@ -276,17 +348,70 @@ class OpenAlexSearch(SearchSource):
             params["search"] = query
         if ctx.mailto:
             params["mailto"] = ctx.mailto
-        data = http_client.get_json(
-            ctx.http(), f"{OPENALEX_API}/works",
-            params=params, timeout=60,
-        )
-        if data is None:
-            raise RuntimeError(
-                f"OpenAlex rejected the request at cursor {cursor!r} (or "
-                f"its retries were exhausted). Check the filter expression: "
-                f"{filter_str}"
+        key = ctx.openalex_api_key
+        if key:
+            params["api_key"] = key
+        where = (f"page {position}" if isinstance(position, int)
+                 else f"cursor {position!r}")
+        try:
+            response = ctx.http().get(
+                f"{OPENALEX_API}/works", params=params, timeout=60,
             )
-        return data
+        except Exception as exc:
+            # The exception text can quote the request URL, `api_key=`
+            # and all.
+            raise RuntimeError(redact(
+                f"OpenAlex request at {where} failed: "
+                f"{type(exc).__name__}: {exc}", key,
+            )) from None
+        if 200 <= response.status_code < 300:
+            try:
+                return response.json()
+            except ValueError:
+                raise RuntimeError(
+                    f"OpenAlex returned a non-JSON answer at {where}"
+                ) from None
+        raise RuntimeError(redact(
+            self._rejection_message(response, where, filter_str, ctx), key,
+        ))
+
+    def _rejection_message(self, response, where: str, filter_str: str,
+                           ctx: SearchContext) -> str:
+        """What a non-2xx answer means, in terms the user can act on.
+
+        OpenAlex puts the reason in a JSON `message`; it is quoted
+        because "API key required for cursor paging" and "Maximum
+        results size exceeded" need different fixes and both used to
+        surface as the same bare "rejected the request".
+        """
+        status = response.status_code
+        try:
+            body = response.json() or {}
+        except ValueError:
+            body = {}
+        reason = ""
+        if isinstance(body, dict):
+            reason = " — ".join(
+                str(body[k]) for k in ("error", "message") if body.get(k)
+            )
+        reason = reason or (getattr(response, "text", "") or "")[:200]
+        detail = f"HTTP {status}" + (f": {reason}" if reason else "")
+        if status in (401, 403):
+            if ctx.openalex_api_key:
+                return (
+                    f"OpenAlex refused the configured API key at {where} "
+                    f"({detail}). Check OPENALEX_API_KEY / `[openalex] "
+                    f"api_key` — an environment variable overrides the "
+                    f"config file — or issue a new key at {KEY_URL}."
+                )
+            return (
+                f"OpenAlex requires an API key for this request at {where} "
+                f"({detail}). {KEY_HOWTO}"
+            )
+        return (
+            f"OpenAlex rejected the request at {where} ({detail}). "
+            f"Check the filter expression: {filter_str}"
+        )
 
     def _work_to_row(self, w: dict, label: str) -> dict:
         doi = (w.get("doi") or "").replace("https://doi.org/", "")

@@ -35,10 +35,15 @@ SEED_DOI = "10.1037/0021-9010.91.4.917"
 FROM_YEAR, TO_YEAR = 2007, 2010
 
 
-def _ctx() -> SearchContext:
+def _ctx(*, keyless: bool = False) -> SearchContext:
     # No ISSNs: a citation search must not be venue-scoped, and passing
     # a list here is how we would find out if one leaked into the query.
-    return SearchContext(from_year=FROM_YEAR, to_year=TO_YEAR, issns=[])
+    # The configured OpenAlex key rides along as `search.py` would send
+    # it; `keyless` forces the page-number path a user without one gets.
+    from core.config_loader import get
+    key = "" if keyless else get("openalex", "api_key", env="OPENALEX_API_KEY")
+    return SearchContext(from_year=FROM_YEAR, to_year=TO_YEAR, issns=[],
+                         openalex_api_key=key)
 
 
 def _assert_citation_rows(rows: list[dict], source_name: str) -> None:
@@ -70,6 +75,19 @@ def _assert_citation_rows(rows: list[dict], source_name: str) -> None:
 def test_openalex_lists_works_citing_the_seed() -> None:
     rows = OpenAlexSearch().run_citations([SEED_DOI], _ctx())
     _assert_citation_rows(rows, "openalex")
+
+
+def test_openalex_pages_past_the_first_page_without_a_key() -> None:
+    """OpenAlex refuses keyless *cursor* paging past page 1 (HTTP 401
+    "API key required for cursor paging", first seen 2026-10-15). A user
+    with no key must still get more than one page, by page number."""
+    from searchers.openalex import PER_PAGE
+    ctx = _ctx(keyless=True)
+    ctx.to_year = 2025  # the narrow window above is under one page
+    rows = OpenAlexSearch().run_citations([SEED_DOI], ctx)
+    assert len(rows) > PER_PAGE, (
+        f"keyless run returned {len(rows)} rows — no more than one page"
+    )
 
 
 def test_openalex_resolves_the_seed_doi_to_a_work_id() -> None:

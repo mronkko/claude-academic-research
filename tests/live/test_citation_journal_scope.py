@@ -36,10 +36,15 @@ FROM_YEAR, TO_YEAR = 2007, 2012
 
 
 def _ctx(*, scope: bool) -> SearchContext:
+    # The configured OpenAlex key, as `search.py` would pass it: with it
+    # the stream pages by cursor, without it by page number. Either way
+    # this seed's ~1700 open-scope works fit under the keyless cap.
+    from core.config_loader import get
     return SearchContext(
         from_year=FROM_YEAR, to_year=TO_YEAR,
         issns=list(JOURNALS), journal_titles=list(JOURNALS.values()),
         citation_journal_scope=scope,
+        openalex_api_key=get("openalex", "api_key", env="OPENALEX_API_KEY"),
     )
 
 

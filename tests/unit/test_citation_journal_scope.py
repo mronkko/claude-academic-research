@@ -96,7 +96,7 @@ class _FakeOpenAlex(OpenAlexSearch):
     def _resolve_work_id(self, doi, ctx):
         return "W2015257908"
 
-    def _fetch_page_cursor(self, filter_str, cursor, ctx):
+    def _fetch_page(self, query, filter_str, cursor, ctx):
         self.filters.append(filter_str)
         return {"results": [], "meta": {"next_cursor": None}}
 

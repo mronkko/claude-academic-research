@@ -127,12 +127,13 @@ def test_semantic_scholar_raises_when_retries_are_exhausted() -> None:
     assert len(calls) == 1, "must not retry in-process; the session owns retries"
 
 
-def test_openalex_raises_when_retries_are_exhausted(monkeypatch) -> None:
-    import http_client
-
-    monkeypatch.setattr(http_client, "get_json", lambda *a, **k: None)
-    with pytest.raises(RuntimeError, match="OpenAlex"):
-        OpenAlexSearch()._fetch_page("q", "filter", "*", _ctx())
+def test_openalex_raises_when_retries_are_exhausted() -> None:
+    # The session owns the retries; a 429 reaching the searcher means
+    # they ran out, and it must fail rather than read as "no results".
+    ctx, calls = _ctx_with([_resp(429, {"error": "Too many requests"})])
+    with pytest.raises(RuntimeError, match="OpenAlex.*HTTP 429"):
+        OpenAlexSearch()._fetch_page("q", "filter", "*", ctx)
+    assert len(calls) == 1, "must not retry in-process; the session owns retries"
 
 
 def test_wos_raises_when_retries_are_exhausted(monkeypatch) -> None:

@@ -56,12 +56,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
+# `scripts/` too, for `core.config_loader` (the OpenAlex key) and the
+# `core.providers.redact` the OpenAlex searcher scrubs its errors with.
+for _p in (str(SCRIPT_DIR), str(SCRIPT_DIR.parent)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import doctype  # noqa: E402
 import progress_json  # noqa: E402
 import screening_common  # noqa: E402
+from core.config_loader import get as config_get  # noqa: E402
 from doi_utils import doi_key  # noqa: E402
 from plugin_version import plugin_version  # noqa: E402
 from searchers import (  # noqa: E402
@@ -441,6 +445,11 @@ def main() -> int:
         citation_journal_scope=citation_scope,
         search_fields=search_fields,
         mailto=os.environ.get("CROSSREF_MAILTO", ""),
+        # Optional: without it OpenAlex pages by page number and stops at
+        # 10,000 results; with it, by cursor and without a cap.
+        openalex_api_key=config_get(
+            "openalex", "api_key", env="OPENALEX_API_KEY",
+        ),
     )
 
     registry = searchers_by_name()

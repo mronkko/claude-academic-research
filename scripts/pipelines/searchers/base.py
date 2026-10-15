@@ -221,6 +221,11 @@ class SearchContext:
       whenever `JOURNALS` is non-empty unless told otherwise.
     - `mailto`: `CROSSREF_MAILTO` value if set; OpenAlex uses it for
       polite-pool identification.
+    - `openalex_api_key`: the OpenAlex key, or "" for keyless. Resolved
+      by `search.py` from `OPENALEX_API_KEY` / `[openalex] api_key`
+      rather than read by the searcher, so a context built in a test is
+      keyless unless the test says otherwise. It decides how OpenAlex
+      pages — see `searchers.openalex`.
     - `session`: the shared `requests.Session` every HTTP-based source
       must use — see `http()`.
     """
@@ -231,6 +236,7 @@ class SearchContext:
     citation_journal_scope: bool = False
     search_fields: str = "all"
     mailto: str = ""
+    openalex_api_key: str = field(default="", repr=False)
     session: Any = field(default=None, repr=False)
 
     def journal_title_keys(self) -> frozenset[str]:

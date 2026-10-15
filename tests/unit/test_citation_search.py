@@ -129,7 +129,7 @@ class _FakeOpenAlex(OpenAlexSearch):
         self.resolved = doi
         return self._work_id
 
-    def _fetch_page_cursor(self, filter_str, cursor, ctx):
+    def _fetch_page(self, query, filter_str, cursor, ctx):
         self.filters.append(filter_str)
         self.cursors.append(cursor)
         return self._pages[len(self.filters) - 1]
@@ -180,7 +180,10 @@ def test_openalex_pages_with_a_cursor_past_the_ten_thousand_ceiling() -> None:
         {"results": [OPENALEX_CITING_WORK], "meta": {"next_cursor": "c2"}},
         {"results": [second], "meta": {"next_cursor": None}},
     ])
-    rows = src.run_citations([SEED], _ctx())
+    # Cursor paging needs a key: OpenAlex refuses it keyless past page 1.
+    ctx = _ctx()
+    ctx.openalex_api_key = "test-key"
+    rows = src.run_citations([SEED], ctx)
     assert len(rows) == 2
     assert src.cursors == ["*", "c2"]
 
