@@ -98,7 +98,7 @@ fixes that, and it is the cheapest win there is), and `no_doi` items
 Ask, in one message, and give your recommendation with each:
 
 1. **The order of the modes**: `api`, `paid`, `browser`, `connector`,
-   `manual`. The API cascade first, always — it is fast and nothing in it
+   `unattended`, `manual`. The API cascade first, always — it is fast and nothing in it
    depends on a page layout, a challenge or the user. After it:
    - **Recommend paying before spending the user's time.** At $0.01 a PDF
      most researchers prefer paying to downloading by hand; say what the
@@ -117,14 +117,26 @@ Ask, in one message, and give your recommendation with each:
      large `ebsco` count (no challenge at all). Offer `connector` alone
      only when the resolver routes most of the residue to platforms
      without a handler.
+   - **Offer the `unattended` run** when the browser queue is long (hours
+     of publisher items) and the user would rather not sit through it: the
+     same browser pass in two phases — a short **setup now, with them**
+     (one challenge / sign-in per publisher, each Connector host
+     confirmed), then the **run with nobody there**. Whatever needs a
+     person during the run is deferred, never waited on, and becomes the
+     next `manual` queue. Say plainly: session lifetimes were not
+     measured, so start the run soon after the setup; EZproxy logins do
+     not survive a browser restart, so proxied routes usually defer; it
+     is slower than an attended pass. Put `unattended` in the order
+     *instead of* `browser`, not beside it.
 2. **Is the user present now?** Manual download always needs them; so do
-   the browser and Connector passes — a Chromium window opens on their
-   screen and they solve challenges. Steps that need nobody (`api`,
-   `paid`) can run while they are away.
-3. **Could an unattended run be left going?** Record the answer; it is
-   for the unattended run, which is not built yet. Until it is, describe
-   the browser and Connector modes as needing the user present — never
-   start one on the strength of this answer.
+   the attended browser and Connector passes — a Chromium window opens on
+   their screen and they solve challenges — and the `unattended` step's
+   setup phase. Steps that need nobody (`api`, `paid`, the `unattended`
+   run phase) can run while they are away.
+3. **Could an unattended run be left going?** (Their machine stays on,
+   awake and on the right network for hours.) Record it — an `unattended`
+   step is refused without a yes. A yes is not a reason to start an
+   attended `browser` or `connector` pass while they are away.
 4. **Consent for automated download**, for every site in the plan's
    `consent` section that is still `ask` (not answered) and that the
    chosen order reaches with `browser` or `connector` — see *Consent*
@@ -138,7 +150,8 @@ Ask, in one message, and give your recommendation with each:
 
 Then write it:
 
-- **`pdf_strategy_write`** — `order` (e.g. `api,paid,manual`), `present`,
+- **`pdf_strategy_write`** — `order` (e.g. `api,paid,manual` or
+  `api,unattended,manual`), `present`,
   `unattended`, and the policy values if they were agreed. It refuses to
   replace an existing strategy unless `force`; only replace one the user
   agreed to replace.
@@ -211,8 +224,11 @@ the other modes need the user.
 Loop until `pdf_strategy_show` says the strategy is complete:
 
 1. `pdf_strategy_show` gives the next step, whether it needs the user
-   (`blocked_until_user_present`), and its exact command or MCP tool. Use
-   that command verbatim; do not compose your own.
+   (`blocked_until_user_present`), its MCP tool with the exact
+   `tool_arguments` to pass, and the equivalent terminal command. Call the
+   tool with those arguments (or run the command verbatim); do not
+   compose your own. Every `start_*` tool is a job: follow it with
+   `job_status` until it ends.
 2. `pdf_strategy_update` with `status: "running"`.
 3. Run it (per mode, below).
 4. Run the audit and **diagnose** (next section) — after every step.
@@ -227,11 +243,23 @@ agreed to.
 
 ### `api` and `paid`
 
-No MCP job tool for `enrich_pdfs` exists yet (BACKLOG P21 adds them), so
-run the command from `pdf_strategy_show` with Bash and
-`run_in_background: true` — a large library takes 5–15 minutes. The run
-prints the effective `[pdf]` policy, with where each value came from, at
-the top: check it says what was agreed.
+Both are background jobs; a large library takes 5–15 minutes.
+
+- **`start_enrich_pdfs`** — the free API cascade. It never pays: the
+  paid OpenAlex source is switched off in it.
+- **`start_enrich_pdfs_paid`** — `[costs money]`: $0.01 per PDF the
+  OpenAlex Content API serves, billed to the user's key. `scope:
+  "paid_only"` is the `paid` step; `scope: "cascade"` (or
+  `cascade_prefer` / `cascade_last_resort`) is the `api` step when paying
+  sits *inside* the cascade under the policy. `pdf_strategy_show` says
+  which, in `tool_arguments`. Say the plan's count and cost before you
+  start it, every time — the user agreed to the strategy, not to an
+  open-ended bill.
+
+The first lines of the job's log give the effective `[pdf]` policy with
+where each value came from: check it says what was agreed. Without the
+MCP server, run the strategy's command with Bash and
+`run_in_background: true`.
 
 Journal articles only unless `--item-types journalArticle,bookSection,book`
 admits more; an admitted type is never logged `OUT_OF_SCOPE`.
@@ -293,9 +321,11 @@ lookups before the Connector pass, `run_done`); report progress from it.
   `retry.browser.keys`); one publisher alone with
   `--sources browser --publisher <name> --filter-keys-file
   .claude/audit/audit.retry.browser.<name>.keys`.
-- `--no-prompt` answers every challenge with "skip" — only for a run
-  nobody is watching, never instead of the control file when the user is
-  there.
+- `--no-prompt` answers every challenge with "skip" — never instead of
+  the control file when the user is there. For a run nobody will watch,
+  use the `unattended` step instead: its setup solves the challenges
+  first, and its run defers (rather than skips) what still needs a
+  person.
 - **Consent is settled before the run, not during it.** The control-file
   run never relays a consent question: a site without a recorded `allow`
   is skipped (`CONSENT_NEEDED`), a denied one goes to manual
@@ -324,6 +354,49 @@ lookups before the Connector pass, `run_done`); report progress from it.
 - The Connector step needs Zotero desktop running with the Connector in
   the Chromium profile, and the institution's OpenURL base configured.
 
+### `unattended`
+
+The browser pass as a long unattended run, in two jobs.
+`pdf_strategy_show` reports the step's `phase` — `setup` until a setup
+has been recorded (`.claude/pdf/unattended.json`), then `run` — and the
+tool for it.
+
+**Setup — with the user** (**`start_pdf_unattended_setup`**). Record
+consent first (*Consent* above): the setup never relays a consent
+question, and a site without a recorded `allow` is noted
+`consent_needed` and skipped by the run. Tell the user a Chromium window
+will open and walk them through it. For each publisher in the queue the
+job opens its page and asks whether they can reach the PDF after solving
+the challenge / signing in; for each Zotero Connector host it opens the
+library route and asks them to clear it and confirm (`s` skips the host —
+its items are deferred). Relay each `job_status` prompt verbatim and pass
+**their** answer with `job_answer`, exactly as for the attended pass. It
+downloads nothing and writes nothing to Zotero. Its log ends with
+`UNATTENDED: phase=setup sites=… solved=… hosts_confirmed=…`; read the
+per-site lines back to the user.
+
+**Run — nobody needed** (**`start_pdf_unattended_run`**). Start it right
+after the setup (no lifetimes were measured; a session that expires
+costs that publisher's remaining items, deferred). Zotero Desktop must
+stay running for the Connector items. The run never asks anything: it
+re-checks each publisher's session before it and every 15 minutes
+within it (`--recheck-minutes`, `[pdf] unattended_recheck_minutes`), and
+an expired clearance, a sign-in page, an unconfirmed host, Zotero Desktop
+not running or three unexplained failures in a row defer the item as
+`DEFERRED_NEEDS_USER` (the reason is in the run log's `detail`). The
+network-outage breaker still stops a run on a dead connection. Pacing
+is twice as slow as an attended pass. Follow it with `job_status`; it
+never reaches `awaiting_user`.
+
+**Summary.** The job's log ends with the summary — attached, deferred by
+reason, consent skips, failures split into transport errors and access
+failures on the run's network vs. another — and the line `UNATTENDED:
+phase=run items=… attached=… deferred=… failed_items=… network_errors=…`.
+Read it to the user, then run the audit: the deferred items are
+`retry.deferred.keys`, and they open first in the next `manual` cycle.
+Access failures recorded on another network are not this run's evidence
+about access: re-run them on that network before calling anything ILL.
+
 ### `manual`
 
 One call per cycle — **`pdf_manual_next`** (`enrich_pdfs.py --manual
@@ -344,8 +417,9 @@ next`):
 Tell the user to download what they can from the open tabs and say
 "done"; then run the next cycle. Relay the summary line (opened,
 attached, unmatched, remaining). After the last batch call
-`pdf_manual_collect`. Items in `retry.manual`, `retry.below_policy` and
-`retry.consent_denied` open first.
+`pdf_manual_collect`. Items in `retry.manual`, `retry.below_policy`,
+`retry.consent_denied` and `retry.deferred` (what an unattended run set
+aside) open first.
 
 **Never assign a file yourself.** An unmatched or ambiguous file is
 listed with its candidates — ask the user which item it is, then
@@ -523,8 +597,11 @@ source. Every attached PDF carries `pdf:version:published`,
   strategy does not contain.
 - You presented the paid cost ceiling from a `lookups: "none"` plan as
   an estimate.
-- You started a browser or Connector pass while the user said they are
-  away, or because "an unattended run is possible".
+- You started an attended browser or Connector pass, or an unattended
+  **setup**, while the user said they are away — or an attended pass
+  because "an unattended run is possible".
+- You answered an unattended setup's prompt yourself, or started
+  `start_enrich_pdfs_paid` without saying what it costs.
 - You assigned a downloaded file to an item the user did not name.
 - You recorded a consent answer (`pdf_consent_set`) the user did not give,
   or summarised a site's terms instead of giving the link.

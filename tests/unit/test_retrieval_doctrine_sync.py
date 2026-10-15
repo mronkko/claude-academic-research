@@ -415,13 +415,29 @@ def test_the_skill_names_the_planning_and_strategy_tools() -> None:
     import tool_registry
 
     named = set(re.findall(r"`((?:start_)?pdf_[a-z_]+|enrich_pdfs_[a-z]+|audit_library"
+                           r"|start_enrich_pdfs(?:_paid)?|job_answer"
                            r"|check_setup|job_status|list_jobs)`", _pdf()))
     assert {"pdf_plan", "start_pdf_plan", "pdf_strategy_show", "pdf_strategy_write",
             "pdf_strategy_update", "pdf_policy_write", "pdf_manual_next",
             "pdf_manual_collect", "pdf_manual_assign", "pdf_consent_show",
-            "pdf_consent_set"} <= named
+            "pdf_consent_set", "start_enrich_pdfs", "start_enrich_pdfs_paid",
+            "start_pdf_unattended_setup", "start_pdf_unattended_run"} <= named
     unknown = named - set(tool_registry.TOOLS_BY_NAME) - {"pdf_fetch_log"}  # a module
     assert not unknown, f"retrieving-pdfs names tools the server lacks: {unknown}"
+
+
+def test_the_skill_no_longer_says_enrich_pdfs_has_no_job_tool() -> None:
+    """Step 6 added them; the old "run the command" fallback must not
+    outlive it as the instruction."""
+    assert "No MCP job tool" not in _pdf()
+
+
+def test_the_skill_states_the_unattended_rules() -> None:
+    text = _pdf()
+    assert "setup now, with them" in text
+    assert "never waited on" in text
+    assert "lifetimes were not" in text and "measured" in text
+    assert "`retry.deferred`" in text
 
 
 # ---------------------------------------------------------------------------
