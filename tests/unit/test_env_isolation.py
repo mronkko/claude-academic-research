@@ -32,6 +32,7 @@ _NOT_CONFIGURATION = {
     "USERPROFILE",
     "PATH",
     "CLAUDE_PLUGIN_ROOT",  # set by the host; tests that need it set it
+    "CLAUDE_PROJECT_DIR",  # set by the host; tests that need it set it
     "NO_COLOR",
     "TERM",
     "PYTHONIOENCODING",
