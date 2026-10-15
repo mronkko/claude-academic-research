@@ -5,6 +5,8 @@ Used by:
     publisher name to `[library] no_access`).
   - The setup wizard's `no_access` editor (removes entries).
   - `scripts/setup/set_llm_provider.py` (sets `[llm] provider`).
+  - `core/publisher_consent.record` (writes `[publisher_consent.<site>]`
+    through `set_table`, keeping the answer's date a TOML date).
 
 Design notes:
   - One serialiser for the wizard and the runtime helpers (`_dump`).
@@ -230,6 +232,36 @@ def set_value(section: str, key: str, value: str) -> None:
         )
     sect[key] = value
     _write(values)
+
+
+def set_table(path: tuple[str, ...] | list[str], values: dict) -> None:
+    """Merge `values` into the (possibly nested) table at `path`.
+
+    `set_table(("publisher_consent", "sage"), {"automated": "allow",
+    "confirmed": date(2026, 10, 15)})` writes `[publisher_consent.sage]`.
+    Keys of that table not in `values` stay, and so does everything else
+    in the file. Values keep their type (a `date` is written as a TOML
+    date), unlike `set_value`, which is strings only.
+
+    Raises ValueError when something on `path` exists but is not a table
+    — replacing a scalar with a table silently would lose it.
+    """
+    if not path:
+        raise ValueError("set_table needs a table path")
+    data = _read()
+    table = data
+    for depth, part in enumerate(path):
+        existing = table.get(part)
+        if existing is None:
+            existing = table[part] = {}
+        elif not isinstance(existing, dict):
+            raise ValueError(
+                f"[{'.'.join(path[:depth + 1])}] is not a table "
+                f"({type(existing).__name__}); refusing to overwrite.",
+            )
+        table = existing
+    table.update(values)
+    _write(data)
 
 
 def remove_from_list(section: str, key: str, values_to_remove: list[str]) -> None:
