@@ -93,12 +93,13 @@ import fetchers  # noqa: E402
 import http_client  # noqa: E402
 import manual_pdfs  # noqa: E402
 import pdf_fetch_log  # noqa: E402
+import pdf_plan  # noqa: E402
 import pdf_run_report  # noqa: E402
 import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
 from core import pdf_policy  # noqa: E402
 from core.config_loader import get, require  # noqa: E402
-from fetchers import pdf_version  # noqa: E402
+from fetchers import cache_names, pdf_version  # noqa: E402
 from log_schemas import PDF_FETCH_FIELDS  # noqa: E402
 
 DEFAULT_LOG_CSV = os.path.join("output", "pdf_attach_log.csv")
@@ -3329,6 +3330,20 @@ def _resolver_config(args: argparse.Namespace):
     )
 
 
+def _library_handler_set(key: str) -> set[str]:
+    """Handler names in `[library] <key>` (`no_access` / `direct_access`).
+    Stored as a TOML list, so read through `load_config()` — `get()`
+    only returns strings. A comma-separated string is accepted too."""
+    from core.config_loader import load_config
+
+    raw = load_config().get("library", {}).get(key, [])
+    if isinstance(raw, list):
+        return {str(s).strip() for s in raw if s}
+    if isinstance(raw, str):
+        return {s.strip() for s in raw.split(",") if s.strip()}
+    return set()
+
+
 def _run_browser_in_process(
     to_process: list[dict],
     zot,
@@ -3437,17 +3452,7 @@ def _run_browser_in_process(
     # "Always skip" answer; editable via the setup wizard. Stored as
     # a TOML list, so we read via load_config() directly — get() only
     # returns strings.
-    from core.config_loader import load_config
-
-    def _handler_set(key: str) -> set[str]:
-        raw = load_config().get("library", {}).get(key, [])
-        if isinstance(raw, list):
-            return {str(s).strip() for s in raw if s}
-        if isinstance(raw, str):
-            return {s.strip() for s in raw.split(",") if s.strip()}
-        return set()
-
-    no_access = _handler_set("no_access")
+    no_access = _library_handler_set("no_access")
     # [library] direct_access → the opposite declaration: "I can reach
     # this publisher by means the link resolver cannot see." A personal
     # society membership, or a second institution's SSO — this user
@@ -3460,7 +3465,7 @@ def _run_browser_in_process(
     # private access does contradict. Case 2 is a claim about the
     # platform's *holdings* ("that platform's run starts in 1996"), which
     # no credential changes.
-    direct_access = _handler_set("direct_access")
+    direct_access = _library_handler_set("direct_access")
 
     # Pass 2 API retry: the prefix-filtering API sources (Wiley TDM,
     # Elsevier, Springer). When Crossref resolution reveals a DOI
@@ -5051,6 +5056,23 @@ def _check_manual_args(args: argparse.Namespace) -> int:
     return 0
 
 
+def _check_plan_strategy_args(args: argparse.Namespace) -> int:
+    """0, or 2 after saying why `--plan-strategy` cannot run with these
+    flags: it plans every mode, so it takes no mode of its own."""
+    clash = [flag for flag, on in (
+        ("--all", args.all), ("--sources", bool(args.sources)),
+        ("--plan", args.plan), ("--replace", args.replace),
+        ("--manual", bool(args.manual)), ("--report", args.report),
+        ("--auto-publishers", args.auto_publishers),
+        ("--publisher", bool(args.publisher)),
+    ) if on]
+    if clash:
+        print(f"ERROR: --plan-strategy plans every mode; drop {', '.join(clash)}.",
+              file=sys.stderr)
+        return 2
+    return 0
+
+
 def _manual_settings(args: argparse.Namespace) -> tuple[Path, int]:
     """(downloads folder, batch size): flag > [pdf] config > default."""
     raw_dir = args.downloads_dir or get(
@@ -5157,6 +5179,434 @@ def _run_manual(args: argparse.Namespace, zot, all_items: list[dict], run_date: 
         return rc
     finally:
         log_fh.close()
+
+
+# --- `--plan-strategy`: the planning step (pdf_plan) --------------------------
+
+#: Publisher API sources the planner counts as "likely": prefix or landing
+#: host, the credential attribute on `Config`, and the first year the
+#: entitlement is known to cover. Springer is left out on purpose — its
+#: PDF endpoint answers every HTTP client with an Imperva challenge, so
+#: Springer items reliably fall through to the browser pass (see the
+#: retrieving-pdfs skill). Wiley's TDM token answered nothing before 1990
+#: on a measured 1,895-item pass.
+_PLAN_PUBLISHER_APIS: tuple[tuple[str, str, int | None], ...] = (
+    ("sciencedirect", "elsevier_api_key", None),
+    ("wiley", "wiley_tdm_token", 1990),
+)
+
+
+def _plan_publisher_api(
+    doi: str, host: str, year: str | None, config: Config,
+) -> tuple[str, str]:
+    """(source likely to answer, source matching but missing its key)."""
+    classes = {cls.name: cls for cls in fetchers.PDF_SOURCE_CLASSES}
+    for name, cred, min_year in _PLAN_PUBLISHER_APIS:
+        cls = classes.get(name)
+        if cls is None:
+            continue
+        prefixes = tuple(getattr(cls, "doi_prefixes", ()) or ())
+        domains = tuple(getattr(cls, "direct_access_domains", ()) or ())
+        hit = doi.startswith(prefixes) if prefixes else False
+        if not hit and host:
+            hit = any(host == d or host.endswith("." + d) for d in domains)
+        if not hit:
+            continue
+        if min_year and year and year.isdigit() and int(year) < min_year:
+            continue
+        if getattr(config, cred, ""):
+            return name, ""
+        return "", name
+    return "", ""
+
+
+def _plan_log_signals(
+    log_csv: str, failure_log_csv: str, browser_sources: set[str],
+) -> tuple[set[str], set[str], dict[str, str], set[str]]:
+    """(API-tried keys, browser-tried keys, latest cause per key,
+    below-policy keys) from the run log and the failure log."""
+    api_sources = {
+        cls.name for cls in fetchers.PDF_SOURCE_CLASSES if not cls.interactive
+    } | {_API_CASCADE_SOURCE}
+    api_tried: set[str] = set()
+    browser_tried: set[str] = set()
+    below: set[str] = set()
+    rows: list[dict] = []
+    if log_csv and os.path.isfile(log_csv):
+        with open(log_csv, newline="", encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))
+    for row in rows:
+        key = (row.get("item_key") or "").strip()
+        source = (row.get("source") or "").strip()
+        if not key:
+            continue
+        if source in api_sources:
+            api_tried.add(key)
+        elif source in browser_sources:
+            browser_tried.add(key)
+        if (row.get("status") or "") == "skipped_below_policy":
+            below.add(key)
+    failures = pdf_fetch_log.read_failures(failure_log_csv) if failure_log_csv else []
+    for row in failures:
+        key = (row.get("item_key") or "").strip()
+        source = (row.get("source") or "").strip()
+        if source in api_sources:
+            api_tried.add(key)
+        elif source in browser_sources:
+            browser_tried.add(key)
+    latest = {
+        k: (r.get("cause") or "")
+        for k, r in pdf_fetch_log.latest_per_item(failures).items()
+    }
+    below |= {
+        k for k, c in latest.items()
+        if c == pdf_fetch_log.FailureCause.VERSION_BELOW_POLICY.value
+    }
+    api_tried.discard("")
+    return api_tried, browser_tried, latest, below
+
+
+#: Audit key files the plan reports against the queue.
+_PLAN_AUDIT_LABELS = ("true_negative", "out_of_scope")
+
+
+def _plan_audit_sets(stem: str = AUDIT_KEYS_STEM) -> dict[str, list[str]]:
+    """item key -> the audit retry / verdict sets that list it."""
+    out: dict[str, list[str]] = {}
+    base = Path(stem)
+    if not base.parent.is_dir():
+        return out
+    for path in sorted(base.parent.glob(base.name + ".*.keys")):
+        label = path.name[len(base.name) + 1:-len(".keys")]
+        if not (label.startswith("retry.") or label in _PLAN_AUDIT_LABELS):
+            continue
+        if label.startswith("retry.browser."):
+            continue  # per-publisher subsets of retry.browser
+        try:
+            keys = path.read_text(encoding="utf-8").split()
+        except OSError:
+            continue
+        for key in keys:
+            out.setdefault(key, []).append(label)
+    return out
+
+
+def _plan_openalex(
+    dois: list[str], session, mailto: str, min_version: str,
+) -> tuple[dict[str, tuple[bool, bool]], int, str]:
+    """OpenAlex metadata for `dois`: `{doi_key: (free copy within policy,
+    Content API has the PDF)}`, batches that failed, and a note.
+
+    Keyless on purpose (`pdf_plan.openalex_params`): nothing can be billed.
+    A DOI in an answered batch that OpenAlex does not return is a work it
+    does not know — (False, False). A failed batch leaves its DOIs out,
+    i.e. unknown.
+    """
+    found: dict[str, tuple[bool, bool]] = {}
+    failed = 0
+    note = ""
+    batches = pdf_plan.openalex_batches(dois)
+    for i, batch in enumerate(batches, 1):
+        try:
+            data = http_client.get_json(
+                session, "https://api.openalex.org/works",
+                params=pdf_plan.openalex_params(batch, mailto), timeout=60,
+            )
+        except Exception as e:  # noqa: BLE001 — a plan degrades to unknown
+            data = None
+            note = f"OpenAlex metadata lookup failed ({type(e).__name__})"
+        if not isinstance(data, dict) or "results" not in data:
+            failed += 1
+            if i == 1 and len(batches) > 1:
+                # The first answer decides: a refusal (no key, rate limit)
+                # repeats for every batch, and a plan must not hammer it.
+                note = note or ("OpenAlex refused the keyless metadata query; "
+                                "paid reachability left unknown")
+                failed = len(batches)
+                break
+            continue
+        answered = {doi_utils.doi_key(d) for d in batch}
+        for work in data.get("results") or []:
+            key = doi_utils.doi_key(
+                doi_utils.strip_doi_prefixes(work.get("doi") or "")[0])
+            if not key:
+                continue
+            preprint_item = pdf_version.is_preprint_doi(key)
+
+            def acceptable(loc: dict, url: str, _p=preprint_item) -> bool:
+                return pdf_policy.allows(
+                    min_version, pdf_version.from_openalex_location(loc, url),
+                    item_is_preprint=_p,
+                )
+
+            found[key] = pdf_plan.oa_and_paid(work, acceptable)
+        for key in answered - set(found):
+            if key:
+                found[key] = (False, False)
+        if i % 10 == 0:
+            print(f"  … OpenAlex {i}/{len(batches)} batches", flush=True)
+    return found, failed, note
+
+
+def _resolver_keys_cached(doi: str, resolver_cfg, *, dual: bool) -> bool:
+    """Whether the resolver cache alone answers this DOI — every library's
+    date-filtered key, plus the date-ignoring ones when `dual`."""
+    from fetchers.library_resolver import dual_cache_keys
+
+    cache = getattr(resolver_cfg, "cache", None)
+    if cache is None:
+        return False
+    keys = dual_cache_keys(doi, resolver_cfg)
+    if not dual:
+        keys = [k for k in keys if "::any@@" not in k]
+    return bool(keys) and all(cache.get(k) is not None for k in keys)
+
+
+def _plan_resolver(
+    entry: dict, handler, resolver_cfg, *, network: bool,
+    direct_access: set[str], ignore_coverage: bool,
+) -> tuple[str, str, bool]:
+    """(direct-route case, resolver answer, a network query was made) for
+    one item, from the cache unless `network`. Same lookups and the same
+    reading as the browser pass (`classify_direct_route`, `_pass3_target`),
+    so the plan and the run cannot disagree about an item they both see."""
+    from fetchers.browser import is_ebsco_target
+    from fetchers.library_resolver import lookup_dual
+
+    if resolver_cfg is None:
+        return "", pdf_plan.R_UNCONFIGURED, False
+    doi = entry["doi"]
+    asked = False
+    case = ""
+    if handler is not None:
+        if network or _resolver_keys_cached(doi, resolver_cfg, dual=True):
+            asked = not _resolver_keys_cached(doi, resolver_cfg, dual=True)
+            dual = lookup_dual(
+                doi, resolver_cfg, issn=entry["issn"],
+                pub_date=entry["pub_date"], volume=entry["volume"],
+            )
+            case = classify_direct_route(
+                dual, handler.direct_access_domains, resolver_cfg,
+                pub_date=entry["pub_date"], handler_name=handler.name,
+                direct_access=direct_access,
+            )
+        if case in ("3-in-coverage", "1a-unknown"):
+            # Going to its handler; the Pass-3 route does not matter.
+            return case, pdf_plan.R_UNKNOWN, asked
+    if ignore_coverage:
+        return case, pdf_plan.R_ROUTE, asked
+    if not (network or _resolver_keys_cached(doi, resolver_cfg, dual=False)):
+        return case, pdf_plan.R_UNKNOWN, asked
+    asked = asked or not _resolver_keys_cached(doi, resolver_cfg, dual=False)
+    lookup = _pass3_target(entry, resolver_cfg)
+    if lookup.deferred:
+        answer = pdf_plan.R_DEFERRED
+    elif lookup.url and is_ebsco_target(lookup.target):
+        answer = pdf_plan.R_EBSCO
+    elif lookup.url:
+        answer = pdf_plan.R_ROUTE
+    elif not lookup.query_ok:
+        answer = pdf_plan.R_UNKNOWN
+    else:
+        answer = pdf_plan.R_NONE
+    return case, answer, asked
+
+
+def _plan_progress(event: dict) -> None:
+    from fetchers.browser import interaction
+    interaction.report_progress(event)
+
+
+def _run_plan_strategy(args: argparse.Namespace, zot, all_items: list[dict]) -> int:
+    """`--plan-strategy`: classify the queue by likely route (`pdf_plan`).
+
+    Read-only towards Zotero: it reads the library and never trashes a
+    stub, attaches or tags. It writes `.claude/pdf/plan.json` and
+    `.claude/pdf/plan.<route>.keys`, and with `--plan-lookups all` it
+    fills the Crossref and link-resolver caches the browser pass reads.
+    """
+    from urllib.parse import urlparse
+
+    from fetchers.browser import all_handlers, resolve_by_doi, resolve_by_host
+    from fetchers.doi_resolver import DoiResolverCache, cached_resolution
+
+    lookups = args.plan_lookups
+    policy: pdf_policy.PdfPolicy = args.pdf_policy
+    config = _load_config()
+    library = f"{getattr(zot, 'library_type', 'group')}:{getattr(zot, 'group_id', '')}"
+    _plan_progress({"event": "start", "script": "enrich_pdfs --plan-strategy",
+                    "lookups": lookups, "queued": len(all_items)})
+
+    print("Checking for existing PDF attachments...", flush=True)
+    pdf_map = zot.pdf_map()
+    queue = [it for it in all_items if not pdf_map.get(it["key"], (False, []))[0]]
+    with_pdf = len(all_items) - len(queue)
+
+    handlers = all_handlers()
+    no_access = _library_handler_set("no_access")
+    direct_access = _library_handler_set("direct_access")
+    browser_sources = (
+        {h.name for h in handlers} | set(pdf_fetch_log.BROWSER_PASS_SOURCES)
+        | {"ebsco", "browser"}
+    )
+    api_tried, browser_tried, latest, below = _plan_log_signals(
+        args.log_csv, args.failure_log_csv, browser_sources,
+    )
+    audit = _plan_audit_sets()
+
+    try:
+        resolver_cfg = _resolver_config(args)
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    doi_cache = DoiResolverCache(args.cache_dir)
+    below_dir = Path(args.cache_dir) / BELOW_POLICY_DIR
+
+    entries: list[dict] = []
+    for it in queue:
+        data = it.get("data", {}) or {}
+        doi = doi_utils.strip_doi_prefixes((data.get("DOI") or "").strip())[0].lower()
+        entries.append({
+            "key": it["key"], "doi": doi, "title": data.get("title", "") or "",
+            "issn": _first_issn(data.get("ISSN", "")),
+            "pub_date": _year_from_zotero_date(data.get("date", "")),
+            "volume": (data.get("volume") or "").strip() or None,
+        })
+    dois = [e["doi"] for e in entries if e["doi"]]
+
+    crossref_uncached = [d for d in dois if cached_resolution(d, doi_cache) is None]
+    resolver_uncached = (
+        sum(1 for d in dois if not _resolver_keys_cached(d, resolver_cfg, dual=False))
+        if resolver_cfg is not None else 0
+    )
+    batches = len(pdf_plan.openalex_batches(dois))
+    if lookups == "all":
+        secs = pdf_plan.estimate_seconds(
+            resolver_uncached=resolver_uncached,
+            crossref_uncached=len(crossref_uncached), openalex_batches=batches,
+        )
+        print(
+            f"Lookups (all): {len(crossref_uncached)} Crossref, up to "
+            f"{resolver_uncached} link-resolver queries (~2 s each, "
+            f"{len(dois) - resolver_uncached} already cached), {batches} OpenAlex "
+            f"metadata batches — roughly {_humanize_duration(secs)}. Answers "
+            f"are cached, so the browser pass that follows starts warm.",
+            flush=True,
+        )
+    elif lookups == "openalex":
+        print(f"Lookups (openalex): {batches} keyless OpenAlex metadata "
+              f"batch(es); caches for everything else.", flush=True)
+    else:
+        print("Lookups (none): caches and logs only — no network.", flush=True)
+
+    unknown: dict[str, int] = {}
+    if lookups == "all" and crossref_uncached:
+        from fetchers.doi_resolver import resolve_doi
+        from habanero import Crossref
+        crossref = Crossref(mailto=get("crossref", "mailto", env="CROSSREF_MAILTO"))
+        for i, d in enumerate(crossref_uncached, 1):
+            resolve_doi(d, crossref=crossref, cache=doi_cache)
+            if i % 50 == 0:
+                print(f"  … Crossref {i}/{len(crossref_uncached)}", flush=True)
+    elif crossref_uncached:
+        unknown["crossref_uncached"] = len(crossref_uncached)
+
+    oa_paid: dict[str, tuple[bool, bool]] = {}
+    notes: list[str] = []
+    if lookups in ("openalex", "all") and dois:
+        session = http_client.build_session(mailto=config.crossref_mailto)
+        oa_paid, failed, note = _plan_openalex(
+            dois, session, config.crossref_mailto, policy.min_version,
+        )
+        if note:
+            notes.append(note)
+        if failed:
+            unknown["openalex_unchecked"] = sum(
+                1 for d in dois if doi_utils.doi_key(d) not in oa_paid)
+    elif dois:
+        unknown["openalex_unchecked"] = len(dois)
+
+    facts: list[pdf_plan.ItemFacts] = []
+    resolver_unknown = 0
+    asked = 0
+    t0 = time.monotonic()
+    for i, e in enumerate(entries, 1):
+        key, doi = e["key"], e["doi"]
+        f = pdf_plan.ItemFacts(
+            key=key, doi=doi, title=e["title"][:70],
+            api_tried=key in api_tried, browser_tried=key in browser_tried,
+            last_cause=latest.get(key, ""),
+            audit_sets=tuple(audit.get(key, ())),
+            below_policy=key in below or (
+                bool(doi) and cache_names.cache_pdf_path(below_dir, doi).exists()),
+        )
+        if doi:
+            hit = cached_resolution(doi, doi_cache)
+            host = (urlparse(hit.url).hostname or "").lower() if hit and hit.url else ""
+            f.publisher_api, f.publisher_api_missing_key = _plan_publisher_api(
+                doi, host, e["pub_date"], config)
+            handler = resolve_by_host(host, handlers) if host else None
+            if handler is None:
+                handler = resolve_by_doi(doi, handlers)
+            if handler is not None and handler.name in no_access:
+                handler = None
+            if handler is not None:
+                f.handler = handler.name
+                f.handler_display = handler.display_name or handler.name
+                f.handler_needs_solve = bool(
+                    getattr(handler, "needs_interactive_solve", True))
+            found = oa_paid.get(doi_utils.doi_key(doi))
+            if found is not None:
+                f.open_access, f.paid = found
+            f.direct_case, f.resolver, net = _plan_resolver(
+                e, handler, resolver_cfg, network=(lookups == "all"),
+                direct_access=direct_access,
+                ignore_coverage=bool(getattr(args, "ignore_library_coverage", False)),
+            )
+            asked += net
+            if f.resolver == pdf_plan.R_UNKNOWN and not (
+                    f.handler and f.direct_case in ("3-in-coverage", "1a-unknown")):
+                resolver_unknown += 1
+            if lookups == "all" and net:
+                _plan_progress({"event": "item", "phase": "resolver", "key": key,
+                                "outcome": f.resolver, "done": i,
+                                "queued": len(entries)})
+                if asked % _PREFLIGHT_TICK == 0:
+                    rate = asked / max(time.monotonic() - t0, 1e-6)
+                    print(f"  … {asked} resolver queries ({rate:.1f}/s), "
+                          f"{i}/{len(entries)} items", flush=True)
+        facts.append(f)
+    if resolver_cfg is not None and resolver_unknown:
+        unknown["resolver_uncached"] = resolver_unknown
+
+    policy_info = {
+        "min_version": policy.min_version,
+        "reconstructed": policy.reconstructed,
+        "paid": policy.paid,
+        "sources": dict(policy.sources),
+        "stored": any(v != "default" for v in policy.sources.values()),
+    }
+    plan = pdf_plan.Plan(
+        library=library, lookups=lookups, policy=policy_info,
+        scope_items=len(all_items), with_pdf=with_pdf, facts=facts,
+        paid_known=lookups in ("openalex", "all"),
+        unknown=unknown,
+        credentials={
+            "elsevier": bool(config.elsevier_api_key),
+            "wiley": bool(config.wiley_tdm_token),
+            "openalex_key": bool(config.openalex_api_key),
+        },
+        resolver_configured=resolver_cfg is not None,
+        notes=notes,
+    )
+    summary, path = pdf_plan.write_outputs(plan)
+    print("")
+    print(pdf_plan.format_summary(summary), flush=True)
+    print(f"Plan written to {path.as_posix()} (keys per route beside it).",
+          flush=True)
+    _plan_progress({"event": "summary", "routes": summary["routes"],
+                    "fallback_routes": summary["fallback_routes"]})
+    return 0
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -5372,6 +5822,29 @@ def _build_parser() -> argparse.ArgumentParser:
              "queueing against the same institutional resolver.",
     )
     parser.add_argument(
+        "--plan-strategy", action="store_true",
+        help="The planning step of the retrieving-pdfs skill: classify every "
+             "in-scope item without a PDF by the route most likely to get it "
+             "(API cascade, paid OpenAlex with its cost, a publisher browser "
+             "handler, the library route to EBSCOhost or the Zotero "
+             "Connector, or manual download), plus items below the [pdf] "
+             "policy and flagged by the audit. Prints a summary and writes "
+             ".claude/pdf/plan.json and a keys file per route. Fetches no PDF "
+             "and never writes to Zotero. See --plan-lookups for how much it "
+             "asks the network.",
+    )
+    parser.add_argument(
+        "--plan-lookups", default="none", choices=pdf_plan.LOOKUPS,
+        help="--plan-strategy only. 'none' (default): caches and logs only, "
+             "no network beyond reading Zotero — seconds. 'openalex': also one "
+             "keyless OpenAlex metadata query per 50 items, which says exactly "
+             "which items the paid Content API holds and which have a free "
+             "copy within policy; keyless, so it cannot be billed. 'all': also "
+             "Crossref and the link resolver for every uncached item (~2 s "
+             "each; the estimate is printed before it starts) — the answers "
+             "are cached, so the browser pass afterwards starts warm.",
+    )
+    parser.add_argument(
         "--connector-sync-timeout", type=float, default=30, metavar="SECONDS",
         help="How long each Connector save waits to reach the Zotero cloud "
              "before its merge is queued instead (default 30). Queued "
@@ -5491,6 +5964,14 @@ def main() -> int:
     if args.all and args.sources:
         print("ERROR: --all cannot be combined with --sources.",
               file=sys.stderr)
+        return 2
+
+    if args.plan_strategy:
+        rc = _check_plan_strategy_args(args)
+        if rc:
+            return rc
+    elif args.plan_lookups != "none":
+        print("ERROR: --plan-lookups goes with --plan-strategy.", file=sys.stderr)
         return 2
 
     if args.adopt_legacy_resolver_cache:
@@ -5657,6 +6138,9 @@ def main() -> int:
         return 2
     if args.manual:
         return _run_manual(args, zot, all_items, run_date)
+    if args.plan_strategy:
+        _install_interaction_channel(args)
+        return _run_plan_strategy(args, zot, all_items)
 
     # Everything this invocation is accountable for — the report is
     # scoped to these so a filtered run doesn't dump the whole log.
