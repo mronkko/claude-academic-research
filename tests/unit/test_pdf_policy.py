@@ -1,4 +1,4 @@
-"""The `[pdf]` retrieval policy (`pdf_policy.py`) and how `enrich_pdfs`
+"""The `[pdf]` retrieval policy (`core/pdf_policy.py`) and how `enrich_pdfs`
 enforces it: precedence, the `min_version` gate with reject-and-continue
 in the cascade, the browser / Connector gates, the paid position, and the
 generated `--sources` help.
@@ -17,9 +17,8 @@ from unittest.mock import MagicMock
 import enrich_pdfs
 import fetchers
 import pdf_fetch_log
-import pdf_policy
 import pytest
-from core import config_loader
+from core import config_loader, pdf_policy
 from fetchers import pdf_version
 from log_schemas import PDF_FETCH_FIELDS
 

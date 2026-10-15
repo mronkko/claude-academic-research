@@ -106,7 +106,7 @@ def pdf_sources(
     a correct version of record is worth $0.01 more than a free
     manuscript. It is the only per-item cost in the cascade — every
     other source here is free or already covered by an institutional
-    subscription — and the `[pdf] paid` policy (`pdf_policy.py`) moves
+    subscription — and the `[pdf] paid` policy (`core/pdf_policy.py`) moves
     it: `paid="off"` drops it, even when named in `names`;
     `paid="last_resort"` moves it after every free source, preprint
     included, so it is paid for only when nothing free answered;

@@ -210,29 +210,34 @@ def test_disabled_synthesis_does_not_call_the_xml_endpoint(monkeypatch) -> None:
 def test_wizard_defaults_the_option_to_off_and_keeps_the_api_key(
     monkeypatch, tmp_path: Path,
 ) -> None:
-    """Non-interactive setup must not enable it, and merging the answer
-    into `[elsevier]` must not drop the api_key collected alongside it."""
+    """Non-interactive setup writes the default (off), and merging the
+    policy must not drop the api_key collected alongside it."""
     w = _wizard()
-    entry = w._prompt_elsevier_xml_pdf(False, {})
-    assert entry == {}, "absent means absent; do not write a value nobody chose"
+    assert w._prompt_pdf_policy(False, {}, {})["pdf"]["reconstructed"] is False
 
-    values = {"elsevier": {"api_key": "SECRET"}}
-    entry = w._prompt_elsevier_xml_pdf(
-        False, {"elsevier": {"render_xml_to_pdf": True}},
-    )
-    values.setdefault("elsevier", {}).update(entry)
-    assert values["elsevier"] == {"api_key": "SECRET", "render_xml_to_pdf": True}
+    values = {"openalex": {"api_key": "SECRET"}}
+    for section, entry in w._prompt_pdf_policy(
+        False, {"openalex": {"use_paid_content_api": False}}, values,
+    ).items():
+        values.setdefault(section, {}).update(entry)
+    assert values["openalex"] == {"api_key": "SECRET"}
+    assert values["pdf"]["paid"] == "off"
 
 
 def test_wizard_preserves_an_existing_opt_in_non_interactively() -> None:
-    """A re-run with --no-input must not silently revoke consent."""
+    """A re-run with --no-input must not silently revoke consent — given
+    under the old key or the new one."""
     w = _wizard()
-    assert w._prompt_elsevier_xml_pdf(
-        False, {"elsevier": {"render_xml_to_pdf": True}},
-    ) == {"render_xml_to_pdf": True}
-    assert w._prompt_elsevier_xml_pdf(
-        False, {"elsevier": {"render_xml_to_pdf": False}},
-    ) == {"render_xml_to_pdf": False}
+    for existing, expected in (
+        ({"elsevier": {"render_xml_to_pdf": True}}, True),
+        ({"elsevier": {"render_xml_to_pdf": False}}, False),
+        ({"pdf": {"reconstructed": True}}, True),
+        # [pdf] supersedes the old key.
+        ({"pdf": {"reconstructed": False},
+          "elsevier": {"render_xml_to_pdf": True}}, False),
+    ):
+        got = w._prompt_pdf_policy(False, existing, {})["pdf"]["reconstructed"]
+        assert got is expected, existing
 
 
 def test_enabled_synthesis_does_reach_the_xml_endpoint() -> None:
@@ -370,9 +375,11 @@ def test_a_stored_no_stays_no_on_a_rerun(stored) -> None:
     """A declined opt-in written by an older wizard as "False" must not
     come back as consent: bool("False") is True."""
     w = _wizard()
-    assert w._prompt_elsevier_xml_pdf(
-        False, {"elsevier": {"render_xml_to_pdf": stored}},
-    ) == {"render_xml_to_pdf": False}
-    assert w._prompt_openalex_paid_content(
-        False, {"openalex": {"api_key": "k", "use_paid_content_api": stored}}, {},
-    ) == {"use_paid_content_api": False}
+    pdf = w._prompt_pdf_policy(
+        False,
+        {"elsevier": {"render_xml_to_pdf": stored},
+         "openalex": {"api_key": "k", "use_paid_content_api": stored}},
+        {},
+    )["pdf"]
+    assert pdf["reconstructed"] is False
+    assert pdf["paid"] == "off"

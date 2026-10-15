@@ -36,8 +36,10 @@ server's (an arXiv-native paper) has no better version than the preprint,
 so its floor is always `submitted`: the gate would otherwise refuse the
 work itself.
 
-Stdlib only, and no `fetchers` import (that package imports every
-source, Playwright included); the version names are the same strings as
+Stdlib only, and in `scripts/core/` rather than `scripts/pipelines/`
+so the stdlib-only setup wizard can import it — one list of allowed
+values for the question and for the run. No `fetchers` import (that
+package imports every source, Playwright included); the version names are the same strings as
 `fetchers.pdf_version.VERSIONS`, which `tests/unit/test_pdf_policy.py`
 keeps equal.
 """
@@ -104,7 +106,9 @@ def allows(min_version: str, version: str, *, item_is_preprint: bool = False) ->
     return VERSION_RANK.index(version) <= VERSION_RANK.index(floor)
 
 
-def _coerce(name: str, value: object, where: str) -> object:
+def coerce(name: str, value: object, where: str = "") -> object:
+    """`value` as a valid `name` value; raises `PolicyError` otherwise."""
+    where = f"{where}: " if where else ""
     if name == "reconstructed":
         if isinstance(value, bool):
             return value
@@ -114,13 +118,13 @@ def _coerce(name: str, value: object, where: str) -> object:
         if text in _FALSE:
             return False
         raise PolicyError(
-            f"{where}: reconstructed = {value!r} is not true or false",
+            f"{where}reconstructed = {value!r} is not true or false",
         )
     text = str(value).strip().lower() if isinstance(value, str) else value
     allowed = MIN_VERSIONS if name == "min_version" else PAID_MODES
     if text not in allowed:
         raise PolicyError(
-            f"{where}: {name} = {value!r} is not one of {', '.join(allowed)}",
+            f"{where}{name} = {value!r} is not one of {', '.join(allowed)}",
         )
     return text
 
@@ -213,7 +217,7 @@ def resolve(
         for tier in tiers:
             if name in tier and not _blank(tier[name][0]):
                 raw, label = tier[name]
-                values[name] = _coerce(name, raw, label)
+                values[name] = coerce(name, raw, label)
                 sources[name] = label
                 break
         else:

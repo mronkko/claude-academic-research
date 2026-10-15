@@ -283,7 +283,9 @@ def test_prompts_survive_end_of_input(home, monkeypatch) -> None:
     }
     assert mod._offer_no_access_editor(True, existing) == ["wiley"]
     assert mod._offer_direct_access_editor(True, existing) == ["aom"]
-    assert mod._prompt_elsevier_xml_pdf(True, existing) == {"render_xml_to_pdf": False}
+    assert mod._prompt_pdf_policy(True, existing, {}) == {
+        "pdf": {"min_version": "accepted", "reconstructed": False, "paid": "prefer"},
+    }
     assert mod._prompt_zotero_local_writes(True, existing) == {"local_api_key": "kept"}
 
 

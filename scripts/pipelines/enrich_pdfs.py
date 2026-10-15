@@ -41,7 +41,7 @@ from `fetchers.PDF_SOURCE_CLASSES`, so it is the real order);
 cannot be combined with the others in one invocation — use `--all` for
 cascade-then-browser.
 
-**Retrieval policy** (`pdf_policy.py`): `[pdf] min_version`
+**Retrieval policy** (`core/pdf_policy.py`): `[pdf] min_version`
 (published | accepted | preprint, default accepted), `reconstructed`
 and `paid` (off | prefer | last_resort) in config.toml, overridden per
 project by `PDF_MIN_VERSION` / `PDF_RECONSTRUCTED` / `PDF_PAID` in
@@ -92,10 +92,10 @@ import doi_utils  # noqa: E402
 import fetchers  # noqa: E402
 import http_client  # noqa: E402
 import pdf_fetch_log  # noqa: E402
-import pdf_policy  # noqa: E402
 import pdf_run_report  # noqa: E402
 import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
+from core import pdf_policy  # noqa: E402
 from core.config_loader import get, require  # noqa: E402
 from fetchers import pdf_version  # noqa: E402
 from log_schemas import PDF_FETCH_FIELDS  # noqa: E402
@@ -428,7 +428,7 @@ def _load_config() -> Config:
     )
 
 
-# --- The [pdf] retrieval policy (pdf_policy.py) -------------------------------
+# --- The [pdf] retrieval policy (core/pdf_policy.py) --------------------------
 
 #: The project file a run reads `PDF_*` overrides from when `--config` is
 #: not given and it exists in the working directory.

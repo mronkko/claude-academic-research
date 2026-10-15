@@ -128,7 +128,7 @@ class FailureCause(StrEnum):
 
     VERSION_BELOW_POLICY = "VERSION_BELOW_POLICY"
     """A source returned a usable PDF, but of a version below the run's
-    `[pdf] min_version` (`pdf_policy.py`), so it was not attached — the
+    `[pdf] min_version` (`core/pdf_policy.py`), so it was not attached — the
     cascade moved on to the next source. One row per source whose copy
     was refused; an attach by a later source clears them with the rest.
 

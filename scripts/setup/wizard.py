@@ -56,6 +56,7 @@ if str(_SCRIPTS_ROOT) not in sys.path:
 from check_cluster_config import LEVEL_HELP as _CLUSTER_LEVEL_HELP  # noqa: E402
 from check_cluster_config import LEVELS as _CLUSTER_LEVELS  # noqa: E402
 from core import config_writer as _config_writer  # noqa: E402
+from core import pdf_policy as _pdf_policy  # noqa: E402
 from core import providers  # noqa: E402
 from zotero_mcp_floor import (  # noqa: E402
     PIP_INSTALL_CMD as ZOTERO_MCP_PIP_INSTALL_CMD,
@@ -1162,115 +1163,138 @@ def _resolve_connector_path(base: Path) -> Path | None:
     return subs[-1]
 
 
-def _prompt_elsevier_xml_pdf(interactive: bool, existing: dict) -> dict[str, object]:
-    """Return `{render_xml_to_pdf: bool}` to merge into `[elsevier]`.
-
-    Elsevier serves some articles as a one-page preview even to entitled
-    readers; the full body is available from the XML endpoint, and the
-    pipeline can render it to a text-only PDF so the cascade has
-    something to attach.
-
-    This asks first, and defaults to **no**. The output is a file the
-    tool generates — plain text, no figures, no layout — and finding one
-    of those in your own Zotero library is surprising if you never asked
-    for it: it looks like the article, and nothing about a PDF icon says
-    "reconstructed". Opting in is cheap; discovering afterwards that
-    hundreds of synthesized documents were filed alongside real ones is
-    not.
-    """
-    current = (existing.get("elsevier", {}) or {}).get("render_xml_to_pdf")
-    if not interactive:
-        # Non-interactive re-runs must not silently flip a user's choice.
-        return {"render_xml_to_pdf": _stored_bool(current)} if current is not None else {}
-
-    default_yes = _stored_bool(current)
-    print("\n  Elsevier full-text recovery (optional):")
-    print(
-        "    Elsevier sometimes returns only the first page of an article.\n"
-        "    The full text is usually still available as XML, which this\n"
-        "    plugin can render into a GENERATED, text-only PDF (no figures,\n"
-        "    no layout) and attach to your library. Recovered files are named\n"
-        "    '-tdm-recovered' so they can be told apart from real PDFs.",
-    )
-    suffix = "[Y/n]" if default_yes else "[y/N]"
-    answer = _ask(f"    Recover these as generated PDFs? {suffix} ").strip().lower()
-    if not answer:
-        enabled = default_yes
-    else:
-        enabled = answer in ("y", "yes")
-    return {"render_xml_to_pdf": enabled}
+def _stored_pdf_policy(existing: dict) -> dict[str, object]:
+    """The `[pdf]` answers already on file, field by field: a valid `[pdf]`
+    value, else the legacy key it supersedes (`[elsevier]
+    render_xml_to_pdf`, `[openalex] use_paid_content_api`), else the
+    default. A re-run therefore never flips an earlier choice, including
+    one made under the old keys."""
+    section = existing.get("pdf", {}) or {}
+    legacy = {
+        "reconstructed": _pdf_policy.legacy_reconstructed(
+            (existing.get("elsevier", {}) or {}).get("render_xml_to_pdf"),
+        ),
+        "paid": _pdf_policy.legacy_paid(
+            (existing.get("openalex", {}) or {}).get("use_paid_content_api"),
+        ),
+    }
+    out: dict[str, object] = {}
+    for name, default in _pdf_policy.DEFAULTS.items():
+        value: object = None
+        if name in section:
+            try:
+                value = _pdf_policy.coerce(name, section[name])
+            except _pdf_policy.PolicyError:
+                value = None       # an unreadable answer is asked again
+        if value is None:
+            value = legacy.get(name)
+        out[name] = default if value is None else value
+    return out
 
 
-def _prompt_openalex_paid_content(
+def _ask_choice(question: str, choices: tuple[str, ...], default: str) -> str:
+    """Ask for one of `choices` (by name or 1-based number). Empty input,
+    end of input or three bad answers keep `default`."""
+    menu = " / ".join(f"{i}) {c}" for i, c in enumerate(choices, 1))
+    for _ in range(3):
+        answer = _ask(f"    {question} [{menu}] (Enter = {default}) ", "").strip().lower()
+        if not answer:
+            return default
+        if answer.isdigit() and 1 <= int(answer) <= len(choices):
+            return choices[int(answer) - 1]
+        if answer in choices:
+            return answer
+        print(f"    Please answer one of: {', '.join(choices)}.")
+    return default
+
+
+def _prompt_pdf_policy(
     interactive: bool, existing: dict, collected: dict,
-) -> dict[str, object]:
-    """Return `{use_paid_content_api: bool}` to merge into `[openalex]`.
+) -> dict[str, dict[str, object]]:
+    """The three `[pdf]` retrieval-policy questions. Returns sections to
+    merge: always `{"pdf": {...}}` with all three values, plus
+    `{"openalex": {"use_paid_content_api": ...}}` when the paid question
+    was actually answered.
 
-    The OpenAlex Content API is the only source in the PDF cascade that
-    bills per item, so whether to spend on it is the user's call and not
-    a side effect of having pasted a key. This asks outright.
+    Supersedes the old `[elsevier] render_xml_to_pdf` and `[openalex]
+    use_paid_content_api` questions; their stored answers become this
+    one's defaults (`_stored_pdf_policy`), and the old keys are left in
+    place — `[pdf]` wins over them at run time (`core/pdf_policy.py`).
+    The paid answer is mirrored into `use_paid_content_api` because
+    `enrich_abstracts` spends on the same API (GROBID abstracts) and reads
+    only that key: "never pay OpenAlex" must hold there too.
 
-    Defaults to **yes**, unlike the Elsevier XML prompt. The two differ
-    in what the default risks: an unasked-for synthesized PDF lands in
-    the user's library permanently, whereas this only ever spends about
-    a cent to obtain the correct published article. A configured key is
-    also itself an opt-in signal, so defaulting to no would silently
-    disable a tier that works today for anyone upgrading — see
-    `fetchers.openalex._OpenAlexClient._paid_enabled` for the matching
-    tri-state on the read side.
-
-    Skipped entirely when no OpenAlex key is configured or was just
-    entered: asking whether to spend on a tier that cannot run is noise.
-    `collected` is the freshly gathered key material from
-    `_collect_keys`, checked alongside `existing` so answering in the
-    same session counts.
+    Non-interactive runs write the stored answers, or the defaults where
+    there are none. The paid question is asked only with an OpenAlex key
+    configured (or just entered): asking whether to spend on a tier that
+    cannot run is noise. The answer stays on file (default `prefer`), so
+    adding a key later re-runs the wizard into a real question.
     """
+    stored = _stored_pdf_policy(existing)
+    if not interactive:
+        return {"pdf": stored}
+
+    print("\n  PDF retrieval policy:")
+    print(_wrap_body(
+        "Which version of an article may be attached? 'published' keeps "
+        "only the publisher's version of record (an open-access copy counts "
+        "only when the publisher itself hosts it; repository copies are "
+        "skipped even when they are the typeset PDF). 'accepted' also takes "
+        "the author's accepted manuscript — peer reviewed, but its page "
+        "numbers differ from the journal's. 'preprint' also takes "
+        "working papers from before peer review. Every attached PDF is "
+        "tagged pdf:version:published / accepted / submitted either way. "
+        "A project can override this in its screening_config.py.",
+        indent=4,
+    ))
+    min_version = _ask_choice(
+        "Lowest version to attach?", _pdf_policy.MIN_VERSIONS,
+        str(stored["min_version"]),
+    )
+
+    print(_wrap_body(
+        "Elsevier sometimes returns only the first page of an article. The "
+        "full text is usually still available as XML, which this plugin can "
+        "render into a GENERATED, text-only PDF (no figures, no layout) and "
+        "attach. Recovered files are named '-tdm-recovered' and tagged "
+        "pdf:tdm-recovered so they can be told apart from real PDFs.",
+        indent=4,
+    ))
+    default_yes = bool(stored["reconstructed"])
+    suffix = "[Y/n]" if default_yes else "[y/N]"
+    answer = _ask(
+        f"    Attach reconstructed (generated) PDFs? {suffix} ",
+    ).strip().lower()
+    reconstructed = default_yes if not answer else answer in ("y", "yes")
+
+    out: dict[str, dict[str, object]] = {}
+    paid = str(stored["paid"])
     section = existing.get("openalex", {}) or {}
-    current = section.get("use_paid_content_api")
     has_key = bool(
         (collected.get("openalex", {}) or {}).get("api_key")
         or section.get("api_key")
         or os.environ.get("OPENALEX_API_KEY", "").strip()
     )
-    if not has_key:
-        # Preserve an earlier answer; never invent one for a tier that
-        # has no credential to run on.
-        return {"use_paid_content_api": _stored_bool(current)} if current is not None else {}
-    if not interactive:
-        # A non-interactive re-run must not flip a deliberate choice.
-        return {"use_paid_content_api": _stored_bool(current)} if current is not None else {}
-
-    default_yes = True if current is None else _stored_bool(current)
-    print("\n  OpenAlex paid Content API (optional):")
-    print(_wrap_body(
-        "Retrieving PDFs through APIs is the recommended route. It is much "
-        "faster than driving a browser and far less error prone, because "
-        "nothing depends on a page layout, a Cloudflare challenge, or you "
-        "being at the keyboard. The cascade therefore exhausts every free "
-        "and institutionally-subscribed API first, and only falls back to a "
-        "browser for whatever is left.",
-        indent=4,
-    ))
-    print(_wrap_body(
-        "OpenAlex's Content API is the one source that charges per item — "
-        "roughly $0.01 per PDF (rates: https://openalex.org/pricing). It "
-        "still ranks ahead of the free open-access aggregators, because it "
-        "serves the publisher's own file, the version of record, whereas "
-        "Unpaywall, Semantic Scholar and CORE often hold an author "
-        "manuscript whose page numbers do not match the published article. "
-        "Decline and the cascade runs on free sources only.",
-        indent=4,
-    ))
-    suffix = "[Y/n]" if default_yes else "[y/N]"
-    try:
-        answer = input(
-            f"    Spend on the paid OpenAlex Content API? {suffix} ",
-        ).strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print("\n    Skipped.")
-        return {"use_paid_content_api": _stored_bool(current)} if current is not None else {}
-    enabled = default_yes if not answer else answer in ("y", "yes")
-    return {"use_paid_content_api": enabled}
+    if has_key:
+        print(_wrap_body(
+            "OpenAlex's Content API is the one PDF source that charges per "
+            "item — roughly $0.01 per PDF (rates: https://openalex.org/pricing) "
+            "— and it serves the publisher's own file. 'prefer' (recommended) "
+            "asks it before the free open-access sources, which often hold "
+            "only an author manuscript; 'last_resort' asks it only when no "
+            "free source has a copy; 'off' never uses it. Our recommendation: "
+            "pay before spending your own time on manual downloads — at a "
+            "cent a paper, most researchers would rather pay.",
+            indent=4,
+        ))
+        paid = _ask_choice(
+            "Paid OpenAlex Content API?", _pdf_policy.PAID_MODES, paid,
+        )
+        out["openalex"] = {"use_paid_content_api": paid != "off"}
+    out["pdf"] = {
+        "min_version": min_version, "reconstructed": reconstructed, "paid": paid,
+    }
+    return out
 
 
 def _prompt_cluster_automation(interactive: bool, existing: dict) -> dict[str, object]:
@@ -2817,19 +2841,12 @@ def main() -> int:
     else:
         removals.add(("zotero_connector", "extension_dir"))
 
-    # Merge rather than assign: `[elsevier]` already carries `api_key`
+    # Merge rather than assign: `[openalex]` already carries `api_key`
     # from _collect_keys, and overwriting the section would drop it.
-    xml_pdf_entry = _prompt_elsevier_xml_pdf(interactive, existing_cfg)
-    if xml_pdf_entry:
-        values.setdefault("elsevier", {}).update(xml_pdf_entry)
-
-    # Same merge-not-assign rule as `[elsevier]` above: `[openalex]`
-    # already carries `api_key` from _collect_keys.
-    paid_openalex_entry = _prompt_openalex_paid_content(
+    for section, entry in _prompt_pdf_policy(
         interactive, existing_cfg, values,
-    )
-    if paid_openalex_entry:
-        values.setdefault("openalex", {}).update(paid_openalex_entry)
+    ).items():
+        values.setdefault(section, {}).update(entry)
 
     # Merge-not-assign: `[zotero]` already carries api_key / user_id
     # from _collect_keys.

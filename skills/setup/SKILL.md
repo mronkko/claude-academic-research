@@ -92,7 +92,14 @@ two alternatives:
 > pipelines — Anthropic, Google, OpenAI, OpenRouter, your institution's
 > own OpenAI-compatible gateway, or a local server (Ollama or LM Studio,
 > which need no key) — and asks only for that provider's credential. It
-> then checks five MCP (Model Context Protocol) servers and offers to
+> also asks three questions about PDF retrieval: the lowest article
+> version to attach (published / accepted manuscript / preprint), whether
+> to attach generated text-only PDFs rebuilt from publisher XML, and — if
+> you have an OpenAlex key — whether to use OpenAlex's paid Content API
+> (about $0.01 a PDF) before the free sources, only as a last resort, or
+> never. Our recommendation is to pay before spending your own time on
+> manual downloads. Re-running the wizard keeps your earlier answers as
+> the defaults. It then checks five MCP (Model Context Protocol) servers and offers to
 > register any that are missing: **Zotero** (required — every citation
 > skill uses it), at least one of **Scopus / Semantic Scholar /
 > OpenAlex** (required for literature search), and **paper-search**
