@@ -306,3 +306,26 @@ def test_a_holder_fused_onto_the_first_word_is_cut(notice: str) -> None:
 def test_a_spaced_holder_word_inside_the_abstract_survives() -> None:
     text = "American Psychological Association Members were surveyed twice."
     assert clean_abstract(text) == text
+
+
+# D9: abstracts *about* copyright were truncated from the word onwards,
+# and enrich_abstracts / clean_abstracts --write stored the stub.
+@pytest.mark.parametrize("text", [
+    "We study software firms. Copyright of code is contested in court, and "
+    "we survey 300 firms to measure how often. We find large effects.",
+    "We review the reform. Copyright 1976 Act changes shifted incentives for "
+    "authors and publishers. We test this with sales data.",
+    "Firms rely on law. Copyright of the platform's content belongs to its "
+    "users, which Acme Ltd contested in a case we study in detail across "
+    "four jurisdictions and two decades, finding that courts sided with "
+    "users in most of them and that firms adapted their contracts afterwards.",
+])
+def test_an_abstract_about_copyright_is_not_truncated(text) -> None:
+    assert clean_abstract(text) == text
+
+
+def test_prose_about_copyright_survives_a_real_notice_after_it() -> None:
+    prose = "We study firms. Copyright of code is contested in court."
+    assert clean_abstract(
+        f"{prose} © 2020 Elsevier B.V. All rights reserved.",
+    ) == prose

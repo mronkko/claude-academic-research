@@ -83,6 +83,52 @@ _TRAILING_NOTICE = re.compile(
     r"(?s:.){0,700}$"
 )
 
+#: A trailing match that opens with a copyright *symbol* — ©, (c), or
+#: "Copyright ©" — or with EBSCO's "ABSTRACT FROM AUTHOR" marker. These
+#: never open a sentence of prose, so the match alone is enough.
+_SYMBOL_NOTICE = re.compile(
+    r"\s*(?:\[?ABSTRACT FROM (?:AUTHOR|PUBLISHER)\]?"
+    r"|(?:Crown\s+)?(?:©|\([cC]\)|(?i:copyright)\s*(?:©|\([cC]\))))"
+)
+
+#: What a notice opened by the bare *word* "Copyright" must also contain.
+#: "Copyright of …" and "Copyright 1976 …" open prose as easily as a
+#: notice ("Copyright of software is contested …", "Copyright 1976 Act
+#: reforms …"), and stripping from there to the end truncated real
+#: abstracts that discuss copyright. A notice names its holder or its
+#: terms; prose about copyright rarely does both that and stay short.
+_WORD_NOTICE_TERMS = re.compile(
+    r"rights\b.{0,40}\breserved|is the property of|\bpublished by\b"
+    r"|\bLtd\b|\bInc\b|\bLLC\b|\bB\.V\.|\bGmbH\b|\bLimited\b"
+    r"|\bWiley\b|\bElsevier\b|\bSpringer\b|\bby the authors?\b"
+    r"|\bthe authors?\.?\s*$",
+    re.IGNORECASE,
+)
+#: Longer than this, a word-opened tail is prose unless it is EBSCO's
+#: "is the property of" boilerplate (~500 characters).
+_WORD_NOTICE_MAX = 200
+
+
+def _strip_trailing_notice(m: re.Match) -> str:
+    """`_TRAILING_NOTICE`'s replacement: "" for a notice, the match kept
+    for prose that merely starts with the word "Copyright"."""
+    tail = m.group(0)
+    if _SYMBOL_NOTICE.match(tail):
+        return ""
+    # Prose about copyright, then the real notice: keep the prose, strip
+    # only the later notice.
+    later = _TRAILING_NOTICE.search(tail, 1)
+    if later:
+        return tail[:later.start()] + _strip_trailing_notice(later)
+    if not _WORD_NOTICE_TERMS.search(tail):
+        return tail
+    if len(tail.strip()) > _WORD_NOTICE_MAX and not re.search(
+        r"is the property of", tail, re.IGNORECASE,
+    ):
+        return tail
+    return ""
+
+
 #: A short "© <year> <holder>." closing the text with no sentence end
 #: before it ("…outside of work hours © 2014 American Psychological
 #: Association."). The year and the short, dot-free holder are what make
@@ -178,7 +224,7 @@ def clean_abstract(text: str | None, *, copyright: str | None = None) -> str | N
     text = _FUSED_YEAR.sub("", text, count=1)
     text = _strip_leading_notice(text)
     text = _HBP_TAIL.sub("", text)
-    text = _TRAILING_NOTICE.sub("", text)
+    text = _TRAILING_NOTICE.sub(_strip_trailing_notice, text)
     text = _BARE_TRAILING_NOTICE.sub("", text)
     # A notice can sit in front of the heading ("© 2020 …. Abstract …").
     text = _HEADING.sub("", text, count=1)
