@@ -181,19 +181,17 @@ def _coding_stats() -> dict:
 
 def _provenance_stats() -> dict:
     """Model + prompt-version constants from the latest screening row. These
-    land in prose via `s['provenance.screen.model']` so the reader can see
-    exactly which model rendered which decisions."""
-    ft = _read_csv(FULLTEXT_LOG_PATH)
+    land in prose via `s['provenance.abstract.model']` so the reader can see
+    exactly which model rendered which decisions.
+
+    Every key is always present (empty before that stage has run), like
+    the zero counts above, so a freshly scaffolded manuscript renders."""
     out: dict = {}
-    if ft:
-        last = ft[-1]
-        out["provenance.fulltext.model"] = last.get("model", "")
-        out["provenance.fulltext.prompt_version"] = last.get("prompt_version", "")
-    abs_rows = _read_csv(ABSTRACT_LOG_PATH)
-    if abs_rows:
-        last = abs_rows[-1]
-        out["provenance.abstract.model"] = last.get("model", "")
-        out["provenance.abstract.prompt_version"] = last.get("prompt_version", "")
+    for stage, path in (("fulltext", FULLTEXT_LOG_PATH), ("abstract", ABSTRACT_LOG_PATH)):
+        rows = _read_csv(path)
+        last = rows[-1] if rows else {}
+        out[f"provenance.{stage}.model"] = last.get("model", "")
+        out[f"provenance.{stage}.prompt_version"] = last.get("prompt_version", "")
     return out
 
 

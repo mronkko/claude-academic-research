@@ -114,7 +114,7 @@ python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/check_project_scaffold.py" \
     scripts/test_empirical_integrity.py scripts/test_systematic_review.py \
     search_config.py screening_config.py \
     analysis/manuscript_stats.py manuscript/manuscript_tables.py \
-    manuscript/manuscript.qmd
+    manuscript/manuscript.qmd manuscript/apa.csl
 ```
 
 If any are missing, install them (one call, skip-if-exists for the
@@ -130,8 +130,16 @@ python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/setup/install_templates.py" \
     screening_config.py:screening_config.py \
     manuscript_stats.py:analysis/manuscript_stats.py \
     manuscript_tables.py:manuscript/manuscript_tables.py \
-    manuscript.qmd:manuscript/manuscript.qmd
+    manuscript.qmd:manuscript/manuscript.qmd \
+    apa.csl:manuscript/apa.csl
 ```
+
+`apa.csl` is the APA 7th-edition citation style (CSL project,
+CC BY-SA 3.0); `manuscript.qmd` names it in its YAML, so it must sit next
+to the `.qmd`. Rendering the manuscript also needs Quarto and a Python
+with `jupyter`, `pandas` and `tabulate` — the comment block at the top
+of `manuscript.qmd` shows a one-line setup. Mention this once when the
+manuscript is first rendered, not at bootstrap.
 
 Tell the user which files were installed and flag that the top of
 each `test_*.py` has project-specific paths, `test_empirical_integrity.py`
@@ -1203,9 +1211,9 @@ single-item debugging).
 | Attach Wiley PDFs only (TDM token) | `enrich_pdfs.py --sources wiley` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --sources wiley --filter-keys-file <keys>` |
 | Attach Cloudflare-gated PDFs (Sage, APA, T&F, Emerald, …) | `enrich_pdfs.py --sources browser` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/enrich_pdfs.py --sources browser --filter-keys-file <keys>` |
 | Audit library (missing abstracts / PDFs / stubs) | `audit_zotero_library.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/audit_zotero_library.py --group <id> [--remote]` |
-| Export includes-only coded view | `export_coded_includes.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/export_coded_includes.py --log-csv <screening.csv> --out <coded.csv>` |
+| Export includes-only coded view | `export_coded_includes.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/export_coded_includes.py --group <id> --collection <key> --config ./screening_config.py --out analysis/results/coded_papers.csv` |
 | List / prune this review's Zotero tags | `manage_tags.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/manage_tags.py --group <id> --collection <key> --list` · add `--prune <field> --apply` to drop a coded-value family |
-| Generate `references.bib` from manuscript keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/generate_bib.py <project_dir>` |
+| Generate `references.bib` from manuscript keys | `generate_bib.py` | `uv run ${CLAUDE_PLUGIN_ROOT:-.}/scripts/pipelines/generate_bib.py` from the project root — scans `manuscript/`, writes `manuscript/references.bib` |
 
 Additional templates shipped with the plugin:
 
@@ -1248,7 +1256,10 @@ Additional templates shipped with the plugin:
 - **`${CLAUDE_PLUGIN_ROOT:-.}/templates/manuscript.qmd`** — Quarto
   scaffold with setup chunk importing `build_stats()`, placeholder
   sections, and example inline expressions showing every methodology
-  number wired to `s['key']` rather than hand-typed.
+  number wired to `s['key']` rather than hand-typed. Expects
+  `references.bib` (from `generate_bib.py`) and `apa.csl` (shipped as
+  `${CLAUDE_PLUGIN_ROOT:-.}/templates/apa.csl`) beside it in
+  `manuscript/`.
 
 A project CLAUDE.md template for new SLR projects lives at
 `${CLAUDE_PLUGIN_ROOT:-.}/templates/sr_claude_md.md`. A

@@ -26,6 +26,19 @@ csl: apa.csl
   Table functions live in `manuscript/manuscript_tables.py`. Keep
   prose readable by putting table logic there.
 
+  Rendering needs, next to this file: `references.bib` (written by
+  generate_bib.py) and `apa.csl` (installed with this template). Quarto
+  runs the Python chunks in a Jupyter kernel, so the Python that Quarto
+  finds needs `jupyter`, `pandas` and `tabulate` (pandas' `to_markdown`
+  uses it). One way, from the project root:
+
+      uv venv && uv pip install jupyter pandas tabulate
+      QUARTO_PYTHON=.venv/bin/python quarto render manuscript/manuscript.qmd
+
+  (On Windows: `$env:QUARTO_PYTHON=".venv\Scripts\python.exe"` in
+  PowerShell before `quarto render`.) `quarto check jupyter` shows
+  which Python Quarto picked.
+
   Delete these HTML comments before final submission.
 -->
 
@@ -36,9 +49,13 @@ csl: apa.csl
 import sys
 from pathlib import Path
 
-# Make analysis/manuscript_stats.py and manuscript/manuscript_tables.py importable
-_ROOT = Path().resolve()
-for _p in (_ROOT, _ROOT / "analysis", _ROOT / "manuscript"):
+# Make analysis/manuscript_stats.py and manuscript/manuscript_tables.py importable.
+# Quarto runs this chunk with the working directory set to the .qmd's own
+# folder (manuscript/), so the project root is one level up. A project that
+# sets `execute-dir: project` runs it from the root instead; both work.
+_HERE = Path().resolve()
+_ROOT = _HERE.parent if _HERE.name == "manuscript" else _HERE
+for _p in (_HERE, _ROOT, _ROOT / "analysis", _ROOT / "manuscript"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -115,8 +132,11 @@ automatically.
 #| fig-cap: "PRISMA 2020 flow for this review."
 #| echo: false
 #| output: asis
+# The mermaid fence is built in Python: a literal triple backtick here
+# would close this chunk early.
+_fence = "`" * 3
 print(f"""
-```{{mermaid}}
+{_fence}{{mermaid}}
 flowchart TD
     A["Records identified<br/>across {s['search.databases']}<br/>N = {s['search.total_raw_rows']}"]
     B["Unique records after DOI dedup<br/>N = {s['search.unique_records']}"]
@@ -134,7 +154,7 @@ flowchart TD
     C2 --> D
     D --> E1
     D --> E2
-```
+{_fence}
 """)
 ```
 
