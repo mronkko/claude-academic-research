@@ -69,6 +69,7 @@ def pdf_sources(
     names: list[str] | None = None,
     *,
     allow_preprints: bool = False,
+    paid: str = "prefer",
 ) -> list[PdfFetcher]:
     """Priority-ordered PDF sources.
 
@@ -81,7 +82,8 @@ def pdf_sources(
             ScienceDirect (Elsevier) → Springer → Wiley TDM
             → Crossref TDM → PMC
         Stage 2 — paid version of record
-            OpenAlex Content API ($0.01/PDF, opt-in)
+            OpenAlex Content API ($0.01/PDF; `paid = "prefer"`, the
+            default — see below for `off` / `last_resort`)
         Stage 3 — open access, often the author's accepted manuscript
             arXiv (its own DOI only) → OpenAlex OA tier → Unpaywall
             → Semantic Scholar → CORE
@@ -104,8 +106,12 @@ def pdf_sources(
     a correct version of record is worth $0.01 more than a free
     manuscript. It is the only per-item cost in the cascade — every
     other source here is free or already covered by an institutional
-    subscription — and it is skippable via
-    `[openalex] use_paid_content_api = false`.
+    subscription — and the `[pdf] paid` policy (`pdf_policy.py`) moves
+    it: `paid="off"` drops it, even when named in `names`;
+    `paid="last_resort"` moves it after every free source, preprint
+    included, so it is paid for only when nothing free answered;
+    `paid="prefer"` keeps it here. `[openalex] use_paid_content_api =
+    false` still turns it off (it is the legacy form of `paid = "off"`).
 
     OpenAIRE and BASE sit below CORE, and below is the right place: all
     three are repository indexes returning accepted manuscripts, and
@@ -151,29 +157,21 @@ def pdf_sources(
     cascade found 39; a separate `--sources wiley` pass then recovered
     **47 more** that no default invocation would ever have asked for.
     """
+    if paid not in PAID_POSITIONS:
+        raise ValueError(f"unknown paid position {paid!r}")
     if http is None:
         return []
-    all_sources = cast("list[PdfFetcher]", [
-        ScienceDirectSource(http, config),
-        SpringerSource(http, config),
-        WileySource(http, config),
-        CrossrefSource(http, config),
-        PmcSource(http, config),
-        # Stage 2 — the cascade's only per-item cost, ranked here rather
-        # than last because what it returns is the version of record.
-        OpenAlexContentSource(http, config),
-        # Stage 3 — open access. arXiv first: for an arXiv-native item
-        # its own DOI names the PDF, and it answers nothing else.
-        ArxivSource(http, config),
-        OpenAlexSource(http, config),
-        UnpaywallSource(http, config),
-        SemanticScholarSource(http, config),
-        CoreSource(http, config),
-        OpenAireSource(http, config),
-        BaseSearchSource(http, config),
-        PreprintSource(http, config),
-        BrowserSource(http, config),
-    ])
+    all_sources = cast(
+        "list[PdfFetcher]", [cls(http, config) for cls in PDF_SOURCE_CLASSES],
+    )
+    if paid == "off":
+        all_sources = [s for s in all_sources if s.name != PAID_SOURCE]
+    elif paid == "last_resort":
+        all_sources = (
+            [s for s in all_sources if s.name != PAID_SOURCE and not s.interactive]
+            + [s for s in all_sources if s.name == PAID_SOURCE]
+            + [s for s in all_sources if s.interactive]
+        )
     if names:
         name_set = set(names)
         return [s for s in all_sources if s.name in name_set]
@@ -184,7 +182,58 @@ def pdf_sources(
     ]
 
 
+#: The `pdf_sources` registry, in cascade order. A class list rather than
+#: instances so the order can be read without a session — `enrich_pdfs
+#: --help` prints it from here, which is what keeps the help text from
+#: drifting (it once listed six sources in an order the cascade had
+#: long since left).
+PDF_SOURCE_CLASSES: tuple[type, ...] = (
+    ScienceDirectSource,
+    SpringerSource,
+    WileySource,
+    CrossrefSource,
+    PmcSource,
+    # Stage 2 — the cascade's only per-item cost, ranked here rather
+    # than last because what it returns is the version of record.
+    OpenAlexContentSource,
+    # Stage 3 — open access. arXiv first: for an arXiv-native item
+    # its own DOI names the PDF, and it answers nothing else.
+    ArxivSource,
+    OpenAlexSource,
+    UnpaywallSource,
+    SemanticScholarSource,
+    CoreSource,
+    OpenAireSource,
+    BaseSearchSource,
+    PreprintSource,
+    BrowserSource,
+)
+
+#: The one per-item-cost source, which the `[pdf] paid` policy places.
+PAID_SOURCE = OpenAlexContentSource.name
+PAID_POSITIONS: tuple[str, ...] = ("off", "prefer", "last_resort")
+
+
+def default_pdf_source_names(*, paid: str = "prefer") -> list[str]:
+    """Names of the default automated cascade, in order, without
+    instantiating anything. `preprint` is excluded: it needs
+    `min_version = preprint`."""
+    names = [
+        cls.name for cls in PDF_SOURCE_CLASSES
+        if not cls.interactive and cls.name != "preprint"
+    ]
+    if paid == "off":
+        names.remove(PAID_SOURCE)
+    elif paid == "last_resort":
+        names.remove(PAID_SOURCE)
+        names.append(PAID_SOURCE)
+    return names
+
+
 __all__ = [
+    "PAID_POSITIONS",
+    "PAID_SOURCE",
+    "PDF_SOURCE_CLASSES",
     "AbstractFetcher",
     "PdfFetcher",
     "Source",
@@ -192,6 +241,7 @@ __all__ = [
     "REPOSITORY_COPY_TAG",
     "TDM_RECOVERED_TAG",
     "abstract_sources",
+    "default_pdf_source_names",
     "pdf_sources",
     "is_preprint_path",
     "is_repository_copy_path",

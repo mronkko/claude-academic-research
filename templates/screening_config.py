@@ -50,6 +50,36 @@ TAG_PREFIX = ""
 
 
 # =============================================================================
+# PDF retrieval policy — optional overrides for this project
+# =============================================================================
+#
+# `enrich_pdfs.py` reads these three constants when it runs from this
+# directory (or with `--config path/to/screening_config.py`). Left commented
+# out, the global `[pdf]` answers you gave in /setup apply. The file is
+# parsed, not run, for this — so each must be a plain literal.
+#
+#   PDF_MIN_VERSION   the lowest article version to attach.
+#       "published"  version of record only. Open-access copies count only
+#                    when the publisher hosts them; repository copies are
+#                    set aside, even when they are the typeset PDF.
+#       "accepted"   (default) also the author's accepted manuscript.
+#       "preprint"   also preprints / working papers, before peer review.
+#                    Tagged `pdf:version:submitted`; verify coded findings
+#                    against the published article.
+#   PDF_RECONSTRUCTED attach generated, text-only PDFs rebuilt from
+#                    publisher XML (Elsevier) when only a preview is served.
+#   PDF_PAID         the paid OpenAlex Content API (~$0.01 per PDF):
+#                    "off", "prefer" (default: before the free open-access
+#                    sources) or "last_resort" (only when nothing free has it).
+#
+# Every PDF attached carries a `pdf:version:published|accepted|submitted` tag
+# either way, so you can always see what you got.
+# PDF_MIN_VERSION = "accepted"
+# PDF_RECONSTRUCTED = False
+# PDF_PAID = "prefer"
+
+
+# =============================================================================
 # Abstract screening (stage 1) — the fast tier, on title + abstract
 # =============================================================================
 

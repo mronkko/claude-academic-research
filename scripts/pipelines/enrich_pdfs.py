@@ -34,17 +34,27 @@ Source selection via `--sources`:
     enrich_pdfs.py --sources elsevier,pmc  # custom subset (aliases OK)
     enrich_pdfs.py --allow-preprints       # + arXiv / SSRN / RePEc copies
 
-Fetcher names are `sciencedirect`, `springer`, `crossref`,
-`pubmed_central`, `openalex`, `unpaywall`, `semantic_scholar`, `core`,
-`preprint`, `wiley`; `elsevier` and `pmc` are accepted as aliases for
-the first and fourth. `browser` and `connector` are separate passes and
+Fetcher names are those listed under `--sources` in `--help` (generated
+from `fetchers.PDF_SOURCE_CLASSES`, so it is the real order);
+`elsevier` and `pmc` are accepted as aliases for `sciencedirect` and
+`pubmed_central`. `browser` and `connector` are separate passes and
 cannot be combined with the others in one invocation — use `--all` for
 cascade-then-browser.
 
+**Retrieval policy** (`pdf_policy.py`): `[pdf] min_version`
+(published | accepted | preprint, default accepted), `reconstructed`
+and `paid` (off | prefer | last_resort) in config.toml, overridden per
+project by `PDF_MIN_VERSION` / `PDF_RECONSTRUCTED` / `PDF_PAID` in
+`./screening_config.py` (or `--config`), and per run by `--min-version`,
+`--paid` and `--allow-preprints`. The banner prints the effective policy
+and where each value came from. A copy below `min_version` is refused
+and set aside, and the cascade asks the next source.
+
 `preprint` is the one source that is off unless asked for, via
-`--allow-preprints` and not via `--sources`: what it attaches is the
-manuscript before peer review, which is a different paper in every way
-a systematic review cares about. See `fetchers/preprint.py`.
+`min_version = preprint` (`--allow-preprints` for one run) and not via
+`--sources`: what it attaches is the manuscript before peer review,
+which is a different paper in every way a systematic review cares
+about. See `fetchers/preprint.py`.
 
 For `--sources browser`, this script drives the per-publisher
 `fetchers.browser` handlers directly — a visible Chromium opens, you
@@ -82,6 +92,7 @@ import doi_utils  # noqa: E402
 import fetchers  # noqa: E402
 import http_client  # noqa: E402
 import pdf_fetch_log  # noqa: E402
+import pdf_policy  # noqa: E402
 import pdf_run_report  # noqa: E402
 import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
@@ -415,6 +426,174 @@ def _load_config() -> Config:
         core_api_key=get("core", "api_key", env="CORE_API_KEY"),
         crossref_mailto=get("crossref", "mailto", env="CROSSREF_MAILTO"),
     )
+
+
+# --- The [pdf] retrieval policy (pdf_policy.py) -------------------------------
+
+#: The project file a run reads `PDF_*` overrides from when `--config` is
+#: not given and it exists in the working directory.
+DEFAULT_PROJECT_CONFIG = "screening_config.py"
+
+#: Where a refused copy goes. It has to leave the shared `<doi>.pdf` slot:
+#: every source serves that slot as a cache hit before fetching, so a
+#: refused file left there would be served — and refused — by every
+#: source after it, and the cascade could never move on.
+BELOW_POLICY_DIR = "below_policy"
+
+
+def _resolve_pdf_policy(args: argparse.Namespace) -> pdf_policy.PdfPolicy:
+    """The run's policy from flag / project / global / legacy / default.
+
+    The project tier is how a per-project override reaches this
+    library-wide script without making it a per-review one: `--config`
+    (default `./screening_config.py` when present) is read only for its
+    three `PDF_*` literals, parsed and never executed — no `TAG_PREFIX`,
+    no LLM settings, nothing else of the review's. Raises
+    `pdf_policy.PolicyError` on an unrecognised value.
+    """
+    from core.config_loader import load_config, value_source
+
+    raw_global = load_config().get("pdf", {}) or {}
+    if not isinstance(raw_global, dict):
+        raise pdf_policy.PolicyError("config.toml: [pdf] is not a table")
+    global_cfg = {k: v for k, v in raw_global.items() if k in pdf_policy.DEFAULTS}
+
+    legacy: dict[str, tuple[object, str]] = {}
+    for name, section, key, env, mapper in (
+        ("reconstructed", "elsevier", "render_xml_to_pdf",
+         "ELSEVIER_RENDER_XML_TO_PDF", pdf_policy.legacy_reconstructed),
+        ("paid", "openalex", "use_paid_content_api",
+         "OPENALEX_USE_PAID_CONTENT_API", pdf_policy.legacy_paid),
+    ):
+        mapped = mapper(get(section, key, env=env))
+        if mapped is not None:
+            where = (f"env {env}" if value_source(section, key, env=env) == "env"
+                     else f"[{section}] {key}")
+            legacy[name] = (mapped, where)
+
+    project: dict[str, object] = {}
+    config_path = getattr(args, "config", None)
+    if config_path is None and os.path.isfile(DEFAULT_PROJECT_CONFIG):
+        config_path = DEFAULT_PROJECT_CONFIG
+    if config_path:
+        if not os.path.isfile(config_path):
+            raise pdf_policy.PolicyError(f"--config not found: {config_path}")
+        project = pdf_policy.read_project_constants(config_path)
+
+    flags: dict[str, tuple[object, str]] = {}
+    if getattr(args, "min_version", None):
+        flags["min_version"] = (args.min_version, "--min-version")
+    if getattr(args, "allow_preprints", False):
+        flags["min_version"] = ("preprint", "--allow-preprints")
+    if getattr(args, "paid", None):
+        flags["paid"] = (args.paid, "--paid")
+
+    return pdf_policy.resolve(
+        global_cfg=global_cfg, legacy=legacy, project=project,
+        project_label=str(config_path or ""), flags=flags,
+    )
+
+
+def _apply_policy_to_config(config: Config, policy: pdf_policy.PdfPolicy) -> None:
+    """Make the fetchers' own switches agree with the policy. `paid` is
+    also enforced by leaving the source out of the cascade; this keeps
+    the Content API inert if anything else reaches it."""
+    config.elsevier_render_xml_to_pdf = policy.reconstructed
+    config.openalex_use_paid_content_api = policy.paid != "off"
+
+
+def _run_min_version(args: argparse.Namespace) -> str | None:
+    """The run's `min_version`, or None when no policy was resolved (a
+    helper called outside `main()`, e.g. from a test): no gate."""
+    policy = getattr(args, "pdf_policy", None)
+    return policy.min_version if policy is not None else None
+
+
+def _version_allowed(min_version: str | None, version: str, doi: str) -> bool:
+    if min_version is None:
+        return True
+    return pdf_policy.allows(
+        min_version, version, item_is_preprint=pdf_version.is_preprint_doi(doi),
+    )
+
+
+def _set_aside_below_policy(pdf_path) -> Path | None:
+    """Move a refused copy (and its version sidecar) to
+    `<its dir>/below_policy/`, out of the shared cache slot. Kept rather
+    than deleted: it is a real copy of the article, and a later run under
+    a lower policy — or a person — may want it. Best-effort."""
+    src = Path(pdf_path)
+    dest_dir = src.parent / BELOW_POLICY_DIR
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / src.name
+        os.replace(src, dest)
+        side = pdf_version.sidecar_path(src)
+        if side.exists():
+            os.replace(side, pdf_version.sidecar_path(dest))
+        return dest
+    except OSError as e:
+        print(f"    [could not set aside {src.name}: {e}]", flush=True)
+        try:
+            src.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+
+
+def _log_below_policy(
+    failure_log_path: str | None,
+    *,
+    item_key: str,
+    doi: str,
+    item_type: str,
+    source: str,
+    attempt: int = 1,
+) -> None:
+    """One VERSION_BELOW_POLICY row for the source whose copy was refused."""
+    if not failure_log_path or not item_key:
+        return
+    try:
+        with _FAILURE_LOG_LOCK:
+            pdf_fetch_log.log_failure(
+                failure_log_path,
+                item_key=item_key, doi=doi, item_type=item_type,
+                attempt=attempt, source=source,
+                cause=pdf_fetch_log.FailureCause.VERSION_BELOW_POLICY,
+            )
+    except Exception as e:  # noqa: BLE001
+        print(f"    [pdf_fetch_log write failed: {e}]", flush=True)
+
+
+def _below_policy_detail(version: str, min_version: str, source: str) -> str:
+    return (f"{version} copy via {source} refused: below "
+            f"[pdf] min_version = {min_version}")
+
+
+def _route_below_policy(
+    entry: dict, *, via: str, args: argparse.Namespace, log_writer, run_date: str,
+) -> bool:
+    """True — and logged — when a Pass-3 route's copy is below the run's
+    `min_version`, so the item must not be handed to the Connector or
+    the EBSCO handler. `entry["pdf_version"]` was decided from the route
+    (`pdf_version.for_connector_target`)."""
+    min_version = _run_min_version(args)
+    version = entry.get("pdf_version") or pdf_version.ACCEPTED
+    if _version_allowed(min_version, version, entry.get("doi", "")):
+        return False
+    log_writer.writerow({
+        "run_date": run_date, "item_key": entry.get("item_key", ""),
+        "doi": entry.get("doi", ""),
+        "title": (entry.get("title") or "")[:70],
+        "status": "skipped_below_policy", "source": via,
+        "detail": _below_policy_detail(version, min_version or "", via)
+        + f" (route {entry.get('resolver_target_url', '')})",
+    })
+    _log_browser_failure(
+        args, entry, source=via,
+        cause=pdf_fetch_log.FailureCause.VERSION_BELOW_POLICY,
+    )
+    return True
 
 
 def _open_log(path: str, *, replace: bool = False):
@@ -1468,8 +1647,14 @@ def _attach_and_log(
     failure_log_path: str = "",
     item_type: str = "",
     check_text: bool = True,
+    min_version: str | None = None,
 ) -> bool:
     """Attach one fetched PDF to Zotero and log the outcome. True on success.
+
+    `min_version` is the `[pdf]` policy's last line of defence: a file
+    whose recorded version is below it is refused here, whichever route
+    brought it (the cascade already refuses earlier and moves on; this
+    catches the browser handlers, the Pass-2 retry and cache recovery).
 
     The single upload path for every fetch route (browser handlers, the
     Pass-2 API retry, and the API cascade). Those were three divergent
@@ -1496,6 +1681,22 @@ def _attach_and_log(
                 "detail": "fetched file is byte-identical to the attached one",
             })
             return True
+
+    version = pdf_version.version_of(pdf_path, doi=doi)
+    if not _version_allowed(min_version, version, doi):
+        detail = _below_policy_detail(version, min_version or "", source)
+        print(f"→ refused: {detail}", flush=True)
+        log_writer.writerow({
+            "run_date": run_date, "item_key": item_key, "doi": doi,
+            "title": title, "status": "skipped_below_policy",
+            "source": source, "detail": detail,
+        })
+        _set_aside_below_policy(pdf_path)
+        _log_below_policy(
+            failure_log_path, item_key=item_key, doi=doi,
+            item_type=item_type, source=source,
+        )
+        return False
 
     # Structural check before upload. Attaching a corrupt PDF is worse
     # than attaching nothing: `pdf_map()` then reports the item as
@@ -1568,9 +1769,7 @@ def _attach_and_log(
     # Decided when the file was fetched (`pdf_version.settle`) and read
     # back here from the cache sidecar, so the cache-recovery pass — which
     # knows only a path — tags as precisely as the cascade did.
-    version_add, version_remove = _version_tag_op(
-        pdf_version.version_of(pdf_path, doi=doi),
-    )
+    version_add, version_remove = _version_tag_op(version)
     provenance_tags += version_add
     _finish_replacement(
         zot, item_key, keep={new_attachment_key}, provenance=provenance_tags,
@@ -2082,6 +2281,7 @@ async def _drive_handler(
                 failure_log_path=getattr(args, "failure_log_csv", "") or "",
                 item_type=item.get("item_type", ""),
                 check_text=not getattr(args, "no_check_text", False),
+                min_version=_run_min_version(args),
             )
             if lanes > 1:
                 # A complete line rather than a prefix `_attach_and_log`
@@ -3265,8 +3465,12 @@ def _run_browser_in_process(
     if (not connector_only and session is not None and config is not None
             and not plan_only):
         try:
+            policy = getattr(args, "pdf_policy", None)
             pass2_api_sources = [
-                s for s in fetchers.pdf_sources(session, config)
+                s for s in fetchers.pdf_sources(
+                    session, config,
+                    paid=policy.paid if policy is not None else "prefer",
+                )
                 if getattr(s, "direct_access_domains", ())
             ]
         except Exception as e:
@@ -3724,6 +3928,7 @@ def _run_browser_in_process(
     failed_open = 0
     deferred_pass3 = 0
     journal_pages_replaced = 0
+    below_policy_pass3 = 0
     route_progress = _RouteLookupProgress(
         len(origins), enabled=resolver_cfg is not None and not ignore_coverage,
     )
@@ -3788,6 +3993,17 @@ def _run_browser_in_process(
                     f"journal-level target {chosen.url} replaced by the "
                     f"DOI landing page"
                 )
+            # The `[pdf] min_version` gate, before the save rather than
+            # after: the version is already decided from the route, and
+            # a Connector save cannot be taken back cleanly (it creates
+            # an item, then a merge and a trash).
+            if _route_below_policy(
+                entry_with_target,
+                via="ebsco" if is_ebsco_target(chosen) else "connector",
+                args=args, log_writer=log_writer, run_date=run_date,
+            ):
+                below_policy_pass3 += 1
+                continue
             if is_ebsco_target(chosen):
                 ebsco_items.append(entry_with_target)
             else:
@@ -3839,6 +4055,14 @@ def _run_browser_in_process(
         )
     if deferred_pass3:
         print(_deferred_note(deferred_pass3, resolver_cfg), flush=True)
+    if below_policy_pass3:
+        print(
+            f"  {below_policy_pass3} item"
+            f"{'s' if below_policy_pass3 != 1 else ''} not handed to the "
+            f"Connector: the route's copy would be below min_version = "
+            f"{_run_min_version(args)}.",
+            flush=True,
+        )
 
     # ------------------------------------------------------------------
     # Pass 4a — EBSCOhost items, driven directly from their resolver
@@ -4057,9 +4281,25 @@ def _try_cascade(
     *,
     failure_log_path: str | None = None,
     scope_types: frozenset[str] | None = None,
+    min_version: str | None = None,
+    rejected: list[tuple[str, str]] | None = None,
 ) -> tuple[Path, str] | None:
     """Try each PDF fetcher in priority order. Returns (path, source_name)
-    on the first hit.
+    on the first hit that the `[pdf] min_version` policy admits.
+
+    **Reject and continue.** A hit whose settled version
+    (`pdf_version.settle`, never a raw API field) is below `min_version`
+    is not returned: the file is moved out of the shared cache slot
+    (`_set_aside_below_policy`), a VERSION_BELOW_POLICY row is logged for
+    that source, `(source, version)` is appended to `rejected`, and the
+    next source is asked. A source cannot be dropped up front instead —
+    under `published` an Unpaywall or OpenAlex copy qualifies only when
+    its location is publisher-hosted, which is known only after the
+    fetch. A refused *cache hit* earns its source one more ask, now that
+    the slot is empty: a cached file of unknown provenance reads as
+    `accepted`, and may well be the very publisher PDF that source would
+    download fresh. `min_version=None` (helpers outside `main()`) gates
+    nothing.
 
     On full-cascade failure (every source returns None or raises), the
     cause is classified via `pdf_fetch_log.classify_failure` and a row
@@ -4093,25 +4333,42 @@ def _try_cascade(
     raised_exception = False
     last_status: int | None = None
     for src in sources:
-        try:
-            result = src.fetch_pdf(doi, cache_dir=cache_dir)
-        except NotImplementedError:
-            continue
-        except Exception as e:
-            print(f"    {src.name}: {e}", flush=True)
-            raised_exception = True
-            status = _http_status_of(e)
-            if status is not None:
-                last_status = status
-                blamed_source = src.name
-            elif not blamed_source:
-                blamed_source = src.name
-            continue
-        if result is None:
-            continue
-        path, source_url = result
-        pdf_version.settle(path, source=src.name, source_url=source_url, doi=doi)
-        return path, src.name
+        for _ask in range(2):
+            try:
+                result = src.fetch_pdf(doi, cache_dir=cache_dir)
+            except NotImplementedError:
+                break
+            except Exception as e:
+                print(f"    {src.name}: {e}", flush=True)
+                raised_exception = True
+                status = _http_status_of(e)
+                if status is not None:
+                    last_status = status
+                    blamed_source = src.name
+                elif not blamed_source:
+                    blamed_source = src.name
+                break
+            if result is None:
+                break
+            path, source_url = result
+            version = pdf_version.settle(
+                path, source=src.name, source_url=source_url, doi=doi,
+            )
+            if _version_allowed(min_version, version, doi):
+                return path, src.name
+            print(
+                f"    {src.name}: {_below_policy_detail(version, min_version or '', src.name)}",
+                flush=True,
+            )
+            _set_aside_below_policy(path)
+            if rejected is not None:
+                rejected.append((src.name, version))
+            _log_below_policy(
+                failure_log_path, item_key=item_key, doi=doi,
+                item_type=item_type, source=src.name,
+            )
+            if not (source_url or "").startswith("cache://"):
+                break
 
     # Cascade exhausted. Classify and persist if a log path was given.
     if failure_log_path and item_key:
@@ -4217,12 +4474,17 @@ def _run_api_cascade(
 
     print(f"\n  Downloading PDFs ({args.workers} threads)...", flush=True)
     results: list[tuple[dict, tuple[Path, str] | None]] = []
+    min_version = _run_min_version(args)
+    #: item key → the (source, version) copies the policy refused.
+    refused: dict[str, list[tuple[str, str]]] = {it["key"]: [] for it in to_process}
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = {
             pool.submit(
                 _try_cascade, it, sources, args.cache_dir,
                 failure_log_path=args.failure_log_csv,
                 scope_types=_scope_types(args),
+                min_version=min_version,
+                rejected=refused[it["key"]],
             ): it
             for it in to_process
         }
@@ -4259,15 +4521,35 @@ def _run_api_cascade(
         flush=True,
     )
 
+    below = 0
     for item in not_found:
         d = item["data"]
-        log_writer.writerow({
+        row = {
             "run_date": run_date, "item_key": item["key"],
             "doi": d.get("DOI", ""),
             "title": (d.get("title") or "")[:70],
             "status": "skipped_no_pdf", "source": "",
-        })
+        }
+        copies = refused.get(item["key"]) or []
+        if copies:
+            # Not "nothing found": a copy was found and refused. The run
+            # report and the manual mode both need to tell those apart.
+            below += 1
+            row.update(
+                status="skipped_below_policy", source=copies[0][0],
+                detail="; ".join(
+                    _below_policy_detail(v, min_version or "", src)
+                    for src, v in copies
+                ),
+            )
+        log_writer.writerow(row)
         no_pdf += 1
+    if below:
+        print(
+            f"  {below} of those had only copies below min_version = "
+            f"{min_version} (set aside in {args.cache_dir}/{BELOW_POLICY_DIR}/).",
+            flush=True,
+        )
 
     if found and not args.dry_run:
         print(f"  Uploading {len(found)} PDFs to Zotero...\n", flush=True)
@@ -4297,6 +4579,7 @@ def _run_api_cascade(
             failure_log_path=args.failure_log_csv,
             item_type=d.get("itemType", ""),
             check_text=not getattr(args, "no_check_text", False),
+            min_version=min_version,
         ):
             attached += 1
         else:
@@ -4354,6 +4637,7 @@ def _pass2_api_retry(
     """
     from fetchers.resolvers import host_matches_domains
 
+    min_version = _run_min_version(args)
     for src in sources:
         if not host_matches_domains(
             f"https://{resolved_host}/", src.direct_access_domains,
@@ -4370,7 +4654,23 @@ def _pass2_api_retry(
         if result is None:
             continue
         pdf_path, source_url = result
-        pdf_version.settle(pdf_path, source=src.name, source_url=source_url, doi=doi)
+        version = pdf_version.settle(
+            pdf_path, source=src.name, source_url=source_url, doi=doi,
+        )
+        if not _version_allowed(min_version, version, doi):
+            # Same reject-and-continue as the cascade: the next matching
+            # source, or the browser routes after this, may hold better.
+            print(f"  Pass 2 API retry: "
+                  f"{_below_policy_detail(version, min_version or '', src.name)}",
+                  flush=True)
+            _set_aside_below_policy(pdf_path)
+            _log_below_policy(
+                getattr(args, "failure_log_csv", "") or "",
+                item_key=entry.get("item_key", ""), doi=doi,
+                item_type=entry.get("item_type", ""), source=src.name,
+                attempt=2,
+            )
+            continue
         title70 = (entry.get("title") or "")[:70]
         if args.dry_run:
             log_writer.writerow({
@@ -4390,6 +4690,7 @@ def _pass2_api_retry(
             failure_log_path=getattr(args, "failure_log_csv", "") or "",
             item_type=entry.get("item_type", ""),
             check_text=not getattr(args, "no_check_text", False),
+            min_version=min_version,
         ):
             return "attached"
     return None
@@ -4491,6 +4792,19 @@ def _attach_from_cache(
             args.cache_dir,
         )) is not None
     ]
+    # A cached copy below the policy is left for the cascade, which
+    # refuses it, sets it aside and asks the sources for a better one.
+    # Refusing it here would log a "cache" verdict about no real source.
+    min_version = _run_min_version(args)
+    if min_version is not None:
+        hits = [
+            (it, path) for it, path in hits
+            if _version_allowed(
+                min_version,
+                pdf_version.version_of(path, doi=it["data"].get("DOI") or ""),
+                it["data"].get("DOI") or "",
+            )
+        ]
     if not hits:
         return []
 
@@ -4511,6 +4825,7 @@ def _attach_from_cache(
             pdf_path=path, failure_log_path=args.failure_log_csv,
             item_type=d.get("itemType", ""),
             check_text=not args.no_check_text,
+            min_version=min_version,
         ):
             done.append(item)
     return done
@@ -4653,8 +4968,31 @@ def _build_parser() -> argparse.ArgumentParser:
              "'wiley' (Wiley TDM only), 'browser' (full browser pass: "
              "direct handlers + Connector fallback), 'connector' "
              "(Connector handler only; useful for targeted validation). "
-             "Default: automated cascade "
-             "(elsevier+springer+crossref+pmc+openalex+unpaywall).",
+             "Default: the automated cascade, in this order: "
+             + " → ".join(fetchers.default_pdf_source_names())
+             + " (`[pdf] paid` moves or drops openalex_content; `preprint` "
+             "joins last under min_version = preprint).",
+    )
+    parser.add_argument(
+        "--config", default=None, metavar="PATH",
+        help="Project file to read the PDF policy overrides from "
+             "(PDF_MIN_VERSION, PDF_RECONSTRUCTED, PDF_PAID). Default: "
+             f"./{DEFAULT_PROJECT_CONFIG} when it exists. Only those three "
+             "literals are read — the file is parsed, not run, so nothing "
+             "else of the review's configuration matters here.",
+    )
+    parser.add_argument(
+        "--min-version", default=None, choices=pdf_policy.MIN_VERSIONS,
+        help="This run only: the lowest article version to attach "
+             "(published | accepted | preprint). Overrides [pdf] min_version "
+             "and the project's PDF_MIN_VERSION. 'published' keeps an "
+             "open-access copy only when the publisher hosts it.",
+    )
+    parser.add_argument(
+        "--paid", default=None, choices=pdf_policy.PAID_MODES,
+        help="This run only: where the paid OpenAlex Content API "
+             "($0.01/PDF) sits — off, prefer (before the free open-access "
+             "sources) or last_resort (after them). Overrides [pdf] paid.",
     )
     parser.add_argument(
         "--publisher",
@@ -4758,13 +5096,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--allow-preprints", action="store_true",
-        help="Also look for a preprint copy (arXiv / SSRN / RePEc) when "
-             "every other source has failed. OFF by default: a preprint is "
-             "the manuscript before peer review, and coding one as the "
-             "published article misreports what the journal actually "
-             "published. Every attachment this produces is tagged "
-             "`pdf:preprint-version`, and the coding stage surfaces the tag "
-             "— review those items before trusting their coded rows.",
+        help="This run only: min_version = preprint — accept preprint "
+             "copies, and look for one (arXiv / SSRN / RePEc) when every "
+             "other source has failed. Set it for a project instead with "
+             "PDF_MIN_VERSION = \"preprint\" or [pdf] min_version. OFF by "
+             "default: a preprint is the manuscript before peer review, and "
+             "coding one as the published article misreports what the "
+             "journal actually published. Every attachment this produces "
+             "is tagged `pdf:preprint-version` / `pdf:version:submitted`, "
+             "and the coding stage surfaces the tag — review those items "
+             "before trusting their coded rows.",
     )
     parser.add_argument(
         "--progress-json", default="",
@@ -4944,17 +5285,34 @@ def main() -> int:
     if args.no_prompt and not args.on_first_failure:
         args.on_first_failure = "skip"
 
+    if args.allow_preprints and args.min_version not in (None, "preprint"):
+        print(
+            f"ERROR: --allow-preprints means --min-version preprint; it "
+            f"contradicts --min-version {args.min_version}. Pass one.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        policy = _resolve_pdf_policy(args)
+    except pdf_policy.PolicyError as e:
+        print(f"ERROR: PDF policy: {e}", file=sys.stderr)
+        return 2
+    args.pdf_policy = policy
+    allow_preprints = policy.min_version == "preprint"
+
     source_names = [
         _SOURCE_ALIASES.get(s.strip().lower(), s.strip().lower())
         for s in args.sources.split(",") if s.strip()
     ]
-    if "preprint" in source_names and not args.allow_preprints:
+    if "preprint" in source_names and not allow_preprints:
         # The flag is where the hazard is explained, so it has to be the
         # only door in. Letting `--sources preprint` do the same thing
         # silently would leave a user who never read that explanation
         # coding working papers as published articles.
         print(
-            "ERROR: --sources preprint also needs --allow-preprints.\n"
+            "ERROR: --sources preprint also needs min_version = preprint "
+            "(--allow-preprints for this run,\n"
+            "  or PDF_MIN_VERSION / [pdf] min_version).\n"
             "  A preprint is the manuscript before peer review; coding one "
             "as the published\n"
             "  article misreports what the journal published. Pass "
@@ -5032,6 +5390,14 @@ def main() -> int:
         )
 
     config = _load_config()
+    _apply_policy_to_config(config, policy)
+    print(policy.banner(), flush=True)
+    if policy.min_version == "published":
+        print(
+            "  (published: an open-access copy counts only when the publisher "
+            "hosts it; repository copies are set aside, even typeset ones.)",
+            flush=True,
+        )
     session = http_client.build_session(mailto=config.crossref_mailto)
 
     # Validate Zotero config via require() — surfaces a clear error.
@@ -5226,7 +5592,7 @@ def main() -> int:
     if args.all:
         print("\n--- Pass 1: API cascade ---", flush=True)
         sources = fetchers.pdf_sources(
-            session, config, allow_preprints=args.allow_preprints,
+            session, config, allow_preprints=allow_preprints, paid=policy.paid,
         )
         print(f"Active fetchers: {[s.name for s in sources]}", flush=True)
 
@@ -5275,11 +5641,15 @@ def main() -> int:
     # Default / explicit-sources path: API cascade only.
     sources = fetchers.pdf_sources(
         session, config, names=source_names if source_names else None,
-        allow_preprints=args.allow_preprints,
+        allow_preprints=allow_preprints, paid=policy.paid,
     )
     if not sources:
         print(f"ERROR: no PDF fetchers matched --sources={args.sources!r}",
               file=sys.stderr)
+        if fetchers.PAID_SOURCE in source_names and policy.paid == "off":
+            print(f"  {fetchers.PAID_SOURCE} is off under paid = off "
+                  f"({policy.sources.get('paid')}); pass --paid prefer to "
+                  f"use it this run.", file=sys.stderr)
         return 2
     print(f"Active fetchers: {[s.name for s in sources]}", flush=True)
 

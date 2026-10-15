@@ -1587,9 +1587,12 @@ correctly paginated. Unpaywall, Semantic Scholar and CORE frequently
 hold an author accepted manuscript instead, whose page numbers do not
 match the published article. When the downstream job is quoting text and
 citing pages, a correct version of record is worth $0.01 more than a
-free manuscript. It is skippable: answer no to the wizard's OpenAlex
-question, or set `[openalex] use_paid_content_api = false`, and the
-cascade runs on free and institutionally-subscribed sources only. CORE
+free manuscript. Its position is the `[pdf] paid` policy, asked in
+`/setup`: `prefer` (default, this position), `last_resort` (after every
+free source) or `off` (free and institutionally-subscribed sources only;
+the older `[openalex] use_paid_content_api = false` still means `off`).
+A review that needs the version of record only sets
+`PDF_MIN_VERSION = "published"` in `screening_config.py`. CORE
 sits last of the free sources for the same version-quality reason, and
 its attachments carry `pdf:repository-copy` so the distinction survives
 into coding.
@@ -1707,6 +1710,7 @@ Then act by cause:
 | `NETWORK_ERROR` | Transport failure | Re-run. **Not an exclusion.** |
 | `CORRUPT_DOWNLOAD` | A source served bytes that are not a usable PDF — usually a truncated download | Retry via a *different* source, not the same one. **Not an exclusion.** |
 | `NO_PDF_OFFERED` | The Zotero Connector opened the library's route and its translator finished without a PDF — usually an HTML-only galley. Nobody refused access | Open the page by hand (`retry.manual.keys`): save the HTML full text or find the PDF link. Not ILL. **Not an exclusion.** |
+| `VERSION_BELOW_POLICY` | A source returned a copy below the `[pdf] min_version` policy (e.g. an accepted manuscript under `published`); it was set aside in `<cache>/below_policy/`, not attached | Get the published version another way (`retry.below_policy.keys`: browser pass or download by hand), or lower `PDF_MIN_VERSION` for the project. **Not an exclusion.** |
 | `UPLOAD_FAILED` | The PDF was fetched but the Zotero attach failed | The file is already in the local cache; re-run `enrich_pdfs.py` and it attaches without re-downloading. **Not an exclusion.** |
 | `OUT_OF_SCOPE` | Book chapter, thesis, preprint | FE2 / FE3 — exclude on item type, not on retrieval |
 | `UNAVAILABLE` | Every route tried, nothing found | FE6 — the only cause that justifies a full-text-unavailable exclusion |

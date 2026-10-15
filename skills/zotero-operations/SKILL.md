@@ -126,7 +126,8 @@ body, and the XML transformation never rendered them. The prose still
 cites "Table 2", so the gap is easy to miss. Tell the user before anyone
 codes data from those tables. The repair is `--replace --filter-keys-file
 <audit-stem>.tdm_recovered.keys`. Recovery itself is off by default
-(`[elsevier] render_xml_to_pdf`), and while it is off that run swaps in a
+(`[pdf] reconstructed`; the older `[elsevier] render_xml_to_pdf` still
+works as a fallback), and while it is off that run swaps in a
 real PDF wherever another source has one, and leaves the rest untouched.
 Only with the option on does it re-render them (one Elsevier API call per
 item; older cached recoveries count as stale and are not reused).
@@ -146,7 +147,21 @@ Semantic Scholar, CORE) → browser handlers → Zotero Connector. The
 OpenAlex Content API is the only per-item cost anywhere in that
 sequence; it outranks the free open-access tiers because it serves the
 correctly paginated published article rather than an author manuscript,
-and it is switched off with `[openalex] use_paid_content_api = false`.
+and its position is the `[pdf] paid` policy: `off`, `prefer` (default,
+the position above) or `last_resort` (after every free source).
+
+**The `[pdf]` retrieval policy** is asked in `/setup` and printed, with
+the source of each value, at the top of every `enrich_pdfs.py` run:
+`min_version` (`published` | `accepted` default | `preprint`),
+`reconstructed`, `paid`. A project overrides it with `PDF_MIN_VERSION` /
+`PDF_RECONSTRUCTED` / `PDF_PAID` in its `screening_config.py` (read from
+the working directory, or `--config`), and one run with `--min-version`,
+`--paid` or `--allow-preprints`. A copy below `min_version` is refused,
+set aside in `<cache>/below_policy/`, and the cascade asks the next
+source; items left with only such copies are `skipped_below_policy` in
+the run log and `VERSION_BELOW_POLICY` in the failure log. Under
+`published`, open-access copies count only when the publisher hosts
+them — repository copies are refused even when they are the typeset PDF.
 The authoritative ordering lives in `fetchers.pdf_sources`'s docstring —
 read it there rather than restating it from memory.
 
@@ -223,6 +238,7 @@ running these stages:**
    | `NETWORK_ERROR` | Re-run the same stage; the cause is transient |
    | `CORRUPT_DOWNLOAD` | The source served a broken file (usually truncated). Re-running the *same* source returns the same bad bytes — escalate to a different one: the publisher TDM route, or `--sources browser`. |
    | `NO_PDF_OFFERED` | The Connector reached the page and it offered no PDF — usually an HTML-only galley, not a paywall. Hand the user `retry.manual.keys` to open by hand (save the HTML full text, or find the PDF link the translator missed). Not an ILL candidate. |
+   | `VERSION_BELOW_POLICY` | A copy was found but is below the `[pdf] min_version` policy, so it was set aside (`<cache>/below_policy/`) and not attached. Items are in `retry.below_policy.keys`: fetch the published version by another route, or ask the user whether to lower `PDF_MIN_VERSION` for the project. Not an exclusion. |
    | `UPLOAD_FAILED` | The PDF is already in the local cache and only the Zotero attach failed. Re-run `enrich_pdfs.py`; it attaches from cache with no new download. Cheapest rung on the ladder — always offer it first. |
    | `OUT_OF_SCOPE` | A book chapter, thesis, or preprint. No rung applies — the item is excluded on its type, not on retrieval, and chasing a PDF for it wastes the user's time. |
    | `UNAVAILABLE` | Genuinely unreachable *as published* — every route was tried, so this cannot appear before a browser pass has run. One route remains — see below — and only after the user declines it is "not available" the honest report. |

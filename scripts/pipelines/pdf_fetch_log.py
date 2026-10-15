@@ -126,6 +126,18 @@ class FailureCause(StrEnum):
     Suggested action: open the page by hand — save the HTML full text,
     or find the PDF link the translator missed. Not an exclusion."""
 
+    VERSION_BELOW_POLICY = "VERSION_BELOW_POLICY"
+    """A source returned a usable PDF, but of a version below the run's
+    `[pdf] min_version` (`pdf_policy.py`), so it was not attached — the
+    cascade moved on to the next source. One row per source whose copy
+    was refused; an attach by a later source clears them with the rest.
+
+    The article exists and *a* copy of it is in hand (set aside under
+    `<cache>/below_policy/`), so this is never an exclusion. What is
+    missing is a copy good enough for the policy: the published version
+    by another route (browser pass, a manual download), or a deliberate
+    decision to lower `min_version` for this project."""
+
     UPLOAD_FAILED = "UPLOAD_FAILED"
     """The PDF was fetched successfully but could not be attached to
     Zotero. Categorically different from the four above: the full text
@@ -377,6 +389,7 @@ CAUSE_PRECEDENCE: tuple[str, ...] = (
     FailureCause.UPLOAD_FAILED.value,
     FailureCause.CORRUPT_DOWNLOAD.value,
     FailureCause.NO_PDF_OFFERED.value,
+    FailureCause.VERSION_BELOW_POLICY.value,
     FailureCause.ACCESS_BLOCKED.value,
     FailureCause.NETWORK_ERROR.value,
     FailureCause.UNAVAILABLE.value,
@@ -480,6 +493,9 @@ SUGGESTED_FE_CODE: dict[str, str] = {
     FailureCause.NO_PDF_OFFERED.value:
         "NOT an exclusion — the page offered no PDF; open it by hand "
         "(HTML-only full text is common)",
+    FailureCause.VERSION_BELOW_POLICY.value:
+        "NOT an exclusion — only a copy below [pdf] min_version was found; "
+        "get the published version another way, or lower min_version",
 }
 
 #: Causes that must never be adjudicated as a full-text exclusion —
@@ -500,4 +516,5 @@ RECOVERABLE_CAUSES: frozenset[str] = frozenset({
     FailureCause.CORRUPT_DOWNLOAD.value,
     FailureCause.UPLOAD_FAILED.value,
     FailureCause.NO_PDF_OFFERED.value,
+    FailureCause.VERSION_BELOW_POLICY.value,
 })

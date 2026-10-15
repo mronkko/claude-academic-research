@@ -124,6 +124,14 @@ STATUS_INFO: dict[str, tuple[str, str]] = {
         "cannot reach the PDF — re-run with `--sources browser` from a "
         "real terminal. Otherwise this is a genuine no-open-copy result.",
     ),
+    "skipped_below_policy": (
+        "Only copies below the [pdf] min_version policy were found; none attached",
+        "NOT a missing article: a lower version was found and set aside in "
+        "the cache's below_policy/ folder. Get the published version by "
+        "another route (`--sources browser`, or download it by hand), or "
+        "lower `min_version` for this project (PDF_MIN_VERSION in "
+        "screening_config.py) if that version is good enough.",
+    ),
     "skipped_no_library_coverage": (
         "Library link-resolver reported no licensed full-text route",
         "Verify against your library's own journal listing before "
