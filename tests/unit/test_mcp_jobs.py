@@ -124,13 +124,6 @@ def _call(name: str, arguments: dict | None = None) -> dict:
 
 
 
-#: Windows + Python 3.11 only: cancelling a running job reads back as
-#: "failed" and a CI run once hung for over an hour (3.12/3.13 and POSIX
-#: pass). Not reproduced off CI yet — see BACKLOG P27.
-_WIN_PY311 = pytest.mark.skipif(
-    sys.platform == "win32" and sys.version_info[:2] == (3, 11),
-    reason="job cancel misbehaves on Windows + Python 3.11 (BACKLOG P27)",
-)
 
 def _wait(job_id: str, until=lambda s: s["status"] in FINAL, timeout: float = 30) -> dict:
     deadline = time.monotonic() + timeout
@@ -225,7 +218,6 @@ def test_answering_a_job_that_is_not_asking_is_refused(project: Path) -> None:
         _call("job_answer", {"job_id": job_id, "answer": "y"})
 
 
-@_WIN_PY311
 def test_cancel_interrupts_first_so_the_script_can_flush(project: Path, monkeypatch) -> None:
     monkeypatch.setenv("FAKE_MODE", "hang")
     markers = Path(os.environ["FAKE_MARKERS"])
@@ -259,7 +251,6 @@ def test_cancel_escalates_to_sigterm_when_sigint_is_ignored(project: Path, monke
     assert not (markers / "flushed").exists()
 
 
-@_WIN_PY311
 def test_a_second_zotero_writer_is_refused_while_one_runs(project: Path, monkeypatch) -> None:
     monkeypatch.setenv("FAKE_MODE", "hang")
     markers = Path(os.environ["FAKE_MARKERS"])
@@ -373,7 +364,6 @@ def _tool_call(id_: int, name: str, arguments: dict) -> dict:
             "params": {"name": name, "arguments": arguments}}
 
 
-@_WIN_PY311
 def test_a_job_survives_its_server_and_a_fresh_server_reads_it(
         project: Path, monkeypatch) -> None:
     monkeypatch.setenv("FAKE_MODE", "hang")
@@ -394,7 +384,6 @@ def test_a_job_survives_its_server_and_a_fresh_server_reads_it(
     assert _wait(job_id)["status"] == "cancelled"
 
 
-@_WIN_PY311
 def test_the_pdf_plan_job_runs_beside_a_zotero_writer(project: Path, monkeypatch) -> None:
     """Planning never writes to Zotero, so the one-writer rule does not
     hold it back — and it gets the resolver sweep's argv."""
@@ -447,7 +436,6 @@ def test_enrich_pdfs_jobs_build_the_strategys_argv(project: Path) -> None:
         _wait(job_id)
 
 
-@_WIN_PY311
 def test_paid_and_unattended_run_are_zotero_writers_and_setup_is_not(
     project: Path, monkeypatch,
 ) -> None:
@@ -467,7 +455,6 @@ def test_paid_and_unattended_run_are_zotero_writers_and_setup_is_not(
         assert _wait(job_id)["status"] == "cancelled"
 
 
-@_WIN_PY311
 def test_a_second_browser_job_is_refused_while_one_runs(
     project: Path, monkeypatch,
 ) -> None:
@@ -534,3 +521,35 @@ def test_paying_says_so_in_its_effect_class() -> None:
     assert free.effect == reg.WRITES_ZOTERO and free.fixed == ("--paid", "off")
     assert "Opens a Chromium window" in reg.TOOLS_BY_NAME[
         "start_pdf_unattended_setup"].description
+
+
+def test_job_file_writes_retry_while_windows_holds_the_target(tmp_path, monkeypatch) -> None:
+    """P27: on Windows os.replace fails while a reader has job.json open.
+    The write must retry instead of killing the runner."""
+    target = tmp_path / "job.json"
+    real = os.replace
+    refusals = {"left": 3}
+
+    def flaky(src, dst):
+        if refusals["left"]:
+            refusals["left"] -= 1
+            raise PermissionError(13, "The process cannot access the file")
+        real(src, dst)
+
+    monkeypatch.setattr(job_runner.os, "replace", flaky)
+    job_runner.write_json(target, {"status": "cancelled"})
+    assert job_runner.read_json(target) == {"status": "cancelled"}
+    assert refusals["left"] == 0
+    assert not list(tmp_path.glob(".job.json.*.tmp"))
+
+
+def test_job_file_write_gives_up_after_the_retry_window(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(job_runner, "REPLACE_RETRY_S", 0.05)
+
+    def refuse(src, dst):
+        raise PermissionError(13, "locked")
+
+    monkeypatch.setattr(job_runner.os, "replace", refuse)
+    with pytest.raises(PermissionError):
+        job_runner.write_json(tmp_path / "job.json", {"status": "failed"})
+    assert not list(tmp_path.glob(".job.json.*.tmp"))

@@ -9,6 +9,9 @@ on:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    # A hung test (seen once on windows-latest / 3.11, BACKLOG P27) must
+    # fail the job, not hold a runner for GitHub's 6-hour default.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

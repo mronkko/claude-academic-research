@@ -128,7 +128,10 @@ directory — not checked in because it references machine-local paths).
   for keys was considered and rejected as overkill.
 
 - **P27 — cancelling an MCP background job misbehaves on Windows +
-  Python 3.11.** Found by CI after the 0.25.0 push (run 38847617056):
+  Python 3.11.** **Status: probable cause fixed, verifying in CI** —
+  `job_runner.write_json` did a single `os.replace`, which Windows refuses
+  while the server has `job.json` open for a status read; the runner died
+  before recording its result. It now retries for up to 5 s. Found by CI after the 0.25.0 push (run 38847617056):
   on `windows-latest` / 3.11 only, six `tests/unit/test_mcp_jobs.py`
   tests that start a long-running fake job and cancel it read the job
   back as `failed` instead of `cancelled`, and a later run hung for over

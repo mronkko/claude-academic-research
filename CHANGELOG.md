@@ -477,10 +477,11 @@ large review.
   their home page instead: Sage, APA, AoM, AAA, OUP, INFORMS, Emerald,
   IEEE and ProQuest. Wiley's and Taylor & Francis's links are shipped
   but could not be checked over plain HTTP.
-- On Windows with Python 3.11, cancelling an MCP background job
-  (`cancel_job`) may not stop it cleanly or may report it as failed;
-  Windows with Python 3.12+ and macOS/Linux are unaffected. Prefer
-  Python 3.12+ on Windows (BACKLOG P27).
+- MCP background jobs on Windows: the job runner now retries writing
+  its state file while the server is reading it (Windows refuses the
+  replace meanwhile); before that fix, a job could read back as failed
+  or a cancel could leave it running. Covered by the Windows CI tests;
+  not yet tried on a user's Windows machine.
 - Not exercised live before release: abstract screening, full-text
   coding and export. The live smoke test ran the per-source API and
   Zotero tests and the end-to-end mini review through search, import,

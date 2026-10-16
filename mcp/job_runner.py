@@ -55,10 +55,35 @@ def write_json(path: Path, payload: dict) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, indent=2)
             fh.write("\n")
-        os.replace(tmp, path)
+        _replace(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+
+
+#: How long `_replace` keeps retrying a target another process holds open.
+REPLACE_RETRY_S = 5.0
+
+
+def _replace(src: str, dst: Path) -> None:
+    """`os.replace`, retried while Windows refuses it.
+
+    On Windows `os.replace` raises PermissionError while any other process
+    has `dst` open — and the server opens `job.json` on every job_status
+    call. Unretried, a write that collided with a read killed the runner
+    before it recorded the job's result, so the job read back as "failed"
+    (exit code None) and a cancelled child could be left running
+    (BACKLOG P27). The read is brief, so a short retry clears it.
+    """
+    deadline = time.monotonic() + REPLACE_RETRY_S
+    while True:
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.02)
 
 
 def read_json(path: Path) -> dict:

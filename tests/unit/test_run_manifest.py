@@ -196,8 +196,9 @@ def test_a_fatal_provider_error_stops_the_run(tmp_path, monkeypatch, provider) -
             _Dead.calls += 1
             if _Dead.calls > 1:
                 # Slow enough that the main thread cancels the queue
-                # while this one is in flight.
-                threading.Event().wait(0.3)
+                # while this one is in flight — generously, because a
+                # loaded Windows CI runner took longer than 0.3 s.
+                threading.Event().wait(2.0)
             raise RuntimeError("quota")
 
     class _Verdict:
