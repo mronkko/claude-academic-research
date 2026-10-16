@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.25.0] — 2026-10-15
+## [0.25.0] — 2026-10-16
 
 This release brings four things. The first is a full audit of the
 codebase, with fixes for what it found, several of which could lose
@@ -477,6 +477,14 @@ large review.
   their home page instead: Sage, APA, AoM, AAA, OUP, INFORMS, Emerald,
   IEEE and ProQuest. Wiley's and Taylor & Francis's links are shipped
   but could not be checked over plain HTTP.
+- Not exercised live before release: abstract screening, full-text
+  coding and export. The live smoke test ran the per-source API and
+  Zotero tests and the end-to-end mini review through search, import,
+  enrichment and audit against a real Zotero group; screening stopped at
+  its model-connection pre-flight because no working LLM key was
+  available. Screening and coding are covered by the unit suite only for
+  this release. The unattended browser run and manual download mode
+  were tested with stubs, not live — pilot them on a small batch first.
 
 ## [0.24.1] — 2026-09-22
 
