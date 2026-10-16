@@ -121,34 +121,17 @@ def _signal(child: subprocess.Popen, stage: int) -> None:
             return
         sig = {1: signal.SIGINT, 2: signal.SIGTERM, 3: signal.SIGKILL}[stage]
         os.killpg(child.pid, sig)
-    except (OSError, ValueError):
-        pass  # already gone, or (Windows) no console to deliver the break to
-
-
-def _shield_from_console_breaks(job_dir: Path) -> None:
-    """Windows: keep a CTRL_BREAK meant for the child from killing the runner.
-
-    `_signal` delivers stage 1 with GenerateConsoleCtrlEvent, and Windows
-    does not always confine that to the target group: the event can reach
-    every process on the console, the sender included. The runner has no
-    handler for SIGBREAK, whose default action ends the process at once —
-    before it records the job's result, so a cancelled job read back as
-    "failed" with job.json still "running" (BACKLOG P27, seen on CI's
-    windows-latest / Python 3.11). Each break that arrives is logged, so
-    run.log shows whether this happened.
-    """
-    def note(signum, _frame):
-        with (job_dir / LOG_FILE).open("a", encoding="utf-8") as log:
-            log.write(f"job_runner: ignored {signal.Signals(signum).name} "
-                      "(meant for the job's process group)\n")
-
-    for name in ("SIGBREAK", "SIGINT"):
-        signal.signal(getattr(signal, name), note)
+    except (OSError, SystemError, ValueError):
+        # Already gone, or (Windows) no console to deliver the break to: the
+        # runner is started detached, so GenerateConsoleCtrlEvent fails and
+        # escalation moves on to terminate() after the grace period. Python
+        # 3.11's os.kill reports that failure as SystemError ("returned a
+        # result with an exception set") rather than OSError; uncaught, it
+        # killed the runner before it recorded the cancel (BACKLOG P27).
+        pass
 
 
 def run(job_dir: Path, argv: list[str]) -> int:
-    if IS_WINDOWS:
-        _shield_from_console_breaks(job_dir)
     job = read_json(job_dir / JOB_FILE)
     grace = float(job.get("grace_s") or DEFAULT_GRACE_S)
     env = dict(os.environ)
