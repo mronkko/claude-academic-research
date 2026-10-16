@@ -59,6 +59,8 @@ NON_ASCII_ENTRY_POINTS = [
     "scripts/setup/set_cluster_automation.py",
     "scripts/setup/set_llm_provider.py",
     "scripts/setup/wizard.py",
+    "scripts/track_changes/check_docx.py",
+    "scripts/track_changes/inspect_docx.py",
 ]
 
 

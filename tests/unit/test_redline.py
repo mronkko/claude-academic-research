@@ -185,7 +185,7 @@ def test_find_validator_skips_staging_copies(tmp_path):
     real = tmp_path / '.claude' / 'skills' / 'synced' / 'x' / rel
     for p in (staged, real):
         p.parent.mkdir(parents=True)
-        p.write_text('')
+        p.write_text('', encoding='utf-8')
     assert check_docx.find_validator(home=tmp_path) == real
     real.unlink()
     assert check_docx.find_validator(home=tmp_path) is None
@@ -200,7 +200,7 @@ def test_run_edits_makes_library_importable(tmp_path, monkeypatch):
         'from redline import Doc\n'
         f"d = Doc({str(tmp_path / 'fx' / 'word' / 'document.xml')!r}, author='T, T')\n"
         "d.replace_text(d.find_para('Alpha'), 'beta', ['BETA'])\n"
-        'd.save()\n')
+        'd.save()\n', encoding='utf-8')
     monkeypatch.setattr(sys, 'argv', ['run_edits.py', str(edits)])
     run_edits.main()
     assert 'BETA' in (tmp_path / 'fx' / 'word' / 'document.xml').read_text(encoding='utf8')
@@ -278,7 +278,7 @@ def test_validator_errors_shared_with_original_are_ignored(tmp_path, monkeypatch
     import check_docx
 
     fake = tmp_path / 'validate.py'
-    fake.write_text(FAKE_VALIDATOR)
+    fake.write_text(FAKE_VALIDATOR, encoding='utf-8')
     monkeypatch.setenv('FAKE_MODE', mode)
     valid, report = check_docx.run_validator(fake, 'out.docx', 'orig.docx', AUTHOR)
     assert valid is ok

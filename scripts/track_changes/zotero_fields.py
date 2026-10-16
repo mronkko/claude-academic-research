@@ -69,7 +69,7 @@ def zotero_to_csl(z):
 class Citer:
     """Creates citation pieces for redline.Doc.
 
-    citer = Citer(open(doc_xml).read(), library_id='1234567', library_type='groups')
+    citer = Citer(open(doc_xml, encoding='utf8').read(), library_id='1234567', library_type='groups')
     citer.add_item('ABCD1234', zotero_json_data)   # only for items not yet cited
     piece = citer.cite('(Smith, 2020, p. 5)', citer.item('ABCD1234', locator='5'))
     """

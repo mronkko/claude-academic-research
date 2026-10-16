@@ -16,6 +16,8 @@ field-type counts and the Zotero libraries cited (the library id Citer needs).
 """
 import argparse
 import re
+import sys
+from pathlib import Path
 
 from lxml import etree
 
@@ -36,6 +38,12 @@ def para_text(p):
 
 
 def main():
+    # It prints the manuscript's own text, which may hold any character; a
+    # cp1252 stdout (Windows, redirected) cannot write most of them.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from core.console import enable_utf8_output
+
+    enable_utf8_output()
     ap = argparse.ArgumentParser()
     ap.add_argument('xml')
     ap.add_argument('range', nargs='*', type=int)

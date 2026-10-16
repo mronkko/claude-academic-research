@@ -94,10 +94,21 @@ def error_lines(stdout):
             if ln.strip() and not ln.strip().startswith(_NOT_ERRORS)}
 
 
+def _run_python(argv):
+    """Run a Python script and read its output as UTF-8 on every OS.
+
+    validate.py prints arrows ("Paragraphs: 6 → 7"); with the platform
+    default encoding (cp1252 on Windows) the child cannot write them and
+    this side cannot read them.
+    """
+    env = {**os.environ, 'PYTHONIOENCODING': 'utf-8', 'PYTHONUTF8': '1'}
+    return subprocess.run([sys.executable, *argv], capture_output=True, text=True,
+                          encoding='utf-8', errors='replace', env=env)
+
+
 def run_validator(validator, out, original, author):
     """(ok, report) for the edited file, judged against the original's own errors."""
-    r = subprocess.run([sys.executable, str(validator), out, '--original', original,
-                        '--author', author], capture_output=True, text=True)
+    r = _run_python([str(validator), out, '--original', original, '--author', author])
     report = [r.stdout[-4000:], r.stderr[-2000:]]
     if r.returncode == 0:
         return True, report
@@ -105,8 +116,7 @@ def run_validator(validator, out, original, author):
     if not errors:
         report.append(f'validator exited {r.returncode} without reporting an error (crashed?)')
         return False, report
-    b = subprocess.run([sys.executable, str(validator), original],
-                       capture_output=True, text=True)
+    b = _run_python([str(validator), original])
     baseline = error_lines(b.stdout)
     new = sorted(errors - baseline)
     ignored = sorted(errors & baseline)
@@ -118,6 +128,12 @@ def run_validator(validator, out, original, author):
 
 
 def main():
+    # The validator's report is echoed, arrows included; a cp1252 stdout
+    # (Windows, redirected) cannot write them.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from core.console import enable_utf8_output
+
+    enable_utf8_output()
     ap = argparse.ArgumentParser()
     ap.add_argument('unpacked')
     ap.add_argument('out')
