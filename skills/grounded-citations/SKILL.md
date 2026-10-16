@@ -57,6 +57,9 @@ citation may not be made.
    from Zotero via `mcp__zotero__zotero_get_item_metadata` with
    `format="bibtex"`. Never hand-craft keys (`Smith2019`-style); never
    fabricate; never write to Zotero's Extra field to pin a key.
+   *Word manuscripts:* the citation is a live Zotero field built from the
+   item key instead of a `[@citekey]` — insert it with `word-zotero-track-changes`.
+   Requirements 1, 3 and 4 apply unchanged.
 3. **Externalised consultation.** At citation time, the paper's content
    is available either as a **fresh MCP response** (abstract, notes, or
    full-text retrieved in the current turn or an adjacent recent turn) or

@@ -45,7 +45,7 @@ every commit against `windows-latest`.
 
 ## What's in the plugin
 
-Eleven user-invocable skills:
+Twelve user-invocable skills:
 
 | Skill | Mode | Purpose |
 |---|---|---|
@@ -58,6 +58,7 @@ Eleven user-invocable skills:
 | `zotero-operations` | procedure (explicit) | Import, dedup, enrich abstracts and DOIs, maintain BBT keys. |
 | `retrieving-pdfs` | procedure (explicit) | Find and attach PDFs: plan the retrieval with you (what the API cascade, paid OpenAlex, the browser / Connector passes — attended, or as a long unattended run after a short setup with you — and manual download would each get), record the agreed strategy, run it step by step, diagnose what is left. Loaded by `systematic-review` and `zotero-operations`. |
 | `fact-check` | procedure (explicit) | Verify citations and quantitative claims against sources. |
+| `word-zotero-track-changes` | procedure (explicit) | Edit a co-authored Word manuscript as tracked changes by one author, inserting live Zotero citation fields and preserving co-authors' pending changes. |
 | `critic-loop` | procedure (explicit) | Run 4 parallel critics (evidence / method / argument / expert) until no MAJOR issues remain. |
 | `setup` | procedure (explicit) | Hands you the terminal configuration wizard (API keys, LLM provider, MCP servers); switches LLM provider. |
 

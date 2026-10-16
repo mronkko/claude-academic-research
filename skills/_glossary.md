@@ -101,6 +101,10 @@ canonical longer entry.
 - **CSL** — *Citation Style Language*. XML files that describe how
   a citation should be formatted (APA, Chicago, MLA, …). Pandoc /
   Quarto consume them via `--csl=<file>` or YAML `csl:`.
+- **OOXML** — *Office Open XML*, the zipped-XML format of `.docx`
+  files. Tracked changes are `w:ins` / `w:del` elements in
+  `word/document.xml`; a Zotero citation is a complex field
+  (`w:fldChar` begin / separate / end). Edited by `word-zotero-track-changes`.
 - **Link resolver / OpenURL** — the service that answers "which
   licensed routes does my institution have to this article?". OpenURL
   is the underlying standard; the plugin speaks two dialects of it as

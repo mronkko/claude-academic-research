@@ -119,6 +119,11 @@ Document-format defaults assume Quarto → gfm, with the snapshot landing
 at `critic-reviews/iter-{N}/rendered.md`. For other formats:
 
 - **Plain `.md`** — no render needed; snapshot is a file copy.
+- **`.docx`** — the accepted-text preview from `word-zotero-track-changes`'s
+  `check_docx.py --preview`, or
+  `pandoc --track-changes=accept {doc} -t gfm --wrap=none -o <path>.md`
+  with `--rendered-path` set to match. Apply the critics' fixes as
+  tracked changes through `word-zotero-track-changes`, not by rewriting the file.
 - **`.ipynb`** — `jupyter nbconvert --to markdown {doc}` (add
   `--execute` if cells are runnable).
 - **`.tex`** — `latexmk -pdf {doc}` yields a PDF, not markdown. Either

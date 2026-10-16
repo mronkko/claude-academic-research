@@ -93,6 +93,10 @@ typed.
   drafting and revision. When a critic flags a weak citation, the fix
   goes through `grounded-citations`' four-part rule (Zotero-backed
   BBT key, externalised consultation, claim-supporting source).
+- **`word-zotero-track-changes`** — for a co-authored Word (`.docx`)
+  manuscript, the mechanics of applying revisions as tracked changes
+  with live Zotero fields. The doctrine here still decides *what* to
+  change.
 - **`empirical-integrity`** — governs how numbers enter prose. When a
   critic suggests sharpening a statistic, the fix must route through
   the pipeline (inline expression reading `analysis/results/`) — never

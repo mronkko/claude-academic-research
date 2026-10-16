@@ -39,6 +39,7 @@ EXPECTED_SKILLS = {
     "cluster-screening",
     "verifying-citations",
     "suggesting-reviewers",
+    "word-zotero-track-changes",
 }
 
 MAX_DESCRIPTION_CHARS = 500

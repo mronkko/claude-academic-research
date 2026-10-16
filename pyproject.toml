@@ -60,6 +60,12 @@ dev = [
     # tests/unit/test_skill_frontmatter.py parses SKILL.md frontmatter with a
     # real YAML loader; until now pyyaml only arrived transitively.
     "pyyaml>=6.0",
+    # scripts/track_changes/ (the word-zotero-track-changes skill) edits Word XML with
+    # lxml; tests/unit/test_redline.py imports it at module scope.
+    "lxml>=5.0",
+    # The docx skill's validate.py, which check_docx.py runs when installed,
+    # imports it; test_redline's real-validator test needs it to run.
+    "defusedxml>=0.7",
 ]
 
 [tool.pytest.ini_options]

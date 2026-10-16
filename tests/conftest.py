@@ -55,6 +55,7 @@ ISOLATED_ENV_NAMES = frozenset({
     "OPENALEX_USE_PAID_CONTENT_API",
     "OPENURL_CONTEXT_PARAMS",
     "DISCOVERY_KEYWORD",
+    "DOCX_VALIDATE_PY",
 })
 
 #: Variables pointed at the per-test temporary home rather than removed.

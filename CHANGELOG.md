@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.0] — 2026-10-16
+
+### Added
+
+- **`word-zotero-track-changes` skill: tracked-change editing of Word
+  manuscripts with live Zotero fields.** Co-authored manuscripts often
+  live in Word, where every edit must show up as a tracked change by one
+  named author, citations must stay Zotero fields so the bibliography
+  refreshes, and co-authors' pending changes must survive. Generic XML
+  editing breaks all three: run-merging fuses text with field characters
+  so a later replacement deletes the citation, `w:ins` cannot nest so
+  text inserted into a co-author's insertion lands out of reading order,
+  and a `w:del` placed before `w:ins` in a paragraph mark fails schema
+  validation. `scripts/track_changes/` handles each of these
+  (`redline.py`, `zotero_fields.py`), plus `unpack_docx.py` (snapshot +
+  unpack), `inspect_docx.py`, `run_edits.py` (runs the agent's edit
+  script with the library importable) and `check_docx.py` (re-zip,
+  field balance, accepted-text preview via pandoc). The scripts came
+  from a real revision of an ~800-paragraph manuscript with ~250 Zotero
+  fields; `tests/unit/test_redline.py` reproduces each failure on a
+  synthetic `.docx`.
+
+  Anthropic's `docx` skill is a soft dependency: `check_docx.py`
+  discovers its `validate.py` under `~/.claude` (newest copy, skipping
+  the skill sync's `.staging/` leftovers) and skips that check with a
+  warning when it is absent. The validator is not vendored — it is
+  under a different licence and would stop receiving updates.
+  Real manuscripts often fail that validator before anyone edits them
+  (an unreferenced `[trash]/0000.dat` part, which Word ignores), so a
+  failing run is judged against the original validated alone: only
+  error lines the original does not share, or changes not tracked under
+  the author, fail the check.
+
+  `grounded-citations`, `critic-loop` and `manuscript-revision` now
+  point to the skill for Word manuscripts. `lxml` and `defusedxml` join
+  the dev dependency group.
+
 ## [0.25.0] — 2026-10-16
 
 This release brings four things. The first is a full audit of the
