@@ -48,6 +48,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A rate limit or outage at an API PDF source was logged as "no PDF".**
+  OpenAIRE, BASE, arXiv, ScienceDirect and OpenAlex returned nothing on
+  every failure, so a 429 storm at Elsevier read as a run of plain
+  misses and the failure log never said which source refused or why.
+  They now raise on 401 / 403 / 429 / 5xx and on timeouts, and the row
+  names the source and its HTTP status (403 → ACCESS_BLOCKED, 5xx →
+  NETWORK_ERROR). A 404 is still a plain miss. Error messages never
+  include the request URL, which for OpenAlex carries the key.
+- **`fulltext_code` missed PDFs cached under a SICI-style DOI** (or any
+  DOI with a colon), because it built the file name differently from
+  `enrich_pdfs`.
+- **An API key in a URL could reach the console when a connection
+  dropped.** urllib3's retry warning prints the full URL; key-like query
+  values are now redacted from its log records.
 - **Cancelling an MCP background job on Windows + Python 3.11 killed
   the job runner** (BACKLOG P27), so the job read back as `failed` with
   its state stuck at `running`, and the script could be left running.

@@ -58,6 +58,8 @@ from fetchers.base import (
     SourceUnavailable,
     answered,
     is_not_found,
+    pdf_answered,
+    pdf_transport_error,
 )
 
 if TYPE_CHECKING:
@@ -196,22 +198,40 @@ class _OpenAlexClient:
             pyalex.config.api_key = api_key
         self._configured = True
 
-    def _work(self, doi: str, *, strict: bool = False):
+    def _work(self, doi: str, *, strict: bool = False, pdf_source: str = ""):
         """Look up one work by DOI, or None on any failure.
 
         `strict` narrows None to "OpenAlex has no such work" (a 404) and
         lets every other failure raise — what the abstract cascade needs
-        to tell a miss from a lookup that never happened. The PDF paths
-        keep the lenient form: they only ever move on either way.
+        to tell a miss from a lookup that never happened.
+
+        `pdf_source` (the calling PDF source's name) draws the same line
+        for the PDF cascade, in the shape `_try_cascade` triages on (P22):
+        a 401 / 403 / 429 / 5xx raises `PdfHttpError` carrying the
+        status; a transport failure raises a bare `RuntimeError`; a 404
+        or other non-refusal 4xx is a miss (None).
+
+        Never re-raises pyalex's own exception: its message quotes the
+        request URL, which carries the API key.
         """
         import pyalex
         try:
             work = pyalex.Works()[f"doi:{doi}"]
         except Exception as e:
+            resp = getattr(e, "response", None)
+            if pdf_source:
+                if resp is None or getattr(resp, "status_code", None) == 200:
+                    # No response, or a 200 pyalex raised on anyway (an
+                    # unparseable body): unanswered either way.
+                    raise pdf_transport_error(pdf_source, e) from None
+                pdf_answered(resp, pdf_source)    # raises on a refusal
+                logger.debug(
+                    "%s lookup %s: HTTP %s", pdf_source, doi,
+                    getattr(resp, "status_code", None),
+                )
+                return None
             if strict and not is_not_found(e):
-                # Not `raise`: pyalex's message quotes the request URL,
-                # which carries the API key.
-                status = getattr(getattr(e, "response", None), "status_code", None)
+                status = getattr(resp, "status_code", None)
                 raise RuntimeError(
                     f"OpenAlex lookup failed: {type(e).__name__}"
                     + (f" (HTTP {status})" if status else ""),
@@ -380,7 +400,7 @@ class OpenAlexSource(_OpenAlexClient, AbstractFetcher, PdfFetcher):
     def _fetch_pdf_oa_url(
         self, doi: str, path: Path,
     ) -> tuple[Path, str] | None:
-        work = self._work(doi)
+        work = self._work(doi, pdf_source=self.name)
         if not work:
             return None
         pdf_url = (work.get("open_access") or {}).get("oa_url")
@@ -396,6 +416,11 @@ class OpenAlexSource(_OpenAlexClient, AbstractFetcher, PdfFetcher):
         try:
             resp = self.http.get(pdf_url, headers={"User-Agent": ua}, timeout=60)
         except Exception as e:
+            # `oa_url` is a third-party host, not OpenAlex: its refusal or
+            # outage says nothing about the work's access status, so it
+            # stays a move-on (the same line `fetchers/openaire.py` draws
+            # for repository candidates). Only OpenAlex's own lookup
+            # above raises.
             logger.debug("openalex OA PDF %s failed: %s", pdf_url, e)
             return None
         defect = _pdf_validate.response_defect(resp)
@@ -435,7 +460,7 @@ class OpenAlexContentSource(_OpenAlexClient, PdfFetcher):
             return None
         self._ensure_configured()
 
-        work = self._work(doi)
+        work = self._work(doi, pdf_source=self.name)
         if not work:
             return None
         if not (work.get("has_content") or {}).get("pdf", False):
@@ -448,8 +473,13 @@ class OpenAlexContentSource(_OpenAlexClient, PdfFetcher):
         try:
             resp = self.http.get(dl_url, timeout=120)
         except Exception as e:
-            # Not `e` itself: a requests error quotes the URL, key and all.
-            logger.debug("openalex content PDF %s failed: %s", doi, type(e).__name__)
+            # Raised, not None — an unanswered request is not a miss
+            # (P22). Not `e` itself: a requests error quotes the URL, key
+            # and all; `pdf_transport_error` names only its type.
+            raise pdf_transport_error(self.name, e) from None
+        # `PdfHttpError`'s message is source + status only, so the key in
+        # `dl_url` cannot reach the console or the log through it.
+        if not pdf_answered(resp, self.name):
             return None
         defect = _pdf_validate.response_defect(resp)
         if defect is not None:

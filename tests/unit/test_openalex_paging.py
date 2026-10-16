@@ -316,7 +316,7 @@ def test_the_paid_pdf_fetcher_returns_its_url_without_the_key(
                                      crossref_mailto="")
     fetcher.http = SimpleNamespace(get=lambda url, **_kw: _Pdf())
     monkeypatch.setattr(fetcher, "_ensure_configured", lambda: None)
-    monkeypatch.setattr(fetcher, "_work", lambda doi: {
+    monkeypatch.setattr(fetcher, "_work", lambda doi, **_kw: {
         "id": "https://openalex.org/W9", "has_content": {"pdf": True},
     })
     result = fetcher.fetch_pdf("10.1/x", cache_dir=str(tmp_path))

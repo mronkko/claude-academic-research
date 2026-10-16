@@ -79,6 +79,57 @@ def answered(resp, source: str) -> bool:
     raise RuntimeError(f"{source} answered HTTP {resp.status_code}")
 
 
+class PdfHttpError(RuntimeError):
+    """A PDF source's own server refused or failed the request.
+
+    Carries `.response`, so `enrich_pdfs._http_status_of` can read the
+    status and `_try_cascade` can triage the row (403 → ACCESS_BLOCKED,
+    5xx → NETWORK_ERROR) and blame this source. Its message names the
+    source and the status only — never the URL, which for OpenAlex's
+    Content API carries the API key.
+    """
+
+    def __init__(self, source: str, response) -> None:
+        self.response = response
+        self.status_code = getattr(response, "status_code", None)
+        super().__init__(f"{source} answered HTTP {self.status_code}")
+
+
+#: Statuses that mean "the question was not answered", not "no PDF".
+_PDF_REFUSALS = frozenset({401, 403, 429})
+
+
+def pdf_answered(resp, source: str) -> bool:
+    """The PDF-path counterpart of `answered`.
+
+    True on a 200. Raises `PdfHttpError` on 401 / 403 / 429 / 5xx — an
+    access refusal, a rate limit or a server fault, none of which says
+    the PDF does not exist, and all of which `_try_cascade` can only
+    classify if the status reaches it. False for anything else (404,
+    410, 400, …): the source answered and has nothing, a plain miss.
+
+    Separate from `answered` because that one raises a bare RuntimeError
+    with no status — fine for the abstract cascade, useless for PDF
+    triage — and because a 404 is not the only clean miss here.
+    """
+    code = getattr(resp, "status_code", None)
+    if code == 200:
+        return True
+    if code in _PDF_REFUSALS or (isinstance(code, int) and code >= 500):
+        raise PdfHttpError(source, resp)
+    return False
+
+
+def pdf_transport_error(source: str, exc: BaseException) -> RuntimeError:
+    """A URL-free stand-in for a timeout / connection failure.
+
+    A requests exception's message quotes the request URL, which may
+    carry a key (OpenAlex's Content API puts `?api_key=` there). The
+    exception type is what the operator needs; raise this `from None`.
+    """
+    return RuntimeError(f"{source} request failed: {type(exc).__name__}")
+
+
 class Source(ABC):  # noqa: B024  # marker base; abstractmethods live on AbstractFetcher / PdfFetcher
     """Root base class. Subclasses MUST set `name` as a class attribute.
 

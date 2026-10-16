@@ -250,7 +250,7 @@ def test_enabled_synthesis_does_reach_the_xml_endpoint() -> None:
     called = []
 
     class _Resp:
-        status_code = 500          # bail immediately after the call
+        status_code = 404          # bail immediately after the call (a miss, not a raise)
         headers: dict = {}
 
     def _get(*a, **k):

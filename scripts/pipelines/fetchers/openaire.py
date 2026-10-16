@@ -40,7 +40,7 @@ import urllib.parse
 from pathlib import Path
 
 from fetchers import _pdf_validate, cache_names
-from fetchers.base import PdfFetcher
+from fetchers.base import PdfFetcher, pdf_answered, pdf_transport_error
 from fetchers.core import REPOSITORY_COPY_TAG  # noqa: F401  (re-export intent)
 
 logger = logging.getLogger(__name__)
@@ -138,12 +138,14 @@ class OpenAireSource(PdfFetcher):
             f"{_API}?format=json&doi="
             f"{urllib.parse.quote(doi, safe='')}"
         )
+        # The lookup is OpenAIRE's own API: a timeout, 401/403/429 or 5xx
+        # there means the question went unanswered, so it raises for
+        # `_try_cascade` to triage rather than reading as "no PDF" (P22).
         try:
             resp = self.http.get(lookup, timeout=30)
         except Exception as e:
-            logger.debug("openaire lookup %s failed: %s", doi, e)
-            return None
-        if resp.status_code != 200:
+            raise pdf_transport_error(self.name, e) from None
+        if not pdf_answered(resp, self.name):
             return None
         try:
             payload = resp.json() or {}
@@ -161,6 +163,9 @@ class OpenAireSource(PdfFetcher):
                     timeout=60,
                 )
             except Exception as e:
+                # A candidate is a third-party repository, not OpenAIRE:
+                # its refusal or outage says nothing about the article's
+                # access status, so it stays a move-on, not a raise.
                 logger.debug("openaire PDF %s failed: %s", url, e)
                 continue
             defect = _pdf_validate.response_defect(got)

@@ -34,7 +34,7 @@ import logging
 from pathlib import Path
 
 from fetchers import _pdf_validate, cache_names
-from fetchers.base import PdfFetcher
+from fetchers.base import PdfFetcher, pdf_answered, pdf_transport_error
 
 logger = logging.getLogger(__name__)
 
@@ -134,9 +134,10 @@ class BaseSearchSource(PdfFetcher):
                 timeout=30,
             )
         except Exception as e:
-            logger.debug("base lookup %s failed: %s", doi, e)
-            return None
-        if resp.status_code != 200:
+            # BASE's own API failing is an unanswered question, not "no
+            # PDF" — raised for `_try_cascade` to triage (P22).
+            raise pdf_transport_error(self.name, e) from None
+        if not pdf_answered(resp, self.name):
             return None
         try:
             payload = resp.json() or {}
@@ -160,6 +161,8 @@ class BaseSearchSource(PdfFetcher):
                     url, headers={"User-Agent": "Mozilla/5.0"}, timeout=60,
                 )
             except Exception as e:
+                # Third-party repository, not BASE: a move-on, not a
+                # raise — see the same branch in `fetchers/openaire.py`.
                 logger.debug("base PDF %s failed: %s", url, e)
                 continue
             defect = _pdf_validate.response_defect(got)

@@ -41,6 +41,8 @@ from fetchers.base import (
     PdfFetcher,
     SourceUnavailable,
     is_not_found,
+    pdf_answered,
+    pdf_transport_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -981,7 +983,12 @@ class ScienceDirectSource(AbstractFetcher, PdfFetcher):
                 timeout=30,
             )
         except Exception as e:
-            logger.debug("elsevier PDF %s failed: %s", doi, e)
+            # Raised, not None: a timeout is an unanswered request, and a
+            # 429 storm at Elsevier used to be logged as a plain miss (P22).
+            raise pdf_transport_error(self.name, e) from None
+        # 401 / 403 / 429 / 5xx raise with the status for the cascade's
+        # triage; 404 (Elsevier does not hold the DOI) stays a miss.
+        if not pdf_answered(resp, self.name):
             return None
         _defect = _pdf_validate.response_defect(resp)
         if _defect is not None:
@@ -1054,9 +1061,8 @@ class ScienceDirectSource(AbstractFetcher, PdfFetcher):
                 timeout=30,
             )
         except Exception as e:
-            logger.debug("elsevier XML fallback %s failed: %s", doi, e)
-            return None
-        if xml_resp.status_code != 200:
+            raise pdf_transport_error(self.name, e) from None
+        if not pdf_answered(xml_resp, self.name):
             return None
         xml_status = xml_resp.headers.get("x-els-status", "") or xml_resp.headers.get("X-ELS-Status", "")
         if _is_preview_warning(xml_status):

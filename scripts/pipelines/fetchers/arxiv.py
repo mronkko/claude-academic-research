@@ -24,7 +24,7 @@ import logging
 from pathlib import Path
 
 from fetchers import _pdf_validate
-from fetchers.base import PdfFetcher
+from fetchers.base import PdfFetcher, pdf_answered, pdf_transport_error
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,9 @@ class ArxivSource(PdfFetcher):
                 allow_redirects=True,
             )
         except Exception as e:
-            logger.debug("arxiv PDF %s failed: %s", url, e)
+            # Raised, not None: an unanswered request is not a miss (P22).
+            raise pdf_transport_error(self.name, e) from None
+        if not pdf_answered(resp, self.name):
             return None
         defect = _pdf_validate.response_defect(resp)
         if defect is not None:
