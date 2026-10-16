@@ -42,6 +42,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   point to the skill for Word manuscripts. `lxml` and `defusedxml` join
   the dev dependency group.
 
+### Fixed
+
+- **Cancelling an MCP background job on Windows + Python 3.11 killed
+  the job runner** (BACKLOG P27), so the job read back as `failed` with
+  its state stuck at `running`, and the script could be left running.
+  The runner starts detached, without a console, so its first cancel
+  step, a CTRL_BREAK to the script, always fails. Python 3.12+ reports
+  that failure as `OSError`, which the runner caught before moving on
+  to `terminate()`. Python 3.11's `os.kill` reports it as `SystemError`
+  instead, which escaped. The runner now catches it, and logs a
+  traceback to `run.log` if it ever crashes. Its stderr is discarded,
+  which is why the cause stayed hidden.
+
+### Known limitations
+
+- On Windows, cancelling a job never interrupts the script, so it gets
+  no chance to save partial progress (CSV rows, buffered Zotero tags).
+  It is stopped after the grace period, on every Python version. See
+  BACKLOG P28.
+
 ## [0.25.0] — 2026-10-16
 
 This release brings four things. The first is a full audit of the
@@ -514,11 +534,10 @@ large review.
   their home page instead: Sage, APA, AoM, AAA, OUP, INFORMS, Emerald,
   IEEE and ProQuest. Wiley's and Taylor & Francis's links are shipped
   but could not be checked over plain HTTP.
-- MCP background jobs on Windows: the job runner now retries writing
-  its state file while the server is reading it (Windows refuses the
-  replace meanwhile); before that fix, a job could read back as failed
-  or a cancel could leave it running. Covered by the Windows CI tests;
-  not yet tried on a user's Windows machine.
+- MCP background jobs on Windows + Python 3.11: cancelling a job killed
+  the job runner, so the job read back as failed and the script could
+  be left running. The retry described here was not the cause; fixed
+  in 0.26.0.
 - Not exercised live before release: abstract screening, full-text
   coding and export. The live smoke test ran the per-source API and
   Zotero tests and the end-to-end mini review through search, import,

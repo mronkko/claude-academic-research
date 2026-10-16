@@ -128,25 +128,39 @@ directory — not checked in because it references machine-local paths).
   for keys was considered and rejected as overkill.
 
 - **P27 — cancelling an MCP background job misbehaves on Windows +
-  Python 3.11.** **Status: probable cause fixed, verifying in CI** —
-  `job_runner.write_json` did a single `os.replace`, which Windows refuses
-  while the server has `job.json` open for a status read; the runner died
-  before recording its result. It now retries for up to 5 s. Found by CI after the 0.25.0 push (run 38847617056):
-  on `windows-latest` / 3.11 only, six `tests/unit/test_mcp_jobs.py`
-  tests that start a long-running fake job and cancel it read the job
-  back as `failed` instead of `cancelled`, and a later run hung for over
-  an hour (cancelled by hand). Windows 3.12 / 3.13, macOS and Linux pass.
-  The server's liveness check is already Windows-safe (`OpenProcess` /
-  `GetExitCodeProcess`, not `os.kill(pid, 0)`), so suspects are the
-  runner's cancel path — `CTRL_BREAK_EVENT` from a `DETACHED_PROCESS`
-  runner with no console to a `CREATE_NEW_PROCESS_GROUP |
-  CREATE_NO_WINDOW` child, then `terminate()` — or the runner itself
-  being stopped. Those six tests are skipped on win32 + 3.11
-  (`_WIN_PY311` in the test file) until it's fixed; `_dump_job` prints
-  the job's `job.json` / `cancel.json` / `run.log` when a waited-on job
-  ends `failed`. Needs a Windows machine (or CI iterations with
-  per-test timeouts) to reproduce. User impact: on Windows with Python
-  3.11, `cancel_job` may not stop a job cleanly or may report it wrongly.
+  Python 3.11.** **Status: done (2026-10-16, eb51893).** Six
+  `test_mcp_jobs.py` cancel tests read the job back as `failed`, with
+  `job.json` stuck at `running`: the runner had died. e86fe61's
+  `os.replace` retry was a wrong guess; it is harmless and kept. 0a14b54
+  made the runner write a traceback to `run.log` on a crash (its stderr
+  goes to DEVNULL), and the next CI run showed `SystemError: <built-in
+  function kill> returned a result with an exception set` from
+  `child.send_signal(CTRL_BREAK_EVENT)`. The runner is started with
+  `DETACHED_PROCESS`, so GenerateConsoleCtrlEvent always fails. 3.12+
+  raises that as `OSError`, which `_signal` caught; 3.11 leaks
+  `SystemError`, which it did not. `_signal` now catches it. All Windows
+  jobs pass these tests since. See P28 for what this exposed.
+
+- **P28 — on Windows, cancel never interrupts the script.** Found while
+  fixing P27: the runner has no console, so stage 1 of the cancel
+  (CTRL_BREAK, meant to give a script's `KeyboardInterrupt` path the
+  chance to flush its CSV rows and tag buffers) cannot be delivered on
+  any Python version. Every Windows cancel is `terminate()` after
+  `grace_s`, and anything the script had buffered is lost.
+  `test_cancel_interrupts_first_so_the_script_can_flush` asserts the
+  flush only off Windows, which is why this passed unnoticed. Options:
+  give the child a console the runner can share
+  (`AttachConsole`/`AllocConsole`), or have the scripts poll
+  `cancel.json` themselves, which is portable but touches every
+  long-running script. Not started.
+
+- **P29 — expose the track-changes scripts as MCP tools.** The
+  `word-zotero-track-changes` skill (0.26.0) still runs its scripts with
+  `uv run` through Bash, while the other skills call the plugin's MCP
+  server. `unpack_docx`, `inspect_docx` and `check_docx` fit the
+  short-tool pattern in `mcp/tool_registry.py`. `run_edits` executes
+  agent-written Python, so it is a poor fit for a tool and can stay in
+  Bash.
 
 - **P26 — PDF retrieval redesign: plan with the user, then execute.**
   **Status: all six build steps done for 0.25.0** (2026-10-15; step 6,
