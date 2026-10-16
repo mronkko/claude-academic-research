@@ -138,3 +138,31 @@ def test_get_keeps_its_5xx_and_read_error_retries() -> None:
     assert retry.is_retry("GET", 503)
     err = ReadTimeoutError(None, "https://x/y", "read timed out")
     assert retry.increment("GET", "https://x/y", error=err).total == retry.total - 1
+
+
+# ---------------------------------------------------------------- P24
+
+def test_urllib3_retry_warning_does_not_print_a_query_key(caplog) -> None:
+    """urllib3 logs the full request URL when it retries a dropped
+    connection, at WARNING — which Python's last-resort handler prints to
+    stderr when nothing configured logging. OpenAlex's content API takes
+    its key only in the query string."""
+    import logging
+
+    import http_client  # noqa: F401 — importing attaches the filter
+
+    log = logging.getLogger("urllib3.connectionpool")
+    with caplog.at_level(logging.WARNING, logger="urllib3.connectionpool"):
+        log.warning("Retrying (%r) after connection broken by '%r': %s",
+                    "Retry(total=2)", "ProtocolError()",
+                    "/works/W1.pdf?api_key=SECRET123&x=1")
+    assert "SECRET123" not in caplog.text
+    assert "api_key=REDACTED&x=1" in caplog.text
+
+
+def test_redaction_leaves_ordinary_urls_alone() -> None:
+    from http_client import redact_query_secrets
+
+    url = "https://api.crossref.org/works?mailto=a@b.org&rows=5"
+    assert redact_query_secrets(url) == url
+    assert redact_query_secrets("x?apiKey=abc") == "x?apiKey=REDACTED"

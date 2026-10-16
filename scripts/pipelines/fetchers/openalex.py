@@ -448,7 +448,8 @@ class OpenAlexContentSource(_OpenAlexClient, PdfFetcher):
         try:
             resp = self.http.get(dl_url, timeout=120)
         except Exception as e:
-            logger.debug("openalex content PDF %s failed: %s", doi, e)
+            # Not `e` itself: a requests error quotes the URL, key and all.
+            logger.debug("openalex content PDF %s failed: %s", doi, type(e).__name__)
             return None
         defect = _pdf_validate.response_defect(resp)
         if defect is not None:

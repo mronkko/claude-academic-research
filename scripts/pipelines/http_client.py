@@ -18,10 +18,15 @@ into the caller).
 
 Source modules accept a `requests.Session` in their constructor — no
 module-level globals.
+
+Importing this module also attaches `RedactSecrets` to urllib3's loggers,
+so a URL that carries a key in its query never reaches a log in clear.
 """
 
 from __future__ import annotations
 
+import logging
+import re
 import sys
 from urllib.parse import urlsplit
 
@@ -42,6 +47,43 @@ DEFAULT_TIMEOUT = 30
 #: one-second blip nobody needs told about; a thirty-second one looks
 #: exactly like a hung process from the outside.
 ANNOUNCE_BACKOFF_OVER = 3.0
+
+#: Query parameters whose value is a credential. Some APIs take the key
+#: only in the URL (OpenAlex's content API documents nothing else).
+_SECRET_QUERY_RE = re.compile(
+    r"((?:api_?key|apikey|access_token|token|key)=)[^&\s'\"]+", re.IGNORECASE,
+)
+
+#: urllib3 loggers that print request URLs, query string included.
+#: `connectionpool` logs "Retrying (...) after connection broken by ...:
+#: <url>" at WARNING, and with no logging configured Python's last-resort
+#: handler prints that to stderr — into the console, run.log and the chat.
+URLLIB3_LOGGERS = ("urllib3.connectionpool", "urllib3.util.retry")
+
+
+def redact_query_secrets(text: str) -> str:
+    """`...?api_key=abc&x=1` -> `...?api_key=REDACTED&x=1`."""
+    return _SECRET_QUERY_RE.sub(r"\1REDACTED", text)
+
+
+class RedactSecrets(logging.Filter):
+    """Rewrite a record whose message carries a credential query value."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:  # noqa: BLE001 — a malformed record is logging's problem
+            return True
+        redacted = redact_query_secrets(message)
+        if redacted != message:
+            record.msg, record.args = redacted, ()
+        return True
+
+
+for _name in URLLIB3_LOGGERS:
+    _logger = logging.getLogger(_name)
+    if not any(isinstance(f, RedactSecrets) for f in _logger.filters):
+        _logger.addFilter(RedactSecrets())
 
 #: Methods a replay can apply twice. Retried on 429 only — see
 #: `VerboseRetry.is_retry`.

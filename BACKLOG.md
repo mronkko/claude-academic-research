@@ -203,7 +203,14 @@ Deferred from the 0.25.0 audit (findings file:
   (`fetchers/__init__.py` imports every source, Playwright included) and
   with it a much larger PEP 723 block; the fix is to move the naming rule
   somewhere import-light (e.g. `doi_utils`) and import it from both.
-- **P24 — the OpenAlex content-API key travels in URLs.** `fetchers/
+- **P24 — the OpenAlex content-API key travels in URLs.** **Status: done
+  (2026-10-16).** The key stays in the query string: OpenAlex documents
+  only `api_key=`, and testing a header on the paid content host would
+  cost money. The two leak paths are closed instead. `http_client` now
+  attaches a redacting filter to urllib3's loggers: on a dropped
+  connection, `connectionpool` logs the full URL at WARNING, which
+  Python's last-resort handler prints to stderr. And `fetch_pdf`'s debug
+  line now logs only the exception type. Original note: `fetchers/
   openalex.py` builds `?api_key=` URLs; they are logged only at debug
   level (never enabled) and the returned `dl_url` is discarded by both
   callers, so nothing leaks today. Move the key to a header or params that
