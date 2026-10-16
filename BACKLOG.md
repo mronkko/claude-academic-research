@@ -223,7 +223,10 @@ Deferred from the 0.25.0 audit (findings file:
   callers, so nothing leaks today. Move the key to a header or params that
   are scrubbed, as 0.25.0 did for Gemini and the Zotero key check. Audit
   finding G10.
-- **P25 — Scopus and WoS searchers have no dedicated live search test.**
+- **P25 — Scopus and WoS searchers have no dedicated live search test.** **Status: done (2026-10-16).**
+  `tests/live/test_search_scopus_wos.py` runs one phrase in one journal
+  and one year per searcher (passed live on first run); `SEARCH_LIVE_TESTS`
+  now points at it.
   Their only live coverage is `test_mini_slr_end_to_end` (pinned in
   `SEARCH_LIVE_TESTS` by `test_live_coverage.py`). CLAUDE.md asks for one
   live test per source; add a small `-m live` keyword search per searcher.

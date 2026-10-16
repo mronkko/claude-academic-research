@@ -341,8 +341,8 @@ SEARCH_LIVE_TESTS: dict[str, tuple[str, list[str]]] = {
     "semantic_scholar": (
         "test_s2_journal_scope.py", ["test_semantic_scholar_returns_rows_under_journal_scope"],
     ),
-    "scopus": ("test_mini_slr.py", ["test_mini_slr_end_to_end"]),
-    "wos": ("test_mini_slr.py", ["test_mini_slr_end_to_end"]),
+    "scopus": ("test_search_scopus_wos.py", ["test_scopus_search_returns_rows_in_scope"]),
+    "wos": ("test_search_scopus_wos.py", ["test_wos_search_returns_rows_in_scope"]),
 }
 
 
