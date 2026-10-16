@@ -128,10 +128,23 @@ def _wait(job_id: str, until=lambda s: s["status"] in FINAL, timeout: float = 30
     while True:
         status = _call("job_status", {"job_id": job_id})
         if until(status):
+            if status.get("status") == "failed":
+                _dump_job(job_id)
             return status
         if time.monotonic() > deadline:
             pytest.fail(f"job {job_id} did not get there in {timeout}s: {status}")
         time.sleep(0.1)
+
+
+def _dump_job(job_id: str) -> None:
+    """Print the job's own files, so a failure seen only in CI (Windows,
+    Python 3.11 reports cancelled jobs as failed) shows what the runner
+    recorded. pytest shows captured stdout for failing tests only."""
+    job_dir = Path(os.environ["CLAUDE_PROJECT_DIR"]) / ".claude" / "jobs" / job_id
+    for name in ("job.json", "cancel.json", "run.log"):
+        f = job_dir / name
+        text = f.read_text(encoding="utf-8", errors="replace") if f.exists() else "<missing>"
+        print(f"--- {job_id}/{name} ---\n{text[-3000:]}")
 
 
 def _wait_for_file(path: Path, timeout: float = 20) -> None:

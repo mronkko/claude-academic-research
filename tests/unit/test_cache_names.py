@@ -8,6 +8,7 @@ miss — and a `\\` in a crafted DOI is a path separator there.
 from __future__ import annotations
 
 import importlib
+import sys
 from pathlib import Path
 
 import pytest
@@ -55,8 +56,14 @@ def test_browser_cache_and_diagnostics_use_the_shared_rule(tmp_path) -> None:
 
 def test_all_cache_paths_covers_every_suffix_and_case(tmp_path) -> None:
     paths = {p.name for p in cache_names.all_cache_paths(tmp_path, "10.1/AB")}
+    # Windows paths compare case-insensitively, so the two case variants
+    # are one path (and one file) there and the dedup keeps only one.
+    fold = sys.platform == "win32"
+    if fold:
+        paths = {name.lower() for name in paths}
     for stem in ("10.1_AB", "10.1_ab"):
         for suffix in cache_names.CACHE_SUFFIXES:
-            assert f"{stem}{suffix}.pdf" in paths
+            want = f"{stem}{suffix}.pdf"
+            assert (want.lower() if fold else want) in paths
     assert all(p.parent == tmp_path for p in cache_names.all_cache_paths(
         tmp_path, "10.1/AB"))
