@@ -28,7 +28,8 @@ Zotero]`, `[costs LLM credits]`, …).
   background. Follow one with `job_status`. When it reports
   `awaiting_user`, show the user its `prompt` verbatim and pass **their**
   answer to `job_answer` — never answer it yourself. `cancel_job` stops a
-  job (interrupting first, so its CSV and tags flush); `list_jobs` shows
+  job (on macOS and Linux it interrupts first, so its CSV and tags flush;
+  on Windows it terminates); `list_jobs` shows
   recent ones. A job outlives the session that started it. One job at a
   time may write to Zotero — the server refuses a second.
 - **Terminal equivalent.** Beside each tool this skill gives the shipped

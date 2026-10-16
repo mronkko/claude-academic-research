@@ -41,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `grounded-citations`, `critic-loop` and `manuscript-revision` now
   point to the skill for Word manuscripts. `lxml` and `defusedxml` join
   the dev dependency group.
+- **MCP tools for the track-changes workflow:** `track_changes_unpack`,
+  `track_changes_inspect` and `track_changes_check`. The skill calls
+  them like the other skills call theirs. The edit step still runs the
+  agent's own Python through `run_edits.py`.
 
 ### Fixed
 

@@ -154,7 +154,11 @@ directory — not checked in because it references machine-local paths).
   `cancel.json` themselves, which is portable but touches every
   long-running script. Not started.
 
-- **P29 — expose the track-changes scripts as MCP tools.** The
+- **P29 — expose the track-changes scripts as MCP tools.** **Status: done
+  (2026-10-16).** `track_changes_unpack` / `_inspect` / `_check` are
+  short tools; the skill calls them and keeps the `uv run` commands as
+  the terminal equivalent, which it also uses when the manuscript is
+  outside the project (tool paths are confined to it). The
   `word-zotero-track-changes` skill (0.26.0) still runs its scripts with
   `uv run` through Bash, while the other skills call the plugin's MCP
   server. `unpack_docx`, `inspect_docx` and `check_docx` fit the

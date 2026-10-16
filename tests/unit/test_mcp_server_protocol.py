@@ -129,6 +129,7 @@ def test_initialize_then_tools_list(project, stub, tmp_path) -> None:
         "enrich_pdfs_report", "pdf_manual_next", "pdf_manual_collect",
         "pdf_manual_assign", "pdf_manual_ignore", "screening_report", "audit_library",
         "export_coded_includes", "generate_bib",
+        "track_changes_unpack", "track_changes_inspect", "track_changes_check",
         "start_pdf_plan", "start_enrich_pdfs", "start_enrich_pdfs_paid",
         "start_pdf_unattended_setup", "start_pdf_unattended_run",
         "start_search", "start_import", "start_enrich_abstracts",
@@ -366,6 +367,50 @@ def test_real_scaffold_project(project, tmp_path) -> None:
     [third] = _session([_call(3, "scaffold_project",
                               {"kind": "manuscript", "claude_md": "install"})], env)
     assert _payload(third)["summary"]["copied_templates"] == ["CLAUDE.md"]
+
+
+def test_real_track_changes_round_trip(project, tmp_path) -> None:
+    """unpack -> inspect -> (edit with the library) -> check, through the
+    server, on the synthetic manuscript test_redline uses."""
+    sys.path.insert(0, str(Path(__file__).parent / "fixtures"))
+    sys.path.insert(0, str(SERVER.parents[1] / "scripts" / "track_changes"))
+    from redline import Doc
+    from redline_docx import build
+
+    build(str(tmp_path / "src"))
+    (project / "manuscript.docx").write_bytes((tmp_path / "src.docx").read_bytes())
+    env = _env(project, [sys.executable], tmp_path / "rec")
+    work = ".claude/redline/r1"
+    xml = f"{work}/unpacked/word/document.xml"
+    unpack, listing, meta = _session(
+        [_call(1, "track_changes_unpack", {"docx": "manuscript.docx", "workdir": work}),
+         _call(2, "track_changes_inspect", {"document_xml": xml}),
+         _call(3, "track_changes_inspect",
+               {"document_xml": xml, "fields": True, "authors": True})],
+        env,
+    )
+    assert _payload(unpack)["summary"]["snapshot"].endswith("00_original.docx")
+    assert _payload(listing)["summary"] == {"paragraphs_listed": 6}
+    meta_summary = _payload(meta)["summary"]
+    assert meta_summary["fields"] == {"begin": 2, "separate": 2, "end": 2}
+    assert meta_summary["libraries"] == ["zotero.org/groups/1"]
+    assert meta_summary["tracked_change_authors"] == {"Other, Author": {"ins": 3}}
+
+    d = Doc(str(project / xml), author="Tester, Tina")
+    d.replace_text(d.find_para("Alpha"), "beta", ["BETA"])
+    d.save()
+    [check] = _session(
+        [_call(4, "track_changes_check", {
+            "unpacked": f"{work}/unpacked", "out": f"{work}/out.docx",
+            "original": f"{work}/00_original.docx", "author": "Tester, Tina"})],
+        env,
+    )
+    payload = _payload(check)
+    assert payload["ok"], payload["log_tail"]
+    assert payload["summary"]["fields_balanced"] is True
+    # conftest's empty HOME hides any installed docx skill.
+    assert payload["summary"]["validator"] == "not installed"
+    assert (project / work / "out.docx").is_file()
 
 
 # --- manual PDF download tools ----------------------------------------------

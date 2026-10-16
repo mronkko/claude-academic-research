@@ -30,36 +30,48 @@ real failure.
   is tracked under the author. Without it that check is skipped with a
   warning. Use that skill for new documents, comments and PDF rendering.
 
-## Requirements
+## Tools and requirements
 
-`uv` (scripts declare `lxml` / `defusedxml` via PEP 723) and `pandoc`
-for the preview. Scripts live in `${CLAUDE_PLUGIN_ROOT}/scripts/track_changes/`;
-below, `$R` stands for that path. Paths below are relative to the
-manuscript's folder for step 2 and to the work directory `WORK` from
-step 3 on — `cd` into it, since the edit script resolves paths against
-the current directory.
+Steps 2, 3 and 5 are tools of the plugin's MCP server:
+`track_changes_unpack`, `track_changes_inspect`, `track_changes_check`.
+In Claude Code their full names start
+`mcp__plugin_academic-research_academic-research__`. Their paths are
+project-relative and must stay inside the project. Use a work directory
+such as `.claude/redline/round1` (`WORK` below).
+
+- **Terminal equivalent.** Use these commands only when the tools are
+  unavailable, or when the manuscript lives outside the project.
+  `$R` is `${CLAUDE_PLUGIN_ROOT}/scripts/track_changes`:
+  - `uv run $R/unpack_docx.py manuscript.docx WORK`
+  - `uv run $R/inspect_docx.py WORK/unpacked/word/document.xml [FROM [TO]] [--fields] [--authors]`
+  - `uv run $R/check_docx.py WORK/unpacked WORK/out.docx --original WORK/00_original.docx --author "…" --preview WORK/preview.md`
+- Step 4 has no tool: it runs your own Python through
+  `uv run $R/run_edits.py`.
+- Needs `uv`. `pandoc` is needed for the preview.
 
 ## Workflow
 
 1. **Pre-flight.**
    - Confirm the author name to record. Use exactly the form already in
      the document's tracked changes (e.g. `Surname, Given`);
-     `inspect_docx.py … --authors` lists them after step 2.
+     `track_changes_inspect` with `authors` lists them after step 2.
    - In a synced folder (OneDrive, Dropbox), check that no `~$` lock file
      exists and no co-author has the file open.
-2. **Snapshot and unpack** into a scratch work directory:
-   `uv run $R/unpack_docx.py manuscript.docx WORK` writes
-   `WORK/00_original.docx` and `WORK/unpacked/`. Do **not** run
+2. **Snapshot and unpack.** `track_changes_unpack` (`docx`, `workdir`)
+   writes `WORK/00_original.docx` and `WORK/unpacked/`. Do **not** run
    run-merging scripts afterwards (see Pitfalls).
-3. **Inspect.** `uv run $R/inspect_docx.py unpacked/word/document.xml [FROM [TO]]`
-   lists paragraphs (0-based, inclusive indices) with `{+inserted+}`,
-   `{-deleted-}` and `[ZFIELD]` marks. `--fields` prints field balance,
-   Zotero field types and the cited library (`zotero.org/groups/<id>` —
-   the `library_id` and `library_type` for `Citer`); `--authors` prints
-   tracked-change authors.
-4. **Edit.** Write an edit script (`edits.py`) in the work directory and
-   run it with `uv run $R/run_edits.py edits.py`, which makes the
-   library importable:
+3. **Inspect.** `track_changes_inspect` (`document_xml` =
+   `WORK/unpacked/word/document.xml`) lists the paragraphs in its log
+   file (`log_path`); read the part you need. Each line is
+   `[index] (style) text`, with 0-based indices and `{+inserted+}`,
+   `{-deleted-}` and `[ZFIELD]` marks. `fields` reports field balance,
+   Zotero field types and the cited library: `zotero.org/groups/<id>`
+   gives the `library_id` and `library_type` for `Citer`. `authors`
+   reports tracked-change authors.
+4. **Edit.** Write an edit script (`edits.py`) in `WORK`. Run it from
+   there with `uv run $R/run_edits.py edits.py`, which makes the library
+   importable. Paths in the script resolve against the current
+   directory:
    ```python
    from redline import Doc
    from zotero_fields import Citer
@@ -94,13 +106,22 @@ the current directory.
    For items not yet cited in the document, first call
    `citer.add_item(key, zotero_json_data)`. Take creators from the JSON:
    the markdown view of an item lists editors as authors.
-5. **Check.** `uv run $R/check_docx.py unpacked out.docx --original 00_original.docx --author "Surname, Given" --preview preview.md`
-   re-zips, checks field balance and duplicate `citationID`s, runs the
-   validator if available and writes the accepted-text preview. Read the
-   preview around every edit. Exit code 1 means unbalanced fields, a
-   change not tracked under the author, or a validation error the
-   original does not already have — stop and fix. Errors the original
-   shares are printed as ignored.
+5. **Check.** `track_changes_check` (`unpacked`, `out` =
+   `WORK/out.docx`, `original` = `WORK/00_original.docx`, `author`,
+   `preview` = `WORK/preview.md`) does four things:
+   - re-zips the folder into `out`;
+   - checks field balance and duplicate `citationID`s;
+   - runs the validator if it is installed;
+   - writes the accepted-text preview.
+
+   Read the preview around every edit. `ok: false` means stop and fix.
+   The cause is one of these:
+   - unbalanced fields;
+   - a change not tracked under the author;
+   - a validation error the original does not already have
+     (`validator_new_errors`).
+
+   Errors the original shares are counted in `validator_errors_ignored`.
 6. **Save in stages** (skip if the user wants the output kept separate).
    - Copy `out.docx` over the manuscript only after confirming the file
      on disk still equals the last snapshot; a co-author may have saved.

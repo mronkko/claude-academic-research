@@ -974,6 +974,151 @@ GENERATE_BIB = Tool(
     summarise=summarise_bib,
 )
 
+
+# ---------------------------------------------------------------------------
+# Word manuscripts as tracked changes (skill: word-zotero-track-changes)
+# ---------------------------------------------------------------------------
+
+def summarise_tc_unpack(out: str, rc: int, project: Path) -> tuple[dict, list[str]]:
+    found = {
+        m.group(1): m.group(2).strip()
+        for m in re.finditer(r"^(snapshot|unpacked|document): (.+)$", out, re.MULTILINE)
+    }
+    return found, [found["snapshot"]] if "snapshot" in found else []
+
+
+def summarise_tc_inspect(out: str, rc: int, project: Path) -> tuple[dict, list[str]]:
+    fields = {
+        k: _int(rf"^{k} (\d+)$", out) for k in ("begin", "separate", "end")
+    }
+    zotero = {
+        m.group(1): int(m.group(2))
+        for m in re.finditer(r"^ADDIN (ZOTERO_[A-Z_]+) (\d+)$", out, re.MULTILINE)
+    }
+    authors: dict[str, dict[str, int]] = {}
+    for m in re.finditer(r"^'(.*)' (ins|del) (\d+)$", out, re.MULTILINE):
+        authors.setdefault(m.group(1), {})[m.group(2)] = int(m.group(3))
+    summary = _drop_none({
+        "paragraphs_listed": len(re.findall(r"^\[\d+\] ", out, re.MULTILINE)) or None,
+        "fields": fields if any(v is not None for v in fields.values()) else None,
+        "zotero_fields": zotero or None,
+        "libraries": re.findall(r"^library (\S+)$", out, re.MULTILINE) or None,
+        "tracked_change_authors": authors or None,
+    })
+    return summary, []
+
+
+def summarise_tc_check(out: str, rc: int, project: Path) -> tuple[dict, list[str]]:
+    counts = re.search(r"^fields begin/separate/end: (\d+) (\d+) (\d+) -> (\w+)$",
+                       out, re.MULTILINE)
+    if "validator not found" in out:
+        validator = "not installed"
+    elif re.search(r"^NEW relative to the original:", out, re.MULTILINE):
+        validator = "new problems"
+    elif re.search(r"^validator: ", out, re.MULTILINE):
+        validator = "passed" if rc == 0 or "All validations PASSED" in out else "failed"
+    else:
+        validator = None
+
+    def listed(heading: str) -> int | None:
+        m = re.search(rf"^{heading}\n((?:  .*\n?)+)", out, re.MULTILINE)
+        return len(m.group(1).splitlines()) if m else None
+
+    preview = re.search(r"^preview written: (\S+)", out, re.MULTILINE)
+    summary = _drop_none({
+        "fields_balanced": (counts.group(4) == "OK") if counts else None,
+        "field_counts": [int(counts.group(i)) for i in (1, 2, 3)] if counts else None,
+        "duplicate_citation_ids": True if "citationID shared" in out else None,
+        "validator": validator,
+        "validator_errors_ignored": listed(r"ignored \(also reported for the original\):"),
+        "validator_new_errors": listed("NEW relative to the original:"),
+        "preview": preview.group(1) if preview else None,
+    })
+    return summary, [preview.group(1)] if preview else []
+
+
+TC_UNPACK = Tool(
+    name="track_changes_unpack",
+    title="Unpack a Word manuscript",
+    effect=WRITES_PROJECT,
+    description=(
+        "Copies a .docx to <workdir>/00_original.docx (the baseline the "
+        "check compares against) and unpacks it to <workdir>/unpacked/ for "
+        "tracked-change editing. Refuses a workdir that already has an "
+        "unpacked/ folder. The manuscript itself is not changed."
+    ),
+    script="scripts/track_changes/unpack_docx.py",
+    params=(
+        Param("docx", "Project-relative path of the Word manuscript.",
+              kind="positional", flag="docx", path=True, required=True),
+        Param("workdir", "Project-relative work directory to create, e.g. "
+              ".claude/redline/round1.", kind="positional", flag="workdir",
+              path=True, required=True),
+    ),
+    read_only=False,
+    idempotent=False,
+    summarise=summarise_tc_unpack,
+)
+
+TC_INSPECT = Tool(
+    name="track_changes_inspect",
+    title="List a Word manuscript's paragraphs",
+    effect=READ_ONLY,
+    description=(
+        "Lists every paragraph of an unpacked document.xml with its index, "
+        "style and text, marking {+inserted+} and {-deleted-} text and "
+        "[ZFIELD] Zotero citations. The listing is in the returned log file "
+        "(read the part you need); the summary has counts. `fields` adds "
+        "field balance and the cited Zotero library, `authors` the "
+        "tracked-change authors as recorded."
+    ),
+    script="scripts/track_changes/inspect_docx.py",
+    params=(
+        Param("document_xml", "Project-relative path of unpacked/word/document.xml.",
+              kind="positional", flag="xml", path=True, required=True),
+        Param("fields", "Report field counts, Zotero field types and libraries "
+              "instead of the listing.", kind="switch", flag="--fields",
+              type="boolean"),
+        Param("authors", "Report tracked-change authors instead of the listing.",
+              kind="switch", flag="--authors", type="boolean"),
+    ),
+    # Whole paragraphs: the agent reads them from the log, not the reply.
+    fixed=("--width", "1000000"),
+    summarise=summarise_tc_inspect,
+)
+
+TC_CHECK = Tool(
+    name="track_changes_check",
+    title="Re-zip and check a redlined manuscript",
+    effect=WRITES_PROJECT,
+    description=(
+        "Zips the unpacked folder into a new .docx, checks Zotero field "
+        "balance and duplicate citation IDs, runs Anthropic's docx validator "
+        "when installed (every change tracked under `author`; errors the "
+        "original already has are ignored) and writes an accepted-text "
+        "Markdown preview with pandoc. ok=false means stop and fix. Never "
+        "overwrites the manuscript."
+    ),
+    script="scripts/track_changes/check_docx.py",
+    params=(
+        Param("unpacked", "Project-relative unpacked folder.", kind="positional",
+              flag="unpacked", path=True, required=True),
+        Param("out", "Project-relative .docx to write, inside the work "
+              "directory.", kind="positional", flag="out", path=True,
+              required=True),
+        Param("original", "Project-relative 00_original.docx snapshot.",
+              kind="option", flag="--original", path=True, required=True),
+        Param("author", "Author name exactly as in the document's tracked "
+              "changes, e.g. 'Surname, Given'.", kind="option",
+              flag="--author", required=True),
+        Param("preview", "Project-relative Markdown preview to write.",
+              kind="option", flag="--preview", path=True),
+    ),
+    timeout=300,
+    read_only=False,
+    summarise=summarise_tc_check,
+)
+
 # ---------------------------------------------------------------------------
 # Jobs — long runs, started detached; follow them with job_status
 # ---------------------------------------------------------------------------
@@ -1486,6 +1631,9 @@ TOOLS: tuple[Tool, ...] = (
     AUDIT_LIBRARY,
     EXPORT_CODED_INCLUDES,
     GENERATE_BIB,
+    TC_UNPACK,
+    TC_INSPECT,
+    TC_CHECK,
     *JOB_TOOLS,
     *JOB_CONTROL_TOOLS,
 )
