@@ -194,7 +194,10 @@ Deferred from the 0.25.0 audit (findings file:
   raise instead of returning None, and the cascade's blame and
   classification then needs re-testing per source. Audit finding C20.
 - **P23 — `fulltext_code` looks for SICI-DOI PDFs under the old cache
-  name.** Its DOI-named fallback (`_resolve_pdf`, ~L863) still builds
+  name.** **Status: done (2026-10-16).** `doi_safe` moved to
+  `doi_utils` (stdlib, import-light); `fetchers.cache_names` re-exports
+  it, and `fulltext_code`'s fallback tries `doi_safe(doi)`, its
+  lower-cased form, then the old `/`-only name. Its DOI-named fallback (`_resolve_pdf`, ~L863) still builds
   `doi.replace("/", "_") + ".pdf"`, while enrich_pdfs now names cache
   files through `fetchers/cache_names.py`, which also escapes `<>#` and
   other characters illegal on Windows. Ordinary DOIs map to the same name

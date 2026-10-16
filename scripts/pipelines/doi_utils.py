@@ -112,3 +112,26 @@ def doi_cache_key(raw: str) -> str:
     ``""`` and serving each other's cached lookups.
     """
     return strip_doi_prefixes(raw)[0].lower() if raw else ""
+
+
+#: `/` `:` are the historical replacements; the rest are what Windows
+#: forbids in a filename (`<>"\\|?*`) plus control characters. `#` and
+#: `%` are legal but break `file://` URLs and shell quoting in the
+#: diagnostics the run prints, so they go too.
+_UNSAFE_IN_FILENAME = re.compile(r'[/:<>"\\|?*#%\x00-\x1f]')
+
+
+def doi_safe(doi: str) -> str:
+    """`doi` as a single, portable filename component: the one DOI →
+    cache-filename rule (see `fetchers/cache_names.py` for its history).
+
+    Lives here rather than in `fetchers.cache_names` because importing
+    anything under `fetchers` runs `fetchers/__init__.py`, which imports
+    every source (Playwright included). `fulltext_code` needs only this
+    rule and would otherwise inherit that whole dependency block.
+    """
+    safe = _UNSAFE_IN_FILENAME.sub("_", doi or "")
+    # "." and ".." are directory references, not names.
+    if set(safe) <= {"."}:
+        safe = safe.replace(".", "_")
+    return safe

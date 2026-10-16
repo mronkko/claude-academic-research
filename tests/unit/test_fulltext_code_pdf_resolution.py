@@ -136,6 +136,25 @@ def test_doi_named_fallback_in_pdf_dir(tmp_path: Path) -> None:
     assert found == pdf_path
 
 
+def test_doi_fallback_finds_a_sici_doi_under_the_fetchers_cache_name(
+        tmp_path: Path) -> None:
+    """P23: enrich_pdfs caches through `doi_safe`, which also escapes `:`
+    and `<>`; the old `/`-only rule never found these files."""
+    import doi_utils
+
+    doi = "10.1002/(SICI)1097-0266(199701)18:1<1::AID-SMJ894>3.0.CO;2-D"
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    pdf_path = pdf_dir / (doi_utils.doi_safe(doi) + ".pdf")
+    pdf_path.write_bytes(b"%PDF-1.4 mock")
+
+    item = _journal_item("ITEM0099", doi=doi)
+    found = fulltext_code._find_pdf_path(
+        item, {"ITEM0099": []}, pdf_dir=pdf_dir, zotero_storage=None,
+    )
+    assert found == pdf_path
+
+
 def test_returns_none_when_no_path_works(tmp_path: Path) -> None:
     item = _journal_item("ITEM0006", doi="10.1234/missing")
     atts = {"ITEM0006": [_stored_attachment("ATTACH006", "paper.pdf")]}

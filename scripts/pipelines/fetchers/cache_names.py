@@ -15,23 +15,12 @@ written by earlier versions are still found. Stdlib only.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
-#: `/` `:` are the historical replacements; the rest are what Windows
-#: forbids in a filename (`<>"\\|?*`) plus control characters. `#` and
-#: `%` are legal but break `file://` URLs and shell quoting in the
-#: diagnostics the run prints, so they go too.
-_UNSAFE = re.compile(r'[/:<>"\\|?*#%\x00-\x1f]')
-
-
-def doi_safe(doi: str) -> str:
-    """`doi` as a single, portable filename component."""
-    safe = _UNSAFE.sub("_", doi or "")
-    # "." and ".." are directory references, not names.
-    if set(safe) <= {"."}:
-        safe = safe.replace(".", "_")
-    return safe
+# The rule itself lives in the import-light `doi_utils` so that scripts
+# outside the fetchers package (fulltext_code) can share it; re-exported
+# here for the fetchers that call `cache_names.doi_safe`.
+from doi_utils import doi_safe  # noqa: F401
 
 
 def cache_pdf_path(cache_dir: str | Path, doi: str, suffix: str = "") -> Path:

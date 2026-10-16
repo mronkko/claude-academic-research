@@ -90,6 +90,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
 
 import batch_manifest  # noqa: E402
 import csv_io  # noqa: E402
+import doi_utils  # noqa: E402
 import pdf_text_cache  # noqa: E402
 import progress_json  # noqa: E402
 import screening_common  # noqa: E402
@@ -859,11 +860,16 @@ def _find_pdf_path(
             if candidate.exists():
                 return candidate
 
-    # 4. DOI-named fallback in the project-local pdf_dir.
+    # 4. DOI-named fallback in the project-local pdf_dir: the name the
+    # fetchers cache under (which also escapes `:` and the `<>` of SICI
+    # DOIs), as given and lower-cased, then the older `/`-only form.
     if pdf_dir and doi:
-        candidate = pdf_dir / (doi.replace("/", "_") + ".pdf")
-        if candidate.exists():
-            return candidate
+        stems = (doi_utils.doi_safe(doi), doi_utils.doi_safe(doi.lower()),
+                 doi.replace("/", "_"))
+        for stem in dict.fromkeys(stems):
+            candidate = pdf_dir / (stem + ".pdf")
+            if candidate.exists():
+                return candidate
     return None
 
 
