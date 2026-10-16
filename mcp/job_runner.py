@@ -125,7 +125,30 @@ def _signal(child: subprocess.Popen, stage: int) -> None:
         pass  # already gone, or (Windows) no console to deliver the break to
 
 
+def _shield_from_console_breaks(job_dir: Path) -> None:
+    """Windows: keep a CTRL_BREAK meant for the child from killing the runner.
+
+    `_signal` delivers stage 1 with GenerateConsoleCtrlEvent, and Windows
+    does not always confine that to the target group: the event can reach
+    every process on the console, the sender included. The runner has no
+    handler for SIGBREAK, whose default action ends the process at once —
+    before it records the job's result, so a cancelled job read back as
+    "failed" with job.json still "running" (BACKLOG P27, seen on CI's
+    windows-latest / Python 3.11). Each break that arrives is logged, so
+    run.log shows whether this happened.
+    """
+    def note(signum, _frame):
+        with (job_dir / LOG_FILE).open("a", encoding="utf-8") as log:
+            log.write(f"job_runner: ignored {signal.Signals(signum).name} "
+                      "(meant for the job's process group)\n")
+
+    for name in ("SIGBREAK", "SIGINT"):
+        signal.signal(getattr(signal, name), note)
+
+
 def run(job_dir: Path, argv: list[str]) -> int:
+    if IS_WINDOWS:
+        _shield_from_console_breaks(job_dir)
     job = read_json(job_dir / JOB_FILE)
     grace = float(job.get("grace_s") or DEFAULT_GRACE_S)
     env = dict(os.environ)
@@ -176,7 +199,17 @@ def main(argv: list[str]) -> int:
     if len(argv) < 4 or argv[2] != "--":
         print("usage: job_runner.py <job_dir> -- <argv...>", file=sys.stderr)
         return 2
-    return run(Path(argv[1]), argv[3:])
+    job_dir = Path(argv[1])
+    try:
+        return run(job_dir, argv[3:])
+    except BaseException:
+        # The server starts the runner with stderr discarded; without this a
+        # crash leaves only a job.json stuck at "running".
+        import traceback
+
+        with (job_dir / LOG_FILE).open("a", encoding="utf-8") as log:
+            log.write("job_runner crashed:\n" + traceback.format_exc())
+        raise
 
 
 if __name__ == "__main__":
