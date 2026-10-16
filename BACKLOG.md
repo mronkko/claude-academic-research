@@ -127,6 +127,24 @@ directory — not checked in because it references machine-local paths).
   command (`python3` on macOS/Linux, `py` on Windows). A local web form
   for keys was considered and rejected as overkill.
 
+- **P27 — cancelling an MCP background job misbehaves on Windows +
+  Python 3.11.** Found by CI after the 0.25.0 push (run 38847617056):
+  on `windows-latest` / 3.11 only, six `tests/unit/test_mcp_jobs.py`
+  tests that start a long-running fake job and cancel it read the job
+  back as `failed` instead of `cancelled`, and a later run hung for over
+  an hour (cancelled by hand). Windows 3.12 / 3.13, macOS and Linux pass.
+  The server's liveness check is already Windows-safe (`OpenProcess` /
+  `GetExitCodeProcess`, not `os.kill(pid, 0)`), so suspects are the
+  runner's cancel path — `CTRL_BREAK_EVENT` from a `DETACHED_PROCESS`
+  runner with no console to a `CREATE_NEW_PROCESS_GROUP |
+  CREATE_NO_WINDOW` child, then `terminate()` — or the runner itself
+  being stopped. Those six tests are skipped on win32 + 3.11
+  (`_WIN_PY311` in the test file) until it's fixed; `_dump_job` prints
+  the job's `job.json` / `cancel.json` / `run.log` when a waited-on job
+  ends `failed`. Needs a Windows machine (or CI iterations with
+  per-test timeouts) to reproduce. User impact: on Windows with Python
+  3.11, `cancel_job` may not stop a job cleanly or may report it wrongly.
+
 - **P26 — PDF retrieval redesign: plan with the user, then execute.**
   **Status: all six build steps done for 0.25.0** (2026-10-15; step 6,
   the unattended run, without the session-lifetime measurement — skipped
