@@ -12,7 +12,7 @@ built: 2026-06-16
 works_through: 2025-11-03
 checked: 2026-06-16
 orm_works_count: 5
-orm_swept: 2026-06-16
+orm_swept: 2026-10-19
 ```
 
 # Catherine Welch — Trinity College Dublin, Ireland
@@ -32,7 +32,7 @@ Catherine Welch is a senior qualitative methodologist in international business 
 
 ## ORM publications
 
-5 articles in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-16). Most recent shown.
+5 articles in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19). Most recent shown.
 - 2025 — Generative Artificial Intelligence in Qualitative Data Analysis: Analyzing—Or Just Chatting? — _Organizational Research Methods_
 - 2023 — Qualitative Restudies: Research Designs for Retheorizing — _Organizational Research Methods_
 - 2020 — From Templates to Heuristics: How and Why to Move Beyond the Gioia Methodology — _Organizational Research Methods_

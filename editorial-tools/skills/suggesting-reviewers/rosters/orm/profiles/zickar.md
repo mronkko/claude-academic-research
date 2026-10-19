@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-05-21
 checked: 2026-06-06
 orm_works_count: 6
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Michael J. Zickar — Bowling Green State University, USA
@@ -31,7 +31,7 @@ Quantitative psychometrician in industrial-organizational psychology, best known
 
 ## ORM publications
 
-6 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+6 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2017 — Review of Item Response Theory Practices in Organizational Research — _Psychometric Methodologies and Testing_
 - 2011 — Some Common Myths About Centering Predictor Variables in Moderated Multiple Regression and Polynomial Regression — _Advanced Statistical Methods and Models_

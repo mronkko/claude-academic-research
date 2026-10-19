@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-05-01
 checked: 2026-06-06
 orm_works_count: 4
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Kristopher Preacher — Vanderbilt University, USA
@@ -31,7 +31,7 @@ Eminent quantitative methodologist (Vanderbilt's Peabody College). Defining cont
 
 ## ORM publications
 
-4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2021 — Interaction Effects in Cross-Lagged Panel Models: SEM with Latent Interactions Applied to Work-Family Conflict, Job Satisfaction, and Gender — _Work-Family Balance Challenges_
 - 2019 — From Data to Causes II: Comparing Approaches to Panel Data Analysis — _Spatial and Panel Data Analysis_

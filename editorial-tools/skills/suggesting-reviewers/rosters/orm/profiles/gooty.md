@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-04-01
 checked: 2026-06-06
 orm_works_count: 2
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Janaki Gooty — University of North Carolina, Charlotte, USA
@@ -31,7 +31,7 @@ Leadership/emotions scholar with a strong methodological line on construct redun
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2019 — Meta-Analyses as a Multi-Level Model — _Motivation and Self-Concept in Sports_
 - 2010 — Dyads in Organizational Research: Conceptual Issues and Multilevel Analyses — _Job Satisfaction and Organizational Behavior_

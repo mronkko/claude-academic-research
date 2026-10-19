@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-04-20
 checked: 2026-06-06
 orm_works_count: 4
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Michael T. Braun — DePaul University, USA
@@ -31,9 +31,9 @@ Quantitative/computational methodologist specializing in multilevel emergence, c
 
 ## ORM publications
 
-4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2024 — Hello World! Building Computational Models to Represent Social and Organizational Theory — _Data Analysis with R_
 - 2017 — Special Considerations for the Acquisition and Wrangling of Big Data — _Big Data and Business Intelligence_
-- 2013 — Spurious Results in the Analysis of Longitudinal Data in Organizational Research — _Psychological Well-being and Life Satisfaction_
 - 2013 — Advancing Multilevel Research Design — _Team Dynamics and Performance_
+- 2013 — Spurious Results in the Analysis of Longitudinal Data in Organizational Research — _Psychological Well-being and Life Satisfaction_

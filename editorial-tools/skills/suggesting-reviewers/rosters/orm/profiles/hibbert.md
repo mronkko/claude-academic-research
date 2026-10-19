@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-05-20
 checked: 2026-06-06
 orm_works_count: 2
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Paul Hibbert — University of St Andrews, UK
@@ -30,7 +30,7 @@ Qualitative/interpretive methodologist; a leading authority on reflexivity and r
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2018 — Getting On With Field Research Using Participant Deconstruction — _Management and Organizational Studies_
 - 2014 — Relationally Reflexive Practice — _Management and Organizational Studies_

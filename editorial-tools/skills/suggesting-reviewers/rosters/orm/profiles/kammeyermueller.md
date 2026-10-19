@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-12-05
 checked: 2026-06-06
 orm_works_count: 1
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # John Kammeyer-Mueller — University of Minnesota, USA
@@ -31,6 +31,6 @@ Organizational-behavior scholar (socialization, job attitudes, turnover) with de
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2007 — Bayesian Variance Estimation for Meta-Analysis — _Meta-analysis and systematic reviews_

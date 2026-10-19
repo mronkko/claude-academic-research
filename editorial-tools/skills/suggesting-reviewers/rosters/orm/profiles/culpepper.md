@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-04-27
 checked: 2026-06-06
 orm_works_count: 3
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Steven Culpepper — University of Illinois at Urbana-Champaign, USA
@@ -32,7 +32,7 @@ Quantitative psychometrician and statistician specializing in cognitive diagnosi
 
 ## ORM publications
 
-3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2015 — An Expanded Decision-Making Procedure for Examining Cross-Level Interaction Effects With Multilevel Modeling — _Job Satisfaction and Organizational Behavior_
 - 2010 — R is for Revolution — _Technology Adoption and User Behaviour_

@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-01-01
 checked: 2026-06-06
 orm_works_count: 1
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Hans Hansen — Texas Tech University, USA
@@ -30,6 +30,6 @@ Qualitative organizational scholar; recent methodological work argues against th
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2023 — Resisting the Objectification of Qualitative Research: The Unsilencing of Context, Researchers, and Noninterview Data — _Management and Organizational Studies_

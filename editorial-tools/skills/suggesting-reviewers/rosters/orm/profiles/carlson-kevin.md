@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2024-07-09
 checked: 2026-06-06
 orm_works_count: 4
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Kevin Carlson — Virginia Tech, USA
@@ -31,7 +31,7 @@ Quantitative methodologist best known for influential critiques of statistical-c
 
 ## ORM publications
 
-4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2013 — Random and Systematic Error Effects of Insomnia on Survey Behavior — _Behavioral Health and Interventions_
 - 2011 — The Illusion of Statistical Control — _Accounting and Organizational Management_

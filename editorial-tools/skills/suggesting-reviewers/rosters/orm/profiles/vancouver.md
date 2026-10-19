@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-12-09
 checked: 2026-06-06
 orm_works_count: 4
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Jeffrey B. Vancouver — Ohio University, USA
@@ -31,7 +31,7 @@ Senior self-regulation scholar and a leading proponent of computational modeling
 
 ## ORM publications
 
-4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2018 — Translating Informal Theories Into Formal Theories: The Case of the Dynamic Computational Model of the Integrated Model of Work Motivation — _Complex Systems and Decision Making_
 - 2014 — All Things in Moderation, Including Tests of Mediation (at Least Some of the Time) — _Social and Intergroup Psychology_

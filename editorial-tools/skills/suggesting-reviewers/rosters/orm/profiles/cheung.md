@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 1998, works_count: 71, h_index: 29 }
 built: 2026-06-06
 works_through: 2026-03-12
 checked: 2026-06-06
-orm_works_count: 9
-orm_swept: 2026-06-06
+orm_works_count: 10
+orm_swept: 2026-10-19
 ```
 
 # Gordon W. Cheung — University of Auckland, New Zealand
@@ -31,8 +31,9 @@ Quantitative SEM methodologist; author of the most widely cited work on goodness
 
 ## ORM publications
 
-9 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+10 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
+- 2026 — Assessing Partial Measurement Invariance in Cross-Group, Longitudinal, Congruence, and Multilevel Organizational Studies: Introducing the MEI Package in R — _Psychometric Methodologies and Testing_
 - 2015 — Accuracy of Parameter Estimates and Confidence Intervals in Moderated Mediation Models — _Psychometric Methodologies and Testing_
 - 2011 — A Direct Comparison Approach for Testing Measurement Invariance — _Psychometric Methodologies and Testing_
 - 2010 — Estimating and Comparing Specific Mediation Effects in Complex Latent Variable Models — _Advanced Causal Inference Techniques_

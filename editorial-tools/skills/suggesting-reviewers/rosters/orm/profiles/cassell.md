@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-01-01
 checked: 2026-06-06
 orm_works_count: 1
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Catherine Cassell — Durham University, UK
@@ -32,6 +32,6 @@ Leading qualitative methodologist in organizational and management research; co-
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2019 — Participant Reflexivity in Organizational Research Design — _Management and Organizational Studies_

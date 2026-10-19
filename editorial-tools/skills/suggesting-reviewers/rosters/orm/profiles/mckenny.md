@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-06-30
 checked: 2026-06-06
 orm_works_count: 1
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Aaron McKenny — Indiana University Bloomington, USA
@@ -31,6 +31,6 @@ Entrepreneurship and strategy scholar who is a leading methodologist of computer
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2012 — Using Computer-Aided Text Analysis to Elevate Constructs — _Job Satisfaction and Organizational Behavior_

@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-01-01
 checked: 2026-06-06
 orm_works_count: 3
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # S. Trevis Certo — Arizona State University, USA
@@ -32,7 +32,7 @@ Quantitative methodologist for strategic-management research, known for accessib
 
 ## ORM publications
 
-3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2023 — Out of Shape: The Implications of (Extremely) Nonnormal Dependent Variables — _Efficiency Analysis Using DEA_
 - 2022 — Measuring What Matters: Assessing How Executives Reference Firm Performance in Corporate Filings — _Corporate Finance and Governance_

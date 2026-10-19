@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-07-01
 checked: 2026-06-06
 orm_works_count: 0
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # A. Paul Spee — University of Queensland, Australia
@@ -31,4 +31,4 @@ Qualitative organization/strategy scholar in the strategy-as-practice tradition.
 
 ## ORM publications
 
-No *Organizational Research Methods* articles found in the OpenAlex sweep (source S133599136, 2026-06-06). Board member without first-party ORM publications — eligibility and method fit rest on the profile above.
+No *Organizational Research Methods* articles found in the OpenAlex sweep (source S133599136, 2026-10-19). Board member without first-party ORM publications — eligibility and method fit rest on the profile above.

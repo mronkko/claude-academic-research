@@ -12,10 +12,10 @@ built: 2026-06-06
 works_through: 2026-02-18
 checked: 2026-06-06
 orm_works_count: 4
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
-# Frederick Oswald — Rice University, USA
+# Frederick Oswald — UC Irvine, USA
 
 Eminent quantitative methodologist in personnel/applied psychology. Broad methods portfolio spanning regression and variable-importance analysis, Bayesian estimation, meta-analysis, effect-size interpretation, machine-learning reliability, and scale development.
 
@@ -31,7 +31,7 @@ Eminent quantitative methodologist in personnel/applied psychology. Broad method
 
 ## ORM publications
 
-4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2025 — Reliability Evidence for AI-Based Scores in Organizational Contexts: Applying Lessons Learned From Psychometrics — _Explainable Artificial Intelligence (XAI)_
 - 2013 — Understanding the Results of Multiple Linear Regression — _Advanced Statistical Methods and Models_

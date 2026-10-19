@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-05-07
 checked: 2026-06-06
 orm_works_count: 7
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Scott Tonidandel — University of North Carolina at Charlotte, USA
@@ -31,7 +31,7 @@ Senior quantitative methodologist best known for relative importance / relative 
 
 ## ORM publications
 
-7 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+7 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2026 — I Gotta Feeling: Advancing Sentiment Analysis in Organizational Science — _Sentiment Analysis and Opinion Mining_
 - 2021 — The Use and Misuse of <i>Organizational Research Methods</i> ‘Best Practice’ Articles — _Meta-analysis and systematic reviews_

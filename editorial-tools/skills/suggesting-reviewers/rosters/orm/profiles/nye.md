@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-04-20
 checked: 2026-06-06
 orm_works_count: 8
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Chris Nye — Michigan State University, USA
@@ -31,7 +31,7 @@ Quantitative psychometric methodologist. Central contributions are effect-size i
 
 ## ORM publications
 
-8 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+8 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2022 — Reviewer Resources: Confirmatory Factor Analysis — _Innovation Diffusion and Forecasting_
 - 2021 — A Review of Measurement Equivalence in Organizational Research: What's Old, What's New, What's Next? — _Behavioral and Psychological Studies_

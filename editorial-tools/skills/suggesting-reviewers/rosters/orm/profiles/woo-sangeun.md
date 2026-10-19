@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-10-30
 checked: 2026-06-06
 orm_works_count: 3
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Sang Eun Woo — Purdue University, USA
@@ -31,7 +31,7 @@ Methodologist in industrial-organizational psychology with a strong identity in 
 
 ## ORM publications
 
-3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2018 — Putting the “Person” in the Center — _Mental Health Research Topics_
 - 2014 — A Bayesian Primer for the Organizational Sciences — _Decision-Making and Behavioral Economics_

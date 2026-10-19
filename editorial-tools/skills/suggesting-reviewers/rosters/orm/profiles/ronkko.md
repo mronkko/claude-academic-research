@@ -12,7 +12,7 @@ built: 2026-06-16
 works_through: 2025-02-06
 checked: 2026-06-16
 orm_works_count: 6
-orm_swept: 2026-06-16
+orm_swept: 2026-10-19
 ```
 
 # Mikko Rönkkö — University of Jyväskylä, Finland
@@ -33,7 +33,7 @@ Mikko Rönkkö is a quantitative methodologist working in management, informatio
 
 ## ORM publications
 
-6 articles in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-16). Most recent shown.
+6 articles in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19). Most recent shown.
 - 2023 — To Omit or to Include? Integrating the Frugal and Prolific Perspectives on Control Variable Use — _Organizational Research Methods_
 - 2021 — Eight Simple Guidelines for Improved Understanding of Transformations and Nonlinear Effects — _Organizational Research Methods_
 - 2020 — An Updated Guideline for Assessing Discriminant Validity — _Organizational Research Methods_

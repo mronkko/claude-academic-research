@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-03-01
 checked: 2026-06-06
 orm_works_count: 9
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Fritz Drasgow — University of Illinois at Urbana-Champaign, USA
@@ -31,7 +31,7 @@ Eminent psychometrician. Item response theory, appropriateness/person-fit measur
 
 ## ORM publications
 
-9 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+9 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2021 — Faking Detection Improved: Adopting a Likert Item Response Process Tree Model — _Personality Traits and Psychology_
 - 2020 — Using Bifactor Models to Examine the Predictive Validity of Hierarchical Constructs: Pros, Cons, and Solutions — _Mental Health Research Topics_

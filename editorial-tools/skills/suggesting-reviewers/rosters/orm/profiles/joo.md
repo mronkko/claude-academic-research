@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-07-20
 checked: 2026-06-06
 orm_works_count: 2
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Harry Joo — Indiana University, USA (OpenAlex affiliation: University of Dayton)
@@ -31,7 +31,7 @@ Quantitative methodologist working at the intersection of performance distributi
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2013 — Best-Practice Recommendations for Defining, Identifying, and Handling Outliers — _Forecasting Techniques and Applications_
 - 2012 — The Time Has Come — _Sports Analytics and Performance_

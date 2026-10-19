@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-04-27
 checked: 2026-06-06
 orm_works_count: 3
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Kevin Corley — Imperial College London, UK
@@ -31,7 +31,7 @@ Qualitative methodologist and co-architect of the "Gioia methodology" for rigoro
 
 ## ORM publications
 
-3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2017 — Mixed Methods in the Organizational Sciences — _Management and Organizational Studies_
 - 2015 — A Commentary on “What Grounded Theory Is…” — _Management and Organizational Studies_

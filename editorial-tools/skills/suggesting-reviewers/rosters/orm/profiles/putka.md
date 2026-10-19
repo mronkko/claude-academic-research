@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 2000, works_count: 65, h_index: 17 }
 built: 2026-06-06
 works_through: 2026-04-20
 checked: 2026-06-06
-orm_works_count: 6
-orm_swept: 2026-06-06
+orm_works_count: 7
+orm_swept: 2026-10-19
 ```
 
 # Dan J. Putka — Human Resources Research Organization (HumRRO), USA
@@ -31,8 +31,9 @@ Applied quantitative methodologist (HumRRO). Central contributions to reliabilit
 
 ## ORM publications
 
-6 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+7 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
+- 2026 — Applying Machine Learning and Natural Language Processing Methods to Support Taxonomy Development and Maintenance — _Computational and Text Analysis Methods_
 - 2025 — Reliability Evidence for AI-Based Scores in Organizational Contexts: Applying Lessons Learned From Psychometrics — _Explainable Artificial Intelligence (XAI)_
 - 2017 — Modern Prediction Methods — _Qualitative Comparative Analysis Research_
 - 2011 — An Examination of G-Theory Methods for Modeling Multitrait–Multimethod Data — _Cognitive and psychological constructs research_

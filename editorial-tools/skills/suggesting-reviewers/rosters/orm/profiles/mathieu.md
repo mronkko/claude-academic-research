@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-05-28
 checked: 2026-06-06
 orm_works_count: 5
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # John E. Mathieu — University of Connecticut, USA
@@ -31,7 +31,7 @@ Eminent teams scholar with deep, widely cited contributions to multilevel resear
 
 ## ORM publications
 
-5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2019 — The Development and Construct Validity of a Team Processes Survey Measure — _Team Dynamics and Performance_
 - 2017 — A Fitting Approach to Construct and Measurement Alignment — _Complex Systems and Decision Making_

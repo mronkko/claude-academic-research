@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 1993, works_count: 357, h_index: 93 }
 built: 2026-06-06
 works_through: 2026-04-24
 checked: 2026-06-06
-orm_works_count: 29
-orm_swept: 2026-06-06
+orm_works_count: 24
+orm_swept: 2026-10-19
 ```
 
 # Herman Aguinis — George Washington University, USA
@@ -31,7 +31,7 @@ Past editor of ORM and a prolific, highly cited quantitative methodologist known
 
 ## ORM publications
 
-29 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06). 15 most recent shown.
+24 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19). 15 most recent shown.
 
 - 2025 — Using Markov Chains to Detect Careless Responding in Survey Research — _Social and Intergroup Psychology_
 - 2020 — Best-Practice Recommendations for Producers, Evaluators, and Users of Methodological Literature Reviews — _Management and Organizational Studies_

@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 2000, works_count: 239, h_index: 46 }
 built: 2026-06-16
 works_through: 2026-03-11
 checked: 2026-06-16
-orm_works_count: 0
-orm_swept: 2026-06-16
+orm_works_count: 1
+orm_swept: 2026-10-19
 ```
 
 # Jeremy F. Dawson — University of Sheffield, UK
@@ -31,4 +31,6 @@ Jeremy Dawson is a senior quantitative methodologist (h-index 46, ~15,200 citati
 
 ## ORM publications
 
-No first-party ORM articles found (OpenAlex source S133599136, swept 2026-06-16). His methodological contributions appear in substantive psychology/management journals (JAP, JBP, JOB) rather than in *Organizational Research Methods* itself; OpenAlex-indexed ORM-adjacent items are Academy of Management Proceedings editorial-panel symposia (paratext), not ORM articles.
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+
+- 2007 — On the Use of Likert-Type Scales in Multilevel Data — _Psychometric Methodologies and Testing_

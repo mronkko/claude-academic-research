@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 2009, works_count: 277, h_index: 61 }
 built: 2026-06-06
 works_through: 2026-05-01
 checked: 2026-06-06
-orm_works_count: 12
-orm_swept: 2026-06-06
+orm_works_count: 13
+orm_swept: 2026-10-19
 ```
 
 # Louis Tay — Purdue University, USA
@@ -31,9 +31,10 @@ Senior quantitative psychologist (well-being, vocational behavior) and a promine
 
 ## ORM publications
 
-12 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+13 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2024 — One Size Does Not Fit All: Unraveling Item Response Process Heterogeneity Using the Mixture Dominance-Unfolding Model (MixDUM) — _Personality Traits and Psychology_
+- 2023 — The Generalized Thurstonian Unfolding Model (GTUM): Advancing the Modeling of Forced-Choice Data — _Psychometric Methodologies and Testing_
 - 2020 — Text Preprocessing for Text Mining in Organizational Research: Review and Recommendations — _Topic Modeling_
 - 2019 — From Data to Causes II: Comparing Approaches to Panel Data Analysis — _Spatial and Panel Data Analysis_
 - 2019 — From Data to Causes I: Building A General Cross-Lagged Panel Model (GCLM) — _Psychological Well-being and Life Satisfaction_

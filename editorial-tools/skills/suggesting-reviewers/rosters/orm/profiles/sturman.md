@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-11-15
 checked: 2026-06-06
 orm_works_count: 6
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Michael C. Sturman — Rutgers University, USA
@@ -31,7 +31,7 @@ Senior HR/OB scholar with a strong, ongoing methodological program: common metho
 
 ## ORM publications
 
-6 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+6 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2023 — Real Research with Fake Data: A Tutorial on Conducting Computer Simulation for Research and Teaching — _Statistics Education and Methodologies_
 - 2009 — A Tale of Three Perspectives — _Survey Methodology and Nonresponse_

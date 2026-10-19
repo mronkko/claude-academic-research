@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 2015, works_count: 42, h_index: 16 }
 built: 2026-06-06
 works_through: 2026-04-10
 checked: 2026-06-06
-orm_works_count: 1
-orm_swept: 2026-06-06
+orm_works_count: 3
+orm_swept: 2026-10-19
 ```
 
 # John R. Busenbark — University of Notre Dame, USA
@@ -30,6 +30,8 @@ Quantitative strategy methodologist known for influential methods papers on samp
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
+- 2023 — Out of Shape: The Implications of (Extremely) Nonnormal Dependent Variables — _Advanced Statistical Methods and Models_
+- 2021 — A Marginal Effects Approach to Interpreting Main Effects and Moderation — _Advanced Causal Inference Techniques_
 - 2018 — Divided We Fall: How Ratios Undermine Research in Strategic Management — _Corporate Finance and Governance_

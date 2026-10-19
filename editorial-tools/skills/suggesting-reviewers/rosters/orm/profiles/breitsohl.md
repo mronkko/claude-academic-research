@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-03-04
 checked: 2026-06-06
 orm_works_count: 1
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Heiko Breitsohl — University of Klagenfurt, Austria
@@ -30,6 +30,6 @@ Quantitative methodologist in organizational behavior; works on SEM-based analys
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2018 — Beyond ANOVA: An Introduction to Structural Equation Models for Experimental Designs — _Psychometric Methodologies and Testing_

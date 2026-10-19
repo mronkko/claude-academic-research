@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-04-01
 checked: 2026-06-06
 orm_works_count: 4
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Ernest O'Boyle — Indiana University Bloomington, USA
@@ -31,7 +31,7 @@ Quantitative methodologist focused on meta-analysis, multiverse/specification an
 
 ## ORM publications
 
-4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2022 — Assessment of Path Model Fit: Evidence of Effectiveness and Recommendations for use of the RMSEA-P — _Evaluation and Performance Assessment_
 - 2020 — Recommendations for Reviewing Meta-Analyses in Organizational Research — _Meta-analysis and systematic reviews_

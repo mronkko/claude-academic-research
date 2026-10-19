@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 1987, works_count: 156, h_index: 51 }
 built: 2026-06-06
 works_through: 2023-07-24
 checked: 2026-06-06
-orm_works_count: 14
-orm_swept: 2026-06-06
+orm_works_count: 9
+orm_swept: 2026-10-19
 ```
 
 # Robert J. Vandenberg — University of Georgia, USA
@@ -31,17 +31,12 @@ Past editor of ORM and a leading quantitative methodologist on measurement invar
 
 ## ORM publications
 
-14 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+9 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
-- 2021 — ORM-CARMA Virtual Feature Topics for Advanced Reviewer Development — _Software Engineering Techniques and Practices_
 - 2018 — Nonlinear Transformations in Organizational Research: Possible Problems and Potential Solutions — _Big Data and Business Intelligence_
 - 2016 — Degrees of Freedom in SEM — _Job Satisfaction and Organizational Behavior_
 - 2016 — Integrating Moderation and Mediation — _Behavioral Health and Interventions_
-- 2013 — Introduction to the Research Design Feature Topic — _Qualitative Research Methods and Applications_
-- 2010 — Organizational Research Methods: Yearly Update — _Human Resource Development and Performance Evaluation_
 - 2010 — New Editor Appointed — _Diverse Scientific and Economic Studies_
-- 2009 — Organizational Research Methods — _Human Resource Development and Performance Evaluation_
-- 2007 — Organizational Research Methods Yearly Update — _scientometrics and bibliometrics research_
 - 2007 — Organizational Research Methods Yearly Update — _Complex Systems and Decision Making_
 - 2006 — Software Review: Mplus 3.0 — _Business Process Modeling and Analysis_
 - 2006 — Introduction: Statistical and Methodological Myths and Urban Legends — _Qualitative Comparative Analysis Research_

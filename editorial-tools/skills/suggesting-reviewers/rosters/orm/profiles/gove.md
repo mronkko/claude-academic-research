@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2022-03-22
 checked: 2026-06-06
 orm_works_count: 1
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Stephen Gove — University of Vermont, USA
@@ -30,6 +30,6 @@ Strategic-management methodologist focused on construct measurement and measurem
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2013 — Dummy Constructs? Binomial Categorical Variables as Representations of Constructs — _Corporate Finance and Governance_

@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-03-13
 checked: 2026-06-06
 orm_works_count: 0
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Rebecca Bednarek — Victoria University of Wellington, NZ
@@ -30,4 +30,4 @@ Qualitative methodologist specializing in organizational ethnography (including 
 
 ## ORM publications
 
-No *Organizational Research Methods* articles found in the OpenAlex sweep (source S133599136, 2026-06-06). Board member without first-party ORM publications — eligibility and method fit rest on the profile above.
+No *Organizational Research Methods* articles found in the OpenAlex sweep (source S133599136, 2026-10-19). Board member without first-party ORM publications — eligibility and method fit rest on the profile above.

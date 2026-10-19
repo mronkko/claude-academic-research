@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-03-15
 checked: 2026-06-06
 orm_works_count: 13
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # James M. LeBreton — Pennsylvania State University, USA
@@ -31,18 +31,18 @@ Past editor of ORM and a quantitative methodologist best known for definitive gu
 
 ## ORM publications
 
-13 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+13 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2019 — Conditional Reasoning: An Integrated Approach to Item Analysis — _Psychological Testing and Assessment_
 - 2019 — Conditional Reasoning: A Review and Suggestions for Future Test Development and Validation — _Psychological Testing and Assessment_
 - 2013 — Residualized Relative Importance Analysis — _Advanced Statistical Methods and Models_
 - 2009 — Determining the Relative Importance of Predictors in Logistic Regression: An Extension of Relative Weight Analysis — _Advanced Statistical Methods and Models_
-- 2008 — Book Review: Von Eye, A., &amp; Mun, E. Y. (2005). Analyzing Rater Agreement: Manifest Variable Methods. Mahwah, NJ: Lawrence Erlbaum — _Statistical Methods in Clinical Trials_
 - 2007 — Answers to 20 Questions About Interrater Reliability and Interrater Agreement — _Psychometric Methodologies and Testing_
 - 2007 — Integrating Implicit and Explicit Social Cognitions for Enhanced Personality Assessment — _Psychological Testing and Assessment_
 - 2007 — Integrating Implicit and Explicit Social Cognitions for Enhanced Personality Assessment: A General Framework for Choosing Measurement and Statistical Methods — _Psychological Testing and Assessment_
 - 2004 — Recent Issues Regarding rWG, rWG, rWG(J), and rWG(J) — _Reliability and Agreement in Measurement_
+- 2004 — A Conditional Reasoning Measure for Aggression — _Psychological Testing and Assessment_
+- 2004 — Importance of Personality and Job-Specific Affect for Predicting Job Attitudes and Withdrawal Behavior — _Job Satisfaction and Organizational Behavior_
 - 2004 — History and Use of Relative Importance Indices in Organizational Research — _Advanced Statistical Methods and Models_
 - 2004 — A Monte Carlo Comparison of Relative Importance Methodologies — _Advanced Statistical Methods and Models_
-- 2004 — Importance of Personality and Job-Specific Affect for Predicting Job Attitudes and Withdrawal Behavior — _Job Satisfaction and Organizational Behavior_
 - 2003 — The Restriction of Variance Hypothesis and Interrater Reliability and Agreement: Are Ratings from Multiple Sources Really Dissimilar? — _Job Satisfaction and Organizational Behavior_

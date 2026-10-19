@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-02-13
 checked: 2026-06-06
 orm_works_count: 3
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # H. Kristl Davison — Appalachian State University, USA
@@ -31,7 +31,7 @@ Quantitative I-O psychologist focused on selection and assessment methods — im
 
 ## ORM publications
 
-3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2018 — Insufficient Effort Responding as a Partial Function of Implicit Aggression — _Social and Intergroup Psychology_
 - 2007 — Integrating Implicit and Explicit Social Cognitions for Enhanced Personality Assessment — _Psychological Testing and Assessment_

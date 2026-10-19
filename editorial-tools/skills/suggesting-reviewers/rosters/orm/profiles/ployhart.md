@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 1998, works_count: 208, h_index: 65 }
 built: 2026-06-06
 works_through: 2026-05-21
 checked: 2026-06-06
-orm_works_count: 7
-orm_swept: 2026-06-06
+orm_works_count: 6
+orm_swept: 2026-10-19
 ```
 
 # Robert E. Ployhart — University of South Carolina, USA
@@ -31,10 +31,9 @@ Eminent quantitative methodologist specializing in the theory, design, and analy
 
 ## ORM publications
 
-7 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+6 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2011 — The Analysis of Mean Differences Using Mean and Covariance Structure Analysis — _Psychometric Methodologies and Testing_
-- 2007 — Book Review: van Montfort, K., Oud, J., &amp; Satorra, A. (Eds.). (2006). Longitudinal Models in the Behavioral and Related Sciences. Mahwah, NJ: Lawrence Erlbaum — _Intergenerational and Educational Inequality Studies_
 - 2007 — Multilevel Methods — _Social Capital and Networks_
 - 2005 — Assessing the Convergent and Discriminant Validity of Goldberg’s International Personality Item Pool — _Personality Traits and Psychology_
 - 2004 — A Monte Carlo Comparison of Relative Importance Methodologies — _Advanced Statistical Methods and Models_

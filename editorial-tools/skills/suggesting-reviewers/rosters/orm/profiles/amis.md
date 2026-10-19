@@ -11,8 +11,8 @@ career_signals: { first_pub_year: 1997, works_count: 202, h_index: 33 }
 built: 2026-06-06
 works_through: 2026-03-19
 checked: 2026-06-06
-orm_works_count: 2
-orm_swept: 2026-06-06
+orm_works_count: 1
+orm_swept: 2026-10-19
 ```
 
 # John Amis — University of Edinburgh, UK
@@ -30,7 +30,6 @@ Qualitative organizational scholar known for longitudinal, real-time case resear
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
-- 2010 — Book Review: Amis: Denzin, N. K., &amp; Lincoln, Y. S. (Eds.). (2008). The landscape of qualitative research. Thousand Oaks, CA: Sage — _Management and Organizational Studies_
 - 2007 — The Philosophy and Politics of Quality in Qualitative Organizational Research — _Management and Organizational Studies_

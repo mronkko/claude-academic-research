@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2024-08-27
 checked: 2026-06-06
 orm_works_count: 3
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # John Antonakis — University of Lausanne, Switzerland
@@ -31,7 +31,7 @@ Leading quantitative methodologist on causal inference and endogeneity in manage
 
 ## ORM publications
 
-3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2019 — On Ignoring the Random Effects Assumption in Multilevel Models: Review, Critique, and Recommendations — _Experimental Behavioral Economics Studies_
 - 2018 — An Introductory Guide to Organizational Neuroscience — _Neural and Behavioral Psychology Studies_

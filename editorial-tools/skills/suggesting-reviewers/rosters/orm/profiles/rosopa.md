@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-02-26
 checked: 2026-06-06
 orm_works_count: 2
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Patrick Rosopa — Clemson University, USA
@@ -31,7 +31,7 @@ Quantitative methodologist (I/O psychology) with contributions to the validity o
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2010 — Experimental Tests of Mediation Models — _Conflict Management and Negotiation_
 - 2007 — The Relative Validity of Inferences About Mediation as a Function of Research Design Characteristics — _Conflict Management and Negotiation_

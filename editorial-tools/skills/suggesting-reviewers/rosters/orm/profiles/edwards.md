@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-05-19
 checked: 2026-06-06
 orm_works_count: 10
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Jeffrey R. Edwards — University of North Carolina, Chapel Hill, USA
@@ -31,7 +31,7 @@ Eminent quantitative methodologist. Foundational work on congruence/fit modeling
 
 ## ORM publications
 
-10 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+10 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2017 — On the Use of Spline Regression in the Study of Congruence in Organizational Research — _Social and Intergroup Psychology_
 - 2016 — Improving Our Understanding of Moderation and Mediation in Strategic Management Research — _Job Satisfaction and Organizational Behavior_

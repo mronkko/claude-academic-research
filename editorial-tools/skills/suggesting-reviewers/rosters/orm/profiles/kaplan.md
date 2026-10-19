@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-02-24
 checked: 2026-06-06
 orm_works_count: 4
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Seth A. Kaplan — George Mason University, USA
@@ -31,7 +31,7 @@ Industrial-organizational psychologist studying workplace affect and well-being,
 
 ## ORM publications
 
-4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2023 — The Promise of Just-in-Time Adaptive Interventions for Organizational Scholarship and Practice: Conceptual Development and Research Agenda — _Behavioral Health and Interventions_
 - 2023 — “Transforming” Personality Scale Development: Illustrating the Potential of State-of-the-Art Natural Language Processing — _Topic Modeling_

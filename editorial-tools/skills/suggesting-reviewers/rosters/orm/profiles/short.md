@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-04-01
 checked: 2026-06-06
 orm_works_count: 5
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Jeremy C. Short — University of Oklahoma, USA
@@ -31,7 +31,7 @@ Senior entrepreneurship/strategy scholar (h=55) and a leading methodologist on c
 
 ## ORM publications
 
-5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2012 — Using Computer-Aided Text Analysis to Elevate Constructs — _Job Satisfaction and Organizational Behavior_
 - 2009 — Research Methods in Entrepreneurship — _Entrepreneurship Studies and Influences_

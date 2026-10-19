@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2026-05-25
 checked: 2026-06-06
 orm_works_count: 2
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Bert Weijters — Ghent University, Belgium
@@ -31,7 +31,7 @@ Quantitative methodologist focused on survey measurement quality: response style
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2021 — On the Use of Balanced Item Parceling to Counter Acquiescence Bias in Structural Equation Models — _Psychometric Methodologies and Testing_
 - 2018 — Analyzing Policy Capturing Data Using Structural Equation Modeling for Within-Subject Experiments (SEMWISE) — _Technology Adoption and User Behaviour_

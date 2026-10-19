@@ -12,7 +12,7 @@ built: 2026-06-06
 works_through: 2025-09-10
 checked: 2026-06-06
 orm_works_count: 7
-orm_swept: 2026-06-06
+orm_swept: 2026-10-19
 ```
 
 # Bo Zhang — University of Illinois at Urbana-Champaign, USA
@@ -31,7 +31,7 @@ Quantitative psychometrician (industrial-organizational psychology) specializing
 
 ## ORM publications
 
-7 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
+7 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
 
 - 2024 — One Size Does Not Fit All: Unraveling Item Response Process Heterogeneity Using the Mixture Dominance-Unfolding Model (MixDUM) — _Personality Traits and Psychology_
 - 2024 — Mixed-Keying or Desirability-Matching in the Construction of Forced-Choice Measures? An Empirical Investigation and Practical Recommendations — _Decision-Making and Behavioral Economics_

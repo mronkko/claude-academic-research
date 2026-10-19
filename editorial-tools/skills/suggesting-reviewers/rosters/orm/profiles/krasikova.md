@@ -12,7 +12,7 @@ built: 2026-06-16
 works_through: 2025-05-10
 checked: 2026-06-16
 orm_works_count: 1
-orm_swept: 2026-06-16
+orm_swept: 2026-10-19
 ```
 
 # Dina V. Krasikova — University of Texas at San Antonio, USA
@@ -30,5 +30,5 @@ Krasikova is a quantitative organizational-behavior scholar at UTSA whose work p
 
 ## ORM publications
 
-1 article in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-16). Most recent shown.
+1 article in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19). Most recent shown.
 - 2013 — Residualized Relative Importance Analysis — _Organizational Research Methods_
