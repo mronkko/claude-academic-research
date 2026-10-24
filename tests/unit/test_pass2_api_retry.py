@@ -12,6 +12,16 @@ import inspect
 from types import SimpleNamespace
 
 import enrich_pdfs
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _in_tmp_dir(tmp_path, monkeypatch):
+    """The sources hand back relative paths ("p.pdf", "cache"). Run in an
+    empty directory so they never resolve to a real file: when the repo
+    root once held a `p.pdf`, this module stamped a `p.pdf.version.json`
+    sidecar next to it."""
+    monkeypatch.chdir(tmp_path)
 
 
 class _Src:
