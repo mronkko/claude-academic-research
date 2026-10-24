@@ -140,6 +140,24 @@ def test_the_read_test_lists_the_personal_library(monkeypatch, wizard):
     assert seen == [wizard.ZOTERO_LOCAL_URL + "users/0/items?limit=1"]
 
 
+def test_the_read_test_does_not_retry_a_closed_zotero(monkeypatch, wizard):
+    """A refused connection on loopback means Zotero is closed; the gate
+    says so at once instead of backing off first."""
+    import urllib.error
+    calls = []
+
+    def refuse(*a, **k):
+        calls.append(1)
+        raise urllib.error.URLError("Connection refused")
+
+    monkeypatch.setattr(wizard.urllib.request, "urlopen", refuse)
+    monkeypatch.setattr(wizard.time, "sleep",
+                        lambda s: pytest.fail("the read test backed off"))
+    ok, message = wizard._zotero_read_test()
+    assert not ok and "not reachable" in message
+    assert calls == [1]
+
+
 @pytest.mark.parametrize(("answer", "fragment"), [
     ((0, None, "Connection refused"), "not reachable"),
     ((403, None, "Forbidden"), "HTTP 403"),

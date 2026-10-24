@@ -149,11 +149,13 @@ def _http_json(
     url: str,
     headers: dict[str, str] | None = None,
     timeout: int = 10,
+    attempts: int = _MAX_ATTEMPTS,
 ) -> tuple[int, dict | None, str]:
     """Plain urllib GET returning (status, json_or_none, error_message).
 
     Retries transient failures — 408/429/5xx and transport errors — with
-    exponential backoff and jitter, honouring `Retry-After`. Auth
+    exponential backoff and jitter, honouring `Retry-After`, up to
+    `attempts` tries in all. Auth
     failures (401/403) and other 4xx are returned on the first attempt:
     they are answers, not blips, and the caller reports them to the user.
     """
@@ -166,7 +168,7 @@ def _http_json(
         if re.search(r"key|auth|token", k, re.IGNORECASE)
     ]
     status, data, err = 0, None, ""
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
+    for attempt in range(1, attempts + 1):
         retry_after: float | None = None
         try:
             with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -185,7 +187,7 @@ def _http_json(
             # ValueError: `http.client` rejects a header value containing
             # a newline before anything is sent.
             status, data, err = 0, None, providers.redact(str(e), *secrets)
-        if attempt < _MAX_ATTEMPTS:
+        if attempt < attempts:
             time.sleep(_backoff_delay(attempt, retry_after))
     return status, data, err
 
@@ -2080,9 +2082,14 @@ def _zotero_read_test(timeout: int = 5) -> tuple[bool, str]:
 
     `/api/` answering proves only that the server is up; a listing proves
     the data path the pipeline reads through.
+
+    One attempt: a closed Zotero refuses the connection at once, and
+    backing off before saying so only makes the user wait for the
+    obvious. Loopback has no transient network to retry through.
     """
     status, data, err = _http_json(
         ZOTERO_LOCAL_URL + "users/0/items?limit=1", timeout=timeout,
+        attempts=1,
     )
     if status == 200 and isinstance(data, list):
         return True, "read the personal library"
