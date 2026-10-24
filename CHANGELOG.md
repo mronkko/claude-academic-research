@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0] — 2026-10-24
+
+### Changed — breaking
+
+- **Zotero is local-only: the zotero.org Web API is gone.** Every read,
+  write, PDF upload and merge goes to Zotero Desktop's local API
+  (`localhost:23119`). **Zotero 10 must be running** whenever a Zotero
+  stage runs; headless and CI runs of those stages are no longer
+  possible. No zotero.org key is used, and `/setup` deletes the old
+  `[zotero] api_key`, `user_id`, `username` and `accessible_group_ids`.
+  The two-surface design (local reads, Web API writes and uploads) had
+  caused the plugin's most persistent bugs: writes that local reads did
+  not see until Desktop synced (one re-run duplicated an import), 412s
+  from version numbers crossing surfaces, and cloud re-parents that
+  Desktop's pending push overwrote.
+- **`/setup` starts with a Zotero read test and a write test** (it
+  creates one note in My Library and deletes it), and stops with exit
+  code 3 unless both pass. The first run shows Zotero's permission
+  dialog; choose **Always Allow**.
+- **A revoked write key is re-requested automatically.** The write that
+  finds it rejected opens Zotero's dialog, saves the new key and resends
+  once. Deny or a one-time "Allow" stops the run with a message saying
+  what to do.
+- The `zotero` MCP server is registered with `ZOTERO_LOCAL=true`. An
+  existing registration is not changed: remove it
+  (`claude mcp remove zotero -s user`) and re-run `/setup`.
+- Connector merges always run in Desktop: the cloud-sync waits are gone,
+  and a saved item with no PDF is given up after 30 minutes, not 6 hours.
+
+### Removed
+
+- `--remote` on every pipeline script and plugin tool.
+- `scripts/pipelines/reconcile_merged_pdfs.py`, which compared a merge's
+  cloud copy with Desktop's; there is no cloud copy any more.
+
+### Fixed
+
+- API PDF sources (OpenAIRE, BASE, arXiv, ScienceDirect, OpenAlex) raise
+  on refusals and outages, so a 429 storm is reported as blocked access
+  rather than as a run of misses (P22).
+- `fulltext_code.py` finds DOI-named PDFs under the fetchers' cache name,
+  including DOIs with `:` or SICI `<>` (P23).
+- OpenAlex keys no longer leak through urllib3's retry log lines (P24).
+- The MCP job runner survived Python 3.11's `os.kill` `SystemError` on
+  Windows (P27); track-changes scripts read and print UTF-8 on Windows.
+
+### Added
+
+- `track_changes_unpack` / `_inspect` / `_check` plugin tools (P29).
+
 ## [0.26.0] — 2026-10-16
 
 ### Added
