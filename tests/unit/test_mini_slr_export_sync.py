@@ -10,7 +10,9 @@ afterwards returned the missing row, which is what identified this as a
 race rather than a lost write.
 
 `stage_code` already carries the same wait for `abstract:*` tags; this
-guards the `fulltext:*` half, which was missing.
+guards the `fulltext:*` half, which was missing. Writes and reads both go
+to Zotero Desktop now, so the wait normally passes at once, but it stays
+as the read-back check that keeps a short export from passing silently.
 """
 
 from __future__ import annotations
@@ -107,7 +109,7 @@ def test_export_waits_for_tags_to_sync(mini_slr, tmp_path, monkeypatch) -> None:
     items and silently wrote an empty CSV."""
     _write_log(tmp_path, [("A", "include")])
     client = _FakeClient([[], [], ["A"]])
-    monkeypatch.setattr(mini_slr, "_local_client", lambda _g: client)
+    monkeypatch.setattr(mini_slr, "_client", lambda _g: client)
     monkeypatch.setattr(mini_slr, "SYNC_INTERVAL_S", 0)
 
     exported_when: list[int] = []
@@ -132,7 +134,7 @@ def test_export_skips_wait_when_nothing_tagged(mini_slr, tmp_path,
     def _no_client(_g):
         raise AssertionError("must not poll Zotero when no tags are expected")
 
-    monkeypatch.setattr(mini_slr, "_local_client", _no_client)
+    monkeypatch.setattr(mini_slr, "_client", _no_client)
     ran = []
     monkeypatch.setattr(mini_slr, "_uv_run", lambda *a, **k: ran.append(1))
 
@@ -146,7 +148,7 @@ def test_export_fails_loudly_when_sync_never_lands(mini_slr, tmp_path,
     """Timing out must not fall through to an export that writes a short
     CSV — that is the silent-truncation bug this wait exists to stop."""
     _write_log(tmp_path, [("A", "include")])
-    monkeypatch.setattr(mini_slr, "_local_client", lambda _g: _FakeClient([[]]))
+    monkeypatch.setattr(mini_slr, "_client", lambda _g: _FakeClient([[]]))
     monkeypatch.setattr(mini_slr, "SYNC_INTERVAL_S", 0)
     monkeypatch.setattr(mini_slr, "SYNC_TIMEOUT_S", 0)
     monkeypatch.setattr(

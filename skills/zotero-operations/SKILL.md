@@ -376,30 +376,23 @@ want it recorded, rather than quietly typing it in.
 
 ## Which Zotero surface a call uses
 
-`pyzotero.zotero.Zotero(group, "group", key, local=True)` reads from
-`localhost:23119` (Zotero must be running). Much faster than the remote
-API for bulk operations — a library of a few thousand items that would
-time out on `api.zotero.org` returns in milliseconds from the local
-client.
+One surface only: **Zotero Desktop's local API at `localhost:23119`**,
+for reads, writes, file uploads and merges alike. Zotero 10 must be
+running. The plugin has no zotero.org Web API path and needs no
+zotero.org key; Desktop syncs to zotero.org on its own.
 
-**Writes go local too when `[zotero] local_api_key` is set.** Zotero 10
-accepts writes on the local API once the user grants a key through its
-own consent dialog; `/setup` asks for one. Writing where we already
-read closes a gap that has bitten this pipeline repeatedly — a script
-that wrote through `api.zotero.org` and read back locally saw nothing
-until Zotero Desktop synced, and reported it as "already done".
+Writes need Desktop's own write key, `[zotero] local_api_key`, which
+`/setup` obtains through Zotero's consent dialog and proves with a test
+write. If it is revoked later, the next write asks Zotero for a new one
+(the dialog again — the user chooses **Always Allow**), saves it, and
+carries on. `zotero_io.ZoteroClient` does all of this; do not hand-roll
+pyzotero clients against the local API, which also has no item
+templates (`item_template()` raises there).
 
-Without a key, writes go to `api.zotero.org` exactly as before. Two
-operations stay there regardless, and both are deliberate: **file
-uploads** (`attach_pdf` — pyzotero's 3-step S3 handshake has no local
-form here) and **`merge_duplicate_item`** (its trash step is a
-hand-built PATCH needing a header pyzotero only computes privately).
-
-Never mix the two surfaces within one operation. `update_item` sends
-`If-Unmodified-Since-Version`, and local and cloud version counters are
-unrelated, so a version read from one and sent to the other is rejected
-412 every time. `ZoteroClient._write_client()` is the read client for
-anything about to be written back.
+This replaced a two-surface design (local reads, Web API writes and
+uploads) whose failures were all one gap: a script that wrote through
+zotero.org and read back from Desktop saw nothing until Desktop synced,
+and reported it as "already done".
 
 ## Citation keys (Better BibTeX)
 

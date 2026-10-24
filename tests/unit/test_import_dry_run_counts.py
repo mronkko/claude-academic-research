@@ -1,7 +1,7 @@
 """A dry run must not report a number it did not measure.
 
 `_fetch_existing_items` returned `({}, {})` when `dry_run=True`, skipping
-the cloud lookup on the grounds that a dry run patches nothing. But the
+the library lookup on the grounds that a dry run patches nothing. But the
 summary printed underneath it did not know that, so every dry run
 reported "Already in library (patch only): 0" and routed every row into
 "New items to create" — for a library with 480 overlapping items, on a
@@ -12,7 +12,7 @@ Previewing patch-versus-create is the main thing a dry run is *for*: it
 is the decision the operator makes from it. So the lookup now happens in
 dry-run too, and the counts are real.
 
-The lookup can still be unavailable — no credentials, no network, an
+The lookup can still be unavailable — Zotero Desktop not running, an
 offline CSV check. That case prints "not checked" instead of a number.
 The rule is the same either way: measure it, or say you did not.
 """
@@ -26,7 +26,7 @@ import import_to_zotero
 
 def _zot(items: list[dict]) -> MagicMock:
     zot = MagicMock()
-    zot.cloud_journal_articles.return_value = items
+    zot.journal_articles.return_value = items
     return zot
 
 
@@ -42,7 +42,7 @@ def test_dry_run_reads_the_library_so_its_counts_are_real() -> None:
         zot, dry_run=True,
     )
     assert set(doi_map) == {"10.1016/j.example.2020.01.001", "10.1016/j.example.2020.01.002"}
-    zot.cloud_journal_articles.assert_called_once()
+    zot.journal_articles.assert_called_once()
 
 
 def test_a_real_run_is_unchanged() -> None:
@@ -54,7 +54,7 @@ def test_a_real_run_is_unchanged() -> None:
 def test_a_failed_lookup_in_dry_run_degrades_instead_of_crashing(capsys) -> None:
     """An offline CSV check still has to work — it just may not know."""
     zot = MagicMock()
-    zot.cloud_journal_articles.side_effect = RuntimeError("403 Forbidden")
+    zot.journal_articles.side_effect = RuntimeError("Zotero is not running")
     doi_map, title_map = import_to_zotero._fetch_existing_items(
         zot, dry_run=True,
     )
@@ -68,7 +68,7 @@ def test_a_failed_lookup_in_a_real_run_still_raises() -> None:
     everything already in it — the exact incident `_fetch_existing_items`
     was written to prevent. Failing loudly is the only safe answer."""
     zot = MagicMock()
-    zot.cloud_journal_articles.side_effect = RuntimeError("403 Forbidden")
+    zot.journal_articles.side_effect = RuntimeError("Zotero is not running")
     try:
         import_to_zotero._fetch_existing_items(zot, dry_run=False)
     except RuntimeError:

@@ -4,9 +4,10 @@ B7  Title+first-author matching was applied even when both sides carried
     a DOI and the DOIs differed (a paper and its erratum, a conference and
     a journal version), and an empty title still formed a key (`"|smith"`,
     `"|"`), collapsing unrelated untitled rows into one item.
-B8  `POST /items` carried no `Zotero-Write-Token`, and the session
-    replayed it on 5xx/read errors — a batch applied before the server
-    failed to answer was created twice.
+B8  `POST /items` was replayed on 5xx/read errors — a batch applied
+    before the server failed to answer was created twice. Creates now go
+    through `ZoteroClient.create_items` and are never resent; a failed
+    batch is counted and the rest still run.
 B9  Failed creates still exited 0; an exception mid-run lost
     `--created-keys-out`; two rows resolving to one existing item sent a
     second PATCH with a superseded version, got 412, and aborted.
@@ -20,7 +21,6 @@ from pathlib import Path
 
 import import_to_zotero as imp
 import pytest
-import requests
 
 
 def test_empty_title_forms_no_key() -> None:
@@ -36,54 +36,32 @@ def test_empty_title_forms_no_key() -> None:
 _FIELDS = ["doi", "title", "authors", "year", "source", "issn", "abstract"]
 
 
-class _Resp:
-    def __init__(self, status: int, body: dict | None = None):
-        self.status_code = status
-        self.ok = 200 <= status < 300
-        self._body = body or {}
-
-    def raise_for_status(self):
-        if not self.ok:
-            raise requests.HTTPError(f"HTTP {self.status_code}")
-
-    def json(self):
-        return self._body
-
-
-class _Session:
-    """Answers each POST from `script`; records headers and payloads."""
-
-    def __init__(self, script):
-        self.script = list(script)
-        self.posts: list[dict] = []
-
-    def post(self, url, headers=None, json=None, timeout=None):
-        self.posts.append({"headers": dict(headers or {}), "json": json})
-        step = self.script.pop(0)
-        if isinstance(step, BaseException):
-            raise step
-        if step == "ok":
-            return _Resp(200, {"success": {str(i): f"K{len(self.posts)}{i}"
-                                           for i in range(len(json))},
-                               "failed": {}})
-        return _Resp(step)
-
-
 class _Zot:
-    api_key = "k"
+    """In-memory Zotero; answers each `create_items` batch from `script`
+    (`"ok"`, an HTTP status to fail with, or an exception to raise)."""
 
-    def __init__(self, existing: list[dict]):
+    def __init__(self, existing: list[dict], script=()):
         self.existing = existing
         self.patches: list[dict] = []
+        self.script = list(script)
+        self.posts: list[list[dict]] = []
 
     def describe_library(self):
         return "group 1"
 
-    def api_base_url(self):
-        return "https://api.zotero.org/groups/1"
-
-    def cloud_journal_articles(self):
+    def journal_articles(self):
         return self.existing
+
+    def create_items(self, batch):
+        self.posts.append(batch)
+        step = self.script.pop(0)
+        if isinstance(step, BaseException):
+            raise step
+        if step != "ok":
+            raise RuntimeError(f"HTTP {step}")
+        return {"success": {str(i): f"K{len(self.posts)}{i}"
+                            for i in range(len(batch))},
+                "failed": {}}
 
     def update_fields(self, item_key, fields):
         # Like ZoteroClient.update_fields: writes at the item's current
@@ -104,14 +82,11 @@ def run_import(tmp_path, monkeypatch):
             w.writeheader()
             for r in rows:
                 w.writerow({k: r.get(k, "") for k in _FIELDS})
-        zot = _Zot([dict(e) for e in existing])
-        session = _Session(script)
+        zot = _Zot([dict(e) for e in existing], script)
         monkeypatch.setattr(imp.zotero_io.ZoteroClient, "from_args",
                             classmethod(lambda cls, *a, **k: zot))
-        monkeypatch.setattr(imp, "require", lambda *a, **k: "key")
         monkeypatch.setattr(imp.screening_common, "load_tag_namespace",
                             lambda *a, **k: "rev")
-        monkeypatch.setattr(imp.http_client, "build_session", lambda *a, **k: session)
         monkeypatch.setattr(imp.time, "sleep", lambda _s: None)
         monkeypatch.setattr(
             imp, "build_item",
@@ -125,12 +100,12 @@ def run_import(tmp_path, monkeypatch):
             "import_to_zotero.py", "--input", str(csv_path), *extra,
         ])
         rc = imp.main()
-        return rc, zot, session
+        return rc, zot, zot
     return _run
 
 
-def _created_titles(session) -> list[str]:
-    return [it["DOI"] for p in session.posts for it in p["json"]]
+def _created_titles(zot) -> list[str]:
+    return [it["DOI"] for batch in zot.posts for it in batch]
 
 
 def _lib_item(key, doi, title, last="Smith", version=1):
@@ -174,17 +149,6 @@ def test_untitled_rows_do_not_collapse_into_one(run_import) -> None:
     ])
     assert rc == 0
     assert len(_created_titles(session)) == 2
-
-
-def test_each_batch_carries_its_own_write_token(run_import, monkeypatch) -> None:
-    monkeypatch.setattr(imp, "BATCH_SIZE", 1)
-    rc, _zot, session = run_import([
-        {"doi": "10.1000/a", "title": "A"}, {"doi": "10.1000/b", "title": "B"},
-    ])
-    assert rc == 0
-    tokens = [p["headers"].get("Zotero-Write-Token") for p in session.posts]
-    assert all(t and len(t) == 32 for t in tokens)
-    assert len(set(tokens)) == 2
 
 
 def test_failed_creates_exit_non_zero(run_import, monkeypatch, tmp_path) -> None:

@@ -1,11 +1,13 @@
 """Recording which Zotero surface a write actually went to.
 
-Since 0.22.0 a write goes to Zotero Desktop's local API when
-`[zotero] local_api_key` is set, and to `api.zotero.org` when it is not.
-The two libraries keep unrelated version counters, so a reader
-reconciling a run-log afterwards against item versions cannot tell which
-surface produced a row — and picking the wrong one makes every version
-in it look wrong.
+From 0.22.0 until the Web API was dropped, a write went to Zotero
+Desktop's local API when `[zotero] local_api_key` was set, and to
+`api.zotero.org` when it was not. The two libraries keep unrelated
+version counters, so a reader reconciling a run-log afterwards against
+item versions cannot tell which surface produced a row — and picking the
+wrong one makes every version in it look wrong. Every write now goes to
+Desktop and new rows say `local`, but logs written before still mix both,
+so the column stays.
 
 The log already records `source` (which publisher supplied the abstract)
 and `status` (what happened). `surface` is the third fact needed to
@@ -15,48 +17,15 @@ Empty is meaningful here and is not a gap. `no_doi`, `not_found`,
 `lookup_failed` and `dry_run` rows performed no write at all, and naming
 a surface for them would assert something that never happened.
 
-Deliberately NOT added to `PDF_FETCH_FIELDS`: `attach_pdf` always uses
-the cloud (pyzotero's 3-step S3 upload has no local form here), so the
-column would be constant. This repo has already learned that a column
-carrying no information invites a bug — the crosswalk's always-empty
-`zotero_item_key` is the precedent. When `upload_attachments()` gives
-uploads a local route, that is when the column earns its place.
+Deliberately NOT added to `PDF_FETCH_FIELDS`: the column would be
+constant there. This repo has already learned that a column carrying no
+information invites a bug — the crosswalk's always-empty
+`zotero_item_key` is the precedent.
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 from log_schemas import ABSTRACT_FETCH_FIELDS, PDF_FETCH_FIELDS
-from zotero_io import ZoteroClient
-
-
-def _client(**kw) -> ZoteroClient:
-    zc = ZoteroClient(api_key="k", group_id="123", **kw)
-    zc._local = MagicMock(name="local")
-    zc._cloud = MagicMock(name="cloud")
-    return zc
-
-
-# --- what the client reports ------------------------------------------
-
-def test_a_cloud_client_names_the_cloud():
-    assert _client().write_surface == "cloud"
-
-
-def test_a_local_client_names_local():
-    assert _client(local_api_key="secret").write_surface == "local"
-
-
-def test_remote_puts_the_surface_back_on_the_cloud():
-    zc = _client(local_api_key="secret", prefer_local=False)
-    assert zc.write_surface == "cloud"
-
-
-def test_uploads_report_the_cloud_even_on_a_local_client():
-    """`attach_pdf` has no local route, and the log must not imply one."""
-    assert _client(local_api_key="secret").upload_surface == "cloud"
-
 
 # --- the schema -------------------------------------------------------
 

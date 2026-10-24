@@ -116,7 +116,7 @@ def test_connector_loads_in_playwright_chromium() -> None:
 # "DOI must not already be in the library" guard rarely trips. The
 # article page needs no Cloudflare solve and no institutional access,
 # yet drives the identical translator-detection → saveWithTranslator →
-# poll → cloud-sync → merge chain a paywalled SFX target would.
+# poll → merge chain a paywalled SFX target would.
 _OA_TEST_DOI = "10.1371/journal.pone.0310979"
 _OA_TEST_URL = f"https://journals.plos.org/plosone/article?id={_OA_TEST_DOI}"
 
@@ -164,17 +164,16 @@ def test_connector_full_save_and_merge() -> None:
     import os
     group_override = os.environ.get("ZOTERO_GROUP", "").strip()
 
+    # Writes (stub create, merge, delete) go to the local API, so a
+    # write key must be on file — a missing one would open Zotero's
+    # consent dialog mid-test.
+    from tests.live.conftest import require_zotero_local
+    require_zotero_local()
+
     if group_override:
         zot = zotero_io.ZoteroClient.from_config(group_id=group_override)
     else:
-        from core.config_loader import get
-        user_id = get("zotero", "user_id", env="ZOTERO_USER_ID")
-        if not user_id:
-            pytest.skip(
-                "No zotero user_id in config.toml — run the /setup wizard "
-                "(or set ZOTERO_GROUP to target a group library instead)."
-            )
-        zot = zotero_io.ZoteroClient.for_user_library(user_id)
+        zot = zotero_io.ZoteroClient.for_user_library()
 
     # The Connector saves into whichever library Zotero Desktop has
     # selected in its left pane — refuse to run unless that matches
@@ -219,7 +218,7 @@ def test_connector_full_save_and_merge() -> None:
             )
 
     # Stub item — plays the role of the SLR item that's missing its PDF.
-    resp = zot.cloud.create_items([{
+    resp = zot.create_items([{
         "itemType": "journalArticle",
         "title": "[connector-live-test stub — safe to delete]",
         "DOI": _OA_TEST_DOI,
@@ -277,5 +276,5 @@ def test_connector_full_save_and_merge() -> None:
     assert ok, (
         "download_and_attach() reported failure — the step-by-step "
         "diagnostics above show where the chain broke (translator "
-        "detection, save, local poll, cloud sync, or merge)."
+        "detection, save, local poll, or merge)."
     )

@@ -1,10 +1,10 @@
-"""`--collection <name>` has to work on the remote read path too.
+"""`--collection <name>` resolves a display name to a collection key.
 
 `collection_items` passed its argument straight to the Zotero API as a
-collection key. Locally that happened to work — Zotero's own HTTP server
-tolerates a name — so `abstract_screen.py --collection SLR` ran fine
-until `--remote` was added, at which point api.zotero.org was asked for
-`/collections/SLR/items` and returned 404 "Collection not found".
+collection key. Zotero's own HTTP server happens to tolerate a name, and
+the Web API, which this plugin used to read too, answered the same
+request with 404 "Collection not found" — so the behaviour should not
+depend on that tolerance.
 
 Two things make that worth fixing rather than documenting. It is
 inconsistent with `import_to_zotero.py`, which resolves keys and names on
@@ -28,14 +28,14 @@ import zotero_io
 
 
 def _client(collections: list[dict]) -> zotero_io.ZoteroClient:
-    zc = zotero_io.ZoteroClient(api_key="k", group_id="1")
+    zc = zotero_io.ZoteroClient(group_id="1")
     read = MagicMock()
     read.everything.side_effect = lambda arg: arg
     read.collections.return_value = collections
     read.collection_items.side_effect = (
         lambda key, **kw: [{"key": "I1", "_collection": key}]
     )
-    zc._read_client = MagicMock(return_value=read)  # type: ignore[method-assign]
+    zc._local = read
     zc._read = read
     return zc
 
@@ -64,7 +64,7 @@ def test_an_unknown_name_raises_with_an_actionable_message() -> None:
     zc = _client([_coll("QCN49MPI", "SLR")])
     # The message names the library, and `describe_library` looks the
     # group's name up over the network — swallowing the failure, which
-    # is how this test used to reach api.zotero.org and still pass.
+    # is how this test once reached the network and still passed.
     zc.group_name = lambda: "Test group"  # type: ignore[method-assign]
     with pytest.raises(ValueError) as exc:
         zc.collection_items("Screening")
@@ -96,13 +96,3 @@ def test_an_empty_collection_argument_is_rejected() -> None:
     zc = _client([_coll("QCN49MPI", "SLR")])
     with pytest.raises(ValueError):
         zc.collection_items("")
-
-
-def test_resolution_uses_the_read_client_not_the_cloud() -> None:
-    """A local run must not acquire a cloud dependency it did not have.
-    `find_collection` reads the cloud deliberately, for read-your-writes
-    on a collection this pipeline just created; this path only reads."""
-    zc = _client([_coll("QCN49MPI", "SLR")])
-    zc._cloud = MagicMock(side_effect=AssertionError("must not touch cloud"))
-    zc.collection_items("SLR")
-    zc._read.collections.assert_called_once()

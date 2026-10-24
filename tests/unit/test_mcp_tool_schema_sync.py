@@ -172,7 +172,7 @@ def test_scanner_follows_shared_helpers() -> None:
     """The scan must see `--group` etc. through `zotero_io.add_library_args`,
     or every library parameter above would pass or fail for the wrong reason."""
     options, _, _ = script_cli(REPO / "scripts" / "pipelines" / "export_coded_includes.py")
-    assert {"--group", "--user", "--remote", "--tag-prefix", "--collection"} <= options
+    assert {"--group", "--user", "--tag-prefix", "--collection"} <= options
 
 
 @pytest.mark.parametrize("tool", reg.TOOLS, ids=TOOL_IDS)

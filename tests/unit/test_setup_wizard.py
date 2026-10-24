@@ -37,10 +37,10 @@ def test_wizard_imports() -> None:
 
 def test_key_schema_has_required_core_keys() -> None:
     mod = _load()
-    required_env = {k.env_var for k in mod.KEYS if k.required}
-    assert "ZOTERO_API_KEY" in required_env
-    # ANTHROPIC_API_KEY and GEMINI_API_KEY are now optional individually
-    # but at least one must be provided.
+    # Zotero has no KeySpec: the plugin talks only to Zotero Desktop, and
+    # its local write key comes from the gate (`_zotero_local_gate`), not
+    # from a prompt.
+    assert not any(k.toml_section == "zotero" for k in mod.KEYS)
     # ZOTERO_GROUP deliberately NOT a key in the global config — group IDs
     # are per-project.
     assert "ZOTERO_GROUP" not in {k.env_var for k in mod.KEYS}
@@ -88,38 +88,6 @@ def test_config_path_is_under_home() -> None:
 # ---------------------------------------------------------------------------
 # Verify-function tests (mocked HTTP)
 # ---------------------------------------------------------------------------
-
-
-def test_verify_zotero_success(monkeypatch) -> None:
-    mod = _load()
-    monkeypatch.setattr(mod, "_http_json", lambda *a, **kw: (200, {
-        "userID": 475425,
-        "username": "mronkko",
-        "access": {"groups": {"40758": {}, "52014": {}}},
-    }, ""))
-    ok, msg, extras = mod._verify_zotero("fake-key")
-    assert ok
-    assert "userID=475425" in msg
-    assert extras["user_id"] == "475425"
-    assert "40758" in extras["accessible_group_ids"]
-
-
-def test_verify_zotero_rejected(monkeypatch) -> None:
-    mod = _load()
-    monkeypatch.setattr(mod, "_http_json", lambda *a, **kw: (403, None, "403 Forbidden"))
-    ok, msg, _ = mod._verify_zotero("bad-key")
-    assert not ok
-    assert "rejected" in msg.lower() or "403" in msg
-
-
-def test_verify_zotero_network_failure_permits_save(monkeypatch) -> None:
-    """Offline or transient failure should return ok=False but not error out —
-    the wizard saves the key anyway so the user isn't blocked."""
-    mod = _load()
-    monkeypatch.setattr(mod, "_http_json", lambda *a, **kw: (0, None, "Connection refused"))
-    ok, msg, _ = mod._verify_zotero("any-key")
-    assert not ok
-    assert "saved anyway" in msg or "reach" in msg.lower()
 
 
 def test_verify_anthropic_success(monkeypatch) -> None:
@@ -172,8 +140,8 @@ def test_verify_crossref_mailto_invalid() -> None:
 
 def test_non_interactive_env_wins(monkeypatch) -> None:
     mod = _load()
-    spec = next(k for k in mod.KEYS if k.env_var == "ZOTERO_API_KEY")
-    monkeypatch.setenv("ZOTERO_API_KEY", "env-value")
+    spec = next(k for k in mod.KEYS if k.env_var == "ELSEVIER_API_KEY")
+    monkeypatch.setenv("ELSEVIER_API_KEY", "env-value")
     value, _extras = mod._prompt_key(spec, "config-value",
                                      interactive=False, verify=False)
     assert value == "env-value"
@@ -181,8 +149,8 @@ def test_non_interactive_env_wins(monkeypatch) -> None:
 
 def test_non_interactive_falls_back_to_config(monkeypatch) -> None:
     mod = _load()
-    spec = next(k for k in mod.KEYS if k.env_var == "ZOTERO_API_KEY")
-    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+    spec = next(k for k in mod.KEYS if k.env_var == "ELSEVIER_API_KEY")
+    monkeypatch.delenv("ELSEVIER_API_KEY", raising=False)
     value, _extras = mod._prompt_key(spec, "config-value",
                                      interactive=False, verify=False)
     assert value == "config-value"
@@ -197,7 +165,7 @@ def test_env_var_names_match_user_convention() -> None:
     # quietly become a way to skip this guard.
     env_names = {k.env_var for k in mod.KEYS if k.env_var}
     expected = {
-        "ZOTERO_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
+        "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
         "WOS_API_KEY_EXTENDED", "WOS_API_KEY",
         "ELSEVIER_API_KEY", "SCOPUS_API_KEY",
         "SEMANTIC_SCHOLAR_API_KEY", "CROSSREF_MAILTO",
@@ -299,15 +267,18 @@ def test_every_provider_credential_has_a_key_spec() -> None:
 
 
 def test_non_interactive_with_verify_collects_extras(monkeypatch) -> None:
+    """A verifier's extras are returned with the key it accepted (no
+    shipped verifier derives any today; the mechanism stays)."""
+    import dataclasses
     mod = _load()
-    spec = next(k for k in mod.KEYS if k.env_var == "ZOTERO_API_KEY")
-    monkeypatch.setenv("ZOTERO_API_KEY", "valid-key")
-    monkeypatch.setattr(mod, "_http_json", lambda *a, **kw: (200, {
-        "userID": 42, "username": "u", "access": {"groups": {"1": {}}},
-    }, ""))
+    base = next(k for k in mod.KEYS if k.env_var == "ELSEVIER_API_KEY")
+    spec = dataclasses.replace(
+        base, verify=lambda _v: (True, "ok", {"derived": "42"}),
+    )
+    monkeypatch.setenv("ELSEVIER_API_KEY", "valid-key")
     value, extras = mod._prompt_key(spec, None, interactive=False, verify=True)
     assert value == "valid-key"
-    assert extras.get("user_id") == "42"
+    assert extras == {"derived": "42"}
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +408,7 @@ def test_offer_register_mcp_runs_claude_mcp_add(monkeypatch) -> None:
     zotero_call = next(c for c in add_calls if "zotero" in c)
     assert zotero_call == [
         "claude", "mcp", "add", "-s", "user", "zotero",
+        "-e", "ZOTERO_LOCAL=true",
         "-e", "ZOTERO_MCP_TOOLSETS=libraries,search-admin,pdf-geometry,duplicates,scite",
         "--", "zotero-mcp",
     ]
@@ -563,7 +535,7 @@ def test_format_register_command_is_copy_pasteable() -> None:
     zotero = next(s for s in mod.EXPECTED_MCP if s.name == "zotero")
     cmd = mod._format_register_command(zotero)
     assert cmd == (
-        "claude mcp add -s user zotero "
+        "claude mcp add -s user zotero -e ZOTERO_LOCAL=true "
         "-e ZOTERO_MCP_TOOLSETS=libraries,search-admin,pdf-geometry,duplicates,scite "
         "-- zotero-mcp"
     )
@@ -580,6 +552,7 @@ def test_mcp_spec_to_agy_entry_simple_command() -> None:
     assert mod._mcp_spec_to_agy_entry(zotero) == {
         "command": "zotero-mcp", "args": [],
         "env": {
+            "ZOTERO_LOCAL": "true",
             "ZOTERO_MCP_TOOLSETS": "libraries,search-admin,pdf-geometry,duplicates,scite",
         },
     }
@@ -709,6 +682,7 @@ def test_offer_register_agy_mcp_writes_config(monkeypatch, tmp_path) -> None:
     assert written["mcpServers"]["zotero"] == {
         "command": "zotero-mcp", "args": [],
         "env": {
+            "ZOTERO_LOCAL": "true",
             "ZOTERO_MCP_TOOLSETS": "libraries,search-admin,pdf-geometry,duplicates,scite",
         },
     }
@@ -773,6 +747,7 @@ def test_offer_register_agy_mcp_preserves_unrelated_entries(monkeypatch, tmp_pat
     assert written["mcpServers"]["zotero"] == {
         "command": "zotero-mcp", "args": [],
         "env": {
+            "ZOTERO_LOCAL": "true",
             "ZOTERO_MCP_TOOLSETS": "libraries,search-admin,pdf-geometry,duplicates,scite",
         },
     }
@@ -862,48 +837,20 @@ def test_merge_mcp_status_includes_all_keys_from_both_maps() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Zotero local API probe
+# Zotero Desktop gate — help text (the gate itself: test_wizard_zotero_gate.py)
 # ---------------------------------------------------------------------------
 
 
-def test_zotero_local_probe_ok(monkeypatch) -> None:
-    """HTTP 200 from localhost:23119/api/ → ok status."""
-    mod = _load()
-    monkeypatch.setattr(mod, "_http_json", lambda *a, **kw: (200, {}, ""))
-    status, msg = mod._check_zotero_local()
-    assert status == mod.ZOTERO_LOCAL_STATUS_OK
-    assert "localhost:23119" in msg
-
-
-def test_zotero_local_probe_not_running(monkeypatch) -> None:
-    """Connection refused → not_running status."""
-    mod = _load()
-    monkeypatch.setattr(
-        mod, "_http_json",
-        lambda *a, **kw: (0, None, "Connection refused"),
-    )
-    status, msg = mod._check_zotero_local()
-    assert status == mod.ZOTERO_LOCAL_STATUS_NOT_RUNNING
-    assert "refused" in msg.lower()
-
-
-def test_zotero_local_probe_http_error(monkeypatch) -> None:
-    """Non-200 HTTP (e.g. some proxy is serving a page at :23119) → not_running."""
-    mod = _load()
-    monkeypatch.setattr(mod, "_http_json", lambda *a, **kw: (404, None, "404 Not Found"))
-    status, _ = mod._check_zotero_local()
-    assert status == mod.ZOTERO_LOCAL_STATUS_NOT_RUNNING
-
-
-def test_zotero_local_help_mentions_settings_path(capsys) -> None:
+def test_zotero_gate_help_mentions_settings_path(capsys) -> None:
     """The help text must tell the user exactly where to flip the toggle."""
     mod = _load()
-    mod._print_zotero_local_help()
-    out = capsys.readouterr().out
+    mod._print_zotero_gate_help()
+    out = " ".join(capsys.readouterr().out.split())  # the help wraps lines
     assert "Settings" in out or "Preferences" in out
     assert "Advanced" in out
     assert "Allow other applications" in out
     assert "zotero.org" in out   # link to download Zotero
+    assert "Always Allow" in out
 
 
 # ---------------------------------------------------------------------------
@@ -1093,13 +1040,13 @@ def test_collect_keys_skips_other_providers_credentials(monkeypatch) -> None:
         return real_prompt(spec, existing, interactive, verify)
 
     monkeypatch.setattr(mod, "_prompt_key", spy)
-    _collect(mod, monkeypatch, "openai", {"zotero": {"api_key": "z"}})
+    _collect(mod, monkeypatch, "openai", {})
 
     assert "OPENAI_API_KEY" in asked
     assert "ANTHROPIC_API_KEY" not in asked
     assert "GEMINI_API_KEY" not in asked
     # Non-LLM keys are asked for whatever the provider is.
-    assert "ZOTERO_API_KEY" in asked
+    assert "ELSEVIER_API_KEY" in asked
     assert "SCOPUS_API_KEY" in asked
 
 
@@ -1108,7 +1055,6 @@ def test_collect_keys_preserves_the_unselected_providers_key(monkeypatch) -> Non
     _write_config rewrites the file from these values alone."""
     mod = _load()
     values = _collect(mod, monkeypatch, "openai", {
-        "zotero": {"api_key": "z"},
         "anthropic": {"api_key": "sk-ant-old", "base_url": "http://x:1234"},
         "gemini": {"api_key": "gem-old"},
     })
@@ -1121,7 +1067,7 @@ def test_collect_keys_warns_when_the_selected_provider_has_no_key(
     monkeypatch, capsys,
 ) -> None:
     mod = _load()
-    _collect(mod, monkeypatch, "openai", {"zotero": {"api_key": "z"}})
+    _collect(mod, monkeypatch, "openai", {})
     out = capsys.readouterr().out
     assert "OPENAI_API_KEY" in out
     assert "WARNING" in out
@@ -1131,7 +1077,7 @@ def test_collect_keys_is_silent_for_a_local_provider(monkeypatch, capsys) -> Non
     """Local providers have no credential; warning about a missing key
     scolds a user whose setup is complete."""
     mod = _load()
-    _collect(mod, monkeypatch, "ollama", {"zotero": {"api_key": "z"}})
+    _collect(mod, monkeypatch, "ollama", {})
     assert "WARNING" not in capsys.readouterr().out
 
 
@@ -1142,7 +1088,6 @@ def test_collect_keys_accepts_anthropic_base_url_without_a_key(
     so a base URL alone is a working configuration."""
     mod = _load()
     _collect(mod, monkeypatch, "anthropic", {
-        "zotero": {"api_key": "z"},
         "anthropic": {"base_url": "http://localhost:1234"},
     })
     assert "WARNING" not in capsys.readouterr().out
@@ -1151,7 +1096,6 @@ def test_collect_keys_accepts_anthropic_base_url_without_a_key(
 def test_collect_keys_no_warning_when_the_key_is_present(monkeypatch, capsys) -> None:
     mod = _load()
     _collect(mod, monkeypatch, "google", {
-        "zotero": {"api_key": "z"},
         "gemini": {"api_key": "gem"},
     })
     assert "WARNING" not in capsys.readouterr().out

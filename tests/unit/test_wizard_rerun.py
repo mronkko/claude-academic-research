@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit.wizard_stubs import GATE_KEY, stub_zotero_gate
+
 WIZARD = Path(__file__).resolve().parents[2] / "scripts" / "setup" / "wizard.py"
 
 _SECRETISH = ("_API_KEY", "_TOKEN", "_BASE_URL", "_APP_PASSWORD")
@@ -53,7 +55,7 @@ def _load(home: Path):
 
 def _run(mod, monkeypatch) -> int:
     monkeypatch.setattr(sys, "argv", ["wizard.py", "--non-interactive", "--skip-verify"])
-    monkeypatch.setattr(mod, "_check_zotero_local", lambda *a, **k: ("not_running", "stub"))
+    stub_zotero_gate(mod, monkeypatch)
     monkeypatch.setattr(mod, "_check_zotero_cli", lambda: ("ok", "stub"))
     monkeypatch.setattr(mod, "_check_mcp_servers", lambda: {})
     monkeypatch.setattr(mod, "_agy_available", lambda: False)
@@ -89,7 +91,6 @@ def test_wizard_never_touches_claude_settings(home, monkeypatch) -> None:
     settings.write_bytes(original)
     before = sorted(p.name for p in claude.iterdir())
 
-    monkeypatch.setenv("ZOTERO_API_KEY", "dummy-zotero-key")
     mod = _load(home)
     _run(mod, monkeypatch)
 
@@ -101,7 +102,6 @@ def test_wizard_never_touches_claude_settings(home, monkeypatch) -> None:
 
 def test_wizard_does_not_create_claude_settings(home, monkeypatch) -> None:
     (home / ".claude").mkdir()
-    monkeypatch.setenv("ZOTERO_API_KEY", "dummy-zotero-key")
     mod = _load(home)
     _run(mod, monkeypatch)
     assert not (home / ".claude" / "settings.json").exists()
@@ -118,10 +118,7 @@ provider = "gateway"
 max_retries = 3
 
 [zotero]
-api_key = "zkey"
-user_id = "12345"
-username = "someone"
-accessible_group_ids = "111,222"
+local_api_key = "k"
 group_id = "999"
 
 [gateway]
@@ -177,18 +174,31 @@ def test_rerun_keeps_types(home, monkeypatch) -> None:
     assert after["custom"]["nested"]["flag"] is True
 
 
-def test_rerun_drops_zotero_identity_when_the_key_changes(home, monkeypatch) -> None:
-    """Kept for the same key; dropped for a different, unverified one,
-    which would otherwise be filed under the old account's user ID."""
+def test_rerun_removes_the_legacy_web_api_keys(home, monkeypatch) -> None:
+    """The Web API key and what was derived from it are read by nothing
+    now; a stored credential nothing uses is only a liability."""
     mod = _load(home)
-    _write_cfg(mod, _FULL_CONFIG)
-    monkeypatch.setenv("ZOTERO_API_KEY", "a-different-key")
+    _write_cfg(mod, """\
+[zotero]
+api_key = "zkey"
+user_id = "12345"
+username = "someone"
+accessible_group_ids = "111,222"
+group_id = "999"
+local_api_key = "old"
+""")
     _run(mod, monkeypatch)
     zotero = _read_cfg(mod)["zotero"]
-    assert zotero["api_key"] == "a-different-key"
-    for k in ("user_id", "username", "accessible_group_ids"):
+    for k in ("api_key", "user_id", "username", "accessible_group_ids"):
         assert k not in zotero
-    assert zotero["group_id"] == "999", "group_id is the user's choice, not derived"
+    assert zotero["group_id"] == "999", "group_id is the user's choice"
+    assert zotero["local_api_key"] == GATE_KEY, "the gate's key replaces the old one"
+
+
+def test_the_gate_key_is_written_on_a_first_run(home, monkeypatch) -> None:
+    mod = _load(home)
+    _run(mod, monkeypatch)
+    assert _read_cfg(mod)["zotero"] == {"local_api_key": GATE_KEY}
 
 
 def test_merge_config_applies_explicit_removals(home) -> None:
@@ -227,9 +237,8 @@ def test_gateway_hint_names_the_declared_env_var(home, monkeypatch) -> None:
 
 def test_unparseable_config_is_backed_up_and_left_alone(home, monkeypatch, capsys) -> None:
     mod = _load(home)
-    broken = '[zotero]\napi_key = "unterminated\n'
+    broken = '[zotero]\nlocal_api_key = "unterminated\n'
     _write_cfg(mod, broken)
-    monkeypatch.setenv("ZOTERO_API_KEY", "dummy-zotero-key")
 
     with pytest.raises(SystemExit) as exc:
         _run(mod, monkeypatch)
@@ -245,7 +254,6 @@ def test_unparseable_config_is_backed_up_and_left_alone(home, monkeypatch, capsy
 def test_written_config_is_private(home, monkeypatch) -> None:
     if sys.platform == "win32":
         pytest.skip("POSIX modes only")
-    monkeypatch.setenv("ZOTERO_API_KEY", "dummy-zotero-key")
     mod = _load(home)
     _run(mod, monkeypatch)
     assert mod.CONFIG_PATH.stat().st_mode & 0o777 == 0o600
@@ -286,19 +294,6 @@ def test_prompts_survive_end_of_input(home, monkeypatch) -> None:
     assert mod._prompt_pdf_policy(True, existing, {}) == {
         "pdf": {"min_version": "accepted", "reconstructed": False, "paid": "prefer"},
     }
-    assert mod._prompt_zotero_local_writes(True, existing) == {"local_api_key": "kept"}
-
-
-def test_end_of_input_never_opens_the_zotero_consent_dialog(home, monkeypatch) -> None:
-    mod = _load(home)
-    monkeypatch.setattr("builtins.input", _eof)
-    monkeypatch.setattr(mod, "_check_zotero_local", lambda *a, **k: (mod.ZOTERO_LOCAL_STATUS_OK, ""))
-
-    def _boom(*_a, **_k):
-        raise AssertionError("asked Zotero for a key with nobody at the keyboard")
-
-    monkeypatch.setattr(mod, "_authorize_zotero_local", _boom)
-    assert mod._prompt_zotero_local_writes(True, {}) == {}
 
 
 @pytest.mark.parametrize("verify, payload", [

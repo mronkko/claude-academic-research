@@ -1,5 +1,8 @@
 """Guard test: every publisher / KeySpec / source has a matching live test.
 
+Zotero Desktop's local API, whose write key is not a KeySpec, is pinned
+by `ZOTERO_LOCAL_LIVE_TESTS`.
+
 Runs on every `pytest` invocation (no marker). If a new browser
 handler is added to `fetchers.browser.all_handlers()`, a new `KeySpec`
 added to `scripts/setup/wizard.py:KEYS`, a new `AbstractFetcher` /
@@ -238,6 +241,66 @@ def test_every_keyspec_has_an_auth_test() -> None:
         f"matched by a `covers: [section].key` marker in that test's "
         f"docstring, since it has no variable name to grep for."
     )
+
+
+# ---------------------------------------------------------------------------
+# Zotero Desktop's local API ↔ tests/live
+# ---------------------------------------------------------------------------
+
+
+# The plugin's only Zotero surface is Desktop's local API, and its one
+# credential is the local write key `/setup` obtains through Zotero's
+# consent dialog. That key is not a `KeySpec` (no one pastes it in), so
+# the KeySpec guard above cannot see it; it is pinned here by name.
+# `ZOTERO_LOCAL_API_KEY` must appear in the auth test, and the write,
+# upload and key re-grant paths each keep a live test.
+ZOTERO_LOCAL_LIVE_TESTS: dict[str, list[str]] = {
+    "test_auth_workflows.py": [
+        "test_auth_zotero_local_read", "test_auth_zotero_local_api_key",
+    ],
+    "test_zotero_local_writes.py": [
+        "test_a_local_write_is_visible_to_a_local_read_immediately",
+        "test_a_rejected_key_is_regranted_and_the_write_retried",
+    ],
+    "test_pdf_attach_roundtrip.py": [
+        "test_attached_pdf_actually_lands_with_bytes",
+        "test_pdf_map_agrees_the_item_has_a_real_pdf",
+    ],
+}
+
+
+def test_the_zotero_local_api_has_live_tests() -> None:
+    missing = [
+        f"{filename}::{name}"
+        for filename, names in ZOTERO_LOCAL_LIVE_TESTS.items()
+        for name in names
+        if name not in _test_functions(LIVE / filename)
+    ]
+    assert not missing, f"Zotero local-API live tests missing: {missing}"
+
+    path = LIVE / "test_auth_workflows.py"
+    source = _read(path)
+    fn = _test_functions(path)["test_auth_zotero_local_api_key"]
+    assert re.search(
+        r"(?<![A-Za-z0-9_])ZOTERO_LOCAL_API_KEY(?![A-Za-z0-9_])",
+        ast.get_source_segment(source, fn) or "",
+    ), "test_auth_zotero_local_api_key no longer names ZOTERO_LOCAL_API_KEY"
+
+
+def test_no_live_test_uses_the_zotero_web_api() -> None:
+    """The Web API key and `--remote` are gone; a live test still reading
+    them would skip forever and pass silently."""
+    banned = re.compile(
+        r"ZOTERO_API_KEY(?![A-Za-z0-9_])|ZOTERO_USER_ID|\"api_key\", env=\"ZOTERO"
+        r"|prefer_local|--remote|\.cloud\b"
+    )
+    offenders = [
+        f"{path.relative_to(REPO)}:{lineno}"
+        for path in sorted(LIVE.rglob("*.py"))
+        for lineno, line in enumerate(_read(path).splitlines(), 1)
+        if banned.search(line)
+    ]
+    assert not offenders, f"live tests still use the Zotero Web API: {offenders}"
 
 
 # ---------------------------------------------------------------------------

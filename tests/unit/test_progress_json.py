@@ -147,33 +147,16 @@ def test_search_emits_progress(tmp_path, monkeypatch) -> None:
 def test_import_emits_progress(tmp_path, monkeypatch) -> None:
     import import_to_zotero as imp
 
-    class Resp:
-        status_code, ok = 200, True
-
-        def __init__(self, n):
-            self.n = n
-
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"success": {str(i): f"NEW{i}" for i in range(self.n)}, "failed": {}}
-
-    class Session:
-        def post(self, url, headers=None, json=None, timeout=None):
-            return Resp(len(json))
-
     class Zot:
-        api_key = "k"
-
         def describe_library(self):
             return "group 1"
 
-        def api_base_url(self):
-            return "https://api.zotero.org/groups/1"
-
-        def cloud_journal_articles(self):
+        def journal_articles(self):
             return []
+
+        def create_items(self, batch):
+            return {"success": {str(i): f"NEW{i}" for i in range(len(batch))},
+                    "failed": {}}
 
     in_csv = tmp_path / "in.csv"
     with in_csv.open("w", newline="", encoding="utf-8") as f:
@@ -183,9 +166,7 @@ def test_import_emits_progress(tmp_path, monkeypatch) -> None:
         w.writerow({"doi": "10.1/b", "title": "B", "authors": "Doe, J"})
     monkeypatch.setattr(imp.zotero_io.ZoteroClient, "from_args",
                         classmethod(lambda cls, *a, **k: Zot()))
-    monkeypatch.setattr(imp, "require", lambda *a, **k: "key")
     monkeypatch.setattr(imp.screening_common, "load_tag_namespace", lambda *a, **k: "rev")
-    monkeypatch.setattr(imp.http_client, "build_session", lambda *a, **k: Session())
     monkeypatch.setattr(imp.time, "sleep", lambda _s: None)
     monkeypatch.setattr(imp, "build_item", lambda row, coll, **kw: (
         {"itemType": "journalArticle", "title": row["title"], "DOI": row["doi"]},
@@ -216,12 +197,9 @@ def test_enrich_abstracts_emits_progress(tmp_path, monkeypatch) -> None:
     ]
 
     class Zot:
-        write_surface = "web"
-
         def update_abstract(self, key, abstract):
             pass
 
-    monkeypatch.setattr(ea, "require", lambda *a, **k: "key")
     monkeypatch.setattr(ea, "_load_config", lambda: types.SimpleNamespace(crossref_mailto=""))
     monkeypatch.setattr(ea.http_client, "build_session", lambda *a, **k: object())
     monkeypatch.setattr(ea.zotero_io.ZoteroClient, "from_args",
@@ -275,7 +253,6 @@ def dois_main(tmp_path, monkeypatch):
 
     cr = types.SimpleNamespace(author_surnames=["Smith"], issued_year="2020",
                                title="Needs a DOI")
-    monkeypatch.setattr(ed, "require", lambda *a, **k: "key")
     monkeypatch.setattr(ed.zotero_io.ZoteroClient, "from_args",
                         classmethod(lambda cls, *a, **k: Zot()))
     monkeypatch.setattr(ed, "_load_config", lambda: types.SimpleNamespace(crossref_mailto=""))
@@ -384,7 +361,6 @@ def test_abstract_screen_emits_progress(tmp_path, monkeypatch) -> None:
                         lambda p: ("prompt", "m", "v1", types.SimpleNamespace()))
     monkeypatch.setattr(asc.tag_prefix, "resolve", lambda *a: "rev")
     monkeypatch.setattr(asc, "effective_model", lambda *a, **k: "test-model")
-    monkeypatch.setattr(asc, "require", lambda *a, **k: "key")
     monkeypatch.setattr(asc.llm_provider, "require_credentials", lambda m: None)
     monkeypatch.setattr(asc.llm_provider, "get_provider", lambda m: object())
     monkeypatch.setattr(asc, "paid_run_banner", lambda *a, **k: "")
@@ -422,7 +398,6 @@ def test_fulltext_code_emits_progress(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(ftc, "_render_prompt", lambda t, f: "prompt")
     monkeypatch.setattr(ftc.tag_prefix, "resolve", lambda *a: "rev")
     monkeypatch.setattr(ftc, "effective_model", lambda *a, **k: "test-model")
-    monkeypatch.setattr(ftc, "require", lambda *a, **k: "key")
     monkeypatch.setattr(ftc.llm_provider, "require_credentials", lambda m: None)
     monkeypatch.setattr(ftc.llm_provider, "get_provider", lambda m: object())
     monkeypatch.setattr(ftc, "paid_run_banner", lambda *a, **k: "")

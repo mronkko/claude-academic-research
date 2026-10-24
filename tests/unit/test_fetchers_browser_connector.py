@@ -15,7 +15,6 @@ from fetchers.browser.connector import (
     ZoteroConnectorHandler,
     _poll_for_new_item,
     _wait_for_child_attachment,
-    _wait_for_cloud_sync,
     ping_zotero_desktop,
     resolve_connector_extension_path,
 )
@@ -263,47 +262,17 @@ def test_poll_asks_only_for_the_newest_items() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _wait_for_cloud_sync — closes the race between Desktop-save and
-# the subsequent cloud-API merge.
+# _wait_for_child_attachment — closes the race between the parent
+# appearing in Desktop and its PDF child. JSTOR is the canonical slow case.
 # ---------------------------------------------------------------------------
 
 
-def test_wait_for_cloud_sync_returns_true_when_item_is_visible() -> None:
-    """The item is already in the cloud on first poll."""
+def _zot() -> MagicMock:
+    """A ZoteroClient double: the wait reads `children` and, through
+    `_pdf_child_settled`, `local`; both answer from one mock."""
     zot = MagicMock()
-    zot.cloud.item.return_value = {"key": "NEW", "data": {}}
-    assert _wait_for_cloud_sync(zot, "NEW", timeout_s=0.2) is True
-
-
-def test_wait_for_cloud_sync_returns_false_on_persistent_404() -> None:
-    """Cloud never replicates within timeout → return False so the
-    caller can skip the merge and log a specific error."""
-    zot = MagicMock()
-    zot.cloud.item.side_effect = Exception("404 Not Found")
-    assert _wait_for_cloud_sync(zot, "NEW", timeout_s=0.3) is False
-
-
-def test_wait_for_cloud_sync_recovers_after_transient_404() -> None:
-    """First two poll attempts raise 404; third returns the item.
-    Simulates the common case where Desktop sync takes ~2s."""
-    zot = MagicMock()
-    attempts = {"n": 0}
-
-    def fake_item(key):
-        attempts["n"] += 1
-        if attempts["n"] < 2:
-            raise Exception("404 Not Found")
-        return {"key": key, "data": {}}
-
-    zot.cloud.item.side_effect = fake_item
-    assert _wait_for_cloud_sync(zot, "NEW", timeout_s=5) is True
-    assert attempts["n"] >= 2
-
-
-# ---------------------------------------------------------------------------
-# _wait_for_child_attachment — closes the race between parent-synced
-# and PDF-child-synced. JSTOR is the canonical slow case.
-# ---------------------------------------------------------------------------
+    zot.children = zot.local.children
+    return zot
 
 
 def test_wait_for_child_attachment_returns_true_when_pdf_has_md5(monkeypatch) -> None:
@@ -313,9 +282,9 @@ def test_wait_for_child_attachment_returns_true_when_pdf_has_md5(monkeypatch) ->
     pdf = {"key": "PDF1", "version": 3,
            "data": {"itemType": "attachment", "md5": "deadbeef",
                     "contentType": "application/pdf"}}
-    zot = MagicMock()
-    zot.cloud.children.return_value = [pdf]
-    zot.cloud.item.return_value = pdf
+    zot = _zot()
+    zot.local.children.return_value = [pdf]
+    zot.local.item.return_value = pdf
     assert _wait_for_child_attachment(zot, "NEW", timeout_s=0.2) is True
 
 
@@ -325,8 +294,8 @@ def test_wait_for_child_attachment_refuses_a_shell_without_md5() -> None:
     that attachment overwrote our re-parent: two keepers logged ATTACHED
     ended with no PDF (RPW9D2U6, FZZT98PT), their new PDFs back under the
     trashed temporary item. The merge now waits for the upload to finish."""
-    zot = MagicMock()
-    zot.cloud.children.return_value = [
+    zot = _zot()
+    zot.local.children.return_value = [
         {"key": "PDF1",
          "data": {"itemType": "attachment", "md5": "",
                   "contentType": "application/pdf"}},
@@ -337,8 +306,8 @@ def test_wait_for_child_attachment_refuses_a_shell_without_md5() -> None:
 def test_wait_for_child_attachment_ignores_non_attachment_children() -> None:
     """A note-only child doesn't count — we specifically want an
     attachment (the PDF)."""
-    zot = MagicMock()
-    zot.cloud.children.return_value = [
+    zot = _zot()
+    zot.local.children.return_value = [
         {"key": "NOTE1", "data": {"itemType": "note"}},
     ]
     assert _wait_for_child_attachment(zot, "NEW", timeout_s=0.2) is False
@@ -348,15 +317,15 @@ def test_wait_for_child_attachment_times_out_on_empty() -> None:
     """Translator saved metadata only — no attachment ever appears.
     We must time out (not hang) and return False so the caller can
     proceed with the merge and log PARTIAL."""
-    zot = MagicMock()
-    zot.cloud.children.return_value = []
+    zot = _zot()
+    zot.local.children.return_value = []
     assert _wait_for_child_attachment(zot, "NEW", timeout_s=0.3) is False
 
 
 def test_wait_for_child_attachment_recovers_after_transient_error(monkeypatch) -> None:
     """First poll raises; second returns the attachment with md5 —
     simulates the narrow window where the PDF is mid-upload."""
-    zot = MagicMock()
+    zot = _zot()
     attempts = {"n": 0}
 
     def fake_children(_key):
@@ -370,8 +339,8 @@ def test_wait_for_child_attachment_recovers_after_transient_error(monkeypatch) -
     pdf = {"key": "PDF1", "version": 2,
            "data": {"itemType": "attachment", "md5": "abc123",
                     "contentType": "application/pdf"}}
-    zot.cloud.item.return_value = pdf
-    zot.cloud.children.side_effect = fake_children
+    zot.local.item.return_value = pdf
+    zot.local.children.side_effect = fake_children
     assert _wait_for_child_attachment(zot, "NEW", timeout_s=5) is True
     assert attempts["n"] >= 2
 

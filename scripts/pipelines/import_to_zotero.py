@@ -72,7 +72,6 @@ import os
 import re
 import sys
 import time
-import uuid
 from pathlib import Path
 from urllib.parse import quote
 
@@ -81,11 +80,9 @@ SCRIPTS_ROOT = SCRIPT_DIR.parent
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
-from core import config_loader  # noqa: E402
-from core.config_loader import get, require, value_source  # noqa: E402
 
 try:
-    import requests
+    import requests  # noqa: F401 — http_client needs it; fail clearly here
 except ImportError:
     sys.exit(
         "ERROR: dependencies not available. Run via `uv run`; the PEP 723 "
@@ -492,9 +489,9 @@ def _item_template(item_type: str) -> dict:
 
     `csl_json_to_zotero` writes a field only when the template already
     has that key, which is how it avoids emitting fields the type does
-    not accept. pyzotero's `item_template()` would fetch this from
-    api.zotero.org; `zotero_mcp.schema.valid_fields` answers the same
-    question from an on-disk cache with no network at all, which keeps
+    not accept. pyzotero's `item_template()` does not exist on the local
+    API; `zotero_mcp.schema.valid_fields` answers the same question from
+    an on-disk cache with no network at all, which keeps
     `--dry-run` honest offline and costs nothing per row.
 
     Raises KeyError for a type the schema does not know, so the caller
@@ -702,52 +699,15 @@ def _dois_conflict(a: str, b: str) -> bool:
     return bool(a and b and a != b)
 
 
-def _auth_error_message(status: int, exc: BaseException,
-                        key_source: str | None, library: str) -> str:
-    """Why Zotero refused the key, and which copy of the key it refused.
+def _exit_if_key_refused(exc: BaseException) -> None:
+    """Exit when Zotero would not grant a local write key.
 
-    `ZOTERO_API_KEY` overrides `[zotero].api_key` in config.toml, so a
-    stale export in a shell profile masks a good key in the file and
-    looks exactly like a bad key there. Naming the source is the whole
-    diagnosis; the value is never printed.
+    Not an unavailable lookup but something only the user can fix (Deny,
+    or a one-time "Allow" in Zotero's dialog), so a dry run must not hide
+    it behind "NOT CHECKED" counts either.
     """
-    config = config_loader.CONFIG_PATH.as_posix().replace(
-        Path.home().as_posix(), "~", 1)
-    text = str(exc).strip()
-    detail = text.splitlines()[-1] if text else type(exc).__name__
-    lines = [f"ERROR: Zotero rejected the API key for {library} "
-             f"(HTTP {status}: {detail})."]
-    if key_source == "env":
-        lines.append(
-            "The key came from the ZOTERO_API_KEY environment variable, which "
-            f"overrides [zotero].api_key in {config}. If that variable is "
-            "stale (for example exported in ~/.zshenv, ~/.bashrc or another "
-            "shell profile), remove the export and open a new shell, or set "
-            "it to a current key.")
-    elif key_source == "config":
-        lines.append(
-            f"The key came from [zotero].api_key in {config} (ZOTERO_API_KEY "
-            "is not set). Re-run the setup wizard with a current key from "
-            "https://www.zotero.org/settings/keys.")
-    else:
-        lines.append("No key is configured: set one with the setup wizard.")
-    if status == 403:
-        lines.append(
-            "A 403 can also mean the key is valid but has no access to this "
-            "library: give it read/write access to the group at "
-            "https://www.zotero.org/settings/keys.")
-    lines.append("Nothing was imported.")
-    return "\n".join(lines)
-
-
-def _exit_if_auth_error(exc: BaseException, zot, key_source: str | None) -> None:
-    status = zotero_io.auth_failure_status(exc)
-    if status is not None:
-        try:
-            library = zot.describe_library()
-        except Exception:  # noqa: BLE001 — the message must still print
-            library = "the library"
-        sys.exit(_auth_error_message(status, exc, key_source, library))
+    if isinstance(exc, zotero_io.LocalKeyRefused):
+        sys.exit(f"ERROR: {exc}\nNothing was imported.")
 
 
 #: True when a dry run could not read the library, so the "already in
@@ -779,22 +739,17 @@ def _print_existing_summary(*, n_to_add: int, n_to_create: int) -> None:
 
 
 def _fetch_existing_items(
-    zot: zotero_io.ZoteroClient, dry_run: bool, *,
-    key_source: str | None = None,
+    zot: zotero_io.ZoteroClient, dry_run: bool,
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Return (doi_map, title_map) for existing items in the library.
 
-    Reads the **cloud** library unconditionally, whatever the run's
-    `--remote` setting, because this is a read-your-writes check: this
-    script writes through the Zotero Web API, and Zotero Desktop's local
-    database does not know about those items until it next syncs. A
-    second import run therefore asked the local client, was told the
-    library was empty, and created all 31 items again — after which
-    PDF enrichment downloaded 62 files and the PRISMA count guard
-    failed downstream.
-
-    Local stays the default everywhere else; it is faster and those
-    callers are not reading back their own writes.
+    A read-your-writes check, and the reason this script once duplicated
+    a library: while it wrote through the Zotero Web API and read back
+    from Desktop, which had not synced yet, a second import run was told
+    the library was empty and created all 31 items again — after which
+    PDF enrichment downloaded 62 files and the PRISMA count guard failed
+    downstream. Reads and writes now both go to Desktop, so what a run
+    wrote is what the next one reads.
 
     **Runs under `--dry-run` too.** It used to return empty there, on the
     reasoning that a dry run patches nothing — but the summary then
@@ -804,24 +759,13 @@ def _fetch_existing_items(
     to "not checked"; a real run still raises, because proceeding blind
     is how the duplicate-creation incident above happened.
 
-    **Except a rejected key (HTTP 401/403), which exits in both modes.**
-    That is not an unavailable lookup but a misconfiguration the real run
-    will hit too, and a dry run that reports "NOT CHECKED" counts for it
-    hides the one thing the operator needs to fix. `key_source` ("env" /
-    "config") names which copy of the key was refused.
     """
     global _existing_lookup_failed
     _existing_lookup_failed = False
-    print(
-        "Fetching existing library items via the Zotero Web API "
-        "(api.zotero.org — this script writes there, so it must read "
-        "there too)...",
-        flush=True,
-    )
+    print("Fetching existing library items...", flush=True)
     try:
-        items = zot.cloud_journal_articles()
+        items = zot.journal_articles()
     except Exception as exc:  # noqa: BLE001
-        _exit_if_auth_error(exc, zot, key_source)
         if not dry_run:
             # A real run that cannot see the library would re-create
             # everything already in it. That is the incident this
@@ -868,12 +812,8 @@ def _patch_existing_items(
     """
     if not to_add:
         return 0
-    # Same backend as `_fetch_existing_items`, for the same reason —
-    # plus these patches carry an item `version`, and a stale local one
-    # is rejected by the API's If-Unmodified-Since-Version check.
-    print(f"\nReading {len(to_add)} existing items from the Zotero Web API...",
-          flush=True)
-    all_items = zot.cloud_journal_articles()
+    print(f"\nReading {len(to_add)} existing items...", flush=True)
+    all_items = zot.journal_articles()
     item_by_key = {it["key"]: it for it in all_items}
 
     # Several rows can resolve to one existing item (a DOI hit and a
@@ -923,6 +863,9 @@ def _patch_existing_items(
         try:
             zot.update_fields(item_key, patch)
             outcome = "patched"
+        except zotero_io.LocalKeyRefused:
+            # Every later write would be refused too; see `main`.
+            raise
         except Exception as exc:  # noqa: BLE001 — one item must not sink the import
             failed += 1
             outcome = "patch_failed"
@@ -973,15 +916,13 @@ def _create_new_items(
     a caller holding the list still knows what was created if a later
     batch raises (see `main`'s `--created-keys-out`).
 
-    Every batch carries a fresh `Zotero-Write-Token`. Zotero applies a
-    token at most once and answers a replay with 412, so even a request
-    that reached the server twice cannot create its items twice. The
-    shared session also no longer replays POST on 5xx or read errors
-    (`http_client.VerboseRetry.is_retry`) — only on 429, which Zotero
-    sends instead of applying the write.
+    A create is never retried: a POST whose answer was lost may have
+    created its items, and sending it again would create them twice.
 
     A batch that fails outright (HTTP error, network error) is counted as
     failed and the remaining batches still run; the caller exits non-zero.
+    A refused write key is not a batch failure: every later batch would
+    fail the same way, so it ends the import.
 
     With `key_by_index`, also records which `to_create` position each
     new key belongs to — the success map is keyed by position within the
@@ -998,33 +939,18 @@ def _create_new_items(
         filtered_to_create.append(filtered)
     to_create = filtered_to_create
 
-    base_url = zot.api_base_url()
-    headers = {
-        "Zotero-API-Key": zot.api_key,
-        "Zotero-API-Version": "3",
-        "Content-Type": "application/json",
-    }
     created = failed = 0
     if created_keys is None:
         created_keys = []
     n_batches = (len(to_create) + BATCH_SIZE - 1) // BATCH_SIZE
-    # Zotero asks clients to honour `Backoff` / `Retry-After` and returns
-    # 429 under load. A bare `requests.post` honours neither, so a single
-    # throttled batch used to abort the whole import; the shared session
-    # retries 429 with exponential backoff instead.
-    session = http_client.build_session()
     for batch_num, i in enumerate(range(0, len(to_create), BATCH_SIZE), 1):
         batch = to_create[i:i + BATCH_SIZE]
         print(f"  batch {batch_num}/{n_batches} ({len(batch)} items)...", flush=True)
-        batch_headers = {**headers, "Zotero-Write-Token": uuid.uuid4().hex}
         try:
-            resp = session.post(
-                f"{base_url}/items", headers=batch_headers, json=batch,
-                timeout=60,
-            )
-            resp.raise_for_status()
-            result = resp.json()
-        except (requests.RequestException, ValueError) as exc:
+            result = zot.create_items(batch)
+        except zotero_io.LocalKeyRefused:
+            raise
+        except Exception as exc:  # noqa: BLE001 — counted, see docstring
             failed += len(batch)
             progress_json.emit("item", phase="create", batch=batch_num,
                                outcome="batch_failed", items=len(batch),
@@ -1196,15 +1122,7 @@ def main() -> int:
     # prefix should stop the run at the first line, not after the import.
     ns = screening_common.load_tag_namespace(args.tag_prefix, args.config)
 
-    # A dry run uses the real key when there is one: the patch-versus-
-    # create preview needs to read the library, and a placeholder key is
-    # refused with the same 403 as a bad one.
-    key_source = value_source("zotero", "api_key", env="ZOTERO_API_KEY")
-    if args.dry_run:
-        api_key = get("zotero", "api_key", env="ZOTERO_API_KEY")
-    else:
-        api_key = require("zotero", "api_key", env="ZOTERO_API_KEY")
-    zot = zotero_io.ZoteroClient.from_args(args, api_key=api_key or "dummy")
+    zot = zotero_io.ZoteroClient.from_args(args)
 
     csv_path = Path(args.input)
     if not csv_path.exists():
@@ -1219,20 +1137,11 @@ def main() -> int:
 
     try:
         collection_key = _resolve_collection(zot, args)
-    except Exception as exc:  # noqa: BLE001 — re-raised unless a rejected key
-        _exit_if_auth_error(exc, zot, key_source)
+    except Exception as exc:  # noqa: BLE001 — re-raised unless a refused key
+        _exit_if_key_refused(exc)
         raise
 
-    if args.dry_run and not api_key:
-        global _existing_lookup_failed
-        _existing_lookup_failed = True
-        print("  WARNING: no Zotero API key configured, so the dry run "
-              "cannot read the library; the counts below are unchecked.",
-              flush=True)
-        doi_map, title_map = {}, {}
-    else:
-        doi_map, title_map = _fetch_existing_items(
-            zot, args.dry_run, key_source=key_source)
+    doi_map, title_map = _fetch_existing_items(zot, args.dry_run)
     doi_by_key = {key: doi for doi, key in doi_map.items()}
 
     to_add: list[tuple[str, str, str]] = []
@@ -1345,7 +1254,14 @@ def main() -> int:
         print("\n[DRY RUN] No changes written.", flush=True)
         return 0
 
-    patch_failed = _patch_existing_items(to_add, zot, collection_key or None)
+    # A refused write key ends the run wherever it surfaces: no later
+    # write can succeed, and counting each one as a failure buries the
+    # one thing the user has to do (choose "Always Allow" in Zotero).
+    try:
+        patch_failed = _patch_existing_items(to_add, zot, collection_key or None)
+    except zotero_io.LocalKeyRefused as exc:
+        sys.exit(f"ERROR: {exc}\nNo new items were created. Re-running the "
+                 f"import is safe.")
 
     created = failed = 0
     created_keys: list[str] = []
@@ -1357,6 +1273,10 @@ def main() -> int:
                 to_create, zot, created_keys, key_by_index,
             )
             print(f"  Created: {created}  Failed: {failed}", flush=True)
+    except zotero_io.LocalKeyRefused as exc:
+        sys.exit(f"ERROR: {exc}\n{len(created_keys)} item(s) were created "
+                 f"before it. Re-running the import is safe: it finds them "
+                 f"by DOI.")
     finally:
         # Written even when a batch raises part-way: the keys of the
         # batches that did succeed are exactly what a caller needs to
@@ -1374,12 +1294,10 @@ def main() -> int:
             new_doi = _normalize_doi_key(to_create[idx].get("DOI") or "")
             if new_doi:
                 key_by_doi[new_doi] = key
-        # Through the Web API: the items were just created there, and
-        # Zotero Desktop has not seen them until it syncs. A failed link
-        # is a warning, not a failed import — the tag is the record.
+        # A failed link is a warning, not a failed import — the tag is
+        # the record.
         doctype.link_supplements(
             doctype.supplement_links(supplement_dois, key_by_doi), zot,
-            cloud=True,
         )
 
     progress_json.emit("summary", phase="write", existing_matched=len(to_add),

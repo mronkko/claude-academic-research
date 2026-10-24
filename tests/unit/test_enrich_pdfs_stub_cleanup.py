@@ -31,7 +31,6 @@ def zot(monkeypatch, tmp_path):
     fake.real_pdf_md5_map.return_value = {}
 
     monkeypatch.setattr(zotero_io.ZoteroClient, "from_args", lambda args: fake)
-    monkeypatch.setattr(enrich_pdfs, "require", lambda *a, **k: "key")
     monkeypatch.setattr(enrich_pdfs, "_load_config",
                         lambda: SimpleNamespace(crossref_mailto=""))
     monkeypatch.setattr(enrich_pdfs.http_client, "build_session",

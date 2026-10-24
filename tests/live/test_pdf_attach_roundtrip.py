@@ -1,8 +1,9 @@
 """Live tests for the fetch → attach → verify seam.
 
-Opt in with `pytest -m live`. Needs `ZOTERO_API_KEY` and the
-hand-created `academic-research-e2e` Zotero group; skips cleanly
-otherwise. Seconds, not minutes — no LLM spend, no Cloudflare solve, no
+Opt in with `pytest -m live`. Needs Zotero Desktop running with a
+`[zotero] local_api_key` on file and the hand-created
+`academic-research-e2e` group; skips cleanly otherwise. Uploads go to
+Desktop's local API, like every other write. Seconds, not minutes — no LLM spend, no Cloudflare solve, no
 full SLR run.
 
 This is the coverage gap that let a live run lose 48 PDFs. The browser
@@ -23,16 +24,15 @@ a failed run leaves no residue in the group.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 
 import pytest
 import zotero_io
 
-from tests.live.conftest import require_config
+from tests.live.conftest import e2e_zotero_client
 
 pytestmark = pytest.mark.live
-
-GROUP_NAME = "academic-research-e2e"
 
 
 def _pdf_bytes(marker: bytes | None = None) -> bytes:
@@ -58,30 +58,20 @@ def _truncated_bytes() -> bytes:
 
 @pytest.fixture(scope="module")
 def client():
-    require_config("zotero", "api_key", env="ZOTERO_API_KEY")
-    try:
-        group = zotero_io.find_group_by_name(GROUP_NAME)
-    except Exception as exc:
-        pytest.skip(f"could not list Zotero groups ({exc})")
-    if group is None:
-        pytest.skip(
-            f"Zotero group {GROUP_NAME!r} not found. Create it by hand "
-            f"(the Web API cannot create groups) — see BACKLOG.md's live "
-            f"end-to-end SLR entry."
-        )
-    return zotero_io.ZoteroClient.from_args(
-        type("A", (), {"group": str(group["id"]), "user": False})(),
-    )
+    return e2e_zotero_client()
 
 
 @pytest.fixture
 def scratch_item(client):
     """A throwaway parent item, removed after the test."""
-    key = client.cloud.create_items([{
+    result = client.create_items([{
         "itemType": "journalArticle",
         "title": f"[live-test] attach roundtrip {uuid.uuid4().hex[:8]}",
         "DOI": f"10.9999/live-test-{uuid.uuid4().hex[:8]}",
-    }])["successful"]["0"]["key"]
+    }])
+    created = list((result.get("success") or {}).values())
+    assert len(created) == 1, f"could not create scratch item: {result!r}"
+    key = created[0]
     yield key
     try:
         client.delete_item(key)
@@ -91,7 +81,7 @@ def scratch_item(client):
 
 def _attachment_keys(client, parent_key: str) -> list[dict]:
     return [
-        child for child in client.cloud.children(parent_key)
+        child for child in client.children(parent_key)
         if child["data"].get("contentType") == "application/pdf"
     ]
 
@@ -120,28 +110,47 @@ def test_attached_pdf_actually_lands_with_bytes(client, scratch_item, tmp_path):
         "attachment has no md5 — the file bytes never landed, and "
         "pdf_map() will treat this item as having no PDF"
     )
+    assert children[0]["data"]["md5"] == hashlib.md5(pdf.read_bytes()).hexdigest(), (
+        "stored md5 differs from the file's — Zotero holds other bytes"
+    )
+
+
+def test_deleting_the_parent_removes_its_attachment(client, tmp_path):
+    """Cleanup must not leave orphaned attachments in the e2e group.
+
+    Every test here deletes only the parent it created; this pins that
+    Zotero takes the uploaded attachment with it.
+    """
+    result = client.create_items([{
+        "itemType": "journalArticle",
+        "title": f"[live-test] attach cleanup {uuid.uuid4().hex[:8]}",
+    }])
+    parent = next(iter((result.get("success") or {}).values()))
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(_pdf_bytes())
+    attachment_key = client.attach_pdf(parent, pdf)
+    assert attachment_key
+
+    assert client.delete_item(parent), f"could not delete parent {parent}"
+    with pytest.raises(Exception) as exc:
+        client.get_item(attachment_key)
+    assert zotero_io._http_status_of(exc.value) == 404, (
+        f"attachment {attachment_key} outlived its parent: {exc.value!r}"
+    )
 
 
 def test_pdf_map_agrees_the_item_has_a_real_pdf(client, scratch_item, tmp_path):
     """`pdf_map()` decides whether a later run re-processes an item, so
     it has to agree with the attach step.
 
-    Reads the cloud library explicitly. `ZoteroClient` prefers the local
-    Zotero server for reads while uploads go to the Web API, so the
-    default client would race Zotero Desktop's sync — the first version
-    of this test failed for exactly that reason, which is also why
-    `mini_slr.py` has a dedicated sync stage between import and enrich.
+    Read straight after the upload through the same client: reads and
+    uploads share Desktop's local API, so there is no sync to wait for.
     """
-    import zotero_io as zio
-
     pdf = tmp_path / "paper.pdf"
     pdf.write_bytes(_pdf_bytes())
     client.attach_pdf(scratch_item, pdf)
 
-    cloud_reader = zio.ZoteroClient(
-        api_key=client.api_key, group_id=client.group_id, prefer_local=False,
-    )
-    has_real, stubs = cloud_reader.pdf_map().get(scratch_item, (False, []))
+    has_real, stubs = client.pdf_map().get(scratch_item, (False, []))
     assert has_real, "pdf_map does not see the PDF we just attached"
     assert not stubs
 

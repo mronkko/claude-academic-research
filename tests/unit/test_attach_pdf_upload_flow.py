@@ -13,7 +13,8 @@ does differs on both counts:
   file-less attachment under the parent.
 
 Here the attachment-create, upload-auth and register steps go through a
-real `pyzotero.zotero.Zotero` over `httpx2.MockTransport`; the S3 PUT is
+real local pyzotero client (`zotero_io._LocalZotero`, as Zotero Desktop
+is the only surface) over `httpx2.MockTransport`; the file POST is
 pyzotero's module-level `httpx2.post`, patched to fail the way the
 network does.
 """
@@ -26,9 +27,8 @@ import httpx2
 import pytest
 import zotero_io
 from pyzotero import errors as pz_errors
-from pyzotero import zotero
 
-LIB = "/groups/12345"
+LIB = "/api/groups/12345"
 S3 = "https://s3.example.test/upload"
 
 
@@ -89,9 +89,11 @@ def pdf(tmp_path):
 
 
 def _client(server: FakeUploadServer) -> zotero_io.ZoteroClient:
-    zc = zotero_io.ZoteroClient(api_key="fake-key", group_id="12345")
-    zc._cloud = zotero.Zotero(
-        "12345", "group", "fake-key",
+    zc = zotero_io.ZoteroClient("12345", local_api_key="local-key")
+    # A known server ID, so no write first has to ask for one.
+    zc._local = zotero_io._LocalZotero(
+        "12345", "group", None, local=True, local_api_key="local-key",
+        server_id="SERVER01",
         client=httpx2.Client(transport=httpx2.MockTransport(server.handler)),
     )
     return zc
@@ -124,7 +126,7 @@ def test_pyzotero_reports_a_dropped_upload_as_a_bare_upload_error(
     template = {"itemType": "attachment", "linkMode": "imported_file",
                 "title": pdf.name, "filename": pdf.name}
     with pytest.raises(pz_errors.UploadError) as info:
-        Zupload(_client(server)._cloud, [template], "PARENT01",
+        Zupload(_client(server).local, [template], "PARENT01",
                 basedir=pdf.parent).upload()
     assert info.value.__cause__ is None
     assert zotero_io._http_status_of(info.value) is None

@@ -131,7 +131,7 @@ def _load_wizard():
     return mod
 
 
-@pytest.mark.parametrize("verifier", ["_verify_gemini", "_verify_zotero", "_verify_openai"])
+@pytest.mark.parametrize("verifier", ["_verify_gemini", "_verify_openai"])
 def test_wizard_verification_message_never_quotes_the_key(monkeypatch, verifier) -> None:
     wizard = _load_wizard()
     monkeypatch.setattr(wizard.time, "sleep", lambda _s: None)

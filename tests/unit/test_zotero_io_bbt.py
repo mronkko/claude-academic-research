@@ -103,7 +103,7 @@ def test_get_group_library_ids_returns_empty_list_when_bbt_unreachable() -> None
 
 
 def _client() -> zotero_io.ZoteroClient:
-    return zotero_io.ZoteroClient(api_key="fake-key", group_id="6015547")
+    return zotero_io.ZoteroClient(group_id="6015547")
 
 
 def test_zotero_client_bbt_json_rpc_delegates_to_bbt_client() -> None:

@@ -22,32 +22,55 @@ def test_missing_config_returns_empty(tmp_path, monkeypatch) -> None:
 
 
 def test_get_reads_config(tmp_path, monkeypatch) -> None:
-    _set_config(tmp_path, '[zotero]\napi_key = "from-file"\n', monkeypatch)
-    assert config_loader.get("zotero", "api_key") == "from-file"
+    _set_config(tmp_path, '[zotero]\nlocal_api_key = "from-file"\n', monkeypatch)
+    assert config_loader.get("zotero", "local_api_key") == "from-file"
 
 
 def test_env_overrides_config(tmp_path, monkeypatch) -> None:
-    _set_config(tmp_path, '[zotero]\napi_key = "from-file"\n', monkeypatch)
-    monkeypatch.setenv("ZOTERO_API_KEY", "from-env")
-    assert config_loader.get("zotero", "api_key", env="ZOTERO_API_KEY") == "from-env"
+    _set_config(tmp_path, '[zotero]\nlocal_api_key = "from-file"\n', monkeypatch)
+    monkeypatch.setenv("ZOTERO_LOCAL_API_KEY", "from-env")
+    assert config_loader.get("zotero", "local_api_key", env="ZOTERO_LOCAL_API_KEY") == "from-env"
 
 
 def test_default_used_when_both_missing(tmp_path, monkeypatch) -> None:
     _set_config(tmp_path, "", monkeypatch)
-    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
-    assert config_loader.get("zotero", "api_key",
-                             env="ZOTERO_API_KEY", default="fallback") == "fallback"
+    monkeypatch.delenv("ZOTERO_LOCAL_API_KEY", raising=False)
+    assert config_loader.get("zotero", "local_api_key",
+                             env="ZOTERO_LOCAL_API_KEY", default="fallback") == "fallback"
 
 
 def test_require_raises_when_missing(tmp_path, monkeypatch) -> None:
     _set_config(tmp_path, "", monkeypatch)
-    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+    monkeypatch.delenv("ZOTERO_LOCAL_API_KEY", raising=False)
     import pytest
     with pytest.raises(RuntimeError, match="Required configuration missing"):
-        config_loader.require("zotero", "api_key", env="ZOTERO_API_KEY")
+        config_loader.require("zotero", "local_api_key", env="ZOTERO_LOCAL_API_KEY")
 
 
 def test_require_returns_value_when_present(tmp_path, monkeypatch) -> None:
-    _set_config(tmp_path, '[zotero]\napi_key = "present"\n', monkeypatch)
-    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
-    assert config_loader.require("zotero", "api_key", env="ZOTERO_API_KEY") == "present"
+    _set_config(tmp_path, '[zotero]\nlocal_api_key = "present"\n', monkeypatch)
+    monkeypatch.delenv("ZOTERO_LOCAL_API_KEY", raising=False)
+    assert config_loader.require("zotero", "local_api_key", env="ZOTERO_LOCAL_API_KEY") == "present"
+
+
+# `value_source` names which copy of a value is in force; enrich_pdfs uses
+# it to say whether a key came from the environment or config.toml.
+
+
+def test_value_source_env_overrides_config(tmp_path, monkeypatch) -> None:
+    _set_config(tmp_path, '[elsevier]\napi_key = "from-file"\n', monkeypatch)
+    monkeypatch.setenv("ELSEVIER_API_KEY", "from-env")
+    assert config_loader.value_source("elsevier", "api_key", env="ELSEVIER_API_KEY") == "env"
+
+
+def test_value_source_config_when_env_unset(tmp_path, monkeypatch) -> None:
+    _set_config(tmp_path, '[elsevier]\napi_key = "from-file"\n', monkeypatch)
+    assert config_loader.value_source("elsevier", "api_key", env="ELSEVIER_API_KEY") == "config"
+
+
+def test_value_source_none_when_missing_or_blank(tmp_path, monkeypatch) -> None:
+    _set_config(tmp_path, "", monkeypatch)
+    assert config_loader.value_source("elsevier", "api_key", env="ELSEVIER_API_KEY") is None
+    _set_config(tmp_path, '[elsevier]\napi_key = "   "\n', monkeypatch)
+    monkeypatch.setenv("ELSEVIER_API_KEY", "  ")
+    assert config_loader.value_source("elsevier", "api_key", env="ELSEVIER_API_KEY") is None

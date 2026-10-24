@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Use when the user invokes `/setup`, asks to configure the academic-research plugin, add or rotate an API key (Zotero, Elsevier, WoS, Semantic Scholar, Wiley TDM, OpenAlex, an LLM provider), switch LLM provider or register MCP servers, or when another skill's pre-flight reports `NOT CONFIGURED`. Trigger phrases "/setup", "run setup wizard", "configure the plugin", "add my API key", "switch to OpenAI". Do NOT use for Zotero library work — use `zotero-operations`.
+description: Use when the user invokes `/setup`, asks to configure the academic-research plugin, add or rotate an API key (Elsevier, WoS, Semantic Scholar, Wiley TDM, OpenAlex, an LLM provider), switch LLM provider or register MCP servers, or when another skill's pre-flight reports `NOT CONFIGURED`. Trigger phrases "/setup", "run setup wizard", "configure the plugin", "add my API key", "switch to OpenAI". Do NOT use for Zotero library work — use `zotero-operations`.
 ---
 
 # setup
@@ -92,7 +92,13 @@ two alternatives:
 > kept in the chat transcript. The wizard asks for keys with hidden
 > input and stores them only in a file on your computer.
 >
-> It first asks **which LLM provider** should run the screening
+> **Have Zotero 10 open first.** The wizard starts by reading from and
+> writing to Zotero on your computer (it creates one test note in My
+> Library and deletes it again), and stops there if either fails. The
+> first time, Zotero shows a permission dialog — choose **Always
+> Allow**. No zotero.org key is needed.
+>
+> It then asks **which LLM provider** should run the screening
 > pipelines — Anthropic, Google, OpenAI, OpenRouter, your institution's
 > own OpenAI-compatible gateway, or a local server (Ollama or LM Studio,
 > which need no key) — and asks only for that provider's credential. It
@@ -161,6 +167,12 @@ problem:
   zotero-mcp` then reinstall `zotero-mcp-server[scite,semantic]` as
   above. `zotero-cli` is optional — every skill degrades to MCP tools
   and `zotero_io.py` without it — so this never blocks setup.
+- **Wizard exits with code 3**: the Zotero read or write test failed
+  and setup stopped before asking anything else. The lines above the
+  stop say which: Zotero not running, the "Allow other applications …
+  to communicate with Zotero" setting off (Settings → Advanced →
+  General), a Zotero older than 10, or the permission dialog answered
+  Deny or one-time Allow. Fix that and re-run; choose **Always Allow**.
 - **Wizard exits with code 4**: Zotero MCP is not connected. No
   academic-research skill works without it. The wizard's summary lists
   the install and registration commands; run them and re-run the

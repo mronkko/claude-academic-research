@@ -25,13 +25,12 @@ import httpx2
 import pytest
 import zotero_io
 from pyzotero import errors as pz_errors
-from pyzotero import zotero
 
-LIB = "/groups/12345"
+LIB = "/api/groups/12345"
 
 
 class FakeZotero:
-    """Just enough of the Zotero Web API for the tag-batch path."""
+    """Just enough of Zotero Desktop's local API for the tag-batch path."""
 
     def __init__(self, items: dict[str, list[str]]):
         self.items = {
@@ -56,7 +55,7 @@ class FakeZotero:
             wanted = request.url.params["itemKey"].split(",")
             body = [copy.deepcopy(self.items[k]) for k in wanted if k in self.items]
             return httpx2.Response(200, json=body)
-        if request.method == "GET" and path == "/itemFields":
+        if request.method == "GET" and path == "/api/itemFields":
             return httpx2.Response(200, json=[{"field": "title"}])
         if request.method == "POST" and path.rstrip("/") == f"{LIB}/items":
             payload = json.loads(request.content)
@@ -110,9 +109,10 @@ def _no_backoff(monkeypatch):
 
 
 def _client(server: FakeZotero) -> zotero_io.ZoteroClient:
-    zc = zotero_io.ZoteroClient(api_key="fake-key", group_id="12345")
-    zc._cloud = zotero.Zotero(
-        "12345", "group", "fake-key",
+    zc = zotero_io.ZoteroClient(group_id="12345", local_api_key="fake-key")
+    zc._local = zotero_io._LocalZotero(
+        "12345", "group", None, local=True, local_api_key="fake-key",
+        server_id="fake-server",
         client=httpx2.Client(transport=httpx2.MockTransport(server.handler)),
     )
     return zc
@@ -125,7 +125,7 @@ def test_pyzotero_update_items_still_hides_per_object_failures() -> None:
     map, and `_post_items` may be replaceable by the library call."""
     server = FakeZotero({"A": []})
     server.reject["A"] = (400, "Invalid tag")
-    z = _client(server)._cloud
+    z = _client(server)._local
 
     assert z.update_items([{"key": "A", "version": 10, "tags": [{"tag": "x"}]}]) is True
 
@@ -225,7 +225,7 @@ def test_a_retry_after_a_write_that_landed_counts_it_unchanged() -> None:
             return httpx2.Response(502, text="Bad gateway")
         return resp
 
-    zc._cloud.client = httpx2.Client(transport=httpx2.MockTransport(landed_then_502))
+    zc._local.client = httpx2.Client(transport=httpx2.MockTransport(landed_then_502))
 
     stats = zc.batch_update_tags([("A", {"add": ["t"]})])
 

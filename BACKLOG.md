@@ -955,6 +955,10 @@ were found while merely *designing and implementing* this (D1-D3 below).
   through `cloud_journal_articles()`, since they are reading back this
   script's own writes. The general point stands for every other stage,
   where `--remote` is the escape hatch.)*
+  *(Overtaken 2026-10-24: the Web API was dropped altogether. Writes,
+  uploads and merges go to Desktop too, so there is nothing to sync
+  before a read, and `--remote` and `cloud_journal_articles()` are
+  gone. Desktop must still be running — now by design.)*
 - **Three stages are library-wide, not collection-scoped.**
   `enrich_abstracts.py` / `enrich_pdfs.py` / `enrich_dois.py` take only
   `--filter-keys-file` (the harness generates it at import time);
@@ -992,6 +996,9 @@ were found while merely *designing and implementing* this (D1-D3 below).
   gone and a stale local client can no longer report an empty library
   and duplicate the corpus. The `--remote` flag already covers the
   headless case per-run; the env var would only save typing it.
+  **Withdrawn (2026-10-24):** the plugin is local-only now, with no
+  remote surface to prefer. Headless / CI runs of the Zotero stages are
+  out of scope.
 - *(Optional)* **tiered runs** so a first run needs 2 keys, not 8:
   `search` (~1 min, no Zotero writes — would have caught D1),
   `oa` (~4 min, `ZOTERO_API_KEY` + `ANTHROPIC_API_KEY` only),

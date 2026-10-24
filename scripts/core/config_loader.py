@@ -14,7 +14,7 @@ Precedence for any config value:
 Usage:
     from core.config_loader import get
 
-    zotero_key = get("zotero", "api_key", env="ZOTERO_API_KEY")
+    zotero_key = get("zotero", "local_api_key", env="ZOTERO_LOCAL_API_KEY")
     group_id   = get("zotero", "group_id", env="ZOTERO_GROUP")
     mailto     = get("crossref", "mailto", env="CROSSREF_MAILTO",
                      default="anonymous@example.com")

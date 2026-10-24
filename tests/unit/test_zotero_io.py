@@ -18,25 +18,25 @@ def _real_pdf(tmp_path) -> str:
 
 
 def _client() -> zotero_io.ZoteroClient:
-    """ZoteroClient with fake credentials; real pyzotero clients are
-    injected via the _local/_cloud properties in tests."""
-    return zotero_io.ZoteroClient(api_key="fake-key", group_id="12345")
+    """ZoteroClient on a fake group; tests inject a fake pyzotero client
+    as `_local`, the one client it talks to."""
+    return zotero_io.ZoteroClient(group_id="12345")
 
 
-def test_from_config_reads_api_key_from_config(monkeypatch) -> None:
-    """from_config() reads api_key from config/env but takes group_id as
-    an argument — group is per-project and must not be in the global
+def test_from_config_reads_local_api_key_from_config(monkeypatch) -> None:
+    """from_config() reads the local write key from config/env but takes
+    group_id as an argument — group is per-project and must not be in the global
     config (see test_setup_wizard.py:40-42 for the convention)."""
     from core import config_loader
 
     monkeypatch.setattr(config_loader, "load_config", lambda: {
-        "zotero": {"api_key": "from-config"}
+        "zotero": {"local_api_key": "from-config"}
     })
-    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+    monkeypatch.delenv("ZOTERO_LOCAL_API_KEY", raising=False)
     monkeypatch.delenv("ZOTERO_GROUP", raising=False)
 
     zc = zotero_io.ZoteroClient.from_config(group_id="99")
-    assert zc.api_key == "from-config"
+    assert zc.local_api_key == "from-config"
     assert zc.group_id == "99"
 
 
@@ -44,9 +44,9 @@ def test_from_config_uses_env_group_id_when_no_arg(monkeypatch) -> None:
     from core import config_loader
 
     monkeypatch.setattr(config_loader, "load_config", lambda: {
-        "zotero": {"api_key": "from-config"}
+        "zotero": {"local_api_key": "from-config"}
     })
-    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+    monkeypatch.delenv("ZOTERO_LOCAL_API_KEY", raising=False)
     monkeypatch.setenv("ZOTERO_GROUP", "77")
 
     zc = zotero_io.ZoteroClient.from_config()
@@ -59,13 +59,13 @@ def test_from_config_raises_group_selection_required_when_multiple_groups(monkey
     from core import config_loader
 
     monkeypatch.setattr(config_loader, "load_config", lambda: {
-        "zotero": {"api_key": "from-config", "user_id": "5591"}
+        "zotero": {}
     })
-    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+    monkeypatch.delenv("ZOTERO_LOCAL_API_KEY", raising=False)
     monkeypatch.delenv("ZOTERO_GROUP", raising=False)
     monkeypatch.setattr(
         zotero_io, "_list_accessible_groups",
-        lambda _key, _uid: [
+        lambda: [
             {"id": 111, "name": "Group A"},
             {"id": 222, "name": "Group B"},
         ],
@@ -84,13 +84,13 @@ def test_from_config_auto_selects_sole_group(monkeypatch, capsys) -> None:
     from core import config_loader
 
     monkeypatch.setattr(config_loader, "load_config", lambda: {
-        "zotero": {"api_key": "from-config", "user_id": "5591"}
+        "zotero": {}
     })
-    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+    monkeypatch.delenv("ZOTERO_LOCAL_API_KEY", raising=False)
     monkeypatch.delenv("ZOTERO_GROUP", raising=False)
     monkeypatch.setattr(
         zotero_io, "_list_accessible_groups",
-        lambda _key, _uid: [{"id": 333, "name": "Sole Group"}],
+        lambda: [{"id": 333, "name": "Sole Group"}],
     )
 
     zc = zotero_io.ZoteroClient.from_config()
@@ -100,20 +100,21 @@ def test_from_config_auto_selects_sole_group(monkeypatch, capsys) -> None:
     assert "333" in out
 
 
-def test_from_config_raises_when_no_user_id_and_no_group(monkeypatch) -> None:
-    """Without user_id, we can't query groups — raise GroupSelectionRequired
-    with an empty list so the orchestrator shows the fallback message."""
+def test_from_config_raises_when_desktop_lists_no_groups(monkeypatch) -> None:
+    """Zotero Desktop not running (or in no groups) and no --group: raise
+    GroupSelectionRequired with an empty list so the orchestrator shows
+    the fallback message."""
     from core import config_loader
 
     monkeypatch.setattr(config_loader, "load_config", lambda: {
-        "zotero": {"api_key": "from-config"}     # no user_id
+        "zotero": {}
     })
-    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+    monkeypatch.delenv("ZOTERO_LOCAL_API_KEY", raising=False)
     monkeypatch.delenv("ZOTERO_GROUP", raising=False)
-    # Stated rather than left to the suite-wide env isolation: with a user
-    # id in the environment, from_config lists that user's groups over the
-    # network — which this test once did, swallowed the failure, and passed.
-    monkeypatch.delenv("ZOTERO_USER_ID", raising=False)
+    # Stubbed rather than left to fail: the real lookup asks Desktop over
+    # the network, and swallows the failure into the same empty list —
+    # which is how this test once reached the network and still passed.
+    monkeypatch.setattr(zotero_io, "_list_accessible_groups", lambda: [])
 
     import pytest
     with pytest.raises(zotero_io.GroupSelectionRequired) as exc_info:
@@ -131,10 +132,11 @@ def test_format_group_selection_error_lists_groups() -> None:
 
 
 def test_format_group_selection_error_handles_empty_list() -> None:
-    """When Zotero returned no groups (e.g. API error), show a different
-    message pointing at the wizard."""
+    """When Desktop listed no groups (not running, or in none), say so
+    and name the flags that get past it."""
     msg = zotero_io.format_group_selection_error([])
-    assert "wizard" in msg.lower() or "user_id" in msg
+    assert "Zotero Desktop" in msg
+    assert "--group" in msg and "--user" in msg
 
 
 def test_journal_articles_uses_local_client() -> None:
@@ -323,7 +325,7 @@ def test_a_server_id_mismatch_is_not_retried_as_a_version_conflict() -> None:
     fake.item.return_value = {"key": "X1", "version": 3,
                               "data": {"key": "X1", "tags": []}}
     fake.update_item.side_effect = mismatch
-    zc._cloud = fake
+    zc._local = fake
     with pytest.raises(pz_errors.ServerIDMismatchError):
         zc.update_tags("X1", add=["t"])
     assert fake.update_item.call_count == 1
@@ -341,7 +343,7 @@ def test_update_fields_writes_at_the_current_version_and_retries_412() -> None:
     fake.update_item.side_effect = [
         pz_errors.PreConditionFailedError("\nCode: 412\n"), True,
     ]
-    zc._cloud = fake
+    zc._local = fake
 
     with patch("time.sleep"):
         assert zc.update_fields("X1", {"DOI": "10.1/x"}) is True
@@ -351,24 +353,6 @@ def test_update_fields_writes_at_the_current_version_and_retries_412() -> None:
         {"key": "X1", "version": 7, "DOI": "10.1/x"},
         {"key": "X1", "version": 9, "DOI": "10.1/x"},
     ]
-
-
-def _cloud_with_template():
-    """A fake pyzotero client whose attachment template is a real dict.
-
-    `attach_pdf` fills the template in and hands it to the uploader, so a
-    bare MagicMock would make the payload unreadable — every field would
-    come back as another mock rather than the value that was set.
-    """
-    cloud = MagicMock()
-    cloud._attachment_template.return_value = {
-        "itemType": "attachment",
-        "linkMode": "imported_file",
-        "title": "",
-        "filename": "",
-        "contentType": "",
-    }
-    return cloud
 
 
 @contextmanager
@@ -399,7 +383,7 @@ def test_attach_pdf_uploads_through_zupload(tmp_path) -> None:
     """pyzotero's Zupload returns lists of item dicts under success /
     failure / unchanged (see _upload.py:218-239)."""
     zc = _client()
-    zc._cloud = _cloud_with_template()
+    zc._local = MagicMock()
 
     pdf_path = _real_pdf(tmp_path)
     with _fake_upload({
@@ -430,7 +414,7 @@ def test_attach_pdf_sends_a_bare_filename_not_a_path(tmp_path) -> None:
     `basedir`.
     """
     zc = _client()
-    zc._cloud = _cloud_with_template()
+    zc._local = MagicMock()
 
     pdf_path = _real_pdf(tmp_path)
     with _fake_upload({
@@ -452,7 +436,7 @@ def test_attach_pdf_returns_the_key_on_unchanged(tmp_path) -> None:
     See tests/unit/test_attach_pdf_contract.py for the mechanism and the
     duplicate attachments the old None return produced."""
     zc = _client()
-    zc._cloud = _cloud_with_template()
+    zc._local = MagicMock()
 
     with _fake_upload({
         "success": [],
@@ -464,7 +448,7 @@ def test_attach_pdf_returns_the_key_on_unchanged(tmp_path) -> None:
 
 def test_attach_pdf_raises_on_failure(tmp_path) -> None:
     zc = _client()
-    zc._cloud = _cloud_with_template()
+    zc._local = MagicMock()
 
     with _fake_upload({
         "success": [],
@@ -479,7 +463,7 @@ def test_attach_pdf_reads_nested_data_key_shape(tmp_path) -> None:
     """Some pyzotero responses nest the key under `data` instead of at
     the top level. The wrapper should handle both."""
     zc = _client()
-    zc._cloud = _cloud_with_template()
+    zc._local = MagicMock()
 
     with _fake_upload({
         "success": [{"data": {"key": "NESTED1"}}],
@@ -491,16 +475,16 @@ def test_attach_pdf_reads_nested_data_key_shape(tmp_path) -> None:
 
 def test_update_abstract_patches_item_with_current_version() -> None:
     zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.item.return_value = {"key": "X1", "version": 7}
+    fake_local = MagicMock()
+    fake_local.item.return_value = {"key": "X1", "version": 7}
     response = MagicMock(status_code=204)
-    fake_cloud.update_item.return_value = response
-    zc._cloud = fake_cloud
+    fake_local.update_item.return_value = response
+    zc._local = fake_local
 
     ok = zc.update_abstract("X1", "new abstract text")
 
-    fake_cloud.item.assert_called_once_with("X1")
-    fake_cloud.update_item.assert_called_once_with({
+    fake_local.item.assert_called_once_with("X1")
+    fake_local.update_item.assert_called_once_with({
         "key": "X1", "version": 7, "abstractNote": "new abstract text",
     })
     assert ok is True
@@ -512,13 +496,13 @@ def test_update_abstract_retries_on_412_version_conflict(monkeypatch) -> None:
     re-fetches the item's latest version)."""
     import httpx
     zc = _client()
-    fake_cloud = MagicMock()
+    fake_local = MagicMock()
 
     # First call: returns stale version, pyzotero raises 412.
     # Second call: returns fresh version, pyzotero returns 204.
     version_seq = iter([{"key": "X1", "version": 7},
                         {"key": "X1", "version": 8}])
-    fake_cloud.item.side_effect = lambda _k: next(version_seq)
+    fake_local.item.side_effect = lambda _k: next(version_seq)
 
     conflict = httpx.HTTPStatusError(
         "Precondition Failed",
@@ -526,8 +510,8 @@ def test_update_abstract_retries_on_412_version_conflict(monkeypatch) -> None:
         response=httpx.Response(412),
     )
     response_ok = MagicMock(status_code=204)
-    fake_cloud.update_item.side_effect = [conflict, response_ok]
-    zc._cloud = fake_cloud
+    fake_local.update_item.side_effect = [conflict, response_ok]
+    zc._local = fake_local
 
     # Collapse tenacity waits for test speed.
     import tenacity
@@ -536,8 +520,8 @@ def test_update_abstract_retries_on_412_version_conflict(monkeypatch) -> None:
     ok = zc.update_abstract("X1", "new abstract text")
 
     assert ok is True
-    assert fake_cloud.item.call_count == 2
-    assert fake_cloud.update_item.call_count == 2
+    assert fake_local.item.call_count == 2
+    assert fake_local.update_item.call_count == 2
 
 
 def test_update_abstract_raises_on_non_412_http_error() -> None:
@@ -545,16 +529,16 @@ def test_update_abstract_raises_on_non_412_http_error() -> None:
     conflict."""
     import httpx
     zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.item.return_value = {"key": "X1", "version": 7}
+    fake_local = MagicMock()
+    fake_local.item.return_value = {"key": "X1", "version": 7}
 
     non_conflict = httpx.HTTPStatusError(
         "Server Error",
         request=httpx.Request("PATCH", "http://test"),
         response=httpx.Response(500),
     )
-    fake_cloud.update_item.side_effect = non_conflict
-    zc._cloud = fake_cloud
+    fake_local.update_item.side_effect = non_conflict
+    zc._local = fake_local
 
     with pytest.raises(httpx.HTTPStatusError):
         zc.update_abstract("X1", "abstract")
@@ -562,29 +546,38 @@ def test_update_abstract_raises_on_non_412_http_error() -> None:
 
 def test_delete_item_calls_pyzotero_with_fresh_version() -> None:
     zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.item.return_value = {"key": "STUB1", "version": 99}
-    fake_cloud.delete_item.return_value = MagicMock(status_code=204)
-    zc._cloud = fake_cloud
+    fake_local = MagicMock()
+    fake_local.item.return_value = {"key": "STUB1", "version": 99}
+    fake_local.delete_item.return_value = MagicMock(status_code=204)
+    zc._local = fake_local
 
     assert zc.delete_item("STUB1") is True
-    fake_cloud.delete_item.assert_called_once()
-    args, kwargs = fake_cloud.delete_item.call_args
+    fake_local.delete_item.assert_called_once()
+    args, kwargs = fake_local.delete_item.call_args
     assert args[0]["version"] == 99
     assert kwargs.get("last_modified") == 99
 
 
-def test_read_client_prefers_local_by_default() -> None:
+def test_the_one_client_is_the_local_one() -> None:
+    """Every read and write goes to Zotero Desktop's local API."""
     zc = _client()
-    assert zc.prefer_local is True
-    assert zc._read_client() is zc.local
+    assert zc._client() is zc.local
+    assert isinstance(zc.local, zotero_io._LocalZotero)
+    assert zc.local.endpoint.startswith("http://127.0.0.1:23119")
 
 
-def test_read_client_uses_cloud_when_prefer_local_false() -> None:
-    zc = zotero_io.ZoteroClient(
-        api_key="k", group_id="1", prefer_local=False,
-    )
-    assert zc._read_client() is zc.cloud
+def test_the_local_client_is_built_with_the_local_api_key() -> None:
+    """pyzotero sends it as the `Zotero-API-Key` header on local writes."""
+    zc = zotero_io.ZoteroClient(group_id="123", local_api_key="local-secret")
+    assert zc.local.local is True
+    assert zc.local.local_api_key == "local-secret"
+
+
+def test_no_local_api_key_is_none_not_empty() -> None:
+    """An empty configured key means "ask Zotero for one on first write"."""
+    zc = zotero_io.ZoteroClient(group_id="123", local_api_key="")
+    assert zc.local_api_key is None
+    assert zc.local.local_api_key is None
 
 
 # ---------------------------------------------------------------------------
@@ -600,15 +593,15 @@ class _PatchResponse:
         self.status_code = status_code
 
 
-def _mock_cloud() -> MagicMock:
-    """Fake cloud pyzotero client with minimal surface for merge."""
+def _mock_local() -> MagicMock:
+    """Fake local pyzotero client with minimal surface for merge. The
+    trash PATCH goes through its `_write`, which adds the local-write
+    headers."""
     m = MagicMock()
-    m.endpoint = "https://api.zotero.org"
+    m.endpoint = "http://127.0.0.1:23119/api"
     m.library_type = "groups"
     m.library_id = "12345"
-    patch_mock = MagicMock()
-    patch_mock.patch.return_value = _PatchResponse(status_code=204)
-    m.client = patch_mock
+    m._write.return_value = _PatchResponse(status_code=204)
     return m
 
 
@@ -646,9 +639,8 @@ def test_merge_duplicate_item_refuses_mismatched_dois(monkeypatch) -> None:
     """Safety guard: two non-empty DOIs that don't match → ValueError.
     Prevents merging two genuinely different papers by accident."""
     zc = _client()
-    monkeypatch.setattr(type(zc), "cloud", _mock_cloud(),
-                        raising=False)
-    zc.cloud.item.side_effect = [
+    zc._local = _mock_local()
+    zc._local.item.side_effect = [
         _fake_item("KEEPER", doi="10.1/x"),
         _fake_item("DUPE",   doi="10.1/y"),    # different!
     ]
@@ -661,16 +653,16 @@ def test_merge_duplicate_item_allows_when_one_doi_missing(monkeypatch) -> None:
     """Connector-created duplicates often arrive without a DOI in
     their data field; an empty DOI on one side is not a mismatch."""
     zc = _client()
-    cloud = _mock_cloud()
-    cloud.item.side_effect = [
+    local = _mock_local()
+    local.item.side_effect = [
         _fake_item("KEEPER", doi="10.1/x"),
         _fake_item("DUPE",   doi=""),
         # after mutation, merge re-fetches the duplicate for the trash
         # PATCH — return the same keyed shape.
         _fake_item("DUPE",   doi=""),
     ]
-    cloud.children.side_effect = [[], [], []]  # no children either side, nor on re-check
-    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+    local.children.side_effect = [[], [], []]  # no children either side, nor on re-check
+    zc._local = local
 
     stats = zc.merge_duplicate_item("KEEPER", "DUPE")
     assert stats["trashed"] == ["DUPE"]
@@ -678,12 +670,12 @@ def test_merge_duplicate_item_allows_when_one_doi_missing(monkeypatch) -> None:
 
 def test_merge_duplicate_item_moves_children_and_unions_tags(monkeypatch) -> None:
     zc = _client()
-    cloud = _mock_cloud()
+    local = _mock_local()
     dup_pdf = _fake_attachment(
         "PDF-NEW", parent="DUPE",
         filename="fresh.pdf", md5="aaaa",
     )
-    cloud.item.side_effect = [
+    local.item.side_effect = [
         _fake_item("KEEPER", doi="10.1/x",
                    tags=["framing"], collections=["C1"]),
         _fake_item("DUPE", doi="10.1/x",
@@ -704,8 +696,8 @@ def test_merge_duplicate_item_moves_children_and_unions_tags(monkeypatch) -> Non
                    tags=["framing", "institutional"],
                    collections=["C1", "C2"]),
     ]
-    cloud.children.side_effect = [[], [dup_pdf], []]
-    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+    local.children.side_effect = [[], [dup_pdf], []]
+    zc._local = local
 
     stats = zc.merge_duplicate_item("KEEPER", "DUPE")
 
@@ -715,14 +707,14 @@ def test_merge_duplicate_item_moves_children_and_unions_tags(monkeypatch) -> Non
     assert stats["trashed"] == ["DUPE"]
     # Child was re-parented to the keeper.
     assert dup_pdf["data"]["parentItem"] == "KEEPER"
-    cloud.addto_collection.assert_called_once()
+    local.addto_collection.assert_called_once()
 
 
 def test_merge_duplicate_item_skips_duplicate_attachments(monkeypatch) -> None:
     """A duplicate attachment with the same (contentType, filename,
     md5, url) signature is NOT re-parented — prevents twin PDFs."""
     zc = _client()
-    cloud = _mock_cloud()
+    local = _mock_local()
     keeper_pdf = _fake_attachment(
         "PDF-KEEPER", parent="KEEPER",
         filename="paper.pdf", md5="deadbeef",
@@ -731,14 +723,14 @@ def test_merge_duplicate_item_skips_duplicate_attachments(monkeypatch) -> None:
         "PDF-DUPE", parent="DUPE",
         filename="paper.pdf", md5="deadbeef",
     )
-    cloud.item.side_effect = [
+    local.item.side_effect = [
         _fake_item("KEEPER", doi="10.1/x"),
         _fake_item("DUPE",   doi="10.1/x"),
         dup_pdf,                         # fresh child before re-parent
         _fake_item("DUPE",   doi="10.1/x"),   # latest before trash
     ]
-    cloud.children.side_effect = [[keeper_pdf], [dup_pdf], [dup_pdf]]
-    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+    local.children.side_effect = [[keeper_pdf], [dup_pdf], [dup_pdf]]
+    zc._local = local
 
     stats = zc.merge_duplicate_item("KEEPER", "DUPE")
 
@@ -751,22 +743,23 @@ def test_merge_duplicate_item_trashes_via_patch_not_delete(monkeypatch) -> None:
     not permanently deleted. Matters: Zotero's Trash lets the user
     recover, pyzotero's delete_item() does not."""
     zc = _client()
-    cloud = _mock_cloud()
-    cloud.item.side_effect = [
+    local = _mock_local()
+    local.item.side_effect = [
         _fake_item("KEEPER", doi="10.1/x"),
         _fake_item("DUPE",   doi="10.1/x"),
         _fake_item("DUPE",   doi="10.1/x"),     # latest before trash
     ]
-    cloud.children.side_effect = [[], [], []]
-    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+    local.children.side_effect = [[], [], []]
+    zc._local = local
 
     zc.merge_duplicate_item("KEEPER", "DUPE")
 
     # pyzotero.delete_item MUST NOT be used.
-    assert not cloud.delete_item.called
+    assert not local.delete_item.called
     # The PATCH call body must include {"deleted": 1}.
-    cloud.client.patch.assert_called_once()
-    _args, kwargs = cloud.client.patch.call_args
+    local._write.assert_called_once()
+    args, kwargs = local._write.call_args
+    assert args[0] == "PATCH"
     import json as _json
     body = _json.loads(kwargs["content"])
     assert body == {"deleted": 1}
@@ -778,15 +771,15 @@ def test_merge_duplicate_item_reports_trash_failure(monkeypatch, caplog) -> None
     caller can detect the failure without a raised exception (the
     merge itself succeeded, only the cleanup step didn't)."""
     zc = _client()
-    cloud = _mock_cloud()
-    cloud.client.patch.return_value = _PatchResponse(status_code=412)
-    cloud.item.side_effect = [
+    local = _mock_local()
+    local._write.return_value = _PatchResponse(status_code=412)
+    local.item.side_effect = [
         _fake_item("KEEPER", doi="10.1/x"),
         _fake_item("DUPE",   doi="10.1/x"),
         _fake_item("DUPE",   doi="10.1/x"),
     ]
-    cloud.children.side_effect = [[], [], []]
-    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+    local.children.side_effect = [[], [], []]
+    zc._local = local
 
     caplog.set_level("WARNING")
     stats = zc.merge_duplicate_item("KEEPER", "DUPE")
@@ -816,10 +809,10 @@ def _tagged_item(key: str, version: int, tags: list[str]) -> dict:
 
 def test_update_tags_adds_new_tag_preserving_existing() -> None:
     zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.item.return_value = _tagged_item("X1", 5, ["keep:me"])
-    fake_cloud.update_item.return_value = MagicMock(status_code=204)
-    zc._cloud = fake_cloud
+    fake_local = MagicMock()
+    fake_local.item.return_value = _tagged_item("X1", 5, ["keep:me"])
+    fake_local.update_item.return_value = MagicMock(status_code=204)
+    zc._local = fake_local
 
     changes = zc.update_tags("X1", add=["abstract:include"])
 
@@ -830,7 +823,7 @@ def test_update_tags_adds_new_tag_preserving_existing() -> None:
         "version": 5,
         "tags": [{"tag": "abstract:include"}, {"tag": "keep:me"}],
     }
-    fake_cloud.update_item.assert_called_once_with(expected_payload)
+    fake_local.update_item.assert_called_once_with(expected_payload)
 
 
 def test_update_tags_noop_when_target_equals_existing() -> None:
@@ -838,28 +831,28 @@ def test_update_tags_noop_when_target_equals_existing() -> None:
     PATCH entirely — saves a network round-trip for items already in
     the desired state."""
     zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.item.return_value = _tagged_item(
+    fake_local = MagicMock()
+    fake_local.item.return_value = _tagged_item(
         "X1", 5, ["abstract:include", "keep:me"],
     )
-    zc._cloud = fake_cloud
+    zc._local = fake_local
 
     changes = zc.update_tags("X1", add=["abstract:include"])
 
     assert changes == 0
-    fake_cloud.update_item.assert_not_called()
+    fake_local.update_item.assert_not_called()
 
 
 def test_update_tags_remove_prefixed_replaces_stage_tag_atomically() -> None:
     """The canonical flip pattern: swap abstract:borderline → abstract:include
     in a single PATCH by combining add + remove_prefixed."""
     zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.item.return_value = _tagged_item(
+    fake_local = MagicMock()
+    fake_local.item.return_value = _tagged_item(
         "X1", 5, ["abstract:borderline", "predatory:flag"],
     )
-    fake_cloud.update_item.return_value = MagicMock(status_code=204)
-    zc._cloud = fake_cloud
+    fake_local.update_item.return_value = MagicMock(status_code=204)
+    zc._local = fake_local
 
     changes = zc.update_tags(
         "X1",
@@ -869,7 +862,7 @@ def test_update_tags_remove_prefixed_replaces_stage_tag_atomically() -> None:
 
     # +abstract:include, -abstract:borderline = 2 changes.
     assert changes == 2
-    fake_cloud.update_item.assert_called_once_with({
+    fake_local.update_item.assert_called_once_with({
         "key": "X1",
         "version": 5,
         "tags": [{"tag": "abstract:include"}, {"tag": "predatory:flag"}],
@@ -878,17 +871,17 @@ def test_update_tags_remove_prefixed_replaces_stage_tag_atomically() -> None:
 
 def test_update_tags_remove_exact() -> None:
     zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.item.return_value = _tagged_item(
+    fake_local = MagicMock()
+    fake_local.item.return_value = _tagged_item(
         "X1", 5, ["qa-flag", "qa-hard", "abstract:include"],
     )
-    fake_cloud.update_item.return_value = MagicMock(status_code=204)
-    zc._cloud = fake_cloud
+    fake_local.update_item.return_value = MagicMock(status_code=204)
+    zc._local = fake_local
 
     changes = zc.update_tags("X1", remove=["qa-flag", "qa-hard"])
 
     assert changes == 2
-    fake_cloud.update_item.assert_called_once_with({
+    fake_local.update_item.assert_called_once_with({
         "key": "X1",
         "version": 5,
         "tags": [{"tag": "abstract:include"}],
@@ -900,9 +893,9 @@ def test_update_tags_retries_on_412_version_conflict(monkeypatch) -> None:
     update_tags, which re-fetches the item's current version."""
     import httpx
     zc = _client()
-    fake_cloud = MagicMock()
+    fake_local = MagicMock()
 
-    fake_cloud.item.side_effect = [
+    fake_local.item.side_effect = [
         _tagged_item("X1", 5, []),
         _tagged_item("X1", 6, []),
     ]
@@ -911,8 +904,8 @@ def test_update_tags_retries_on_412_version_conflict(monkeypatch) -> None:
         request=httpx.Request("PATCH", "http://test"),
         response=httpx.Response(412),
     )
-    fake_cloud.update_item.side_effect = [conflict, MagicMock(status_code=204)]
-    zc._cloud = fake_cloud
+    fake_local.update_item.side_effect = [conflict, MagicMock(status_code=204)]
+    zc._local = fake_local
 
     import tenacity
     monkeypatch.setattr(zc.update_tags.retry, "wait", tenacity.wait_none())
@@ -920,17 +913,17 @@ def test_update_tags_retries_on_412_version_conflict(monkeypatch) -> None:
     changes = zc.update_tags("X1", add=["fulltext:include"])
 
     assert changes == 1
-    assert fake_cloud.item.call_count == 2
-    assert fake_cloud.update_item.call_count == 2
+    assert fake_local.item.call_count == 2
+    assert fake_local.update_item.call_count == 2
 
 
 def test_get_tags_returns_set_of_tag_names() -> None:
     zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.item.return_value = _tagged_item(
+    fake_local = MagicMock()
+    fake_local.item.return_value = _tagged_item(
         "X1", 5, ["abstract:include", "predatory:flag", ""],
     )
-    zc._cloud = fake_cloud
+    zc._local = fake_local
 
     tags = zc.get_tags("X1")
 
@@ -939,9 +932,9 @@ def test_get_tags_returns_set_of_tag_names() -> None:
 
 def test_get_tags_returns_empty_set_for_untagged_item() -> None:
     zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.item.return_value = _tagged_item("X1", 5, [])
-    zc._cloud = fake_cloud
+    fake_local = MagicMock()
+    fake_local.item.return_value = _tagged_item("X1", 5, [])
+    zc._local = fake_local
 
     assert zc.get_tags("X1") == set()
 
@@ -982,43 +975,43 @@ def _non_note_child(key: str) -> dict:
 
 def test_upsert_child_note_creates_new_note_when_none_exists() -> None:
     zc = _client()
-    fake_cloud = MagicMock()
-    fake_cloud.children.return_value = [_non_note_child("ATT1")]
+    fake_local = MagicMock()
+    fake_local.children.return_value = [_non_note_child("ATT1")]
     # pyzotero's create_items returns success keyed by index as string.
-    fake_cloud.create_items.return_value = {
+    fake_local.create_items.return_value = {
         "success": {"0": {"key": "NEW1", "data": {"key": "NEW1"}}},
     }
-    zc._cloud = fake_cloud
+    zc._local = fake_local
 
     body = f"{MARKER}\n<p>Decision: include</p>"
     key = zc.upsert_child_note("PARENT", marker=MARKER, note_html=body)
 
     assert key == "NEW1"
-    fake_cloud.create_items.assert_called_once()
-    call_payload = fake_cloud.create_items.call_args[0][0][0]
+    fake_local.create_items.assert_called_once()
+    call_payload = fake_local.create_items.call_args[0][0][0]
     assert call_payload["itemType"] == "note"
     assert call_payload["parentItem"] == "PARENT"
     assert call_payload["note"] == body
-    fake_cloud.update_item.assert_not_called()
+    fake_local.update_item.assert_not_called()
 
 
 def test_upsert_child_note_updates_existing_note_matching_marker() -> None:
     zc = _client()
-    fake_cloud = MagicMock()
+    fake_local = MagicMock()
     # One non-note child and one note that starts with MARKER.
     old_note = _note_child("N1", 12, f"{MARKER}\n<p>old body</p>")
-    fake_cloud.children.return_value = [_non_note_child("ATT1"), old_note]
-    fake_cloud.update_item.return_value = MagicMock(status_code=204)
-    zc._cloud = fake_cloud
+    fake_local.children.return_value = [_non_note_child("ATT1"), old_note]
+    fake_local.update_item.return_value = MagicMock(status_code=204)
+    zc._local = fake_local
 
     new_body = f"{MARKER}\n<p>new body</p>"
     key = zc.upsert_child_note("PARENT", marker=MARKER, note_html=new_body)
 
     assert key == "N1"
     # No new items created.
-    fake_cloud.create_items.assert_not_called()
+    fake_local.create_items.assert_not_called()
     # Update patched the existing note with its version.
-    fake_cloud.update_item.assert_called_once_with({
+    fake_local.update_item.assert_called_once_with({
         "key": "N1", "version": 12, "note": new_body,
     })
 
@@ -1028,21 +1021,21 @@ def test_upsert_child_note_ignores_unrelated_notes() -> None:
     annotations-as-notes). Our upsert must only touch notes that start
     with the marker — never overwrite the user's work."""
     zc = _client()
-    fake_cloud = MagicMock()
+    fake_local = MagicMock()
     user_note = _note_child("U1", 3, "<p>My reading notes. Very important.</p>")
-    fake_cloud.children.return_value = [user_note]
-    fake_cloud.create_items.return_value = {
+    fake_local.children.return_value = [user_note]
+    fake_local.create_items.return_value = {
         "success": {"0": {"key": "NEW1"}},
     }
-    zc._cloud = fake_cloud
+    zc._local = fake_local
 
     body = f"{MARKER}\n<p>Decision: include</p>"
     key = zc.upsert_child_note("PARENT", marker=MARKER, note_html=body)
 
     assert key == "NEW1"
-    fake_cloud.create_items.assert_called_once()
+    fake_local.create_items.assert_called_once()
     # The user's note must NOT have been touched.
-    fake_cloud.update_item.assert_not_called()
+    fake_local.update_item.assert_not_called()
 
 
 def test_upsert_child_note_rejects_body_without_marker() -> None:
@@ -1050,7 +1043,7 @@ def test_upsert_child_note_rejects_body_without_marker() -> None:
     upserts won't find and update it — we'd leak duplicate notes. Fail
     loudly at the call site."""
     zc = _client()
-    zc._cloud = MagicMock()
+    zc._local = MagicMock()
 
     with pytest.raises(ValueError, match="must begin with the marker"):
         zc.upsert_child_note("PARENT", marker=MARKER, note_html="<p>oops</p>")
@@ -1059,20 +1052,20 @@ def test_upsert_child_note_rejects_body_without_marker() -> None:
 def test_upsert_child_note_retries_on_412_version_conflict(monkeypatch) -> None:
     import httpx
     zc = _client()
-    fake_cloud = MagicMock()
+    fake_local = MagicMock()
 
     # children() returns the old note twice (once per attempt); update
     # fails first with 412, succeeds second.
     old_note_v1 = _note_child("N1", 12, f"{MARKER}\n<p>old</p>")
     old_note_v2 = _note_child("N1", 13, f"{MARKER}\n<p>old</p>")
-    fake_cloud.children.side_effect = [[old_note_v1], [old_note_v2], []]
+    fake_local.children.side_effect = [[old_note_v1], [old_note_v2], []]
     conflict = httpx.HTTPStatusError(
         "Precondition Failed",
         request=httpx.Request("PATCH", "http://test"),
         response=httpx.Response(412),
     )
-    fake_cloud.update_item.side_effect = [conflict, MagicMock(status_code=204)]
-    zc._cloud = fake_cloud
+    fake_local.update_item.side_effect = [conflict, MagicMock(status_code=204)]
+    zc._local = fake_local
 
     import tenacity
     monkeypatch.setattr(
@@ -1083,8 +1076,8 @@ def test_upsert_child_note_retries_on_412_version_conflict(monkeypatch) -> None:
     key = zc.upsert_child_note("PARENT", marker=MARKER, note_html=new_body)
 
     assert key == "N1"
-    assert fake_cloud.children.call_count == 2
-    assert fake_cloud.update_item.call_count == 2
+    assert fake_local.children.call_count == 2
+    assert fake_local.update_item.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1125,9 +1118,9 @@ def test_add_library_args_group_and_user_are_mutually_exclusive() -> None:
 def test_from_args_builds_group_client(monkeypatch) -> None:
     from core import config_loader
     monkeypatch.setattr(config_loader, "load_config", lambda: {
-        "zotero": {"api_key": "from-config"}
+        "zotero": {"local_api_key": "from-config"}
     })
-    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+    monkeypatch.delenv("ZOTERO_LOCAL_API_KEY", raising=False)
     monkeypatch.delenv("ZOTERO_GROUP", raising=False)
 
     import argparse
@@ -1138,16 +1131,15 @@ def test_from_args_builds_group_client(monkeypatch) -> None:
     zc = zotero_io.ZoteroClient.from_args(args)
     assert zc.library_type == "group"
     assert zc.group_id == "12345"
-    assert zc.api_key == "from-config"
+    assert zc.local_api_key == "from-config"
 
 
 def test_from_args_builds_user_client(monkeypatch) -> None:
     from core import config_loader
     monkeypatch.setattr(config_loader, "load_config", lambda: {
-        "zotero": {"api_key": "k", "user_id": "5591"}
+        "zotero": {}
     })
-    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
-    monkeypatch.delenv("ZOTERO_USER_ID", raising=False)
+    monkeypatch.delenv("ZOTERO_LOCAL_API_KEY", raising=False)
 
     import argparse
     parser = argparse.ArgumentParser()
@@ -1156,16 +1148,17 @@ def test_from_args_builds_user_client(monkeypatch) -> None:
 
     zc = zotero_io.ZoteroClient.from_args(args)
     assert zc.library_type == "user"
-    assert zc.group_id == "5591"
+    # The local API serves the personal library only as users/0.
+    assert zc.group_id == "0"
 
 
 def test_from_args_errors_without_group_or_user(monkeypatch) -> None:
     from core import config_loader
     monkeypatch.setattr(config_loader, "load_config", lambda: {
-        "zotero": {"api_key": "k"}
+        "zotero": {}
     })
     monkeypatch.delenv("ZOTERO_GROUP", raising=False)
-    monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+    monkeypatch.delenv("ZOTERO_LOCAL_API_KEY", raising=False)
 
     import argparse
     parser = argparse.ArgumentParser()
@@ -1176,34 +1169,33 @@ def test_from_args_errors_without_group_or_user(monkeypatch) -> None:
         zotero_io.ZoteroClient.from_args(args)
 
 
-def test_api_base_url_matches_library_type() -> None:
-    group_zc = zotero_io.ZoteroClient(api_key="k", group_id="12345")
-    assert group_zc.api_base_url() == "https://api.zotero.org/groups/12345"
+def test_the_add_library_args_parser_has_no_remote_flag() -> None:
+    """There is no Web API to read from any more."""
+    import argparse
+    parser = argparse.ArgumentParser()
+    zotero_io.add_library_args(parser)
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--user", "--remote"])
 
-    user_zc = zotero_io.ZoteroClient(
-        api_key="k", group_id="5591", library_type="user",
-    )
-    assert user_zc.api_base_url() == "https://api.zotero.org/users/5591"
 
-
-def test_pyzotero_clients_match_library_type() -> None:
-    """Regression: `local` / `cloud` hardcoded "group", so a
-    `library_type="user"` client queried /groups/<user_id>/ on both
-    transports — every personal-library (`--user`) read/write 404'd."""
-    user_zc = zotero_io.ZoteroClient(
-        api_key="k", group_id="5591", library_type="user",
-    )
+def test_pyzotero_client_matches_library_type() -> None:
+    """Regression: `local` hardcoded "group", so a `library_type="user"`
+    client queried /groups/<user_id>/ — every personal-library (`--user`)
+    read/write 404'd."""
+    user_zc = zotero_io.ZoteroClient("5591", library_type="user")
     assert user_zc.local.library_type == "users"
-    assert user_zc.cloud.library_type == "users"
     # Local Zotero serves the personal library only as users/0 (the
-    # logged-in user); the cloud client keeps the real user ID.
+    # logged-in user), whatever ID the caller passed.
     assert str(user_zc.local.library_id) == "0"
-    assert str(user_zc.cloud.library_id) == "5591"
 
-    group_zc = zotero_io.ZoteroClient(api_key="k", group_id="12345")
+    group_zc = zotero_io.ZoteroClient(group_id="12345")
     assert group_zc.local.library_type == "groups"
-    assert group_zc.cloud.library_type == "groups"
     assert str(group_zc.local.library_id) == "12345"
+
+
+def test_describe_library_names_the_personal_library() -> None:
+    assert zotero_io.ZoteroClient("0", library_type="user").describe_library() \
+        == "personal library"
 
 
 # ---------------------------------------------------------------------
@@ -1276,21 +1268,21 @@ class _InvalidItemFieldsError(Exception):
     """Stands in for pyzotero's exception, which is matched by name."""
 
 
-def _client_with_cloud(cloud):
+def _client_with_local(local):
     from zotero_io import ZoteroClient
     z = ZoteroClient.__new__(ZoteroClient)
-    z._cloud = cloud
+    z._local = local
     return z
 
 
 def test_safe_update_item_strips_known_unwritable_field():
     seen = []
 
-    class Cloud:
+    class Local:
         def update_item(self, item):
             seen.append(dict(item["data"]))
 
-    z = _client_with_cloud(Cloud())
+    z = _client_with_local(Local())
     item = {"data": {"key": "A", "parentItem": "B", "lastRead": 1699999999}}
     z._safe_update_item(item)
 
@@ -1304,7 +1296,7 @@ def test_safe_update_item_retries_on_unknown_field_from_error_text():
     be recovered from pyzotero's own message rather than hard-failing."""
     calls = []
 
-    class Cloud:
+    class Local:
         def update_item(self, item):
             calls.append(dict(item["data"]))
             if "someFutureField" in item["data"]:
@@ -1313,7 +1305,7 @@ def test_safe_update_item_retries_on_unknown_field_from_error_text():
                 )
 
     _InvalidItemFieldsError.__name__ = "InvalidItemFieldsError"
-    z = _client_with_cloud(Cloud())
+    z = _client_with_local(Local())
     item = {"data": {"key": "A", "someFutureField": 1}}
     z._safe_update_item(item)
 
@@ -1322,11 +1314,11 @@ def test_safe_update_item_retries_on_unknown_field_from_error_text():
 
 
 def test_safe_update_item_reraises_unrelated_errors():
-    class Cloud:
+    class Local:
         def update_item(self, item):
             raise RuntimeError("network down")
 
-    z = _client_with_cloud(Cloud())
+    z = _client_with_local(Local())
     with pytest.raises(RuntimeError, match="network down"):
         z._safe_update_item({"data": {"key": "A"}})
 
@@ -1336,18 +1328,18 @@ def test_merge_can_move_only_pdfs_and_leave_tags(monkeypatch) -> None:
     the Connector's HTML snapshot and keyword tags are not wanted there.
     Everything else goes to Zotero's trash with the duplicate."""
     zc = _client()
-    cloud = _mock_cloud()
+    local = _mock_local()
     dup_pdf = _fake_attachment("PDF-NEW", parent="DUPE", filename="a.pdf", md5="aa")
     snap = _fake_attachment("SNAP", parent="DUPE", filename="s.html",
                             content_type="text/html")
-    cloud.item.side_effect = [
+    local.item.side_effect = [
         _fake_item("KEEPER", doi="10.1/x", tags=["pdf:tdm-recovered"]),
         _fake_item("DUPE", doi="10.1/x", tags=["Deception", "Paternalism"]),
         dup_pdf, snap,
         _fake_item("DUPE", doi="10.1/x"),
     ]
-    cloud.children.side_effect = [[], [dup_pdf, snap], [snap]]
-    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+    local.children.side_effect = [[], [dup_pdf, snap], [snap]]
+    zc._local = local
 
     stats = zc.merge_duplicate_item(
         "KEEPER", "DUPE", union_tags=False, child_content_types=("application/pdf",),
@@ -1359,25 +1351,25 @@ def test_merge_can_move_only_pdfs_and_leave_tags(monkeypatch) -> None:
 
 
 def test_merge_never_trashes_an_item_still_holding_an_unmoved_pdf(monkeypatch) -> None:
-    """The PDF child reached the cloud after the merge listed children:
+    """The PDF child appeared after the merge listed children:
     trashing then hid the only real copy."""
     zc = _client()
-    cloud = _mock_cloud()
+    local = _mock_local()
     late_pdf = _fake_attachment("PDF-LATE", parent="DUPE", filename="a.pdf", md5="aa")
-    cloud.item.side_effect = [
+    local.item.side_effect = [
         _fake_item("KEEPER", doi="10.1/x"),
         _fake_item("DUPE", doi="10.1/x"),
     ]
     # listing at merge start: nothing; re-check before trashing: the PDF
-    cloud.children.side_effect = [[], [], [late_pdf]]
-    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+    local.children.side_effect = [[], [], [late_pdf]]
+    zc._local = local
 
     stats = zc.merge_duplicate_item(
         "KEEPER", "DUPE", union_tags=False, child_content_types=("application/pdf",),
     )
     assert stats["trashed"] == []
     assert stats["kept_unmoved_pdf"] is True
-    cloud.client.patch.assert_not_called()
+    local._write.assert_not_called()
 
 
 def test_merge_retries_a_child_whose_version_moved(monkeypatch) -> None:
@@ -1385,15 +1377,15 @@ def test_merge_retries_a_child_whose_version_moved(monkeypatch) -> None:
     attachment's version between the merge's read and its PATCH: 412,
     twice in one night (8TLAMCAM, REMFU76G). Re-read and retry."""
     zc = _client()
-    cloud = _mock_cloud()
+    local = _mock_local()
     pdf_v1 = _fake_attachment("PDF", parent="DUPE", filename="a.pdf", md5="")
     pdf_v2 = _fake_attachment("PDF", parent="DUPE", filename="a.pdf", md5="bb")
-    cloud.item.side_effect = [
+    local.item.side_effect = [
         _fake_item("KEEPER", doi="10.1/x"), _fake_item("DUPE", doi="10.1/x"),
         pdf_v1, pdf_v2,                      # read, then re-read after the 412
         _fake_item("DUPE", doi="10.1/x"),
     ]
-    cloud.children.side_effect = [[], [pdf_v1], []]
+    local.children.side_effect = [[], [pdf_v1], []]
     calls = []
 
     def update(item):
@@ -1405,8 +1397,8 @@ def test_merge_retries_a_child_whose_version_moved(monkeypatch) -> None:
                 "Item has been modified since specified version")
         return True
 
-    cloud.update_item.side_effect = update
-    monkeypatch.setattr(type(zc), "cloud", cloud, raising=False)
+    local.update_item.side_effect = update
+    zc._local = local
     monkeypatch.setattr("time.sleep", lambda s: None)
     stats = zc.merge_duplicate_item("KEEPER", "DUPE", union_tags=False,
                                     child_content_types=("application/pdf",))

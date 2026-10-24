@@ -143,8 +143,9 @@ register it.
 - Skills never read the config file; pipeline scripts read it
   themselves, so API keys stay out of the conversation.
 - Reference management goes through Zotero: the Zotero MCP server for
-  ad-hoc reads, the pipeline's `zotero_io.py` (Zotero's local API at
-  `localhost:23119`, or the Web API) for bulk work, and Better BibTeX
+  ad-hoc reads, the pipeline's `zotero_io.py` (Zotero Desktop's local
+  API at `localhost:23119` — Zotero 10 must be running; no zotero.org
+  key is used) for bulk work, and Better BibTeX
   for citation keys and `references.bib`.
 - The manuscript template renders with Quarto plus a Python that has
   `jupyter`, `pandas` and `tabulate`; see the header of

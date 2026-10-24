@@ -13,7 +13,8 @@ to work around by hand:
    writing through the *cloud* API. Zotero Desktop had not synced yet,
    so the dedup pre-check saw an empty library and created all 31 items
    a second time. PDF enrichment then downloaded 62 files and the PRISMA
-   count guard failed downstream.
+   count guard failed downstream. Reads and writes now both go to Zotero
+   Desktop; the pre-check must still read the library the import writes.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from zotero_io import ZoteroClient
 # ---------------------------------------------------------------------------
 
 
-class _FakeCloud:
+class _FakeLocal:
     def __init__(self, collections, *, created_key="NEWKEY01"):
         self._collections = collections
         self.created: list[str] = []
@@ -46,14 +47,14 @@ class _FakeCloud:
         return {"success": {"0": self._created_key}}
 
 
-def _client(collections, **kw) -> tuple[ZoteroClient, _FakeCloud]:
+def _client(collections, **kw) -> tuple[ZoteroClient, _FakeLocal]:
     client = ZoteroClient.__new__(ZoteroClient)
-    cloud = _FakeCloud(collections, **kw)
-    client._cloud = cloud
+    local = _FakeLocal(collections, **kw)
+    client._local = local
     # `describe_library()` names the library in the not-found error.
     client.library_type = "user"
     client.group_id = "5591"
-    return client, cloud
+    return client, local
 
 
 def _collection(key: str, name: str) -> dict:
@@ -61,24 +62,24 @@ def _collection(key: str, name: str) -> dict:
 
 
 def test_an_existing_key_is_used_as_is() -> None:
-    client, cloud = _client([_collection("BSEJHPJN", "AI SLR")])
+    client, local = _client([_collection("BSEJHPJN", "AI SLR")])
     assert client.find_collection("BSEJHPJN") == ("BSEJHPJN", "key")
-    assert cloud.created == []
+    assert local.created == []
 
 
 def test_a_name_resolves_to_its_key() -> None:
-    client, cloud = _client([_collection("BSEJHPJN", "AI SLR")])
+    client, local = _client([_collection("BSEJHPJN", "AI SLR")])
     assert client.find_collection("AI SLR") == ("BSEJHPJN", "name")
-    assert cloud.created == []
+    assert local.created == []
 
 
 def test_a_missing_name_is_created() -> None:
     """What the skill has promised all along."""
-    client, cloud = _client([], created_key="CREATED1")
+    client, local = _client([], created_key="CREATED1")
     assert client.find_collection("AI_ETP_SR", create=True) == (
         "CREATED1", "created",
     )
-    assert cloud.created == ["AI_ETP_SR"]
+    assert local.created == ["AI_ETP_SR"]
 
 
 def test_a_missing_name_without_create_is_an_error() -> None:
@@ -105,9 +106,9 @@ def test_a_key_shaped_string_that_is_not_a_key_falls_through_to_name() -> None:
 
 
 def test_empty_collection_argument_is_no_collection() -> None:
-    client, cloud = _client([])
+    client, local = _client([])
     assert client.find_collection("") == ("", "")
-    assert cloud.created == []
+    assert local.created == []
 
 
 # ---------------------------------------------------------------------------
@@ -188,9 +189,8 @@ def test_no_collection_argument_resolves_to_nothing() -> None:
 
 
 class _FakeZot:
-    def __init__(self, items, label):
+    def __init__(self, items):
         self.items_returned = items
-        self.label = label
 
     def items(self, **kwargs):
         return self.items_returned
@@ -199,39 +199,18 @@ class _FakeZot:
         return result
 
 
-def _client_with_backends(local_items, cloud_items):
-    client = ZoteroClient.__new__(ZoteroClient)
-    client._local = _FakeZot(local_items, "local")
-    client._cloud = _FakeZot(cloud_items, "cloud")
-    client.prefer_local = True
-    return client
-
-
-def test_cloud_journal_articles_ignores_the_local_preference() -> None:
-    client = _client_with_backends(local_items=[], cloud_items=[{"key": "K1"}])
-    assert client.cloud_journal_articles() == [{"key": "K1"}]
-    assert client.journal_articles() == [], "journal_articles() stays local"
-
-
-def test_dedup_precheck_reads_the_backend_the_import_writes() -> None:
-    """The regression: the local client had not synced, reported zero
-    items, and the import duplicated the whole corpus."""
+def test_dedup_precheck_reads_the_library_the_import_writes() -> None:
+    """The regression: a pre-check that saw zero items duplicated the
+    whole corpus."""
     existing = [{
         "key": "EXISTING1",
         "data": {"key": "EXISTING1", "DOI": "10.1016/j.jbusvent.2019.105970",
                  "title": "A paper", "creators": [{"lastName": "Doe"}]},
     }]
-    client = _client_with_backends(local_items=[], cloud_items=existing)
+    client = ZoteroClient.__new__(ZoteroClient)
+    client._local = _FakeZot(existing)
 
     doi_map, title_map = imp._fetch_existing_items(client, dry_run=False)
 
     assert doi_map == {"10.1016/j.jbusvent.2019.105970": "EXISTING1"}
     assert title_map
-
-
-def test_dry_run_reads_nothing_at_all() -> None:
-    class _Exploding:
-        def cloud_journal_articles(self):
-            raise AssertionError("--dry-run must not read the library")
-
-    assert imp._fetch_existing_items(_Exploding(), dry_run=True) == ({}, {})

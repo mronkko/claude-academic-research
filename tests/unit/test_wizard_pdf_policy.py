@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit.wizard_stubs import stub_zotero_gate
+
 WIZARD = Path(__file__).resolve().parents[2] / "scripts" / "setup" / "wizard.py"
 
 
@@ -121,9 +123,8 @@ def test_an_invalid_stored_value_falls_back_to_the_default(mod) -> None:
 
 
 def _run(mod, monkeypatch) -> int:
-    monkeypatch.setenv("ZOTERO_API_KEY", "dummy-zotero-key")
     monkeypatch.setattr(sys, "argv", ["wizard.py", "--non-interactive", "--skip-verify"])
-    monkeypatch.setattr(mod, "_check_zotero_local", lambda *a, **k: ("not_running", "stub"))
+    stub_zotero_gate(mod, monkeypatch)
     monkeypatch.setattr(mod, "_check_zotero_cli", lambda: ("ok", "stub"))
     monkeypatch.setattr(mod, "_check_mcp_servers", lambda: {})
     monkeypatch.setattr(mod, "_agy_available", lambda: False)

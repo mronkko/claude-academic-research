@@ -34,13 +34,8 @@ import zotero_io
 
 
 def _client() -> zotero_io.ZoteroClient:
-    zc = zotero_io.ZoteroClient(api_key="fake-key", group_id="12345")
-    cloud = MagicMock()
-    cloud._attachment_template.return_value = {
-        "itemType": "attachment", "linkMode": "imported_file",
-        "title": "", "filename": "", "md5": None, "mtime": None,
-    }
-    zc._cloud = cloud
+    zc = zotero_io.ZoteroClient("12345")
+    zc._local = MagicMock()
     return zc
 
 

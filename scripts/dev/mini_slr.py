@@ -24,7 +24,7 @@ section, or --group flag) via `zotero_io.find_group_by_name`. See
 BACKLOG.md's "live end-to-end SLR test" entry for why this must be a
 group and not My Library (the personal library already carries live SLR
 tags from a real review — importing into it would corrupt that record).
-The Zotero Web API cannot create groups, so a missing group produces an
+Groups can only be created on zotero.org, so a missing group produces an
 actionable error instead of trying to provision one.
 
 Usage:
@@ -87,7 +87,6 @@ for _p in (str(SCRIPTS_ROOT), str(PIPELINES_DIR)):
         sys.path.insert(0, _p)
 
 import zotero_io  # noqa: E402
-from core.config_loader import require  # noqa: E402
 from log_schemas import fulltext_screening_fields  # noqa: E402
 
 GROUP_NAME = "academic-research-e2e"
@@ -182,16 +181,14 @@ def _require_state(ctx: Ctx, key: str, earlier_stage: str) -> object:
 
 
 def _resolve_group() -> tuple[str, str]:
-    api_key = require("zotero", "api_key", env="ZOTERO_API_KEY")
     try:
-        group = zotero_io.find_group_by_name(GROUP_NAME, api_key=api_key)
+        group = zotero_io.find_group_by_name(GROUP_NAME)
     except ValueError as e:
         sys.exit(f"ERROR: {e}")
     if group is None:
         sys.exit(
-            f"ERROR: no Zotero group named {GROUP_NAME!r} is accessible "
-            f"with the configured ZOTERO_API_KEY.\n"
-            "The Zotero Web API cannot create groups, so this is a "
+            f"ERROR: Zotero Desktop holds no group named {GROUP_NAME!r}.\n"
+            "Groups can only be created on zotero.org, so this is a "
             "one-time manual step:\n"
             "  1. https://www.zotero.org/groups/new — create a group "
             f"named exactly {GROUP_NAME!r} (Private membership is fine).\n"
@@ -202,15 +199,7 @@ def _resolve_group() -> tuple[str, str]:
     return str(group["id"]), group["name"]
 
 
-def _local_client(group_id: str) -> zotero_io.ZoteroClient:
-    return zotero_io.ZoteroClient(
-        api_key=require("zotero", "api_key", env="ZOTERO_API_KEY"),
-        group_id=group_id,
-        prefer_local=True,
-    )
-
-
-def _cloud_client(group_id: str) -> zotero_io.ZoteroClient:
+def _client(group_id: str) -> zotero_io.ZoteroClient:
     return zotero_io.ZoteroClient.from_config(group_id=group_id)
 
 
@@ -400,7 +389,7 @@ def stage_collection(ctx: Ctx) -> None:
         print(f"  reusing existing collection {ctx.state['collection_key']}",
               flush=True)
         return
-    zot = _cloud_client(ctx.group_id)
+    zot = _client(ctx.group_id)
     name = f"e2e-{ctx.state['run_id']}"
     key = zot.create_collection(name)
     ctx.state["collection_key"] = key
@@ -439,15 +428,18 @@ def stage_import(ctx: Ctx) -> None:
 
 
 def stage_sync(ctx: Ctx) -> None:
-    """Wait for the cloud writes `import` just made to reach the local
-    Zotero client every downstream stage reads from (BACKLOG's
-    "reads are local-only, no cloud fallback" finding)."""
+    """Confirm every item `import` just wrote is visible in the collection.
+
+    A sync wait while writes went through the Web API and reads came from
+    Desktop (BACKLOG's "reads are local-only, no cloud fallback" finding).
+    Both are Desktop now, so it normally passes on the first read; it
+    stays as the read-back check that also records the collection keys."""
     coll_key = _require_state(ctx, "collection_key", "collection")
     csv_path = ctx.run_dir / "analysis" / "raw" / "search_results.csv"
     with csv_path.open(newline="", encoding="utf-8") as f:
         expected = sum(1 for _ in csv.DictReader(f))
 
-    zot_local = _local_client(ctx.group_id)
+    zot_local = _client(ctx.group_id)
     deadline = time.monotonic() + SYNC_TIMEOUT_S
     items: list[dict] = []
     while True:
@@ -530,10 +522,10 @@ def stage_screen(ctx: Ctx) -> None:
 
 
 def stage_code(ctx: Ctx) -> None:
-    """Second sync wait (BACKLOG load-bearing finding): abstract_screen.py's
-    tag writes go to the cloud; this driver reads locally like every
-    pipeline script, so wait for `abstract:*` tags to sync down before
-    computing which items pass to full-text coding."""
+    """Read back every item's `abstract:*` tag before computing which
+    items pass to full-text coding. Was a sync wait while
+    abstract_screen.py's tag writes went to the cloud; now a read-back
+    check that normally passes at once."""
     coll_key = _require_state(ctx, "collection_key", "collection")
     keys_path = ctx.run_dir / "keys" / "collection_items.keys"
     if not keys_path.exists():
@@ -542,7 +534,7 @@ def stage_code(ctx: Ctx) -> None:
         [ln for ln in keys_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
     )
 
-    zot_local = _local_client(ctx.group_id)
+    zot_local = _client(ctx.group_id)
     deadline = time.monotonic() + SYNC_TIMEOUT_S
     only_keys: list[str] = []
     while True:
@@ -631,17 +623,16 @@ def _expected_fulltext_tags(ctx: Ctx) -> int:
 
 
 def stage_export(ctx: Ctx) -> None:
-    """Third sync wait, same cause as `stage_code`'s: `fulltext_code.py`
-    writes stage tags to the cloud, but `export_coded_includes.py` selects
-    on those tags through a client that prefers the local Zotero server.
-    Exporting straight after coding races that sync and silently writes a
-    short `coded_papers.csv` — 0 rows against 1 real include, in the run
-    that prompted this."""
+    """Read back the `fulltext:*` tags before exporting, as `stage_code`
+    does. While `fulltext_code.py` wrote to the cloud, exporting straight
+    after coding raced Desktop's sync and silently wrote a short
+    `coded_papers.csv` — 0 rows against 1 real include, in the run that
+    prompted this."""
     coll_key = _require_state(ctx, "collection_key", "collection")
     total_expected = _expected_fulltext_tags(ctx)
 
     if total_expected:
-        zot_local = _local_client(ctx.group_id)
+        zot_local = _client(ctx.group_id)
         deadline = time.monotonic() + SYNC_TIMEOUT_S
         while True:
             try:
@@ -690,10 +681,6 @@ def _verify_fetch_attach_invariant(ctx: Ctx) -> None:
     while Zotero holds nothing is a hard failure rather than a number
     the operator has to notice.
 
-    Reads the *cloud* library deliberately. `ZoteroClient` prefers the
-    local Zotero server for reads, but uploads go to the Web API, so a
-    local read races Zotero Desktop's sync and would fail this check on
-    timing rather than on substance.
     """
     log_path = ctx.run_dir / "output" / "pdf_attach_log.csv"
     if not log_path.is_file():
@@ -720,10 +707,7 @@ def _verify_fetch_attach_invariant(ctx: Ctx) -> None:
         print("  (no items claimed as attached)", flush=True)
         return
 
-    cloud_reader = zotero_io.ZoteroClient.from_config(
-        group_id=ctx.group_id, prefer_local=False,
-    )
-    pdf_map = cloud_reader.pdf_map()
+    pdf_map = _client(ctx.group_id).pdf_map()
     missing = sorted(k for k in claimed if not pdf_map.get(k, (False, []))[0])
     if missing:
         raise SystemExit(
@@ -746,10 +730,7 @@ def stage_verify(ctx: Ctx) -> None:
     for name in TEST_TEMPLATES:
         shutil.copy2(TEMPLATES_DIR / name, scripts_dir / name)
 
-    env = {
-        "ZOTERO_GROUP": ctx.group_id,
-        "ZOTERO_API_KEY": require("zotero", "api_key", env="ZOTERO_API_KEY"),
-    }
+    env = {"ZOTERO_GROUP": ctx.group_id}
     _uv_run(
         scripts_dir / "test_systematic_review.py", ["-v"],
         cwd=ctx.run_dir, env=env,
@@ -757,7 +738,7 @@ def stage_verify(ctx: Ctx) -> None:
 
 
 def stage_teardown(ctx: Ctx) -> None:
-    zot = _cloud_client(ctx.group_id)
+    zot = _client(ctx.group_id)
     keys = ctx.state.get("created_item_keys", [])
     print(f"  deleting {len(keys)} item(s) this run created...", flush=True)
     failed = []
@@ -842,22 +823,12 @@ def _preflight_clean_group(ctx: Ctx) -> None:
     it five `verify` failures later, none of which name the real cause.
     Run 20260813T184419Z lost a full pipeline that way.
 
-    Reads the *cloud* library deliberately, for the same reason
-    `_verify_fetch_attach_invariant` does: teardown deletes through the
-    Web API, so the cloud is clean the moment it finishes, while Zotero
-    Desktop may still be showing the items locally. Checking the local
-    view would block a genuinely clean run and tell the operator to tear
-    down a run that is already gone — a loop with no exit.
-
     Fails open: a group that cannot be read is not evidence of a dirty
     one, and blocking a run on a transient Zotero blip would be worse
     than the race this guards. An empty answer still counts as clean.
     """
     try:
-        reader = zotero_io.ZoteroClient.from_config(
-            group_id=ctx.group_id, prefer_local=False,
-        )
-        items = reader.journal_articles()
+        items = _client(ctx.group_id).journal_articles()
     except Exception as e:  # noqa: BLE001
         print(f"  WARNING: could not pre-check the group for stale items "
               f"({e}); continuing.", flush=True)

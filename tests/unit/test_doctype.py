@@ -160,19 +160,19 @@ class _RelZot:
         self.calls: list[tuple] = []
         self._fail_on = set(fail_on)
 
-    def add_related(self, key, related, *, cloud=False):
+    def add_related(self, key, related):
         if key in self._fail_on:
             raise RuntimeError("412")
-        self.calls.append((key, tuple(related), cloud))
+        self.calls.append((key, tuple(related)))
         return 1
 
 
 def test_link_supplements_links_both_ways_and_survives_failures(capsys):
     zot = _RelZot(fail_on={"SUPP0002"})
     linked, failed = doctype.link_supplements(
-        [("SUPP0001", "ART00001"), ("SUPP0002", "ART00002")], zot, cloud=True,
+        [("SUPP0001", "ART00001"), ("SUPP0002", "ART00002")], zot,
     )
     assert (linked, failed) == (1, 1)
-    assert zot.calls == [("SUPP0001", ("ART00001",), True),
-                         ("ART00001", ("SUPP0001",), True)]
+    assert zot.calls == [("SUPP0001", ("ART00001",)),
+                         ("ART00001", ("SUPP0001",))]
     assert "could not relate supplement SUPP0002" in capsys.readouterr().out

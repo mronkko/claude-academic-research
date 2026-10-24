@@ -5,45 +5,35 @@ Every pipeline script (both read-only and read-write) routes through
 Zotero REST API.
 
 Design notes:
-    - Local pyzotero client for reads (localhost:23119, requires Zotero
-      desktop + Better BibTeX). Falls back to the cloud client if the
-      local server is unreachable.
-    - Writes go local too when `[zotero] local_api_key` is configured,
-      and to the cloud otherwise. Zotero 10.0.1 accepts local writes
-      after a one-time consent dialog; `/setup` grants the key, because
-      a dialog is not something an unattended `uv run` script can
-      answer. Writing where we read removes the staleness gap that
-      `cloud_journal_articles()` exists to work around — a script that
-      wrote through the Web API and read back locally saw nothing until
-      Desktop synced, and reported it as "already done".
-    - **Whichever surface a write uses, the read that feeds it uses the
-      same one.** `update_item` sends `If-Unmodified-Since-Version`, and
-      local and cloud version counters are unrelated, so a version read
-      from one surface and sent to the other is rejected 412 every time.
-      `_write_client()` is therefore the read client for anything that
-      is about to be written back.
-    - **The surface is chosen by configuration, never by comparing
-      library versions.** A downstream project gated "prefer local" on
-      the local API's `Last-Modified-Version` matching the Web API's.
-      Zotero 9 served the last synced server version there; Zotero 10
-      serves `clientVersion`, a per-transaction local counter unrelated
-      to Web API versions, so the check can never pass. Theirs returned
-      "cannot determine" forever and fell back to the metered surface on
-      every call with nothing said — 46 of 67 live tests skipped on that
-      gate. A reachability probe would fail the same way, so there is
-      none: if a key is configured the local API is used, and if it is
-      down the write raises instead of quietly costing quota.
-    - Uploads (`attach_pdf`) stay on the cloud client regardless.
-      pyzotero's `attachment_simple` / `attachment_both` and the 3-step
-      S3 handshake have no local equivalent (`upload_attachments()` is
-      the local route, unimplemented here). An upload creates a *child*
-      item and never bumps the parent's version, so it does not collide
-      with metadata written locally.
+    - **Zotero Desktop's local API (localhost:23119) is the only
+      surface.** Reads, writes, file uploads and merges all go there;
+      the plugin has no Web API path, no zotero.org key and no
+      fallback. Zotero 10 is required: it is the first release that
+      accepts local writes and uploads. Desktop syncs to zotero.org on
+      its own, which is no concern of this module.
+    - The zotero.org Web API was dropped on 2026-10-24. Two surfaces
+      kept unrelated version counters, so a version read from one and
+      sent to the other was rejected 412 every time; writes through the
+      Web API were invisible to local reads until Desktop synced, which
+      a re-run read as "already done" and duplicated an import; and an
+      upload landed in the cloud minutes before Desktop saw it, racing
+      every local re-parent. With one surface none of that can happen.
+    - **Local writes need Desktop's own key** (`[zotero] local_api_key`,
+      unrelated to any zotero.org credential), granted once through
+      Zotero's consent dialog. `/setup` grants it and proves a write
+      works; `_LocalZotero` re-grants it on the write that finds it
+      missing or revoked, saves the new one, and resends that write
+      once. See `_LocalZotero`.
+    - No item templates: the local API does not serve `/items/new`, so
+      pyzotero's `item_template()` and the `attachment_*` helpers built
+      on it raise there. `attach_pdf` builds its own (see
+      `_IMPORTED_FILE_TEMPLATE`).
     - tenacity wraps `update_abstract` to retry on version conflicts
       (HTTP 412): we re-fetch the item, re-apply the abstract, and
       re-PATCH.
-    - No module-level ZOTERO_API_KEY read. Callers instantiate via
-      `ZoteroClient.from_config()`, which goes through `core.config_loader`.
+    - No module-level key read. Callers instantiate via
+      `ZoteroClient.from_config()` / `from_args()`, which go through
+      `core.config_loader`.
 
 Attribution:
     `merge_duplicate_item` is a port of the `merge_duplicates` function
@@ -141,25 +131,6 @@ def _http_status_of(exc: BaseException) -> int | None:
         match = _PYZOTERO_CODE_RE.search(str(exc))
         if match:
             return int(match.group(1))
-    return None
-
-
-def auth_failure_status(exc: BaseException) -> int | None:
-    """401 or 403 when `exc` is Zotero rejecting the API key, else None.
-
-    Both mean the request will fail identically however often it is
-    retried or whatever the caller does next — "Invalid key", or a valid
-    key without access to the library — so callers treat them as fatal
-    rather than as an unavailable lookup.
-    """
-    status = _http_status_of(exc)
-    if status in (401, 403):
-        # pyzotero maps 401 *and* 403 to one class, so the type alone
-        # cannot tell them apart; its message's `Code:` line can.
-        match = _PYZOTERO_CODE_RE.search(str(exc))
-        if match and int(match.group(1)) in (401, 403):
-            return int(match.group(1))
-        return status
     return None
 
 
@@ -408,8 +379,8 @@ class GroupSelectionRequired(RuntimeError):
     """Raised by `ZoteroClient.from_config()` when the user hasn't picked
     a group and more than one (or zero) is accessible.
 
-    Carries the list of accessible groups (as returned by Zotero's
-    /users/{id}/groups endpoint) so orchestrators can print an
+    Carries the list of accessible groups (as returned by the local
+    API's /users/0/groups endpoint) so orchestrators can print an
     actionable menu to the user.
     """
 
@@ -420,23 +391,28 @@ class GroupSelectionRequired(RuntimeError):
         self.groups = groups
 
 
-def _list_accessible_groups(api_key: str, user_id: str) -> list[dict]:
-    """Fetch `{id, name}` list for every Zotero group the user can access.
+def _personal_library() -> zotero.Zotero:
+    """A read-only local client on the personal library, `users/0`.
 
-    Returns an empty list on any failure (network, auth, malformed
-    response). The caller handles both "empty because failure" and
-    "empty because user has no group memberships" the same way —
-    prompting them to specify --group explicitly.
+    The local API serves the personal library only under `0` ("the
+    logged-in user"), and answers the groups listing there too.
     """
-    import urllib.request
-    url = f"https://api.zotero.org/users/{user_id}/groups?v=3"
-    req = urllib.request.Request(
-        url, headers={"Zotero-API-Key": api_key, "Zotero-API-Version": "3"},
-    )
+    return zotero.Zotero("0", "user", None, local=True)
+
+
+def _list_accessible_groups() -> list[dict]:
+    """`{id, name}` for every group Zotero Desktop holds.
+
+    The groups Desktop has synced, which are the ones the user belongs
+    to; their IDs are the real group IDs, which the local API serves
+    them under. Returns an empty list on any failure (Desktop not
+    running, malformed response). The caller handles both "empty because
+    failure" and "empty because user has no group memberships" the same
+    way — prompting them to specify --group explicitly.
+    """
     try:
-        import json as _json
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = _json.loads(resp.read())
+        z = _personal_library()
+        data = _everything(z, lambda: z.groups())
     except Exception:
         return []
     out: list[dict] = []
@@ -449,31 +425,42 @@ def _list_accessible_groups(api_key: str, user_id: str) -> list[dict]:
     return out
 
 
-def find_group_by_name(
-    name: str,
-    *,
-    api_key: str | None = None,
-    user_id: str | None = None,
-) -> dict | None:
+#: The zotero.org user ID in the `alternate` link the local API returns
+#: with every listing: `<https://www.zotero.org/users/5591/items>`.
+_ALTERNATE_USER_RE = re.compile(
+    r"<https?://(?:www\.)?zotero\.org/users/(\d+)/[^>]*>\s*;\s*rel=\"alternate\"",
+)
+
+
+def local_user_id() -> str:
+    """The zotero.org user ID Desktop is signed in as, or "" if none.
+
+    The local API names the personal library `users/0`, which is no
+    good in a relation URI: Desktop stores relations as
+    `http://zotero.org/users/<id>/items/<key>`. Desktop gives the real
+    ID away in the `alternate` link of any listing, so it is read from
+    there rather than asked of the user. An install never signed in to
+    zotero.org has no such link and gets "".
+    """
+    try:
+        z = _personal_library()
+        z.items(limit=1)
+        link = z.request.headers.get("link", "")
+    except Exception:
+        return ""
+    match = _ALTERNATE_USER_RE.search(link)
+    return match.group(1) if match else ""
+
+
+def find_group_by_name(name: str) -> dict | None:
     """Look up a Zotero group by exact display-name match.
 
-    Queries the user's accessible groups (`_list_accessible_groups`) and
+    Queries the groups Desktop holds (`_list_accessible_groups`) and
     returns the `{"id", "name"}` dict for the unique exact match, or
     `None` if no group has that name. Raises `ValueError` if more than
     one group shares the name — ambiguous, never guess.
-
-    `api_key` / `user_id` default to the live config (same source
-    `ZoteroClient.from_config` reads via `core.config_loader`).
     """
-    if api_key is None or user_id is None:
-        from core.config_loader import get, require
-        if api_key is None:
-            api_key = require("zotero", "api_key", env="ZOTERO_API_KEY")
-        if user_id is None:
-            user_id = get("zotero", "user_id", env="ZOTERO_USER_ID")
-    if not user_id:
-        return None
-    groups = _list_accessible_groups(api_key, user_id)
+    groups = _list_accessible_groups()
     matches = [g for g in groups if g.get("name") == name]
     if len(matches) > 1:
         raise ValueError(
@@ -501,17 +488,15 @@ def format_group_selection_error(groups: list[dict]) -> str:
         lines.append("  • export ZOTERO_GROUP=<id> in your shell.")
     else:
         lines.append(
-            "Could not retrieve your accessible groups from Zotero "
-            "(no user_id in config.toml, or network error, or the key "
-            "lacks group access). Re-run `python3 scripts/setup/wizard.py` "
-            "to refresh your Zotero profile, or pass --group <id> "
-            "directly."
+            "Zotero Desktop listed no groups (it is not running, or this "
+            "account belongs to none). Start Zotero, or pass --group <id> "
+            "directly, or --user for your personal library."
         )
     return "\n".join(lines)
 
 
 def add_library_args(parser: argparse.ArgumentParser) -> None:
-    """Add `--group` / `--user` (mutually exclusive) and `--remote`.
+    """Add `--group` / `--user` (mutually exclusive).
 
     Pipeline scripts call this once on their argparse parser, then
     pass the parsed namespace to `ZoteroClient.from_args(args)`. This
@@ -528,30 +513,16 @@ def add_library_args(parser: argparse.ArgumentParser) -> None:
         "--user", action="store_true",
         help="Use your personal (My Library) instead of a group library.",
     )
-    # Reads default to Zotero Desktop's local API because it is far faster
-    # and unmetered. That default is wrong in one specific, easy-to-hit
-    # situation: items written through the Web API are invisible to the
-    # local client until Zotero Desktop next syncs. A script that adds
-    # items and then reads them back — or one handed a --filter-keys-file
-    # of freshly created keys — sees nothing, and reports zero items to
-    # process, which reads as "already done" rather than "cannot see them
-    # yet". Added here rather than per script so every pipeline entry
-    # point has the escape hatch.
-    parser.add_argument(
-        "--remote", action="store_true",
-        help="Read via api.zotero.org instead of the local Zotero client. "
-             "Use when items were just written through the Web API and the "
-             "desktop client has not synced them down yet.",
-    )
 
 
 #: Zotero's `imported_file` attachment template, written out rather than
 #: fetched.
 #:
-#: This used to call `self.cloud._attachment_template("imported_file")`,
-#: which is pyzotero's private wrapper around
-#: `GET /items/new?itemType=attachment&linkMode=imported_file`. Two
-#: reasons that had to go, one of them live:
+#: The local API has no `/items/new`, so there is nothing to fetch it
+#: from. Before that mattered it used to call the cloud client's
+#: `_attachment_template("imported_file")`, pyzotero's private wrapper
+#: around `GET /items/new?itemType=attachment&linkMode=imported_file`,
+#: and two reasons had already made that go, one of them live:
 #:
 #: 1. **It breaks on long runs.** `item_template` caches the response,
 #:    and on a cache entry older than an hour `_updated()` re-validates
@@ -588,6 +559,125 @@ _IMPORTED_FILE_TEMPLATE: dict = {
 _STORED_LINK_MODES = frozenset({"imported_file", "imported_url"})
 
 
+#: The name Zotero shows in its consent dialog. The same one `/setup`
+#: asks under, so the user sees one app in Zotero's key list, not two.
+LOCAL_APP_NAME = "academic-research"
+
+#: How long a key grant may wait. The dialog waits for a person, which
+#: pyzotero's 30 s default does not allow for.
+_AUTHORIZE_TIMEOUT_S = 180
+
+#: The local API's two bodies for a write without a usable key
+#: (pyzotero maps both to `LocalAPIKeyRequiredError`).
+_KEY_REJECTED_BODIES = ("API key required", "Invalid or expired API key")
+
+
+class LocalKeyRefused(RuntimeError):
+    """Zotero would not grant a local write key: Deny, a one-time
+    "Allow", the rate limit, or no answer in time. Not retryable — the
+    message says what the user has to do."""
+
+
+def _save_local_api_key(key: str) -> None:
+    """Persist a freshly granted key to `[zotero] local_api_key`.
+
+    A failure to save is logged, never raised: the write that asked for
+    the key can still go ahead with it, and the next run asks again.
+    """
+    import os
+    if os.environ.get("ZOTERO_LOCAL_API_KEY"):
+        logger.warning(
+            "ZOTERO_LOCAL_API_KEY is set and overrides config.toml, so the "
+            "new Zotero key saved there will not be used until it is unset.",
+        )
+    try:
+        from core import config_writer
+        config_writer.set_value("zotero", "local_api_key", key)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not save the new Zotero local key: %s", exc)
+
+
+class _LocalZotero(zotero.Zotero):
+    """pyzotero's local client, granting itself a write key on demand.
+
+    Every write pyzotero makes — its own methods, `_post_items`,
+    `_set_deleted`, `Zupload`'s item creation — goes through `_write`,
+    so this is the one place a missing or revoked key can be caught. On
+    the local API's 401 for a key it asks Zotero for a new one (its
+    consent dialog; the user picks "Always Allow"), saves it, and sends
+    the write again, once. A second 401 in the same process is not
+    answered with a second dialog: that is a key Zotero keeps revoking,
+    or an "Allow" that only covered one write, and looping on it would
+    hit the endpoint's rate limit.
+
+    `on_new_key` is how the key reaches config; tests replace it.
+    """
+
+    def __init__(self, *args, on_new_key=_save_local_api_key, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._on_new_key = on_new_key
+        self._regranted = False
+
+    def _write(self, method: str, url: str, **kwargs):
+        resp = super()._write(method, url, **dict(kwargs))
+        if not self._key_rejected(resp) or self._regranted:
+            return resp
+        self._regranted = True
+        logger.warning(
+            "Zotero refused the local write key (%s). Asking Zotero for a "
+            "new one: answer the dialog in Zotero with 'Always Allow'.",
+            "none configured" if not self.local_api_key else "revoked",
+        )
+        self.local_api_key = self._grant_key()
+        self._on_new_key(self.local_api_key)
+        return super()._write(method, url, **dict(kwargs))
+
+    @staticmethod
+    def _key_rejected(resp) -> bool:
+        if getattr(resp, "status_code", None) != 401:
+            return False
+        text = getattr(resp, "text", "") or ""
+        return any(body in text for body in _KEY_REJECTED_BODIES)
+
+    def _grant_key(self) -> str:
+        """Run Zotero's consent dialog and return a key worth storing.
+
+        pyzotero's `authorize_local`, but with a timeout long enough for
+        a person to answer, and refusing a one-time "Allow": that key is
+        spent by the write it was asked for, and the next write would
+        open the dialog again.
+        """
+        from pyzotero.zotero import build_url
+        resp = self._send(
+            "POST",
+            url=build_url(self.endpoint, "/local/authorize"),
+            headers={"Zotero-Server-ID": self._ensure_server_id()},
+            json={"appName": LOCAL_APP_NAME},
+            timeout=_AUTHORIZE_TIMEOUT_S,
+        )
+        if resp.status_code == 403:
+            raise LocalKeyRefused(
+                "Zotero write access was denied in its dialog. Run the "
+                "command again and choose 'Always Allow'.",
+            )
+        if resp.status_code == 429:
+            raise LocalKeyRefused(
+                "Zotero is rate-limiting key requests; wait a minute and "
+                "run the command again.",
+            )
+        if resp.status_code >= 400:
+            _pyzotero_errors.error_handler(self, resp)
+        grant = resp.json()
+        key = (grant.get("key") or "").strip()
+        if not key or not grant.get("remember"):
+            raise LocalKeyRefused(
+                "Zotero granted one-time access ('Allow'), which covers a "
+                "single write. Run the command again and choose 'Always "
+                "Allow'.",
+            )
+        return key
+
+
 class ZoteroClient:
     """Thin pyzotero wrapper used by every pipeline script.
 
@@ -599,81 +689,57 @@ class ZoteroClient:
         zot.attach_pdf(item_key, "/path/to/file.pdf")
     """
 
-    #: Class-level defaults for the two attributes that decide the write
-    #: surface. Several tests build a client with `__new__` to exercise
-    #: one method against a stub, bypassing `__init__` entirely; without
-    #: these, asking any of them where a write goes raises
-    #: AttributeError. The defaults are the conservative pair — cloud
-    #: writes, which is what a client assembled that way already used.
-    prefer_local: bool = True
+    #: Class-level default. Several tests build a client with `__new__`
+    #: to exercise one method against a stub, bypassing `__init__`.
     local_api_key: str | None = None
 
     def __init__(
         self,
-        api_key: str,
         group_id: str,
         *,
         library_type: str = "group",
-        prefer_local: bool = True,
         local_api_key: str | None = None,
     ):
-        """api_key / group_id — standard Zotero credentials. For a user
-        library pass `library_type="user"` and `group_id=<user_id>`.
+        """`group_id` is the group's ID, or for `library_type="user"`
+        anything at all: the local API serves the personal library only
+        as `users/0`, and that is what is used.
 
-        `local_api_key` is Zotero Desktop's own write key, granted by the
-        user through Zotero's consent dialog and unrelated to the
-        zotero.org `api_key`. Supplying one moves writes onto the local
-        API; leaving it None keeps every existing install on the cloud
-        write path it has always used. The alternate constructors read it
-        from config, so it is explicit here and unit tests that build a
-        client directly get the cloud default without touching config.
+        `local_api_key` is Zotero Desktop's own write key. None is fine:
+        the first write then asks Zotero for one (see `_LocalZotero`).
+        The alternate constructors read it from config, so it is explicit
+        here and unit tests that build a client directly touch no config.
         """
-        self.api_key = api_key
-        self.group_id = group_id
+        self.group_id = "0" if library_type == "user" else str(group_id)
         self.library_type = library_type
-        self.prefer_local = prefer_local
         self.local_api_key = local_api_key or None
         self._local: zotero.Zotero | None = None
-        self._cloud: zotero.Zotero | None = None
 
-    #: Zotero Desktop's own write key, granted once through Zotero's
-    #: consent dialog by `/setup` and stored in config. Unrelated to the
-    #: zotero.org API key. Absent, writes go to the Web API exactly as
-    #: they always have.
     @staticmethod
     def _configured_local_api_key() -> str:
         from core.config_loader import get
         return get("zotero", "local_api_key", env="ZOTERO_LOCAL_API_KEY")
 
     @classmethod
-    def from_config(
-        cls,
-        group_id: str | None = None,
-        *,
-        prefer_local: bool = True,
-    ) -> ZoteroClient:
+    def from_config(cls, group_id: str | None = None) -> ZoteroClient:
         """Instantiate from ~/.config/academic-research/config.toml.
 
         `group_id` is per-project (set by the caller from a --group CLI
         flag or $ZOTERO_GROUP) and is NOT stored in the global config.
         See the convention note in tests/unit/test_setup_wizard.py:40-42.
 
-        When group_id is not provided, queries Zotero for the user's
-        accessible groups. If exactly one exists, uses it automatically.
+        When group_id is not provided, asks Zotero Desktop which groups
+        it holds. If exactly one exists, uses it automatically.
         Otherwise raises a GroupSelectionRequired exception carrying the
         list of groups so orchestrators can print an actionable error.
         """
         import os
 
-        from core.config_loader import get, require
-        api_key = require("zotero", "api_key", env="ZOTERO_API_KEY")
         if not group_id:
             group_id = os.environ.get("ZOTERO_GROUP", "").strip()
         if not group_id:
             # User didn't specify a group — ask Zotero which ones they
             # can access, auto-pick if there's only one.
-            user_id = get("zotero", "user_id", env="ZOTERO_USER_ID")
-            groups = _list_accessible_groups(api_key, user_id) if user_id else []
+            groups = _list_accessible_groups()
             if len(groups) == 1:
                 group_id = str(groups[0]["id"])
                 print(
@@ -683,45 +749,18 @@ class ZoteroClient:
                 )
             else:
                 raise GroupSelectionRequired(groups)
+        return cls(group_id, local_api_key=cls._configured_local_api_key())
+
+    @classmethod
+    def for_user_library(cls) -> ZoteroClient:
+        """Alternate constructor for the personal (user) library."""
         return cls(
-            api_key=api_key,
-            group_id=group_id,
-            prefer_local=prefer_local,
+            "0", library_type="user",
             local_api_key=cls._configured_local_api_key(),
         )
 
     @classmethod
-    def for_user_library(
-        cls,
-        user_id: str,
-        *,
-        api_key: str | None = None,
-        prefer_local: bool = True,
-    ) -> ZoteroClient:
-        """Alternate constructor for a personal (user) library.
-
-        Used by audit_zotero_library.py when auditing the user's own
-        library instead of a group.
-        """
-        if api_key is None:
-            from core.config_loader import require
-            api_key = require("zotero", "api_key", env="ZOTERO_API_KEY")
-        return cls(
-            api_key=api_key,
-            group_id=user_id,
-            library_type="user",
-            prefer_local=prefer_local,
-            local_api_key=cls._configured_local_api_key(),
-        )
-
-    @classmethod
-    def from_args(
-        cls,
-        args: argparse.Namespace,
-        *,
-        prefer_local: bool = True,
-        api_key: str | None = None,
-    ) -> ZoteroClient:
+    def from_args(cls, args: argparse.Namespace) -> ZoteroClient:
         """Build a client from parsed `--group` / `--user` argparse args.
 
         Expects the parser was set up with `add_library_args(parser)`.
@@ -729,25 +768,9 @@ class ZoteroClient:
         `--group <id>`) or the user's personal library (`--user`).
         Raises SystemExit with an actionable message if neither is
         set (and `$ZOTERO_GROUP` isn't populated).
-
-        `--remote` forces reads through api.zotero.org. It overrides the
-        `prefer_local` keyword rather than the other way round: the flag is
-        an explicit statement by whoever is running the script that the
-        local client cannot be trusted to have the items yet, which a
-        caller's compiled-in default cannot know.
         """
         import os
 
-        from core.config_loader import require
-
-        if getattr(args, "remote", False):
-            prefer_local = False
-
-        # Validate library selection BEFORE requiring the API key —
-        # a missing --group should produce the actionable
-        # "specify --group or --user" message, not a confusing
-        # "API key missing" RuntimeError. Order matters in CI / fresh
-        # checkouts where neither is set.
         is_user = bool(getattr(args, "user", False))
         group = getattr(args, "group", "") or os.environ.get("ZOTERO_GROUP", "")
         if not is_user and not group:
@@ -755,102 +778,29 @@ class ZoteroClient:
                 "ERROR: --group <id> or --user is required "
                 "(or set $ZOTERO_GROUP).",
             )
-
-        if api_key is None:
-            api_key = require("zotero", "api_key", env="ZOTERO_API_KEY")
-
         if is_user:
-            user_id = require("zotero", "user_id", env="ZOTERO_USER_ID")
-            return cls.for_user_library(
-                user_id,
-                api_key=api_key,
-                prefer_local=prefer_local,
-            )
-        return cls(
-            api_key=api_key,
-            group_id=group,
-            library_type="group",
-            prefer_local=prefer_local,
-            local_api_key=cls._configured_local_api_key(),
-        )
+            return cls.for_user_library()
+        return cls(group, local_api_key=cls._configured_local_api_key())
 
     # -----------------------------------------------------------------
-    # Internal — pyzotero client factories. Lazily created so
-    # ZoteroClient() in a unit test doesn't touch the network.
+    # Internal — the pyzotero client. Lazily created so ZoteroClient()
+    # in a unit test doesn't touch the network.
     # -----------------------------------------------------------------
 
     @property
     def local(self) -> zotero.Zotero:
         if self._local is None:
-            # Zotero Desktop's local API serves the personal library
-            # only as `users/0` ("the logged-in user") — the cloud
-            # user ID gets a 400 locally. Group IDs pass through.
-            lib_id = "0" if self.library_type == "user" else self.group_id
-            kwargs: dict = {"local": True}
-            if self.local_api_key:
-                # pyzotero >= 1.15.1 sends this as the `Zotero-API-Key`
-                # header on local writes, and discovers the companion
-                # `Zotero-Server-ID` from a response header itself.
-                kwargs["local_api_key"] = self.local_api_key
-            self._local = zotero.Zotero(
-                lib_id, self.library_type, self.api_key, **kwargs,
+            # pyzotero >= 1.15.1 sends `local_api_key` as the
+            # `Zotero-API-Key` header on local writes, and discovers the
+            # companion `Zotero-Server-ID` from a response header itself.
+            self._local = _LocalZotero(
+                self.group_id, self.library_type, None,
+                local=True, local_api_key=self.local_api_key,
             )
         return self._local
 
-    @property
-    def cloud(self) -> zotero.Zotero:
-        if self._cloud is None:
-            self._cloud = zotero.Zotero(
-                self.group_id, self.library_type, self.api_key,
-            )
-        return self._cloud
-
-    def _read_client(self) -> zotero.Zotero:
-        return self.local if self.prefer_local else self.cloud
-
-    @property
-    def local_writes_enabled(self) -> bool:
-        """Whether writes go to Zotero Desktop rather than api.zotero.org.
-
-        Two conditions, both configuration — deliberately no network
-        probe. `--remote` (which clears `prefer_local`) is an explicit
-        statement that the desktop client cannot be trusted for this run,
-        and honouring it for reads while writing locally would split one
-        run across two surfaces.
-        """
-        return bool(self.prefer_local and self.local_api_key)
-
-    def _write_client(self) -> zotero.Zotero:
-        """The surface writes go to — and reads that feed them.
-
-        See the module docstring: a version read from one surface cannot
-        be sent to the other.
-        """
-        return self.local if self.local_writes_enabled else self.cloud
-
-    def _upload_client(self) -> zotero.Zotero:
-        """File uploads, which have no local implementation here."""
-        return self.cloud
-
-    @property
-    def write_surface(self) -> str:
-        """`"local"` or `"cloud"` — where metadata writes land.
-
-        For run-logs. The two surfaces keep unrelated version counters,
-        so a reader reconciling a log against item versions afterwards
-        has no way to tell which one produced a row, and choosing wrong
-        makes every version in it look stale.
-        """
-        return "local" if self.local_writes_enabled else "cloud"
-
-    @property
-    def upload_surface(self) -> str:
-        """Always `"cloud"` — see `_upload_client`.
-
-        Separate from `write_surface` so a caller logging an attachment
-        cannot accidentally claim it went local on a local-write client.
-        """
-        return "cloud"
+    def _client(self) -> zotero.Zotero:
+        return self.local
 
     # -----------------------------------------------------------------
     # Reads
@@ -873,7 +823,7 @@ class ZoteroClient:
         Narrow by design; see `abstractable_items()` for the screening
         frame, which is what most callers actually want.
         """
-        z = self._read_client()
+        z = self._client()
         return _everything(z, lambda: z.items(itemType="journalArticle"))
 
     def recent_items(self, limit: int = 50) -> list[dict]:
@@ -883,24 +833,8 @@ class ZoteroClient:
         article instead took 95 s per poll on a 25,703-article library,
         this takes about half a second.
         """
-        z = self._read_client()
+        z = self._client()
         return z.items(sort="dateAdded", direction="desc", limit=limit)
-
-    def cloud_journal_articles(self) -> list[dict]:
-        """`journal_articles()` forced through api.zotero.org.
-
-        For callers that need to read back their own writes. Writes go
-        to the Web API; Zotero Desktop's local database only learns
-        about them at its next sync, so a caller that writes and then
-        asks the local client gets a stale answer with no error — which
-        is how one import created a full set of duplicates on a re-run.
-
-        Deliberately not `prefer_local=False` on the whole client: the
-        rest of a run is faster against the local server and is not
-        reading its own writes.
-        """
-        z = self.cloud
-        return _everything(z, lambda: z.items(itemType="journalArticle"))
 
     def abstractable_items(
         self, item_types: Sequence[str] | None = None,
@@ -911,7 +845,7 @@ class ZoteroClient:
         is one paginated sweep rather than one per type.
         """
         types = tuple(item_types or self.ABSTRACTABLE_ITEM_TYPES)
-        z = self._read_client()
+        z = self._client()
         return _everything(z, lambda: z.items(itemType=" || ".join(types)))
 
     #: Zotero's `itemKey` filter takes a comma-separated list; 50 is the
@@ -941,7 +875,7 @@ class ZoteroClient:
         wanted = [k.strip() for k in keys if k and k.strip()]
         if not wanted:
             return []
-        z = self._read_client()
+        z = self._client()
         out: list[dict] = []
         for i in range(0, len(wanted), self.ITEM_KEY_BATCH):
             batch = wanted[i:i + self.ITEM_KEY_BATCH]
@@ -952,12 +886,12 @@ class ZoteroClient:
 
     def top_items(self) -> list[dict]:
         """All top-level items (includes non-article types: book, report, etc.)."""
-        z = self._read_client()
+        z = self._client()
         return _everything(z, lambda: z.top())
 
     def all_attachments(self) -> list[dict]:
         """All attachment items in the library."""
-        z = self._read_client()
+        z = self._client()
         return _everything(z, lambda: z.items(itemType="attachment"))
 
     def collection_items(self, collection: str, *,
@@ -967,13 +901,11 @@ class ZoteroClient:
         Accepts a name because the CLI flags that feed this are written
         `--collection SLR` in the skills and by users. The argument used
         to go straight to the API as a key, which worked only by accident:
-        Zotero's local HTTP server tolerates a name, so a local run
-        succeeded and the same command with `--remote` got a 404
-        "Collection not found" from api.zotero.org naming nothing the user
-        had typed. `import_to_zotero.py` resolved names on both paths and
-        documented it, so the two disagreed.
+        Zotero's local HTTP server tolerates a name, which the Web API
+        answered with a 404 naming nothing the user had typed. Resolving
+        here keeps the behaviour from depending on that tolerance.
         """
-        z = self._read_client()
+        z = self._client()
         key = self._resolve_collection_for_read(collection, z)
         return _everything(z, lambda: z.collection_items(key, itemType=item_type))
 
@@ -983,12 +915,8 @@ class ZoteroClient:
         Anything already shaped like a key is returned untouched, so the
         common path costs no extra request.
 
-        Resolution reads through `z` — the caller's read client —
-        rather than the write client. `find_collection` deliberately uses
-        the write client, because it serves the write path and has to see
-        a collection this pipeline just created; this one only reads, and
-        routing it through the write surface would give a local run a
-        credential requirement it did not have before.
+        Resolution reads through `z`, the client the caller is already
+        listing with.
         """
         wanted = (collection or "").strip()
         if not wanted:
@@ -1152,19 +1080,13 @@ class ZoteroClient:
 
         return dict(by_parent)
 
+    def children(self, item_key: str) -> list[dict]:
+        """`item_key`'s child notes and attachments."""
+        return self._client().children(item_key)
+
     def get_item(self, item_key: str) -> dict:
         """Fetch a single item's current payload (used for version refresh)."""
-        return self._write_client().item(item_key)
-
-    def api_base_url(self) -> str:
-        """Zotero REST API prefix for this library.
-
-        Returns `https://api.zotero.org/groups/<id>` or
-        `https://api.zotero.org/users/<id>` depending on `library_type`.
-        Pipeline scripts that issue raw HTTP requests (outside pyzotero)
-        use this instead of hard-coding `/groups/`.
-        """
-        return f"https://api.zotero.org/{self.library_type}s/{self.group_id}"
+        return self._client().item(item_key)
 
     def library_ref(self) -> dict[str, str]:
         """Machine-readable library identity, for provenance records.
@@ -1182,10 +1104,10 @@ class ZoteroClient:
 
         Examples:
             "group 6015547 'AI in entrepreneurship'"
-            "user 5591 (personal library)"
+            "personal library"
         """
         if self.library_type == "user":
-            return f"user {self.group_id} (personal library)"
+            return "personal library"
         name = self.group_name() or "?"
         return f"group {self.group_id} ({name!r})"
 
@@ -1222,7 +1144,7 @@ class ZoteroClient:
             return None
 
     def group_name(self) -> str | None:
-        """Fetch the group's display name from the Zotero cloud.
+        """The group's display name, as Zotero Desktop holds it.
 
         Used by the Connector pre-flight to compare against Zotero
         Desktop's currently-selected library name — lets us tell the
@@ -1235,26 +1157,13 @@ class ZoteroClient:
         """
         if self.library_type != "group":
             return None
-        import json as _json
-        import urllib.request
-        url = f"https://api.zotero.org/groups/{self.group_id}"
-        req = urllib.request.Request(
-            url,
-            headers={
-                "Zotero-API-Key": self.api_key,
-                "Zotero-API-Version": "3",
-            },
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = _json.loads(resp.read())
-        except Exception:
-            return None
-        return (data or {}).get("data", {}).get("name")
+        for g in _list_accessible_groups():
+            if str(g["id"]) == self.group_id:
+                return g["name"]
+        return None
 
     # -----------------------------------------------------------------
-    # Writes (`_write_client()` — local when a local API key is
-    # configured, else cloud; pyzotero handles the 3-step S3 upload and
+    # Writes (pyzotero handles the upload handshake and the
     # If-Unmodified-Since-Version headers).
     # -----------------------------------------------------------------
 
@@ -1280,7 +1189,7 @@ class ZoteroClient:
             "abstractNote": abstract,
         }
         try:
-            return bool(self._write_client().update_item(payload))
+            return bool(self._client().update_item(payload))
         except Exception as exc:
             # pyzotero >= 1.15 raises its own typed errors, which are
             # not httpx subclasses and carry no response; see
@@ -1355,7 +1264,7 @@ class ZoteroClient:
             "tags": [{"tag": t} for t in sorted(target)],
         }
         try:
-            self._write_client().update_item(payload)
+            self._client().update_item(payload)
         except Exception as exc:
             # pyzotero >= 1.15 raises its own typed errors, which are
             # not httpx subclasses and carry no response; see
@@ -1377,11 +1286,22 @@ class ZoteroClient:
     def item_uri(self, item_key: str) -> str:
         """The URI Zotero stores in `relations` to point at an item.
 
-        Always the `http://zotero.org/...` form, whichever surface the
-        write goes through: it is an identifier, not a URL anything
-        fetches, and Zotero Desktop writes the same form.
+        Always the `http://zotero.org/...` form: it is an identifier,
+        not a URL anything fetches, and Zotero Desktop writes the same
+        form. For the personal library that needs the zotero.org user ID
+        (`local_user_id`), since the local API's `0` means nothing in a
+        stored relation; raises if Desktop has never been signed in.
         """
-        return (f"http://zotero.org/{self.library_type}s/{self.group_id}"
+        library_id = self.group_id
+        if self.library_type == "user":
+            library_id = local_user_id()
+            if not library_id:
+                raise RuntimeError(
+                    "Cannot build a relation in the personal library: Zotero "
+                    "Desktop is not signed in to a zotero.org account, so it "
+                    "reports no user ID to name the item by.",
+                )
+        return (f"http://zotero.org/{self.library_type}s/{library_id}"
                 f"/items/{item_key}")
 
     @retry(
@@ -1391,8 +1311,7 @@ class ZoteroClient:
         reraise=True,
     )
     def add_related(
-        self, item_key: str, related_keys: Iterable[str], *,
-        cloud: bool = False,
+        self, item_key: str, related_keys: Iterable[str],
     ) -> int:
         """Add `dc:relation` links from `item_key` to each related key.
 
@@ -1400,13 +1319,8 @@ class ZoteroClient:
         link Zotero Desktop makes when you relate items by hand. Existing
         relations (of any predicate) are kept; returns how many links
         were added, 0 without writing when all were already there.
-
-        `cloud=True` reads and writes api.zotero.org whatever the write
-        surface, for callers relating items they have just created there:
-        Zotero Desktop does not know about those until it syncs, and a
-        version read from one surface cannot be written to the other.
         """
-        client = self.cloud if cloud else self._write_client()
+        client = self._client()
         current = client.item(item_key)
         relations = dict(current.get("data", {}).get("relations") or {})
         existing = relations.get(self.RELATION_PREDICATE) or []
@@ -1422,8 +1336,8 @@ class ZoteroClient:
             "version": current["version"],
             "relations": relations,
         }
-        # Version read just above from the same surface; a 412 re-reads it
-        # (the retry), as `update_fields` does.
+        # Version read just above; a 412 re-reads it (the retry), as
+        # `update_fields` does.
         client.update_item(payload)
         return len(added)
 
@@ -1450,7 +1364,7 @@ class ZoteroClient:
         Each entry in `updates` is `(item_key, op)` where `op` is a
         dict with any of `add`, `remove`, `remove_prefixed` (same
         semantics as `update_tags`). Items are fetched in one call
-        per batch from the write surface, new tag sets are computed,
+        per batch, new tag sets are computed,
         and the batch is sent as one POST. `batch_size` is capped at
         50, Zotero's per-request limit.
 
@@ -1534,7 +1448,7 @@ class ZoteroClient:
         self, chunk: list[tuple[str, dict]],
     ) -> tuple[dict[str, int], list[tuple[str, dict]]]:
         stats = {"applied": 0, "unchanged": 0, "failed": 0}
-        z = self._write_client()
+        z = self._client()
         keys = ",".join(k for k, _ in chunk)
         fetched = _read_page(lambda: z.items(itemKey=keys))
         fetched_by_key = {it.get("key"): it for it in fetched}
@@ -1672,7 +1586,7 @@ class ZoteroClient:
 
         # Find existing note with the marker.
         existing: dict | None = None
-        for child in self._write_client().children(parent_key):
+        for child in self._client().children(parent_key):
             data = child.get("data", {})
             if data.get("itemType") != "note":
                 continue
@@ -1690,7 +1604,7 @@ class ZoteroClient:
                 "collections": [],
                 "relations": {},
             }
-            resp = self._write_client().create_items([payload])
+            resp = self._client().create_items([payload])
             # pyzotero returns a dict with 'success' / 'failed' keys.
             success = resp.get("success") or resp.get("successful") or {}
             if isinstance(success, dict):
@@ -1716,7 +1630,7 @@ class ZoteroClient:
             "note": note_html,
         }
         try:
-            self._write_client().update_item(payload)
+            self._client().update_item(payload)
         except Exception as exc:
             # pyzotero >= 1.15 raises its own typed errors, which are
             # not httpx subclasses and carry no response; see
@@ -1816,7 +1730,7 @@ class ZoteroClient:
         template = dict(_IMPORTED_FILE_TEMPLATE)
         template["title"] = path.name
         template["filename"] = path.name
-        z = self._upload_client()
+        z = self._client()
         attempt = 0
         while True:
             attempt += 1
@@ -1927,12 +1841,12 @@ class ZoteroClient:
         stale the moment anything else writes the item — including the
         caller's own earlier write in the same run (enrich_dois's
         malformed-DOI fix followed by its replacement write). This reads
-        the version from the write surface just before writing, and on a
+        the version just before writing, and on a
         412 reads it again (three attempts).
         """
         current = self.get_item(item_key)
         payload = {"key": item_key, "version": current["version"], **fields}
-        return bool(self._write_client().update_item(payload))
+        return bool(self._client().update_item(payload))
 
     def update_item(self, payload: dict) -> bool:
         """Generic item PATCH (used by import_to_zotero for bulk field updates).
@@ -1941,21 +1855,27 @@ class ZoteroClient:
         handles the If-Unmodified-Since-Version header and raises on
         non-2xx (via `@backoff_check`).
         """
-        return bool(self._write_client().update_item(payload))
+        return bool(self._client().update_item(payload))
+
+    def create_items(self, payloads: list[dict]) -> dict:
+        """POST new items (at most 50); Zotero's per-object result map,
+        `{"success": {idx: key}, "failed": {idx: {...}}, ...}` — see
+        `_post_items` for why not pyzotero's `create_items`."""
+        return _post_items(self._client(), payloads)
 
     def create_collection(
         self, name: str, *, parent_collection: str = "",
     ) -> str:
         """Create a new collection and return its key.
 
-        The Zotero Web API cannot create groups — only items,
-        collections, and saved searches within an existing library —
-        so this is the write-side counterpart to `find_group_by_name`
+        Groups can only be created on zotero.org — the API creates
+        items, collections and saved searches within an existing
+        library — so this is the write-side counterpart to `find_group_by_name`
         for harnesses that need a scoped scratch collection inside a
         hand-created group.
         """
         payload = [{"name": name, "parentCollection": parent_collection}]
-        resp = self._write_client().create_collections(payload)
+        resp = self._client().create_collections(payload)
         success = resp.get("success") or resp.get("successful") or {}
         if isinstance(success, dict) and success:
             first = next(iter(success.values()))
@@ -1996,7 +1916,7 @@ class ZoteroClient:
         wanted = (name_or_key or "").strip()
         if not wanted:
             return "", ""
-        collections = self._write_client().everything(self._write_client().collections())
+        collections = self._client().everything(self._client().collections())
         by_key = {c.get("key", ""): c for c in collections}
         if self._COLLECTION_KEY_RE.match(wanted) and wanted in by_key:
             return wanted, "key"
@@ -2030,11 +1950,11 @@ class ZoteroClient:
         pattern for the If-Unmodified-Since-Version header.
         """
         try:
-            current = self._write_client().collection(collection_key)
+            current = self._client().collection(collection_key)
         except Exception:
             return False
         return bool(
-            self._write_client().delete_collection(
+            self._client().delete_collection(
                 current, last_modified=current["version"],
             )
         )
@@ -2050,7 +1970,7 @@ class ZoteroClient:
         except Exception:
             return False
         return bool(
-            self._write_client().delete_item(current, last_modified=current["version"])
+            self._client().delete_item(current, last_modified=current["version"])
         )
 
     # -----------------------------------------------------------------
@@ -2077,12 +1997,14 @@ class ZoteroClient:
     def get_bibtex_export(self, *, library_id: int | str | None = None) -> str:
         """Fetch the full BibTeX export for a Zotero library.
 
-        Defaults to this client's `group_id`. Pass `library_id=1` for
-        the user's personal library, or any numeric ID to override.
+        Defaults to this client's library: its group ID, or BBT's `1`
+        for the personal library. Pass any numeric ID to override.
         See bbt_client.get_bibtex_export.
         """
         from bbt_client import get_bibtex_export as _export
-        lid = library_id if library_id is not None else self.group_id
+        if library_id is None:
+            library_id = 1 if self.library_type == "user" else self.group_id
+        lid = library_id
         return _export(lid)
 
     def get_bbt_keys(self, item_keys: list[str]) -> dict[str, str]:
@@ -2114,10 +2036,10 @@ class ZoteroClient:
         # resolves bare keys against the personal library and answers
         # null for everything else. Measured on Zotero 10.0.1 with BBT
         # 9.0.63 — `41:SQR3R8QW` (the *local* library id) resolves,
-        # while `6658025:SQR3R8QW` (the cloud group id) and a bare
-        # `SQR3R8QW` both return null. This client knows its cloud group
-        # id and has no mapping to the local one, so the prefixed form is
-        # not available to it.
+        # while `6658025:SQR3R8QW` (the group id) and a bare `SQR3R8QW`
+        # both return null. This client knows the group id and has no
+        # mapping to Desktop's internal library id, so the prefixed form
+        # is not available to it.
         out: dict[str, str] = {}
         for item in self.items_by_keys(item_keys):
             key = item.get("key", "")
@@ -2198,7 +2120,7 @@ class ZoteroClient:
         that do not exist yet without silently discarding anything the
         API would have accepted.
         """
-        client = client if client is not None else self._write_client()
+        client = client if client is not None else self._client()
         data = item.get("data", item)
         for field in self._UNWRITABLE_FIELDS:
             data.pop(field, None)
@@ -2223,31 +2145,19 @@ class ZoteroClient:
             client.update_item(item)
 
     def _set_deleted(self, item_key: str, deleted: int, *, client=None) -> int:
-        """PATCH `{"deleted": 0|1}` on the write surface; returns the HTTP
-        status. Hand-built because pyzotero rejects `deleted` as an
-        invalid field.
+        """PATCH `{"deleted": 0|1}`; returns the HTTP status. Hand-built
+        because pyzotero rejects `deleted` as an invalid field.
 
-        The version it sends is read from the same surface, so no version
-        crosses surfaces. It was pinned to the cloud until the local form
-        was verified live on 2026-09-23: a standalone note trashed through
-        Desktop's local API answered 204, read back `deleted` locally, and
-        showed `deleted: 1` on the Web API once Desktop synced. The
+        Verified live on 2026-09-23: a standalone note trashed through
+        Desktop's local API answered 204 and read back `deleted`. The
         local form has two requirements. It goes through pyzotero's
         `_write`, which adds the `Zotero-Server-ID` and local-key headers
         a local write needs (428/401 without them). It also needs an
         explicit `Content-Type`, since the local API answers a raw body
-        without one with "400 Empty request body". The Web API tolerates
-        the missing header, which is why it went unnoticed.
+        without one with "400 Empty request body".
         """
         from pyzotero.zotero import build_url
-        if client is None:
-            local = self.local_writes_enabled
-            z = self._write_client()
-        else:
-            # An explicit surface: `attach_pdf` cleaning up on the upload
-            # client, which is the cloud even when writes go local.
-            z = client
-            local = getattr(z, "local", False) is True
+        z = client if client is not None else self._client()
         latest = z.item(item_key)
         url = build_url(
             z.endpoint, f"/{z.library_type}/{z.library_id}/items/{item_key}",
@@ -2257,38 +2167,24 @@ class ZoteroClient:
             "Content-Type": "application/json",
         }
         body = json.dumps({"deleted": deleted})
-        if local:
-            return z._write("PATCH", url=url, headers=headers, content=body).status_code
-        http = z.client
-        if http is None:
-            raise RuntimeError("pyzotero client is not initialised")
-        resp = http.patch(
-            url=url,
-            headers={
-                **headers,
-                "Zotero-API-Key": self.api_key,
-                "Zotero-API-Version": "3",
-            },
-            content=body,
-        )
-        return resp.status_code
+        return z._write("PATCH", url=url, headers=headers, content=body).status_code
 
     def parent_of(self, item_key: str) -> str:
-        """`item_key`'s parent on the write surface ("" for a top item).
+        """`item_key`'s parent ("" for a top item).
 
         Where a merge re-parented it, so where its result is checked."""
-        item = self._write_client().item(item_key)
+        item = self._client().item(item_key)
         return (item.get("data", {}) or {}).get("parentItem", "") or ""
 
     def reparent(self, child_key: str, parent_key: str) -> None:
-        """Move `child_key` under `parent_key` on the write surface."""
-        z = self._write_client()
+        """Move `child_key` under `parent_key`."""
+        z = self._client()
         item = z.item(child_key)
         item["data"]["parentItem"] = parent_key
         self._safe_update_item(item, z)
 
     def trash_item(self, item_key: str) -> None:
-        """Move `item_key` to Zotero's trash (write surface), recoverable
+        """Move `item_key` to Zotero's trash, recoverable
         from the Trash in the UI, unlike pyzotero's permanent `delete_item`.
         Raises on failure."""
         status = self._set_deleted(item_key, 1)
@@ -2296,7 +2192,7 @@ class ZoteroClient:
             raise RuntimeError(f"trash PATCH returned HTTP {status} for {item_key}")
 
     def restore_from_trash(self, item_key: str) -> bool:
-        """Take `item_key` back out of Zotero's trash (write surface). True on
+        """Take `item_key` back out of Zotero's trash. True on
         success. For recovering a Connector save a merge trashed while
         its PDF was still under it."""
         return self._set_deleted(item_key, 0) in (200, 204)
@@ -2315,7 +2211,7 @@ class ZoteroClient:
         and the md5/mtime update it writes bumps the attachment's version
         between our read and our PATCH; seen twice in one night.
         """
-        z = client if client is not None else self.cloud
+        z = client if client is not None else self._client()
         for attempt in range(attempts):
             fresh = z.item(child_key)
             fd = fresh.get("data", {})
@@ -2386,21 +2282,19 @@ class ZoteroClient:
         different non-empty DOIs, since a mismatched merge permanently
         entangles two separate papers' metadata. Raises ValueError.
 
-        **Runs on the write surface: Desktop's local API when a local
-        key is configured, the cloud otherwise.** It used to be pinned
-        to the cloud, and
-        Zotero Desktop did not always take the result. The Connector
-        saves the item in Desktop, and Desktop may still be writing to
-        that attachment (the md5/mtime of a finishing upload) when the
-        cloud re-parents it. Desktop overwrote two re-parents that had
-        looked successful, and on 2026-09-23 26 of 213 merged PDFs were
-        still under the trashed item in Desktop hours later while the
-        cloud had them under the keeper. A re-parent made in Desktop
-        itself has nothing to be overwritten by.
+        **Runs in Desktop, through the local API.** It used to run on
+        the cloud, and Zotero Desktop did not always take the result. The
+        Connector saves the item in Desktop, and Desktop may still be
+        writing to that attachment (the md5/mtime of a finishing upload)
+        when the cloud re-parents it. Desktop overwrote two re-parents
+        that had looked successful, and on 2026-09-23 26 of 213 merged
+        PDFs were still under the trashed item in Desktop hours later
+        while the cloud had them under the keeper. A re-parent made in
+        Desktop itself has nothing to be overwritten by.
 
-        The trash is `_set_deleted`, on the same surface; see there.
+        The trash is `_set_deleted`; see there.
         """
-        z = self._write_client()
+        z = self._client()
         target = z.item(target_key)
         duplicate = z.item(duplicate_key)
 
@@ -2473,7 +2367,7 @@ class ZoteroClient:
         #
         # Unless it still holds a PDF this merge neither moved nor
         # skipped as a copy of the keeper's. Under upload load a PDF
-        # child reached the cloud after the listing above; the merge
+        # child appeared after the listing above; the merge
         # moved nothing and then trashed the only item holding the real
         # PDF. Listed again here, as late as possible; a listing that
         # fails counts as "may hold one".

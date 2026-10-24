@@ -50,7 +50,7 @@ Before any step below, verify the plugin has been configured: call
 If it reports `configured: false` (`NOT CONFIGURED`), stop immediately and tell the user:
 
 > The academic-research project has not been set up on this machine
-> yet. Run the setup skill or setup wizard first to configure API keys (Zotero, Elsevier,
+> yet. Run the setup skill or setup wizard first to connect Zotero and configure API keys (Elsevier,
 > WoS, Anthropic, Gemini, Semantic Scholar), MCP servers, and permission
 > rules. Do not attempt an SLR before that.
 
@@ -196,15 +196,12 @@ provenance into a library a manuscript will cite. If neither path
 works, name the gap and propose the fix. Full rule: the second IRON
 RULE in [skills/zotero-operations/SKILL.md](../zotero-operations/SKILL.md).
 
-**`--remote` — reading from api.zotero.org.** Every pipeline script
-takes it. Reads default to Zotero Desktop's local server because it is
-far faster, which is the wrong default in two situations: no Zotero
-Desktop is running (headless, CI, a container), or Desktop has not yet
-synced items this pipeline wrote through the Web API (which is what
-writes use when no `[zotero] local_api_key` is configured). In either
-case the local client answers "no items" without an error, which reads
-as "nothing to do". If Zotero Desktop is not open on this machine, pass
-`--remote` on **every** stage, not just the one that failed.
+**Zotero Desktop must be running.** Every pipeline script reads and
+writes the library through Zotero Desktop on this machine
+(`localhost:23119`); there is no zotero.org fallback, so a headless
+machine or container cannot run the Zotero stages. If a script reports
+that Zotero refused its write key, it opens Zotero's permission dialog
+itself — tell the user to choose **Always Allow** there.
 
 ## Zotero library selection (required before any Zotero write)
 
@@ -996,7 +993,7 @@ Principles:
 
 | Variable | Used by | Purpose |
 |----------|---------|---------|
-| `ZOTERO_API_KEY` | All scripts | Zotero API authentication (required) |
+| `ZOTERO_LOCAL_API_KEY` | All Zotero scripts | Zotero Desktop's local write key. Normally not set: `/setup` stores it, and a script re-requests it through Zotero's dialog if it is revoked. |
 | `ANTHROPIC_API_KEY` | Screening scripts | Claude API — required only while `anthropic` is the selected provider. Each provider has its own variable; `check_llm_provider.py` reports which one this machine needs. |
 | *(none — `[gateway]` in config.toml)* | Screening scripts | The institutional gateway is config-only: `base_url` and `api_key`, plus optional `api_key_env` / `base_url_env` naming variables the user already exports. |
 | `ELSEVIER_API_KEY` | `enrich_pdfs.py`, `enrich_abstracts.py` | Elsevier/ScienceDirect full-text retrieval |
@@ -1222,16 +1219,16 @@ reason to run the script.
 | Summarise a pilot CSV — journal coverage (top-N) | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/pilot_analyze.py journal-coverage --csv pilot/search_results.csv --top 25` |
 | Summarise a pilot CSV — hits by journals.json field code | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/pilot_analyze.py field-breakdown --csv pilot/search_results.csv --journals journals.json` |
 | Filter / trim a search CSV (top-N by year, year range) | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/filter_search_results.py --input <csv> --output <csv> [--year-min Y] [--year-max Y] [--top-n N]` |
-| Import deduplicated search CSV into Zotero | `start_import` (job; `group`/`user`, `input`, `collection`; `dry_run` first) — fails if any item create or update failed; read the failures in `log_tail` before moving on, the corpus is incomplete | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/import_to_zotero.py --group <id> --input <search.csv> [--collection <key-or-name>] [--remote]` |
-| Abstract screening (LLM on title+abstract) | `start_abstract_screen` (job; `collection`, `group`/`user`, optional `model`, `dry_run`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/abstract_screen.py --group <id> --collection <key> --config ./screening_config.py [--model <alias>] [--remote]` |
-| Full-text screening + structured coding (LLM) | `start_fulltext_code` (job; `collection`, `group`/`user`, optional `model`, `only_keys`, `rerun`, `full_recode`, `dry_run`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py [--model <alias>] [--remote]` |
-| Update specific coding fields on already-coded items | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --update-fields FIELD1,FIELD2 [--remote]` |
+| Import deduplicated search CSV into Zotero | `start_import` (job; `group`/`user`, `input`, `collection`; `dry_run` first) — fails if any item create or update failed; read the failures in `log_tail` before moving on, the corpus is incomplete | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/import_to_zotero.py --group <id> --input <search.csv> [--collection <key-or-name>]` |
+| Abstract screening (LLM on title+abstract) | `start_abstract_screen` (job; `collection`, `group`/`user`, optional `model`, `dry_run`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/abstract_screen.py --group <id> --collection <key> --config ./screening_config.py [--model <alias>]` |
+| Full-text screening + structured coding (LLM) | `start_fulltext_code` (job; `collection`, `group`/`user`, optional `model`, `only_keys`, `rerun`, `full_recode`, `dry_run`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py [--model <alias>]` |
+| Update specific coding fields on already-coded items | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/fulltext_code.py --group <id> --collection <key> --config ./screening_config.py --update-fields FIELD1,FIELD2` |
 | Summarise screening / coding decisions across passes | `screening_report` (`log_csv`, `list_decision`, `list_rescreened`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/screening_report.py <log.csv> [--list <decision>] [--list-rescreened] [--search-csv <search_results.csv>]` — `--search-csv` (script only) adds the removed-before-screening count |
 | Tag supplements / front matter / notices already in a library | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/tag_doctypes.py --group <id> [--collection <key>]` (dry run) · add `--apply` to write · `--no-link` skips relating supplements to their article |
-| Fetch missing abstracts (multi-source cascade) | `start_enrich_abstracts` (job; `filter_keys_file`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_abstracts.py --filter-keys-file <keys> [--remote]` |
+| Fetch missing abstracts (multi-source cascade) | `start_enrich_abstracts` (job; `filter_keys_file`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_abstracts.py --filter-keys-file <keys>` |
 | Validate DOIs / find missing ones | `start_enrich_dois` (job; `filter_keys_file`; relays its 2/3-match question through `job_status`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/enrich_dois.py --all --filter-keys-file <keys>` |
 | Attach missing PDFs (plan with the user, then API / paid / browser / Connector / manual) | **REQUIRED SUB-SKILL: retrieving-pdfs** — it runs the planning step and every mode | — |
-| Audit library (missing abstracts / PDFs / stubs) | `audit_library` (`group` or `user`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group <id> [--remote]` |
+| Audit library (missing abstracts / PDFs / stubs) | `audit_library` (`group` or `user`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/audit_zotero_library.py --group <id>` |
 | Export includes-only coded view | `export_coded_includes` (`collection`, `group`/`user`; writes `analysis/results/coded_papers.csv`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/export_coded_includes.py --group <id> --collection <key> --config ./screening_config.py --out analysis/results/coded_papers.csv` |
 | List / prune this review's Zotero tags | — | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/manage_tags.py --group <id> --collection <key> --list` · add `--prune <field> --apply` to drop a coded-value family |
 | Generate `references.bib` from manuscript keys | `generate_bib` (scans `manuscript/`, writes `manuscript/references.bib`) | `uv run ${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/generate_bib.py` from the project root |

@@ -47,7 +47,6 @@ SCRIPTS_ROOT = SCRIPT_DIR.parent
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
-from core.config_loader import require  # noqa: E402
 
 # Tag enrich_pdfs.py applies when a PDF's text was recovered from
 # Elsevier's XML TDM fallback rather than the publisher's native PDF.
@@ -547,14 +546,6 @@ def main() -> int:
              "project-local).",
     )
     parser.add_argument(
-        "--local", action="store_true", default=True,
-        help="Use the local Zotero client (requires Zotero running). Default.",
-    )
-    parser.add_argument(
-        "--remote", action="store_true",
-        help="Use the remote api.zotero.org instead of the local client.",
-    )
-    parser.add_argument(
         "--pdf-fetch-log", default="output/pdf_fetch_log.csv",
         help=(
             "Path to the structured PDF-fetch failure log written by "
@@ -570,22 +561,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    api_key = require("zotero", "api_key", env="ZOTERO_API_KEY")
     if args.user:
-        user_id = require("zotero", "user_id", env="ZOTERO_USER_ID")
-        library_id, library_type = user_id, "user"
+        zot = zotero_io.ZoteroClient.for_user_library()
     else:
-        library_id, library_type = args.group, "group"
-
-    use_local = not args.remote
-    print(f"Connecting to Zotero ({'local' if use_local else 'remote'}, "
-          f"{library_type}={library_id})...", flush=True)
-    zot = zotero_io.ZoteroClient(
-        api_key=api_key,
-        group_id=library_id,
-        library_type=library_type,
-        prefer_local=use_local,
-    )
+        zot = zotero_io.ZoteroClient.from_config(group_id=args.group)
+    print(f"Connecting to Zotero ({zot.describe_library()})...", flush=True)
 
     print("Fetching top-level items...", end=" ", flush=True)
     items = zot.top_items()
@@ -623,7 +603,7 @@ def main() -> int:
         keys_files[category] = keys_path
 
     print()
-    print(f"Library audit ({library_type} {library_id})")
+    print(f"Library audit ({zot.describe_library()})")
     print(f"  Total items:                {report['total_items']}")
     print(f"  Have PDF:                   {report['have_pdf']}")
     print(f"  Missing PDF:                {report['missing_pdf_count']}")

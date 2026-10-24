@@ -10,7 +10,7 @@ The distinction that matters: retry the transient failures, and do NOT
 retry a `failure` payload — that is the API accepting the request and
 explicitly rejecting the file, which reproduces identically on retry.
 
-These mock `pyzotero._upload.Zupload`, not `cloud.attachment_simple`.
+These mock `pyzotero._upload.Zupload`, not `attachment_simple`.
 `attach_pdf` stopped calling the latter on 2026-08-15: that helper sets
 the attachment's `filename` to the whole path it is handed, and Zotero
 rejects a stored-file filename containing a directory separator, so every
@@ -29,17 +29,8 @@ import zotero_io
 
 
 def _client() -> zotero_io.ZoteroClient:
-    zc = zotero_io.ZoteroClient(api_key="fake-key", group_id="12345")
-    cloud = MagicMock()
-    # A real dict: attach_pdf assigns title/filename into it, and Zupload
-    # reads `templt["filename"]` off it. A MagicMock here silently yields
-    # a MagicMock filename and the failure surfaces as a confusing
-    # FileDoesNotExistError from deep inside pyzotero.
-    cloud._attachment_template.return_value = {
-        "itemType": "attachment", "linkMode": "imported_file",
-        "title": "", "filename": "", "md5": None, "mtime": None,
-    }
-    zc._cloud = cloud
+    zc = zotero_io.ZoteroClient("12345")
+    zc._local = MagicMock()
     return zc
 
 

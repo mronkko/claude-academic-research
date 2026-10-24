@@ -5,6 +5,10 @@ probe real external services. This module provides:
 
 - `KNOWN_DOIS` — the test corpus, one stable DOI per endpoint.
 - `require_config()` — skip-if-missing helper for API keys.
+- `require_zotero_local()` / `e2e_zotero_client()` — skip unless Zotero
+  Desktop's local API answers and a local write key is on file; the
+  latter returns a client on the disposable `academic-research-e2e`
+  group.
 - `http_get()` — plain urllib GET that returns (status, body, headers).
 - `classify_non_pdf_body()` — match the reference script's failure
   taxonomy (CF / paywall / no-subscription / HTML wrapper / other).
@@ -157,6 +161,60 @@ def require_config(section: str, key: str, env: str = "") -> str:
         )
         pytest.skip(f"{where} not set; skipping live test.")
     return val
+
+
+# ---------------------------------------------------------------------------
+# Zotero Desktop (local API only — the plugin has no Web API path)
+# ---------------------------------------------------------------------------
+
+#: The disposable group every Zotero-writing live test targets, resolved
+#: by name through Desktop's local API — never by ID, env var or flag.
+E2E_GROUP_NAME = "academic-research-e2e"
+
+ZOTERO_LOCAL_PROBE_URL = "http://localhost:23119/api/users/0/items?limit=1"
+
+
+def require_zotero_local() -> str:
+    """Skip unless Zotero Desktop is reachable and a write key is on file.
+
+    Returns the configured `[zotero] local_api_key`. A missing key skips
+    rather than letting the first write ask for one: that opens Zotero's
+    consent dialog, which a live run must never do unannounced. Run
+    `/setup` to grant the key.
+    """
+    status, _body, _headers = http_get(ZOTERO_LOCAL_PROBE_URL, timeout=5)
+    if status != 200:
+        pytest.skip(
+            f"Zotero Desktop's local API is not reachable on localhost:23119 "
+            f"(status {status}); start Zotero and enable 'Allow other "
+            f"applications on this computer to communicate with Zotero'."
+        )
+    return require_config("zotero", "local_api_key", env="ZOTERO_LOCAL_API_KEY")
+
+
+def e2e_group() -> dict:
+    """`{id, name}` of the e2e group, after `require_zotero_local()`."""
+    import zotero_io
+
+    require_zotero_local()
+    try:
+        group = zotero_io.find_group_by_name(E2E_GROUP_NAME)
+    except ValueError as exc:
+        pytest.skip(f"ambiguous Zotero group name {E2E_GROUP_NAME!r}: {exc}")
+    if group is None:
+        pytest.skip(
+            f"Zotero group {E2E_GROUP_NAME!r} not found in Zotero Desktop. "
+            f"Create it by hand at https://www.zotero.org/groups/new and let "
+            f"Desktop sync it — see tests/live/README.md."
+        )
+    return group
+
+
+def e2e_zotero_client():
+    """A `ZoteroClient` on the e2e group, built the way scripts build one."""
+    import zotero_io
+
+    return zotero_io.ZoteroClient.from_config(group_id=str(e2e_group()["id"]))
 
 
 # ---------------------------------------------------------------------------

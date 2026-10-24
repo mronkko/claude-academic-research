@@ -159,15 +159,14 @@ def _html():
     return {"key": "S", "data": {"itemType": "attachment", "contentType": "text/html"}}
 
 
-def test_a_local_pdfless_save_is_trashed_after_half_an_hour(tmp_path, monkeypatch) -> None:
+def test_a_pdfless_save_is_trashed_after_half_an_hour(tmp_path, monkeypatch) -> None:
     q = PendingMerges(tmp_path)
     q.add(keeper="K1", new_key="N1", doi="10.1016/a")
     zot = MagicMock()
-    zot.local_writes_enabled = True
-    surface = MagicMock()
+    surface = zot.local
+    zot.children = surface.children
     surface.item.return_value = {"key": "N1"}
     surface.children.return_value = [_html()]
-    monkeypatch.setattr(connector, "_merge_surface", lambda z: surface)
     monkeypatch.setattr(connector, "_pdf_child_settled", lambda z, k: False)
     monkeypatch.setattr(connector, "_age_s", lambda row: 31 * 60)
     gave_up = []
@@ -182,13 +181,12 @@ def test_a_given_up_save_with_an_unsettled_pdf_is_not_trashed(tmp_path, monkeypa
     q = PendingMerges(tmp_path)
     q.add(keeper="K1", new_key="N1", doi="10.1016/a")
     zot = MagicMock()
-    zot.local_writes_enabled = True
-    surface = MagicMock()
+    surface = zot.local
+    zot.children = surface.children
     surface.item.return_value = {"key": "N1"}
     surface.children.return_value = [
         {"key": "P", "data": {"itemType": "attachment", "contentType": "application/pdf"}},
     ]
-    monkeypatch.setattr(connector, "_merge_surface", lambda z: surface)
     monkeypatch.setattr(connector, "_pdf_child_settled", lambda z, k: False)
     monkeypatch.setattr(connector, "_age_s", lambda row: 31 * 60)
     settle_pending_merges(zot, q, merge=MagicMock(), wait_s=0,
@@ -196,17 +194,19 @@ def test_a_given_up_save_with_an_unsettled_pdf_is_not_trashed(tmp_path, monkeypa
     zot.trash_item.assert_not_called()
 
 
-def test_the_cloud_path_keeps_the_long_grace(tmp_path, monkeypatch) -> None:
+def test_a_pdfless_save_inside_the_grace_stays_queued(tmp_path, monkeypatch) -> None:
     q = PendingMerges(tmp_path)
     q.add(keeper="K1", new_key="N1", doi="10.1016/a")
-    zot = MagicMock()                      # local_writes_enabled is not True
-    zot.cloud.item.return_value = {"key": "N1"}
-    zot.cloud.children.return_value = [_html()]
+    zot = MagicMock()
+    zot.children = zot.local.children
+    zot.local.item.return_value = {"key": "N1"}
+    zot.local.children.return_value = [_html()]
     monkeypatch.setattr(connector, "_pdf_child_settled", lambda z, k: False)
-    monkeypatch.setattr(connector, "_age_s", lambda row: 31 * 60)
+    monkeypatch.setattr(connector, "_age_s", lambda row: 29 * 60)
     settle_pending_merges(zot, q, merge=MagicMock(), wait_s=0,
                           on_merged=lambda *a: None, on_given_up=lambda r: None)
     assert q.keepers() == {"K1"}
+    zot.trash_item.assert_not_called()
 
 
 def test_the_driver_logs_given_up_saves_as_no_pdf_offered() -> None:

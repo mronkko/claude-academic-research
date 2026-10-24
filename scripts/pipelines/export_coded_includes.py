@@ -203,7 +203,7 @@ def main() -> int:
 
     for item in items:
         item_key = item.get("key", "")
-        children = zot.cloud.children(item_key)
+        children = zot.children(item_key)
         payload: dict | None = None
         for child in children:
             cdata = child.get("data", {})

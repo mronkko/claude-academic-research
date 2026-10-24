@@ -286,18 +286,18 @@ def test_no_remaining_errors_in_fulltext_log() -> None:
 
 def _live_zotero_items() -> list[dict] | None:
     """Fetch all journalArticle items from Zotero for cross-check tests.
-    Returns None when pyzotero isn't available, credentials aren't set,
-    or Zotero can't be reached — callers skip gracefully in that case."""
+    Returns None when pyzotero isn't available, ZOTERO_GROUP isn't set,
+    or Zotero Desktop can't be reached — callers skip gracefully in that
+    case. Reads only, so no key is needed."""
     try:
         from pyzotero import zotero  # type: ignore[import-not-found]
     except ImportError:
         return None
     group = os.environ.get("ZOTERO_GROUP")
-    api_key = os.environ.get("ZOTERO_API_KEY")
-    if not group or not api_key:
+    if not group:
         return None
     try:
-        z = zotero.Zotero(group, "group", api_key, local=True)
+        z = zotero.Zotero(group, "group", None, local=True)
         return list(z.everything(z.items(itemType="journalArticle")))
     except Exception:
         return None
@@ -405,10 +405,9 @@ def test_fulltext_include_items_have_slr_coding_note() -> None:
     except ImportError:
         return
     group = os.environ.get("ZOTERO_GROUP")
-    api_key = os.environ.get("ZOTERO_API_KEY")
-    if not group or not api_key:
+    if not group:
         return
-    z = zotero.Zotero(group, "group", api_key, local=True)
+    z = zotero.Zotero(group, "group", None, local=True)
 
     missing: list[str] = []
     for it in items:

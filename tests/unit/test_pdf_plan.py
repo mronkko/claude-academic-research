@@ -240,7 +240,6 @@ def rig(tmp_path, monkeypatch):
         openalex_api_key="secret-key", semantic_scholar_api_key="", core_api_key="",
         elsevier_render_xml_to_pdf=False, openalex_use_paid_content_api=True)
     monkeypatch.setattr(enrich_pdfs, "_load_config", lambda: config)
-    monkeypatch.setattr(enrich_pdfs, "require", lambda *a, **k: "x")
     monkeypatch.setattr(enrich_pdfs, "_library_handler_set", lambda key: set())
     state = SimpleNamespace(resolver=None, net=[], calls=[])
 

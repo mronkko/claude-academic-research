@@ -77,7 +77,6 @@ import tag_prefix  # noqa: E402
 import worker_pool  # noqa: E402
 import zotero_io  # noqa: E402
 from core import llm_provider  # noqa: E402
-from core.config_loader import require  # noqa: E402
 from core.models import (  # noqa: E402
     cost_estimate_line,
     default_for_stage,
@@ -761,15 +760,6 @@ def main() -> int:
         args.model, config_model, stage="ABSTRACT_SCREENING_MODEL",
     )
 
-    # A dry run needs no Zotero credential to *write* with — but it
-    # still has to read the collection, and `--remote` reads go to
-    # api.zotero.org, which rejects an empty key with 403. That
-    # combination died before printing anything, so the cost quote the
-    # dry run exists to produce never appeared and the run went ahead
-    # unpriced. Load the key whenever the reads are remote.
-    needs_key = not args.dry_run or getattr(args, "remote", False)
-    api_key = require("zotero", "api_key",
-                      env="ZOTERO_API_KEY") if needs_key else ""
     batch_mode = bool(args.emit_manifest or args.apply_responses)
     if not (args.dry_run or args.csv_backfill or batch_mode):
         llm_provider.require_credentials(model)
@@ -787,7 +777,7 @@ def main() -> int:
     search_csv = Path(args.search_csv) if args.search_csv else None
     doi_to_query = _load_doi_to_query(search_csv)
 
-    zot = zotero_io.ZoteroClient.from_args(args, api_key=api_key or "dummy")
+    zot = zotero_io.ZoteroClient.from_args(args)
     print(f"Fetching items from Zotero ({zot.describe_library()}, "
           f"collection={args.collection})...", flush=True)
     coll_items = zot.collection_items(args.collection, item_type="journalArticle")

@@ -173,12 +173,8 @@ def test_main_writes_rows_for_tagged_items(monkeypatch, tmp_path) -> None:
     """Happy path: two items tagged fulltext:include, each with a
     parseable SLR Coding note. Output has two rows, columns include
     bibliographic + coding fields."""
-    # No need to stub `require` — we patch `from_args` to return a
-    # pre-built client below, so the real config loader is never
-    # reached. (Earlier versions stubbed `exp.require`, but the
-    # CI-friendly reorder of `from_args` validates --group/--user
-    # before reading the api key, so the require import was lifted
-    # out of export_coded_includes entirely.)
+    # `from_args` is patched to return a pre-built client, so the real
+    # config loader is never reached.
 
     items = [
         _tagged_item("A", title="Alpha", bbt="alpha2020", year="2020-01"),
@@ -192,9 +188,7 @@ def test_main_writes_rows_for_tagged_items(monkeypatch, tmp_path) -> None:
     fake_client = MagicMock(spec=zotero_io.ZoteroClient)
     fake_client.items_with_tag.return_value = items
 
-    fake_cloud = MagicMock()
-    fake_cloud.children.side_effect = lambda k: children_by_parent.get(k, [])
-    fake_client.cloud = fake_cloud
+    fake_client.children.side_effect = lambda k: children_by_parent.get(k, [])
 
     monkeypatch.setattr(
         zotero_io.ZoteroClient, "from_args",
@@ -240,9 +234,7 @@ def test_main_warns_on_missing_slr_coding_note(
 
     fake_client = MagicMock(spec=zotero_io.ZoteroClient)
     fake_client.items_with_tag.return_value = items
-    fake_cloud = MagicMock()
-    fake_cloud.children.side_effect = lambda k: children_by_parent.get(k, [])
-    fake_client.cloud = fake_cloud
+    fake_client.children.side_effect = lambda k: children_by_parent.get(k, [])
     monkeypatch.setattr(
         zotero_io.ZoteroClient, "from_args",
         classmethod(lambda cls, *a, **kw: fake_client),
@@ -271,7 +263,6 @@ def test_main_warns_on_missing_slr_coding_note(
 def test_dry_run_writes_nothing(monkeypatch, tmp_path) -> None:
     fake_client = MagicMock(spec=zotero_io.ZoteroClient)
     fake_client.items_with_tag.return_value = []
-    fake_client.cloud = MagicMock()
     monkeypatch.setattr(
         zotero_io.ZoteroClient, "from_args",
         classmethod(lambda cls, *a, **kw: fake_client),

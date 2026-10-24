@@ -108,10 +108,9 @@ All pipeline scripts take `--group <id>` (group library) or `--user`
 as explicit CLI flags. Do not set `ZOTERO_GROUP` as an env var — the
 canonical record is here.
 
-If Zotero Desktop is not running on this machine (headless, container,
-CI), add `--remote` to **every** stage: reads default to Desktop's
-local server and it answers "no items" rather than erroring when it is
-absent or has not yet synced.
+Zotero Desktop must be running on this machine: every stage reads and
+writes the library through it (`localhost:23119`), with no zotero.org
+fallback.
 
 **Never write Zotero items from metadata you composed yourself.** New
 items come from `import_to_zotero.py` (database-retrieved rows) or from
@@ -150,7 +149,7 @@ independent of this project's configured library.
 
 ## API keys
 
-All API keys (`ZOTERO_API_KEY`, `ANTHROPIC_API_KEY`,
+All API keys (`ANTHROPIC_API_KEY`,
 `ELSEVIER_API_KEY`, `WOS_API_KEY_EXTENDED`, etc.) live in
 `~/.config/academic-research/config.toml` — never read or inspect
 that file from Claude Code or Antigravity.

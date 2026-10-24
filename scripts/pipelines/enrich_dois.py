@@ -70,7 +70,7 @@ import doi_utils  # noqa: E402
 import progress_json  # noqa: E402
 import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
-from core.config_loader import get, require  # noqa: E402
+from core.config_loader import get  # noqa: E402
 from fetchers._title_match import matches as title_matches  # noqa: E402
 from fetchers.doi_resolver import (  # noqa: E402
     DoiResolution,
@@ -611,7 +611,6 @@ def main() -> int:
     run_date = date.today().isoformat()
 
     # Zotero + Crossref clients.
-    require("zotero", "api_key", env="ZOTERO_API_KEY")
     if not getattr(args, "user", False) and not args.group:
         try:
             zot = zotero_io.ZoteroClient.from_config(group_id=None)

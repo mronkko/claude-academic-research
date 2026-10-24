@@ -183,18 +183,12 @@ USER = Param(
     "user", "Use your personal library (My Library) instead of a group.",
     kind="switch", flag="--user", type="boolean",
 )
-REMOTE = Param(
-    "remote", "Read through api.zotero.org instead of Zotero desktop — use "
-    "when items were just written via the Web API and desktop has not "
-    "synced yet.",
-    kind="switch", flag="--remote", type="boolean",
-)
 FILTER_KEYS = Param(
     "filter_keys_file", "Project-relative path to a file of Zotero item "
     "keys (one per line) to restrict the run to, e.g. an audit .keys file.",
     kind="option", flag="--filter-keys-file", path=True,
 )
-LIBRARY_ARGS = (GROUP, USER, REMOTE)
+LIBRARY_ARGS = (GROUP, USER)
 
 
 # ---------------------------------------------------------------------------

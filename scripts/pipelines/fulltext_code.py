@@ -98,7 +98,6 @@ import tag_prefix  # noqa: E402
 import worker_pool  # noqa: E402
 import zotero_io  # noqa: E402
 from core import llm_provider  # noqa: E402
-from core.config_loader import require  # noqa: E402
 from core.llm import (  # noqa: E402
     extract_json_from_response,
     extract_pdf_text,
@@ -262,7 +261,7 @@ def _fetch_existing_payload(
     an item in a shared library can carry one note per review, and merging
     an update into another review's note would corrupt it."""
     marker = zotero_io.slr_coding_marker(ns)
-    children = zot.cloud.children(item_key)
+    children = zot.children(item_key)
     for child in children:
         cdata = child.get("data", {})
         if cdata.get("itemType") != "note":
@@ -619,7 +618,7 @@ def clear_tags_for_recode(
 
     The returned copies have the cleared tags removed **in memory**, for
     exactly the items whose clear succeeded. This used to re-read the
-    collection instead — but the writes go to the Web API and the read
+    collection instead — but the writes went to the Web API and the read
     came back from the local API at localhost:23119, which had not synced
     yet. The stale read still showed every `fulltext:include`, so nothing
     was selected: the run printed "Nothing to code." and exited 0 having
@@ -1770,11 +1769,6 @@ def main() -> int:
         fields = manifest_fields
     csv_columns = _csv_columns(fields)
 
-    # `--dry-run` writes nothing, but `--remote` reads still go to
-    # api.zotero.org, which 403s on an empty key. See abstract_screen.py.
-    needs_key = not args.dry_run or getattr(args, "remote", False)
-    api_key = require("zotero", "api_key",
-                      env="ZOTERO_API_KEY") if needs_key else ""
     # Emit and apply call no model, so they must not demand a credential:
     # a user whose compute is elsewhere may not have one at all.
     batch_mode = bool(args.emit_manifest or args.apply_responses)
@@ -1862,7 +1856,7 @@ def main() -> int:
         except Exception as e:
             sys.exit(f"ERROR: Failed to validate/migrate CSV schema: {e}")
 
-    zot = zotero_io.ZoteroClient.from_args(args, api_key=api_key or "dummy")
+    zot = zotero_io.ZoteroClient.from_args(args)
     print(f"Fetching items from Zotero ({zot.describe_library()}, "
           f"collection={args.collection})...", flush=True)
     items = zot.collection_items(args.collection, item_type="journalArticle")

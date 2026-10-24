@@ -4,20 +4,14 @@
 screening run went straight from "31 items in collection" to "Screening
 with 8 parallel workers (model=…)" — no provider, no price, no pause.
 In the session that prompted this, the dry run had itself failed (a
-`--dry-run --remote` 403, fixed below), so the agent skipped it and ran
-the paid stage with nothing on screen to say that is what was
-happening.
+`--dry-run --remote` 403 from the since-removed Web API path), so the
+agent skipped it and ran the paid stage with nothing on screen to say
+that is what was happening.
 
-Two separate fixes, tested here at the level each one lives at:
-
-1. The banner is unconditional on the paid path.
-2. `--dry-run --remote` loads the Zotero key, because remote reads hit
-   api.zotero.org and an empty key is a 403 there.
+The fix, tested here: the banner is unconditional on the paid path.
 """
 
 from __future__ import annotations
-
-import argparse
 
 from core import models
 
@@ -106,38 +100,3 @@ def test_dry_run_paths_still_use_the_plain_cost_line() -> None:
     """`--dry-run` output is unchanged — it was already loud."""
     for name in ("abstract_screen.py", "fulltext_code.py"):
         assert "cost_estimate_line(" in _source(name)
-
-
-# ---------------------------------------------------------------------------
-# --dry-run --remote
-# ---------------------------------------------------------------------------
-
-
-def _key_needed(*, dry_run: bool, remote: bool) -> bool:
-    """The predicate both orchestrators use, evaluated the same way."""
-    args = argparse.Namespace(dry_run=dry_run, remote=remote)
-    return not args.dry_run or getattr(args, "remote", False)
-
-
-def test_a_remote_dry_run_needs_the_zotero_key() -> None:
-    """The 403: remote reads go to api.zotero.org, and `api_key = ""`
-    is rejected there. The run died before printing its cost quote."""
-    assert _key_needed(dry_run=True, remote=True) is True
-
-
-def test_a_local_dry_run_still_needs_no_key() -> None:
-    assert _key_needed(dry_run=True, remote=False) is False
-
-
-def test_a_real_run_always_needs_the_key() -> None:
-    assert _key_needed(dry_run=False, remote=False) is True
-    assert _key_needed(dry_run=False, remote=True) is True
-
-
-def test_both_orchestrators_share_the_predicate() -> None:
-    """Guard against fixing one script and leaving the other 403ing."""
-    for name in ("abstract_screen.py", "fulltext_code.py"):
-        src = _source(name)
-        assert 'not args.dry_run or getattr(args, "remote", False)' in src, (
-            f"{name} still gates the Zotero key on --dry-run alone"
-        )

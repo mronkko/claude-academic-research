@@ -11,6 +11,7 @@ from __future__ import annotations
 import doctype
 import import_to_zotero as imp
 import pytest
+import zotero_io
 from sources import predatory
 from zotero_io import ZoteroClient
 
@@ -81,7 +82,7 @@ class _PatchZot:
         self._items = items
         self.patches: list[dict] = []
 
-    def cloud_journal_articles(self):
+    def journal_articles(self):
         return self._items
 
     def update_fields(self, key, fields):
@@ -110,34 +111,18 @@ def test_existing_item_is_patched_with_a_missing_doctype_tag(monkeypatch):
 
 # --- created keys are recorded by position -----------------------------
 
-class _Resp:
-    def __init__(self, body):
-        self._body = body
-
-    def raise_for_status(self):
-        pass
-
-    def json(self):
-        return self._body
-
-
-class _Session:
-    def __init__(self, bodies):
-        self._bodies = list(bodies)
-
-    def post(self, *_a, **_kw):
-        return _Resp(self._bodies.pop(0))
-
-
 def test_create_records_key_by_position_even_when_one_fails(monkeypatch):
     monkeypatch.setattr(imp.time, "sleep", lambda _s: None)
     monkeypatch.setattr(imp, "BATCH_SIZE", 2)
-    monkeypatch.setattr(imp.http_client, "build_session", lambda: _Session([
+    bodies = [
         {"success": {"0": "AAAA0001"}, "failed": {"1": {"message": "bad"}}},
         {"success": {"0": "AAAA0003"}},
-    ]))
+    ]
+    monkeypatch.setattr(zotero_io, "_post_items",
+                        lambda _client, _payloads: bodies.pop(0))
     zot = ZoteroClient.__new__(ZoteroClient)
-    zot.library_type, zot.group_id, zot.api_key = "group", "1", "k"
+    zot.library_type, zot.group_id = "group", "1"
+    zot._local = object()  # never reached: `_post_items` is stubbed
     items = [{"itemType": "journalArticle", "title": t} for t in "abc"]
     key_by_index: dict[int, str] = {}
     created, failed, keys = imp._create_new_items(

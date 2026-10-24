@@ -62,7 +62,6 @@ def harness(tmp_path, monkeypatch):
 
     monkeypatch.setattr(enrich_pdfs, "_load_config", lambda: SimpleNamespace(
         crossref_mailto=""))
-    monkeypatch.setattr(enrich_pdfs, "require", lambda *a, **k: "x")
     monkeypatch.setattr(enrich_pdfs, "_run_browser_in_process", _browser)
     monkeypatch.setattr(enrich_pdfs, "_run_api_cascade", _cascade)
     monkeypatch.setattr(enrich_pdfs, "_print_run_report", lambda *a, **k: None)

@@ -63,15 +63,17 @@ def fulltext_screening_fields(coding_field_names: list[str]) -> list[str]:
 # that treat missingness as data (a review reporting how many records are
 # genuinely abstract-less) need those separated. Appended last;
 # `shared_orchestrators.open_log` migrates existing 6-column logs on open.
-# `surface` records which Zotero API the write went to — `local` or
-# `cloud`. Since 0.22.0 either is possible, and the two libraries keep
-# unrelated version counters, so a reader reconciling this log against
-# item versions cannot otherwise tell which one a row describes. Empty
-# means no write was attempted (`no_doi`, `not_found`, `lookup_failed`,
-# `dry_run`), which is a fact rather than a gap. Appended last so
-# `shared_orchestrators.open_log` migrates existing 7-column logs on
-# open. Deliberately absent from PDF_FETCH_FIELDS below: uploads always
-# use the cloud, so the column would carry no information.
+# `surface` records which Zotero API the write went to. From 0.22.0
+# until the Web API was dropped it could be `local` or `cloud`, whose
+# libraries keep unrelated version counters, so older rows need it to be
+# reconciled against item versions; every new write row says `local`.
+# Kept rather than dropped so logs spanning the change stay one schema.
+# Empty means no write was attempted (`no_doi`, `not_found`,
+# `lookup_failed`, `dry_run`), which is a fact rather than a gap.
+# Appended last so `shared_orchestrators.open_log` migrates existing
+# 7-column logs on open. Absent from PDF_FETCH_FIELDS below: uploads
+# went to the cloud until then, so the column never carried information
+# there.
 ABSTRACT_FETCH_FIELDS: list[str] = [
     "run_date", "item_key", "doi", "title", "source", "status", "detail",
     "surface", "ran_at",

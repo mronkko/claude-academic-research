@@ -64,9 +64,9 @@ class _Library:
 
 def _install_library(mini_slr, monkeypatch, items: list[dict],
                      seen: list[dict] | None = None) -> None:
-    def _from_config(*, group_id, prefer_local=True):
+    def _from_config(*, group_id):
         if seen is not None:
-            seen.append({"group_id": group_id, "prefer_local": prefer_local})
+            seen.append({"group_id": group_id})
         return _Library(items)
 
     monkeypatch.setattr(mini_slr.zotero_io.ZoteroClient, "from_config",
@@ -182,16 +182,10 @@ def test_unreadable_group_does_not_block_the_run(mini_slr, tmp_path,
     assert "WARNING" in capsys.readouterr().out
 
 
-def test_it_reads_the_cloud_not_the_local_library(mini_slr, tmp_path,
-                                                  monkeypatch) -> None:
-    """Teardown deletes through the Web API, so the cloud is clean the
-    moment it returns while Zotero Desktop may still show the items. A
-    local read would block a clean run and point at a run that no longer
-    exists — the one failure this check must never produce."""
+def test_it_reads_the_runs_group(mini_slr, tmp_path, monkeypatch) -> None:
     seen: list[dict] = []
     _install_library(mini_slr, monkeypatch, [], seen=seen)
 
     mini_slr._preflight_clean_group(_ctx(mini_slr, tmp_path))
 
-    assert seen and seen[0]["prefer_local"] is False
-    assert seen[0]["group_id"] == "6637302"
+    assert seen == [{"group_id": "6637302"}]

@@ -65,12 +65,23 @@ Keys read per test set:
   `WILEY_TDM_TOKEN`.
 - Abstracts: `CROSSREF_MAILTO`, `SEMANTIC_SCHOLAR_API_KEY`,
   `SCOPUS_API_KEY`, `ELSEVIER_API_KEY`, `OPENALEX_API_KEY`.
-- Auth: all eight KeySpecs in the wizard
-  (`ZOTERO_API_KEY`, `ANTHROPIC_API_KEY`, `WOS_API_KEY_EXTENDED`,
-  `WOS_API_KEY`, `ELSEVIER_API_KEY`, `SCOPUS_API_KEY`,
-  `SEMANTIC_SCHOLAR_API_KEY`, `CROSSREF_MAILTO`). Plus placeholder
-  tests for `WILEY_TDM_TOKEN` and `OPENALEX_API_KEY` that skip with
-  explanations (no cheap auth-only probe exists for those two).
+- Auth: every KeySpec in the wizard (`ANTHROPIC_API_KEY`,
+  `WOS_API_KEY_EXTENDED`, `WOS_API_KEY`, `ELSEVIER_API_KEY`,
+  `SCOPUS_API_KEY`, `SEMANTIC_SCHOLAR_API_KEY`, `CROSSREF_MAILTO`, the
+  LLM providers, …). Plus placeholder tests for `WILEY_TDM_TOKEN` and
+  `OPENALEX_API_KEY` that skip with explanations (no cheap auth-only
+  probe exists for those two).
+- Zotero: Zotero Desktop running (local API on `localhost:23119`) and
+  `ZOTERO_LOCAL_API_KEY` / `[zotero] local_api_key`, the write key
+  `/setup` obtains through Zotero's consent dialog. There is no Zotero
+  Web API key: every read, write, upload and merge goes to Desktop. The
+  Zotero tests skip when Desktop is not reachable or no local key is on
+  file — they never request one themselves, since that would open the
+  consent dialog mid-run. Everything that writes targets the disposable
+  `academic-research-e2e` group (resolved by name) and deletes what it
+  creates. `test_zotero_local_writes.py` also checks that a rejected key
+  is re-granted and the write retried, with the grant stubbed so no
+  dialog opens.
 
 ## `live_slr` one-time setup
 
@@ -82,23 +93,23 @@ verify pass) against real APIs and a small, disposable Zotero **group**.
 It targets a group named exactly `academic-research-e2e`, resolved by
 name — never by env var, config section, or `--group` flag (My Library
 already carries live SLR tags from a real review; importing test data
-into it would corrupt that record). The Zotero Web API cannot create
-groups, so this one-time step is manual:
+into it would corrupt that record). Groups can only be created on
+zotero.org, so this one-time step is manual:
 
 1. Create a group at <https://www.zotero.org/groups/new> named exactly
    `academic-research-e2e` (Private membership is fine — this is scratch
    space, not something to share).
 2. Open Zotero Desktop and let it sync (Preferences → Sync, or just wait
    a minute) so the group appears in the local Zotero API
-   (`localhost:23119`) — every pipeline script reads locally, not from
-   the cloud, so this step is required, not optional.
+   (`localhost:23119`) — every pipeline script reads and writes there,
+   never through zotero.org, so this step is required, not optional.
 3. Leave the group otherwise empty. `test_mini_slr_end_to_end` tears
    down everything it creates after each run (delete-by-recorded-key,
    never by tag match, so it never touches anything else that might end
    up in the group); a fresh run works from an empty group either way.
 
-After that, `pytest -m live_slr` needs only `ZOTERO_API_KEY` +
-`ZOTERO_USER_ID` (written automatically by `/setup`) plus whichever
+After that, `pytest -m live_slr` needs only Zotero Desktop running and
+the local write key `/setup` stores in `[zotero] local_api_key`, plus whichever
 search/enrichment/screening keys you want exercised — same
 `config.toml` / env-var precedence as every other live test. Databases
 or PDF sources without usable credentials are skipped by the pipeline
@@ -156,7 +167,9 @@ SSO session → no download event) if it cannot reach the content.
 | `"access denied / no subscription"` | Browser test: your institution does not subscribe to that journal. Pick a different DOI. |
 | `did not return a PDF ... HTML response` | Publisher returned an HTML wrapper page. Likely the `download_via_*` flow is broken or outdated. |
 | `skipped: no Zotero group named 'academic-research-e2e' ...` | `live_slr` only — do the one-time group setup above. |
-| `ERROR: local Zotero sync timed out ...` | `live_slr` only — Zotero Desktop isn't running, isn't synced, or Better BibTeX's local API (`localhost:23119`) is unreachable. |
+| `skipped: Zotero Desktop's local API is not reachable ...` | Start Zotero Desktop and enable "Allow other applications on this computer to communicate with Zotero". |
+| `skipped: ZOTERO_LOCAL_API_KEY (or config [zotero].local_api_key) not set ...` | Run `/setup`; its write test asks Zotero for the key ("Always Allow"). |
+| `ERROR: local Zotero sync timed out ...` | `live_slr` only — Zotero Desktop isn't running, or Better BibTeX's local API (`localhost:23119`) is unreachable. |
 
 ## Coverage guard
 

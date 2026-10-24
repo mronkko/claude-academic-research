@@ -115,9 +115,7 @@ def main() -> int:
     args = _build_parser().parse_args()
     if not getattr(args, "user", False) and not args.group:
         try:
-            zot = zotero_io.ZoteroClient.from_config(
-                group_id=None, prefer_local=not args.remote,
-            )
+            zot = zotero_io.ZoteroClient.from_config(group_id=None)
         except zotero_io.GroupSelectionRequired as e:
             print(zotero_io.format_group_selection_error(e.groups), file=sys.stderr)
             return 2

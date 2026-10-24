@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.live.conftest import http_get, require_config
+from tests.live.conftest import http_get, require_config, require_zotero_local
 
 pytestmark = pytest.mark.live
 
@@ -43,11 +43,56 @@ def _wizard():
 # ---------------------------------------------------------------------------
 
 
-def test_auth_zotero() -> None:
-    key = require_config("zotero", "api_key", env="ZOTERO_API_KEY")
-    ok, msg, extras = _wizard()._verify_zotero(key)
-    assert ok, f"Zotero auth failed: {msg}"
-    assert extras.get("user_id"), f"Zotero verify missing user_id: {extras}"
+# ---------------------------------------------------------------------------
+# Zotero Desktop. The plugin's only Zotero surface is the local API, and
+# its one credential is the write key `/setup` obtains through Zotero's
+# consent dialog. It is not a KeySpec (nobody pastes it in), so the
+# coverage guard pins these two tests by name.
+# ---------------------------------------------------------------------------
+
+
+def test_auth_zotero_local_read() -> None:
+    """The wizard's read gate passes: Desktop serves the personal library."""
+    require_zotero_local()
+    ok, msg = _wizard()._zotero_read_test()
+    assert ok, f"Zotero local read test failed: {msg}"
+
+
+def test_auth_zotero_local_api_key() -> None:
+    """ZOTERO_LOCAL_API_KEY (or [zotero] local_api_key) is accepted for a
+    write: create one note and delete it, through the wizard's own write
+    primitive.
+
+    The wizard's `_zotero_write_test` writes to the personal library;
+    this does the same create-then-delete in the disposable e2e group
+    instead, so a live run never touches My Library. Skips without a key
+    on file rather than requesting one — that would open Zotero's
+    consent dialog.
+    """
+    from tests.live.conftest import e2e_group
+
+    key = require_zotero_local()
+    library = f"groups/{e2e_group()['id']}"
+    wizard = _wizard()
+    server_id = wizard._zotero_local_server_id()
+    assert server_id, "Zotero sent no Zotero-Server-ID: too old for local writes"
+
+    status, result = wizard._zotero_local_write(
+        "POST", f"{library}/items", key, server_id,
+        body=[{"itemType": "note", "note": wizard._WRITE_TEST_NOTE, "tags": []}],
+    )
+    assert status != 401, "Zotero rejected the configured local write key"
+    created = (result or {}).get("successful", {}) if isinstance(result, dict) else {}
+    assert status == 200 and created, f"local write failed (HTTP {status}): {result!r}"
+    note = next(iter(created.values()))
+    status, _ = wizard._zotero_local_write(
+        "DELETE", f"{library}/items/{note['key']}", key, server_id,
+        headers={"If-Unmodified-Since-Version": str(note["version"])},
+    )
+    assert status in (200, 204), (
+        f"deleting test note {note['key']} failed (HTTP {status}); delete it "
+        f"from the e2e group by hand"
+    )
 
 
 def test_auth_anthropic() -> None:

@@ -105,7 +105,7 @@ def _all_env_names() -> dict[str, list[str]]:
 def test_the_scan_finds_the_variables_it_is_meant_to() -> None:
     """Without this, a broken scan would pass by finding nothing."""
     names = _all_env_names()
-    for expected in ("ZOTERO_API_KEY", "ACADEMIC_RESEARCH_PROVIDER", "WILEY_TDM_TOKEN"):
+    for expected in ("ZOTERO_LOCAL_API_KEY", "ACADEMIC_RESEARCH_PROVIDER", "WILEY_TDM_TOKEN"):
         assert expected in names, f"scan no longer sees {expected}; found {sorted(names)}"
 
 

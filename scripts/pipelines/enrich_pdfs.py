@@ -99,7 +99,7 @@ import pdf_unattended  # noqa: E402
 import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
 from core import pdf_policy  # noqa: E402
-from core.config_loader import get, require  # noqa: E402
+from core.config_loader import get  # noqa: E402
 from fetchers import cache_names, pdf_version  # noqa: E402
 from log_schemas import PDF_FETCH_FIELDS  # noqa: E402
 
@@ -3033,10 +3033,10 @@ class _EmptySaveStreak:
 
 
 def _keeper_has_pdf(zot, keeper: str) -> bool:
-    """Whether `keeper` holds a PDF on the surface merges write to."""
-    from fetchers.browser.connector import _has_pdf_child, _merge_surface
+    """Whether `keeper` holds a PDF."""
+    from fetchers.browser.connector import _has_pdf_child
 
-    return _has_pdf_child(_merge_surface(zot).children(keeper) or [])
+    return _has_pdf_child(zot.children(keeper) or [])
 
 
 #: Connector outcomes an unattended run defers (DEFERRED_NEEDS_USER) —
@@ -3442,7 +3442,6 @@ async def _drive_connector(
 
         merger = None
         if (handler.pending is not None
-                and getattr(zot, "local_writes_enabled", False) is True
                 and not getattr(args, "connector_foreground_merge", False)):
             from fetchers.browser.connector import BackgroundMerger
 
@@ -6999,8 +6998,6 @@ def main() -> int:
         )
     session = http_client.build_session(mailto=config.crossref_mailto)
 
-    # Validate Zotero config via require() — surfaces a clear error.
-    require("zotero", "api_key", env="ZOTERO_API_KEY")
     if not getattr(args, "user", False) and not args.group:
         try:
             zot = zotero_io.ZoteroClient.from_config(group_id=None)

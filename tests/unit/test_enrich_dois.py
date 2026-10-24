@@ -644,8 +644,8 @@ def test_fix_malformed_then_replace_invalid_writes_the_same_item_twice() -> None
         DOI="https://doi.org/10.2307/invalid", version=1,
     )
     surface = _VersionedSurface("K1", version=1)
-    zot = zotero_io.ZoteroClient(api_key="k", group_id="1")
-    zot._cloud = surface
+    zot = zotero_io.ZoteroClient("1")
+    zot._local = surface
 
     cache = MagicMock()
     cache.get.return_value = None

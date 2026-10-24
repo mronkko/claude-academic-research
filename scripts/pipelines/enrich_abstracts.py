@@ -71,7 +71,7 @@ import progress_json  # noqa: E402
 import shared_orchestrators  # noqa: E402
 import zotero_io  # noqa: E402
 from abstract_clean import clean_abstract, not_an_abstract  # noqa: E402
-from core.config_loader import get, require  # noqa: E402
+from core.config_loader import get  # noqa: E402
 from fetchers._title_match import item_meta  # noqa: E402
 from fetchers.base import (  # noqa: E402
     AbstractWithheld,
@@ -471,7 +471,6 @@ def main() -> int:
     progress_json.configure(args.progress_json)
 
     source_names = [s.strip() for s in args.sources.split(",") if s.strip()]
-    require("zotero", "api_key", env="ZOTERO_API_KEY")
 
     os.makedirs(args.cache_dir, exist_ok=True)
     run_date = date.today().isoformat()
@@ -484,9 +483,7 @@ def main() -> int:
         # group auto-selection (single-group accounts) or error
         # with the accessible-groups list.
         try:
-            zot = zotero_io.ZoteroClient.from_config(
-                group_id=None, prefer_local=not args.remote,
-            )
+            zot = zotero_io.ZoteroClient.from_config(group_id=None)
         except zotero_io.GroupSelectionRequired as e:
             print(zotero_io.format_group_selection_error(e.groups), file=sys.stderr)
             return 2
@@ -619,7 +616,7 @@ def main() -> int:
             log_writer.writerow({
                 "run_date": run_date, "item_key": key, "doi": doi,
                 "title": title, "source": source, "status": status,
-                "detail": detail, "surface": zot.write_surface,
+                "detail": detail, "surface": "local",
             })
         if ok:
             print(f"{prefix} {title:<70} ({source}) → updated", flush=True)

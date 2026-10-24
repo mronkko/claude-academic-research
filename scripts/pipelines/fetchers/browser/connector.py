@@ -332,7 +332,7 @@ def connector_extension_problem(explicit: str | Path | None = None) -> str | Non
 
 
 class PendingMerges:
-    """Connector saves waiting for cloud sync before they can be merged.
+    """Connector saves waiting for their PDF before they can be merged.
 
     A JSON list in the cache directory, so a pair queued by one run is
     merged by the next: that is what the old "will be auto-merged next
@@ -398,18 +398,13 @@ class PendingMerges:
 
 
 #: How long a queued save may sit without growing a PDF child before the
-#: queue gives up on it. Upload lag was minutes, not hours; a save still
-#: PDF-less after this is a metadata-only page, and keeping it queued
-#: would stop its keeper from ever being tried again.
-PENDING_GRACE_S = 6 * 3600
-
-#: The same, when merges run in Zotero Desktop (`_merges_locally`). There
-#: is no upload to wait for: Desktop has the PDF by the time the
-#: Connector reports the save over, so a local save still PDF-less after
-#: half an hour is metadata-only. Twelve such saves (ScienceDirect, after
-#: a publisher block, 2026-09-23) would otherwise have barred their
-#: keepers from the next pass for six hours.
-PENDING_GRACE_LOCAL_S = 30 * 60
+#: queue gives up on it. Desktop has the PDF by the time the Connector
+#: reports the save over, so a save still PDF-less after half an hour is
+#: a metadata-only page, and keeping it queued would stop its keeper from
+#: being tried again. (Six hours while merges ran on the cloud and waited
+#: for Desktop's upload; twelve ScienceDirect saves after a publisher
+#: block, 2026-09-23, would have barred their keepers that long.)
+PENDING_GRACE_S = 30 * 60
 
 
 def settle_pending_merges(
@@ -417,9 +412,7 @@ def settle_pending_merges(
     on_given_up=None, sweep_every_s: float = 15.0, keeper_has_pdf=None,
     on_refused=None,
 ) -> None:
-    """Merge every queued pair whose new item has reached the merge's
-    surface (`_merge_surface`): Desktop when local writes are on, else
-    the cloud.
+    """Merge every queued pair whose new item is visible in Desktop.
 
     Sweeps until the queue is empty or `wait_s` has passed (0: one
     sweep). `merge(keeper, new_key)` does the merge and returns its
@@ -445,8 +438,8 @@ def settle_pending_merges(
         first = False
         for row in pending.rows():
             try:
-                visible = bool(_merge_surface(zot).item(row["new_key"]))
-            except Exception:  # noqa: BLE001 — not synced yet
+                visible = bool(zot.local.item(row["new_key"]))
+            except Exception:  # noqa: BLE001 — not visible yet
                 visible = False
             if not visible:
                 continue
@@ -456,8 +449,7 @@ def settle_pending_merges(
             ):
                 continue
             if not has_pdf:
-                grace = (PENDING_GRACE_LOCAL_S if _merges_locally(zot)
-                         else PENDING_GRACE_S)
+                grace = PENDING_GRACE_S
                 if _age_s(row) > grace:
                     pending.remove(row["new_key"])
                     fate = _trash_if_pdfless(zot, row["new_key"])
@@ -484,7 +476,7 @@ def settle_pending_merges(
         if pending.rows() and time.monotonic() < deadline:
             left = int(deadline - time.monotonic())
             print(f"  {len(pending.rows())} queued merge(s) still waiting for "
-                  f"cloud sync (~{left}s left)…", flush=True)
+                  f"a PDF (~{left}s left)…", flush=True)
 
 
 def _is_refusal(exc: BaseException) -> bool:
@@ -508,7 +500,7 @@ def _trash_if_pdfless(zot, new_key: str) -> str:
     happened. One with an unsettled PDF child is left in place — that
     PDF may be the only copy. Zotero's trash is recoverable."""
     try:
-        if _has_pdf_child(_merge_surface(zot).children(new_key) or []):
+        if _has_pdf_child(zot.children(new_key) or []):
             return "left in place: it has an unsettled PDF child"
         zot.trash_item(new_key)
         return "trashed: it held no PDF"
@@ -520,7 +512,7 @@ def _retire_empty_save(zot, pending, row: dict, keeper_has_pdf) -> bool:
     """Drop a queued save with no PDF whose keeper already holds one.
     True when retired."""
     try:
-        kids = _merge_surface(zot).children(row["new_key"]) or []
+        kids = zot.children(row["new_key"]) or []
         if _has_pdf_child(kids) or not keeper_has_pdf(row["keeper"]):
             return False
     except Exception:  # noqa: BLE001 — unknown: leave it queued
@@ -678,10 +670,10 @@ class ZoteroConnectorHandler(PublisherHandler):
         #: Stats of the last merge, read by the caller to finish a
         #: `--replace` swap with the PDF that actually arrived.
         self.last_merge: dict = {}
-        #: Per-item wait for the new item to reach the cloud
+        #: Per-item wait for the saved item's PDF to settle in Desktop
         #: (`--connector-sync-timeout`).
         self.sync_timeout_s: float = 30.0
-        #: Saves whose sync outlasted that wait; None disables queueing.
+        #: Saves whose PDF outlasted that wait; None disables queueing.
         self.pending: PendingMerges | None = None
         #: Set by the driver when merges run in the background; see
         #: `BackgroundMerger`. None merges each item before the next.
@@ -781,27 +773,16 @@ class ZoteroConnectorHandler(PublisherHandler):
         # Read the moved PDFs back. A merge counts, and --replace may
         # delete the old copy, only if they are still under the keeper:
         # Zotero Desktop overwrote two re-parents that had looked
-        # successful. Read where the merge wrote (Desktop when a local key
-        # is set), not the cloud: the cloud catches up only when Desktop
-        # next syncs.
-        #
-        # Twice, 5 s apart, on the cloud, where the overwrite happened:
-        # it was Desktop's pending push landing after our re-parent. A
-        # re-parent made in Desktop has no such push behind it
-        # (`_merge_surface`), so one read after 2 s there confirms the
-        # write without paying 10 s per item for a race that cannot occur.
-        local = _merges_locally(zot)
-        passes = 1 if local else 2
-        if verify_s is None:
-            verify_s = 2.0 if local else 5.0
-        for _ in range(passes):
-            time.sleep(verify_s)
-            for key in stats.get("moved_pdf_keys") or []:
-                parent = zot.parent_of(key)
-                if parent != keeper:
-                    raise MergeNotVerified(
-                        f"{key} is under {parent}, not {keeper}, after the merge",
-                    )
+        # successful. That was Desktop's pending push landing after a
+        # re-parent made on the cloud; a re-parent made in Desktop has no
+        # such push behind it, so one read after 2 s confirms the write.
+        time.sleep(2.0 if verify_s is None else verify_s)
+        for key in stats.get("moved_pdf_keys") or []:
+            parent = zot.parent_of(key)
+            if parent != keeper:
+                raise MergeNotVerified(
+                    f"{key} is under {parent}, not {keeper}, after the merge",
+                )
         return stats
 
     async def setup(self, page: Page, first_doi: str) -> str:
@@ -864,7 +845,7 @@ class ZoteroConnectorHandler(PublisherHandler):
             "*    3. Automatically fire 'Save to Zotero' — do NOT click\n"
             "*       the Connector toolbar button yourself.\n"
             "*    4. Wait up to 30s for Zotero Desktop to create the new\n"
-            "*       item, and then up to 20s for it to sync to the cloud.\n"
+            "*       item and its PDF.\n"
             "*    5. Merge the new PDF into your existing Zotero item\n"
             "*       (preserves the original item key, BibTeX key, tags,\n"
             "*       and collection memberships).\n"
@@ -1265,8 +1246,7 @@ class ZoteroConnectorHandler(PublisherHandler):
             flush=True,
         )
 
-        # Poll LOCAL Zotero for the new item — Zotero Desktop writes
-        # here first, then syncs to cloud. Timeout is 120s because an
+        # Poll Zotero Desktop for the new item. Timeout is 120s because an
         # OpenURL that redirects to a list page (common on EBSCO)
         # triggers Zotero's item picker, and the user needs time to
         # click through it.
@@ -1376,8 +1356,7 @@ class ZoteroConnectorHandler(PublisherHandler):
         # metadata-only (the queue retires it) and stops the family.
         await self._stop_if_blocked(ctx, page, item_host, family, after_save=True)
         wait_s = int(self.sync_timeout_s)
-        local = _merges_locally(zot)
-        if local and self.background is not None and self.pending is not None:
+        if self.background is not None and self.pending is not None:
             # Queue first, then submit: the queue is what keeps this save
             # from being claimed by the next item's poll, and what
             # survives a kill.
@@ -1395,54 +1374,15 @@ class ZoteroConnectorHandler(PublisherHandler):
             print(f"  └─ SAVED ({new_key}); merging into {item['item_key']} "
                   f"in the background.", flush=True)
             return False
-        if local:
-            print(f"  │  New item saved locally ({new_key}). Merging in "
-                  f"Zotero Desktop; no cloud sync needed.", flush=True)
-        else:
-            print(f"  │  New item saved locally ({new_key}). "
-                  f"Waiting for cloud sync (up to {wait_s}s)…", flush=True)
-
-        # Without a local key the merge runs on the cloud API, so the new
-        # item must have synced first. (With one, `_merge_surface` makes
-        # this a local read that succeeds at once.) Usually that takes seconds; under concurrent
-        # writers Zotero Desktop's upload lagged ~7 minutes, and a fixed
-        # 30 s wait failed every item of a run. So a slow sync no longer
-        # fails the item: the pair is queued and merged once it syncs,
-        # at the end of this pass or at the start of the next one.
-        synced = await asyncio.to_thread(
-            _wait_for_cloud_sync, zot, new_key, self.sync_timeout_s,
-        )
-        if not synced:
-            if self.pending is not None:
-                self.pending.add(
-                    keeper=item["item_key"], new_key=new_key, doi=doi,
-                    pdf_version=item.get("pdf_version", ""),
-                )
-                self.last_outcome = "merge_pending"
-                counter.queued += 1
-                print(
-                    f"  └─ QUEUED: {new_key} is saved in Zotero Desktop but not\n"
-                    f"         on the cloud yet ({wait_s}s). Queued; it is merged\n"
-                    f"         into {item['item_key']} as soon as it syncs — later in\n"
-                    f"         this run, or at the start of the next Connector pass.",
-                    flush=True,
-                )
-                return False
-            print(
-                f"  └─ FAIL: new item {new_key} is in Zotero Desktop but\n"
-                f"         hasn't synced to the cloud in {wait_s}s. Merge aborted.",
-                flush=True,
-            )
-            counter.failed += 1
-            return False
+        print(f"  │  New item saved ({new_key}). Merging in Zotero Desktop.",
+              flush=True)
 
         # Wait for the attachment record to appear as a child. We
         # don't require md5 — the merge just PATCHes `parentItem`
         # on the attachment, which works at any sync stage. The
         # stub-vs-real race on next run is handled by `pdf_map()`
         # skipping recently-added attachments.
-        print(f"  │  {'Parent found' if local else 'Parent synced'}. "
-              f"Waiting for the PDF attachment record "
+        print(f"  │  Waiting for the PDF attachment record "
               f"(up to {wait_s}s)…", flush=True)
         has_pdf = await asyncio.to_thread(
             _wait_for_child_attachment, zot, new_key, self.sync_timeout_s,
@@ -1462,7 +1402,7 @@ class ZoteroConnectorHandler(PublisherHandler):
             print(
                 f"  └─ QUEUED: {new_key} is saved but its PDF is not yet\n"
                 f"         ({wait_s}s). Queued; merged into {item['item_key']}\n"
-                f"         once the PDF syncs.",
+                f"         once the PDF appears.",
                 flush=True,
             )
             return False
@@ -1761,10 +1701,8 @@ def _poll_for_new_item(
     for the save — and the caller merges the match into the keeper and
     trashes it. `keeper_key` is excluded on both paths.
 
-    Polls LOCAL Zotero — Zotero Desktop writes new items here
-    immediately after the Connector saves. Cloud sync happens
-    separately; callers that need the item via the cloud API must
-    then call `_wait_for_cloud_sync`.
+    Polls Zotero Desktop, which writes new items immediately after
+    the Connector saves.
 
     When the SFX URL redirects to a list page (EBSCO / JSTOR search
     results are the common cases), Zotero pops a "Select which items"
@@ -2003,65 +1941,10 @@ async def _proxy_login_page(page, target_url: str) -> bool:
         return False
 
 
-def _merges_locally(zot) -> bool:
-    """True when this client merges in Zotero Desktop (local writes on).
-
-    `is True`, not truthiness: test doubles are MagicMocks, whose every
-    attribute is truthy, and they model the cloud path.
-    """
-    return getattr(zot, "local_writes_enabled", False) is True
-
-
-def _merge_surface(zot):
-    """The pyzotero client the merge reads and writes: Desktop's local
-    API when local writes are on, the cloud otherwise.
-
-    Every wait below polls this surface, not the cloud. With the merge
-    (re-parent and trash, e849081) running in Desktop, the cloud has no
-    part in it. Observed on 2026-09-23 on six live Connector saves, the
-    cloud lagged the local save by 167-208 s under the run's own upload
-    load. So the 30 s cloud wait queued every single item, while the PDF
-    child was on the local API within 6-14 s with md5 and mtime already
-    set. That wait was most of the ~1.4 min per item.
-
-    Desktop's later upload does not disturb a local re-parent. The
-    2026-09-23 lost-PDF race was a *cloud* re-parent that Desktop's
-    still-pending push then overwrote with its own, older local state.
-    A change made in Desktop is that local state. Desktop does bump the
-    attachment's local version once the file upload finishes, which is
-    why the merge's read-back (`merge_saved_item`) checks the parent and
-    not the version.
-    """
-    return zot.local if _merges_locally(zot) else zot.cloud
-
-
-def _wait_for_cloud_sync(zot, item_key: str, timeout_s: float) -> bool:
-    """Block until `item_key` is visible on the merge's surface — the
-    Zotero cloud API unless local writes are on (`_merge_surface`).
-
-    Zotero Desktop saves items locally first and replicates to the
-    cloud on its auto-sync cadence, which under upload load can take
-    minutes. A cloud merge started before sync completes gets a spurious
-    404. Poll every second until the item is visible, or give up after
-    `timeout_s`.
-    """
-    surface = _merge_surface(zot)
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        try:
-            if surface.item(item_key):
-                return True
-        except Exception:
-            pass
-        time.sleep(1.0)
-    return False
-
-
 def _wait_for_child_attachment(
     zot, item_key: str, timeout_s: float,
 ) -> bool:
-    """Block until `item_key` has a settled PDF child on the merge's
-    surface (`_merge_surface`).
+    """Block until `item_key` has a settled PDF child in Desktop.
 
     This is enough to proceed with the merge: the merge PATCHes
     `parentItem` on the attachment record, which works regardless
@@ -2080,7 +1963,7 @@ def _wait_for_child_attachment(
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         try:
-            children = _merge_surface(zot).children(item_key) or []
+            children = zot.children(item_key) or []
         except Exception:
             children = []
         if _has_pdf_child(children) and _pdf_child_settled(zot, item_key):
@@ -2097,19 +1980,13 @@ def _pdf_child_settled(zot, item_key: str, *, stable_s: float = 3.0) -> bool:
     """A PDF child of `item_key` whose upload has finished: md5 set, and
     its version the same across two reads `stable_s` apart.
 
-    Merging earlier is how two keepers lost their PDF on 2026-09-23. The
-    attachment was visible with no md5 while Zotero Desktop was still
-    uploading it; our re-parent landed, and Desktop's later push of that
-    attachment put the old parent back — under the temporary item we had
-    just trashed — after --replace had deleted the keeper's old copy.
-
-    On the local surface md5 means something weaker: Desktop sets it the
-    moment the file is written, before any upload. That is enough there,
-    since a re-parent made in Desktop is not exposed to the push race
-    (see `_merge_surface`). The version check still catches a record
-    Desktop is actively rewriting.
+    Desktop sets md5 the moment the file is written. The version check
+    catches a record Desktop is still rewriting. (On 2026-09-23 two
+    keepers lost their PDF to a merge made on the cloud before Desktop's
+    upload finished: its later push put the old parent back. A re-parent
+    made in Desktop is not exposed to that race.)
     """
-    surface = _merge_surface(zot)
+    surface = zot.local
     try:
         pdfs = [
             c for c in surface.children(item_key) or []
@@ -2130,8 +2007,8 @@ def _pdf_child_settled(zot, item_key: str, *, stable_s: float = 3.0) -> bool:
 
 def _has_pdf_child(children) -> bool:
     """A PDF attachment among `children`. Any attachment used to count,
-    but the translator's HTML snapshot can reach the cloud before the
-    PDF, and a merge started then moves nothing."""
+    but the translator's HTML snapshot can arrive before the PDF, and a
+    merge started then moves nothing."""
     return any(
         (c.get("data", {}) or {}).get("itemType") == "attachment"
         and (c.get("data", {}) or {}).get("contentType") == "application/pdf"

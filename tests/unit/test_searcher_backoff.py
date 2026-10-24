@@ -194,9 +194,9 @@ _KNOWN_SITES: dict[tuple[str, str], tuple[int, str]] = {
         "resolver pre-flight (retries would turn one resolver outage into "
         "hours; a failed query already falls back to trying the item)"
     )),
-    ("zotero_io.py", "urllib.request.urlopen"): (3, (
-        "api.zotero.org group listing (from_config) plus two local Zotero "
-        "desktop endpoints — stdlib, no retry"
+    ("zotero_io.py", "urllib.request.urlopen"): (1, (
+        "the Zotero desktop connector endpoint (getSelectedCollection) on "
+        "localhost:23119 — stdlib, no retry"
     )),
     ("bbt_client.py", "urllib.request.urlopen"): (2, (
         "Better BibTeX JSON-RPC on localhost:23119 — stdlib on purpose, no retry"

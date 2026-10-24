@@ -90,7 +90,7 @@ def test_the_exported_row_carries_the_native_key() -> None:
 
 
 def _client(items: list[dict]) -> zotero_io.ZoteroClient:
-    zc = zotero_io.ZoteroClient(api_key="k", group_id="6658025")
+    zc = zotero_io.ZoteroClient(group_id="6658025")
     zc.items_by_keys = MagicMock(return_value=items)  # type: ignore[method-assign]
     zc.bbt_json_rpc = MagicMock(  # type: ignore[method-assign]
         return_value={"result": {}},

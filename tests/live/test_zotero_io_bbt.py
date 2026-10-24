@@ -106,16 +106,14 @@ def test_item_citationkey_accepts_the_item_keys_param_name() -> None:
 def test_get_bbt_keys_resolves_real_items_from_the_local_library() -> None:
     """End-to-end through `ZoteroClient.get_bbt_keys` against real items.
 
-    Reads item keys from Zotero Desktop's local API (`users/0`), which
-    needs no cloud credentials — the API key is never checked locally —
-    then asks BBT for their citation keys. Skips on an empty library.
+    Reads item keys from Zotero Desktop's local API (`users/0`) — reads
+    need no key — then asks BBT for their citation keys. Skips on an
+    empty library.
     """
     _bbt_or_skip()
     import zotero_io
 
-    zot = zotero_io.ZoteroClient.for_user_library(
-        "0", api_key="local-no-auth-required", prefer_local=True,
-    )
+    zot = zotero_io.ZoteroClient.for_user_library()
     try:
         top = zot.top_items()
     except Exception as exc:  # noqa: BLE001 — Desktop offline / local API disabled
@@ -144,17 +142,10 @@ def test_zotero_exposes_a_native_citation_key() -> None:
     project. If this field ever goes away, that failure returns silently,
     so it is worth a live assertion rather than an assumption.
     """
-    import zotero_io
+    from tests.live.conftest import e2e_zotero_client
 
-    from tests.live.conftest import require_config
-
-    api_key = require_config("zotero", "api_key", env="ZOTERO_API_KEY")
-    group = zotero_io.find_group_by_name("academic-research-e2e",
-                                         api_key=api_key, user_id=None)
-    if group is None:
-        pytest.skip("academic-research-e2e group not available")
-    zc = zotero_io.ZoteroClient(api_key=api_key, group_id=str(group["id"]))
-    items = [i for i in zc.cloud.top(limit=25)
+    zc = e2e_zotero_client()
+    items = [i for i in zc.local.top(limit=25)
              if i.get("data", {}).get("citationKey")]
     if not items:
         pytest.skip("no BBT-keyed items in the e2e group")

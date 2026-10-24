@@ -101,7 +101,7 @@ MCP_TIER_OPTIONAL = "optional"
 # Each returns (ok: bool, message: str, extras: dict).
 # - ok=True means the key is valid.
 # - message is a short human-readable result line.
-# - extras carries additional data to persist (e.g. Zotero user_id).
+# - extras carries additional data to persist alongside the key.
 # ---------------------------------------------------------------------------
 
 
@@ -190,36 +190,6 @@ def _http_json(
     return status, data, err
 
 
-def _verify_zotero(key: str) -> tuple[bool, str, dict]:
-    # `/keys/current` with the key in a header, not `/keys/<key>`: a URL
-    # is what ends up in error text and proxy logs.
-    status, data, err = _http_json(
-        "https://api.zotero.org/keys/current",
-        headers={"Zotero-API-Version": "3", "Zotero-API-Key": key},
-    )
-    if status == 0:
-        return False, f"could not reach api.zotero.org ({err}) — saved anyway", {}
-    if status == 403 or status == 404:
-        return False, "Zotero rejected the key (403/404). Re-check the key.", {}
-    if not data:
-        return False, f"Zotero returned HTTP {status} with unparseable body", {}
-    user_id = str(data.get("userID", ""))
-    username = data.get("username", "") or ""
-    groups = sorted((data.get("access", {}).get("groups") or {}).keys())
-    summary = f"userID={user_id}" + (f" (@{username})" if username else "")
-    if groups:
-        preview = ", ".join(groups[:5])
-        more = f" +{len(groups) - 5} more" if len(groups) > 5 else ""
-        summary += f"; groups: {preview}{more}"
-    else:
-        summary += "; no group libraries accessible"
-    return True, summary, {
-        "user_id": user_id,
-        "username": username,
-        "accessible_group_ids": ",".join(groups),
-    }
-
-
 def _verify_anthropic(key: str) -> tuple[bool, str, dict]:
     status, data, err = _http_json(
         "https://api.anthropic.com/v1/models?limit=1",
@@ -235,7 +205,8 @@ def _verify_anthropic(key: str) -> tuple[bool, str, dict]:
 
 
 def _verify_gemini(key: str) -> tuple[bool, str, dict]:
-    # Header, not `?key=` — see `_verify_zotero`.
+    # Header, not `?key=`: a URL is what ends up in error text and
+    # proxy logs.
     status, data, err = _http_json(
         "https://generativelanguage.googleapis.com/v1beta/models",
         headers={"x-goog-api-key": key},
@@ -527,19 +498,6 @@ class KeySpec:
 
 
 KEYS: tuple[KeySpec, ...] = (
-    KeySpec(
-        "ZOTERO_API_KEY", "zotero", "api_key", "Zotero API key",
-        required=True, hidden=True,
-        what="Zotero is a free, open-source reference manager that stores your "
-             "citations, PDFs, and notes (https://www.zotero.org). This plugin uses "
-             "it as the single source of truth for your bibliography.",
-        used_by="Every skill that touches citations: grounded-citations, zotero-operations, "
-                "systematic-review, fact-check.",
-        impact="No skill in the plugin will work without this key — the plugin is "
-               "built around Zotero.",
-        where="https://www.zotero.org/settings/keys — create a key with write access.",
-        verify=_verify_zotero,
-    ),
     KeySpec(
         "ANTHROPIC_API_KEY", "anthropic", "api_key", "Anthropic API key",
         required=False, hidden=True,
@@ -926,6 +884,7 @@ EXPECTED_MCP: tuple[McpServerSpec, ...] = (
         name="zotero",
         purpose="Reference manager — full-text retrieval, notes, citation keys.",
         add_args=("-s", "user", "zotero",
+                  "-e", "ZOTERO_LOCAL=true",
                   "-e", "ZOTERO_MCP_TOOLSETS=libraries,search-admin,pdf-geometry,duplicates,scite",
                   "--", "zotero-mcp"),
         homepage="https://github.com/mronkko/zotero-mcp",
@@ -933,7 +892,9 @@ EXPECTED_MCP: tuple[McpServerSpec, ...] = (
         install_note="Installs the [scite,semantic] extras: scite powers the "
                      "retraction-check step the systematic-review and "
                      "zotero-operations skills run; semantic enables semantic "
-                     "library search. After install, run: zotero-mcp setup. "
+                     "library search. ZOTERO_LOCAL=true points it at Zotero "
+                     "Desktop, like the rest of the plugin; its "
+                     "zotero_authorize_local_writes tool grants it a write key. "
                      f"PyPI alt: {ZOTERO_MCP_PIP_INSTALL_CMD}. "
                      "ZOTERO_MCP_TOOLSETS above adds duplicates/scite to the "
                      "package's own default profile (libraries, search-admin, "
@@ -1820,9 +1781,10 @@ def _backup_unreadable_config() -> Path | None:
     return backup
 
 
-# `[zotero]` values `_verify_zotero` derives from the key. They describe
-# the account the key belongs to, so they go stale when the key changes.
-_ZOTERO_DERIVED_KEYS = ("user_id", "username", "accessible_group_ids")
+# `[zotero]` values from the zotero.org Web API era: its key and what the
+# wizard derived from it. Nothing reads them now, and a stored credential
+# nothing uses is only a liability, so every run removes them.
+_LEGACY_ZOTERO_KEYS = ("api_key", "user_id", "username", "accessible_group_ids")
 
 
 def _merge_config(
@@ -1856,21 +1818,6 @@ def _merge_config(
             target = merged[section] = {}
         target.update(items)
     return merged
-
-
-def _stale_zotero_identity(existing: dict, values: dict) -> set[tuple[str, str]]:
-    """Derived `[zotero]` keys to drop because the key itself changed.
-
-    Preserving `user_id` across re-runs is right for the same key and
-    wrong for a different one: a new key that was not verified this run
-    would otherwise be filed under the previous account's user ID.
-    """
-    old = str((existing.get("zotero", {}) or {}).get("api_key") or "")
-    new_section = values.get("zotero", {}) or {}
-    new = str(new_section.get("api_key") or "")
-    if not new or new == old:
-        return set()
-    return {("zotero", k) for k in _ZOTERO_DERIVED_KEYS if k not in new_section}
 
 
 def _carry_forward(
@@ -2042,58 +1989,11 @@ def _parse_mcp_list(stdout: str) -> dict[str, str]:
 
 
 ZOTERO_LOCAL_URL = "http://localhost:23119/api/"
-ZOTERO_LOCAL_STATUS_OK = "ok"
-ZOTERO_LOCAL_STATUS_NOT_RUNNING = "not_running"
-ZOTERO_LOCAL_STATUS_SERVER_DISABLED = "server_disabled"
 
 ZOTERO_BBT_URL = "http://localhost:23119/better-bibtex/json-rpc"
 ZOTERO_BBT_STATUS_OK = "ok"
 ZOTERO_BBT_STATUS_MISSING = "missing"
 ZOTERO_BBT_STATUS_UNREACHABLE = "unreachable"
-
-
-def _check_zotero_local(timeout: int = 3) -> tuple[str, str]:
-    """Probe the local Zotero HTTP API at localhost:23119/api/.
-
-    Returns (status, message) where status is one of:
-      - "ok"               : HTTP 200 — Zotero is running, local API on.
-      - "server_disabled"  : Connection refused — Zotero is running but
-                             hasn't opened the local server port.
-      - "not_running"      : Connection refused OR DNS/timeout — most
-                             likely Zotero desktop is not running at all.
-                             Without extra probes we can't always tell
-                             these two apart, so the message covers both.
-
-    The message is a one-line human summary suitable for the final
-    summary block.
-    """
-    status, _, err = _http_json(ZOTERO_LOCAL_URL, timeout=timeout)
-    if status == 200:
-        return ZOTERO_LOCAL_STATUS_OK, "reachable at localhost:23119"
-    # status=0 from _http_json means the connection itself failed
-    # (refused, timeout, DNS). We can't distinguish "Zotero not running"
-    # from "Zotero running but local server off" without a second probe,
-    # so we merge them into a single actionable status.
-    return ZOTERO_LOCAL_STATUS_NOT_RUNNING, err or f"HTTP {status}"
-
-
-def _print_zotero_local_help() -> None:
-    """Print the actionable message when the local Zotero API is unreachable.
-
-    Pipeline scripts that call ZoteroClient with prefer_local=True (the
-    default) need this endpoint. Without it, every read falls back to
-    api.zotero.org — slow and rate-limited for large libraries.
-    """
-    print("  *** WARNING: local Zotero API is not reachable ***")
-    print("  Pipeline scripts default to local reads (fast, no rate limit).")
-    print("  Without it, reads fall back to api.zotero.org — much slower.")
-    print()
-    print("  To fix:")
-    print("  1. Open Zotero desktop (download: https://www.zotero.org/download/).")
-    print("  2. Zotero → Settings → Advanced → General:")
-    print("     tick 'Allow other applications on this computer to communicate")
-    print("     with Zotero'.")
-    print("  3. Leave Zotero running; re-run this wizard to confirm.")
 
 
 def _zotero_local_server_id(timeout: int = 5) -> str:
@@ -2167,66 +2067,159 @@ def _authorize_zotero_local(
     return "ok", key, "granted"
 
 
-def _prompt_zotero_local_writes(interactive: bool, existing: dict) -> dict[str, object]:
-    """Return `{local_api_key: str}` to merge into `[zotero]`.
+#: The note the write test creates in the personal library, and deletes
+#: again at once. Worded so that one left behind by a crash between the
+#: two steps explains itself.
+_WRITE_TEST_NOTE = (
+    "<p>academic-research setup: local write test. Safe to delete.</p>"
+)
 
-    Zotero 10 accepts writes on its local API once the user grants a key
-    through Zotero's own consent dialog. With one stored, the pipeline
-    writes where it already reads, which closes the staleness gap that
-    has caused a run to write an item through the Web API, read it back
-    locally, see nothing because Desktop had not synced, and report it
-    as "already done".
 
-    Asked here and nowhere else. The grant is a modal dialog, and a
-    pipeline script running unattended in a background lane has no way
-    to answer one; Zotero also rate-limits the endpoint, so it must not
-    sit in anything that retries.
+def _zotero_read_test(timeout: int = 5) -> tuple[bool, str]:
+    """Read one item from the personal library over the local API.
+
+    `/api/` answering proves only that the server is up; a listing proves
+    the data path the pipeline reads through.
     """
-    current = (existing.get("zotero", {}) or {}).get("local_api_key")
-    if not interactive:
-        # A non-interactive re-run must not drop a key the user granted.
-        return {"local_api_key": current} if current else {}
-    if current:
-        print("\n  Zotero local writes: already authorized (key on file).")
-        answer = _ask("    Request a new key? [y/N] ").strip().lower()
-        if answer not in ("y", "yes"):
-            return {"local_api_key": current}
-
-    status, _ = _check_zotero_local()
-    if status != ZOTERO_LOCAL_STATUS_OK:
-        print("\n  Zotero local writes: skipped — local API not reachable.")
-        return {"local_api_key": current} if current else {}
-
-    print("\n  Zotero local writes (recommended):")
-    print(_wrap_body(
-        "The pipeline reads from Zotero on your own machine but writes "
-        "through zotero.org, and Zotero Desktop only learns about those "
-        "writes at its next sync. A script that writes and reads back can "
-        "therefore see nothing and report it as already done. Zotero 10 "
-        "can accept the writes directly, which removes that gap and the "
-        "rate limit with it.",
-        indent=4,
-    ))
-    print(
-        "    Zotero will show a permission dialog. Choose "
-        "'Always Allow' —\n"
-        "    'Allow' grants a key good for a single write, which cannot "
-        "be stored.",
+    status, data, err = _http_json(
+        ZOTERO_LOCAL_URL + "users/0/items?limit=1", timeout=timeout,
     )
-    # On end of input, "no": a yes opens a modal dialog in Zotero that
-    # nobody is there to answer.
-    answer = _ask("    Request local write access now? [Y/n] ", "n").strip().lower()
-    if answer in ("n", "no"):
-        return {"local_api_key": current} if current else {}
+    if status == 200 and isinstance(data, list):
+        return True, "read the personal library"
+    if status == 0:
+        return False, f"Zotero is not reachable at localhost:23119 ({err})"
+    return False, f"the local API answered HTTP {status} ({err})"
 
-    print("    Waiting for you to answer the dialog in Zotero…", flush=True)
-    grant_status, key, message = _authorize_zotero_local()
-    if grant_status == "ok":
-        print("    ✓ Local writes authorized.")
-        return {"local_api_key": key}
-    print(f"    ○ Not authorized — {message}.")
-    print("      Writes will keep going through zotero.org, as before.")
-    return {"local_api_key": current} if current else {}
+
+def _zotero_local_write(
+    method: str, path: str, key: str, server_id: str, *,
+    body: object = None, headers: dict[str, str] | None = None,
+    timeout: int = 10,
+) -> tuple[int, object]:
+    """One local API write, never retried. Returns (status, json_or_none);
+    status 0 when the request did not get an answer."""
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        ZOTERO_LOCAL_URL + path, data=data, method=method,
+        headers={
+            "Content-Type": "application/json",
+            "Zotero-Server-ID": server_id,
+            "Zotero-API-Key": key,
+            **(headers or {}),
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+            return resp.status, json.loads(raw) if raw else None
+    except urllib.error.HTTPError as e:
+        return e.code, None
+    except Exception:  # noqa: BLE001 — "no answer" is the finding
+        return 0, None
+
+
+def _zotero_write_test(key: str, server_id: str) -> tuple[str, str]:
+    """Create a note in the personal library and delete it again.
+
+    Returns (status, message): "ok", "key_rejected" (401 — no key, or a
+    revoked one), or "error". The delete matters as much as the create:
+    the pipeline trashes and merges, and a key that can only add would
+    pass a create-only test.
+    """
+    status, result = _zotero_local_write(
+        "POST", "users/0/items", key, server_id,
+        body=[{"itemType": "note", "note": _WRITE_TEST_NOTE, "tags": []}],
+    )
+    if status == 401:
+        return "key_rejected", "Zotero refused the write key"
+    created = (result or {}).get("successful", {}) if isinstance(result, dict) else {}
+    if status != 200 or not created:
+        return "error", f"creating a test note failed (HTTP {status})"
+    note = next(iter(created.values()))
+    note_key, version = note.get("key", ""), note.get("version", 0)
+    status, _ = _zotero_local_write(
+        "DELETE", f"users/0/items/{note_key}", key, server_id,
+        headers={"If-Unmodified-Since-Version": str(version)},
+    )
+    if status not in (200, 204):
+        return "error", (
+            f"deleting the test note failed (HTTP {status}); delete the note "
+            f"{note_key} in My Library by hand"
+        )
+    return "ok", "created and deleted a test note"
+
+
+def _zotero_local_gate(interactive: bool, existing: dict) -> tuple[bool, dict[str, str]]:
+    """Prove Zotero Desktop can be read and written; get its write key.
+
+    Returns `(passed, {"local_api_key": key})`. The plugin talks to
+    Zotero only through Desktop's local API, so setup goes no further
+    unless a read and a write (create and delete) both succeed there.
+
+    The write uses the key on file, if any. When Zotero refuses it — no
+    key yet, or one revoked in Zotero's settings — the wizard asks for a
+    new one through Zotero's consent dialog and tries again. The dialog
+    appears in Zotero, not in this terminal, so a `--non-interactive` run
+    asks as well; it is the answer that has to come from a person.
+    Zotero rate-limits that endpoint, so it is asked at most once here.
+    """
+    del interactive  # the dialog is in Zotero; see the docstring
+    print("\n  Zotero Desktop:")
+    ok, message = _zotero_read_test()
+    if not ok:
+        print(f"    ✗ Read test: {message}.")
+        return False, {}
+    print(f"    ✓ Read test: {message}.")
+
+    server_id = _zotero_local_server_id()
+    if not server_id:
+        print(
+            "    ✗ Write test: this Zotero does not accept local writes "
+            "(no Zotero-Server-ID header). Zotero 10 or newer is required.",
+        )
+        return False, {}
+
+    key = (
+        os.environ.get("ZOTERO_LOCAL_API_KEY", "").strip()
+        or str((existing.get("zotero", {}) or {}).get("local_api_key") or "")
+    )
+    status, message = (
+        _zotero_write_test(key, server_id) if key else ("key_rejected", "")
+    )
+    if status == "key_rejected":
+        print(_wrap_body(
+            ("Zotero refused the stored write key (it was revoked in Zotero's "
+             "settings, or belongs to another Zotero profile). "
+             if key else "") +
+            "Zotero will now show a permission dialog. Choose 'Always "
+            "Allow': 'Allow' grants a key good for a single write, which "
+            "cannot be stored.",
+            indent=4,
+        ))
+        print("    Waiting for you to answer the dialog in Zotero…", flush=True)
+        grant_status, key, grant_message = _authorize_zotero_local()
+        if grant_status != "ok":
+            print(f"    ✗ Write test: not authorized — {grant_message}.")
+            return False, {}
+        status, message = _zotero_write_test(key, server_id)
+    if status != "ok":
+        print(f"    ✗ Write test: {message}.")
+        return False, {}
+    print(f"    ✓ Write test: {message}.")
+    return True, {"local_api_key": key}
+
+
+def _print_zotero_gate_help() -> None:
+    """What to do when the Zotero gate failed. Setup stops there."""
+    print()
+    print("  *** Setup stopped: Zotero Desktop must pass both tests. ***")
+    print("  The plugin reads and writes your library only through Zotero")
+    print("  Desktop on this computer. To fix:")
+    print("  1. Open Zotero 10 or newer (https://www.zotero.org/download/).")
+    print("  2. Zotero → Settings → Advanced → General: tick 'Allow other")
+    print("     applications on this computer to communicate with Zotero'.")
+    print("  3. Re-run this wizard and choose 'Always Allow' in Zotero's")
+    print("     permission dialog.")
 
 
 def _check_zotero_bbt(timeout: int = 3) -> tuple[str, str]:
@@ -2734,12 +2727,6 @@ def _offer_register_mcp(
             print(f"    ✓ Registered {spec.name}.")
             updated[spec.name] = MCP_STATUS_CONNECTED
             registered += 1
-            if spec.name == "zotero":
-                print(_wrap_body(
-                    "Note: for local-mode (Zotero desktop instead of cloud), "
-                    "re-run with `-e ZOTERO_LOCAL=true` — see the project page.",
-                    indent=4,
-                ))
         else:
             err_clean = err.strip() or "unknown error"
             print(_wrap_body(f"✗ Registration failed: {err_clean}", indent=4))
@@ -2885,14 +2872,25 @@ def main() -> int:
     # Preserve (or extend) non-key sections across re-runs.
     existing_cfg = _load_existing_config()
 
+    # Zotero first, and nothing else unless it passes: every skill goes
+    # through it, so a user should not answer ten questions and only then
+    # learn the plugin cannot work.
+    zotero_ok, zotero_entry = _zotero_local_gate(interactive, existing_cfg)
+    if not zotero_ok:
+        _print_zotero_gate_help()
+        return 3
+
     provider = _choose_provider(interactive, existing_cfg)
     values = _collect_keys(interactive, verify, provider)
     # Keep any other `[llm]` key the user set by hand (`max_retries`).
     values["llm"] = {**(existing_cfg.get("llm", {}) or {}), "provider": provider}
+    values.setdefault("zotero", {}).update(zotero_entry)
 
     # Keys this run deliberately clears. Everything else already in the
     # file is kept — see `_merge_config`.
-    removals: set[tuple[str, str]] = _stale_zotero_identity(existing_cfg, values)
+    removals: set[tuple[str, str]] = {
+        ("zotero", k) for k in _LEGACY_ZOTERO_KEYS
+    }
 
     connector_entry = _detect_and_prompt_connector(interactive, existing_cfg)
     if connector_entry:
@@ -2906,12 +2904,6 @@ def main() -> int:
         interactive, existing_cfg, values,
     ).items():
         values.setdefault(section, {}).update(entry)
-
-    # Merge-not-assign: `[zotero]` already carries api_key / user_id
-    # from _collect_keys.
-    local_writes_entry = _prompt_zotero_local_writes(interactive, existing_cfg)
-    if local_writes_entry:
-        values.setdefault("zotero", {}).update(local_writes_entry)
 
     cluster_entry = _prompt_cluster_automation(interactive, existing_cfg)
     if cluster_entry:
@@ -2937,18 +2929,8 @@ def main() -> int:
     _write_config(_merge_config(existing_cfg, values, removals))
     gitignore_updated = _maybe_add_claude_to_gitignore()
 
-    # Local Zotero API probe. Pipeline scripts default to local reads for
-    # speed; failing here doesn't block setup but surfaces a clear warning.
-    zotero_local_status, zotero_local_message = _check_zotero_local()
-    # Better BibTeX is a separate plugin — skip the probe if Zotero itself
-    # isn't up, since that would just duplicate the Zotero-local warning.
-    if zotero_local_status == ZOTERO_LOCAL_STATUS_OK:
-        zotero_bbt_status, zotero_bbt_message = _check_zotero_bbt()
-    else:
-        zotero_bbt_status, zotero_bbt_message = (
-            ZOTERO_BBT_STATUS_UNREACHABLE,
-            "skipped — Zotero local API not reachable",
-        )
+    # Better BibTeX is a separate plugin; Zotero itself passed the gate.
+    zotero_bbt_status, zotero_bbt_message = _check_zotero_bbt()
 
     zotero_cli_status, zotero_cli_message = _check_zotero_cli()
 
@@ -3001,18 +2983,14 @@ def main() -> int:
         print(f"    Pipeline tools (Antigravity): {_SELF_STATUS_TEXT[agy_self]}")
     if codex_self != "absent":
         print(f"    Pipeline tools (Codex, untested): {_SELF_STATUS_TEXT[codex_self]}")
-    glyph = "✓" if zotero_local_status == ZOTERO_LOCAL_STATUS_OK else "✗"
-    print(f"    Zotero local API: {glyph} {zotero_local_message}")
+    print("    Zotero Desktop:   ✓ read and write tested")
     bbt_glyph = "✓" if zotero_bbt_status == ZOTERO_BBT_STATUS_OK else "✗"
     print(f"    Better BibTeX:    {bbt_glyph} {zotero_bbt_message}")
     cli_glyph = "✓" if zotero_cli_status == ZOTERO_CLI_STATUS_OK else "○"
     print(f"    zotero-cli:       {cli_glyph} {zotero_cli_message}")
     zotero_missing, all_search_dbs_missing = _print_mcp_summary(current_mcp)
 
-    if zotero_local_status != ZOTERO_LOCAL_STATUS_OK:
-        print()
-        _print_zotero_local_help()
-    elif zotero_bbt_status == ZOTERO_BBT_STATUS_MISSING:
+    if zotero_bbt_status == ZOTERO_BBT_STATUS_MISSING:
         print()
         _print_zotero_bbt_help()
 

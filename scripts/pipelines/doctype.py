@@ -216,7 +216,7 @@ def supplement_links(
 
 
 def link_supplements(
-    pairs: list[tuple[str, str]], zot, *, cloud: bool = False,
+    pairs: list[tuple[str, str]], zot,
 ) -> tuple[int, int]:
     """Relate each supplement and its article, both directions.
 
@@ -228,8 +228,8 @@ def link_supplements(
     linked = failed = 0
     for supp_key, parent_key in pairs:
         try:
-            zot.add_related(supp_key, [parent_key], cloud=cloud)
-            zot.add_related(parent_key, [supp_key], cloud=cloud)
+            zot.add_related(supp_key, [parent_key])
+            zot.add_related(parent_key, [supp_key])
         except Exception as exc:  # noqa: BLE001 — see docstring
             failed += 1
             print(f"  WARNING: could not relate supplement {supp_key} to "
