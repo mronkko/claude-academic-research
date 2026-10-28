@@ -1959,6 +1959,33 @@ class ZoteroClient:
             )
         )
 
+    def list_annotations(self, attachment_key: str) -> list[dict]:
+        """The annotation items under one attachment.
+
+        Not `children()`: that returns notes and attachments only, so an
+        annotation (highlight) never shows in it. Verified against Zotero
+        10's local API on 2026-10-28, where `itemType="annotation"` lists
+        them and `children()` does not.
+        """
+        return self._client().children(attachment_key, itemType="annotation")
+
+    def create_highlights(self, payloads: list[dict]) -> list[str]:
+        """Create highlight annotations (at most 50) and return their keys.
+
+        Each payload is a full `annotation` item with `parentItem` set to
+        the PDF attachment's key. Raises if Zotero rejects any of them:
+        a 200 response can carry per-object failures (see `_post_items`).
+        """
+        resp = self.create_items(payloads)
+        failed = resp.get("failed") or {}
+        if failed:
+            raise RuntimeError(f"annotation create rejected: {failed!r}")
+        success = resp.get("success") or {}
+        return [
+            v.get("key", "") if isinstance(v, dict) else str(v)
+            for _, v in sorted(success.items(), key=lambda kv: int(kv[0]))
+        ]
+
     def delete_item(self, item_key: str) -> bool:
         """Delete an item (used by enrich_pdfs.py to remove PDF stubs).
 

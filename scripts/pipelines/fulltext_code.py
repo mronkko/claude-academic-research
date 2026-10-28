@@ -192,6 +192,9 @@ def _build_slr_coding_note_html(
         # Which review wrote this. A note found on a shared item can then be
         # attributed without reparsing the heading.
         "tag_prefix": ns.rstrip("/"),
+        # Which PDF the coder read; `highlight_quotes.py` uses it to pick
+        # the right attachment when an item has several.
+        "pdf_sha256": _file_sha256(row.get("pdf_path", "")),
         "fields": {f["name"]: row.get(f["name"], "")
                    for f in fields if f.get("name")},
     }
@@ -200,6 +203,17 @@ def _build_slr_coding_note_html(
         f"{json.dumps(data_payload, ensure_ascii=False)} -->"
     )
     return "\n".join(parts)
+
+
+def _file_sha256(path: str) -> str:
+    """Hex SHA-256 of the file at `path`, '' when there is none to hash."""
+    import hashlib
+
+    try:
+        p = Path(path)
+        return hashlib.sha256(p.read_bytes()).hexdigest() if path and p.is_file() else ""
+    except OSError:
+        return ""
 
 
 def _merge_fields_into_payload(

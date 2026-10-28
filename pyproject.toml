@@ -24,6 +24,8 @@ dev = [
     "pyzotero>=1.16",
     "httpx>=0.25",
     "requests>=2.31",
+    # highlight_quotes.py reads PDF text layers; its tests build synthetic PDFs.
+    "pymupdf>=1.24",
     # `core/llm_provider.py` imports openai lazily for the four
     # providers that share the OpenAI-compatible transport.
     "openai>=1.0",
