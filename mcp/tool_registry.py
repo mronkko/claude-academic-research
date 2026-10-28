@@ -328,6 +328,26 @@ def summarise_export(out: str, rc: int, project: Path) -> tuple[dict, list[str]]
     return summary, artifacts
 
 
+def summarise_highlights(out: str, rc: int, project: Path) -> tuple[dict, list[str]]:
+    m = re.search(r"status counts: (.+)", out)
+    counts = {}
+    if m:
+        for part in m.group(1).split(", "):
+            k, _, v = part.partition("=")
+            if v.isdigit():
+                counts[k] = int(v)
+    return _drop_none({"status_counts": counts or None}), (
+        ["output/highlight_log.csv"] if "log: " in out else [])
+
+
+def summarise_cleanup(out: str, rc: int, project: Path) -> tuple[dict, list[str]]:
+    return _drop_none({
+        "deleted_items": _int(r"(?:Deleted|Would delete) (\d+) item", out),
+        "skipped_items": _int(r"skipped (\d+)", out),
+        "collection_removed": True if "collection removed" in out else None,
+    }), []
+
+
 def summarise_bib(out: str, rc: int, project: Path) -> tuple[dict, list[str]]:
     summary = _drop_none({
         "citation_keys": _int(r"Citation keys found in Markdown \((\d+)\)", out),
@@ -941,6 +961,71 @@ EXPORT_CODED_INCLUDES = Tool(
     open_world=True,
     exclusive=(("group", "user"),),
     summarise=summarise_export,
+)
+
+HIGHLIGHT_QUOTES = Tool(
+    name="highlight_quotes",
+    title="Highlight coded quotes in Zotero PDFs",
+    effect=WRITES_ZOTERO,
+    description=(
+        "Creates Zotero PDF highlights from the verbatim evidence quotes "
+        "the coder stored for each full-text include, tagged "
+        "<prefix>/ai-highlight so they can be filtered or deleted. A quote "
+        "found nowhere is reported not_found (a faithfulness check on the "
+        "model); one on several pages is ambiguous and skipped. Re-running "
+        "adds no duplicates. Log CSV: output/highlight_log.csv."
+    ),
+    script="scripts/pipelines/highlight_quotes.py",
+    params=(
+        *LIBRARY_ARGS,
+        Param("collection", "Zotero collection key of the review.",
+              kind="option", flag="--collection", required=True,
+              pattern=r"^[A-Z0-9]{8}$"),
+        Param("tag_prefix", "This review's tag namespace, overriding "
+              "TAG_PREFIX in screening_config.py.", kind="option",
+              flag="--tag-prefix"),
+        Param("keys", "Comma-separated item keys to limit to.",
+              kind="option", flag="--keys"),
+        Param("dry_run", "Report what would be created; write nothing.",
+              kind="switch", flag="--dry-run", type="boolean"),
+    ),
+    timeout=900,
+    read_only=False,
+    open_world=True,
+    exclusive=(("group", "user"),),
+    one_of=(("group", "user"),),
+    summarise=summarise_highlights,
+)
+
+DEMO_CLEANUP = Tool(
+    name="demo_cleanup",
+    title="Remove a demo run from Zotero",
+    effect=WRITES_ZOTERO,
+    description=(
+        "Deletes the items a demo-slr run created (exactly the keys in its "
+        "keys file, each only if it still carries the demo's tag) and the "
+        "demo collection. Refuses any tag prefix not starting with demo-."
+    ),
+    script="scripts/pipelines/demo_cleanup.py",
+    params=(
+        *LIBRARY_ARGS,
+        Param("collection", "Demo collection key.", kind="option",
+              flag="--collection", pattern=r"^[A-Z0-9]{8}$"),
+        Param("tag_prefix", "The demo's tag namespace (demo-...).",
+              kind="option", flag="--tag-prefix", required=True,
+              pattern=r"^demo-[a-z0-9-]{1,32}$"),
+        Param("keys_file", "Project-relative file of created item keys.",
+              kind="option", flag="--keys-file", path=True, required=True),
+        Param("dry_run", "Count only; delete nothing.", kind="switch",
+              flag="--dry-run", type="boolean"),
+    ),
+    timeout=300,
+    read_only=False,
+    destructive=True,
+    open_world=True,
+    exclusive=(("group", "user"),),
+    one_of=(("group", "user"),),
+    summarise=summarise_cleanup,
 )
 
 GENERATE_BIB = Tool(
@@ -1624,6 +1709,8 @@ TOOLS: tuple[Tool, ...] = (
     SCREENING_REPORT,
     AUDIT_LIBRARY,
     EXPORT_CODED_INCLUDES,
+    HIGHLIGHT_QUOTES,
+    DEMO_CLEANUP,
     GENERATE_BIB,
     TC_UNPACK,
     TC_INSPECT,

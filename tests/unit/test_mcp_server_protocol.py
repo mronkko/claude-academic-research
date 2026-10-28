@@ -128,7 +128,7 @@ def test_initialize_then_tools_list(project, stub, tmp_path) -> None:
         "pdf_consent_show", "pdf_consent_set", "enrich_pdfs_plan",
         "enrich_pdfs_report", "pdf_manual_next", "pdf_manual_collect",
         "pdf_manual_assign", "pdf_manual_ignore", "screening_report", "audit_library",
-        "export_coded_includes", "generate_bib",
+        "export_coded_includes", "highlight_quotes", "demo_cleanup", "generate_bib",
         "track_changes_unpack", "track_changes_inspect", "track_changes_check",
         "start_pdf_plan", "start_enrich_pdfs", "start_enrich_pdfs_paid",
         "start_pdf_unattended_setup", "start_pdf_unattended_run",
