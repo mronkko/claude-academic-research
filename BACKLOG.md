@@ -401,9 +401,9 @@ green**; item 4 is why, and it is not a defect in the fix.
    precedence" is not true here. It also makes the resolver the one
    setting a live test cannot parameterise.
 
-   *Status:* CONFIRMED against `fetchers/library_resolver.py:334-343`.
-   Decide deliberately whether the env var should *replace* the list or
-   *reorder* it; replacing is simpler and matches every other key.
+   *Status:* FIXED 2026-09-22 (`8f1f25a`): the env var *replaces* a
+   configured list, guarded by `test_env_base_replaces_a_configured_list`.
+   Same fix as item 3 of the AI-literature-review section above.
 
    *Files:* `scripts/pipelines/fetchers/library_resolver.py`
    (`load_from_config`), `CLAUDE.md` (the precedence sentence).
@@ -527,7 +527,18 @@ Springer, Emerald, T&F and OUP, copied from JYU no-access pages.
 
 ---
 
-## Open — two upstream fixes for `mronkko/zotero-mcp` (2026-08-20)
+## Fixed upstream — two `mronkko/zotero-mcp` converter defects (2026-08-20)
+
+**Status: both fixed upstream by 0.11.0** (checked 2026-10-28 against the
+installed 0.11.0: `_csl_text` takes the first element of an array field,
+and `CSL_TYPE_MAP` has Crossref's `journal-article` / `book-chapter`
+aliases). The plugin's floor is 0.11, so nothing is left upstream. Left
+here: `_csl_for_converter` in `import_to_zotero.py` can drop its array
+coercion and type translation and keep only the `_CSL_FIELDS_KEPT`
+filter (the third point below, which is ours by design); update
+`tests/unit/test_import_metadata_provenance.py` to match. Not urgent:
+the workaround is redundant, not wrong. Original entry:
+
 
 Both found by adopting `zotero_mcp.citation_import.csl_json_to_zotero`
 on `import_to_zotero.py`'s fill path (S10, partially reopened). Both
@@ -535,7 +546,7 @@ are worked around locally in `_csl_for_converter`, with the tests that
 pin the workaround in `tests/unit/test_import_metadata_provenance.py`.
 Fixing them upstream lets that adapter shrink; **it cannot be deleted
 until a fix ships to PyPI**, since this plugin depends on the published
-wheel (`zotero-mcp-server>=0.9,<0.10`), not the checkout.
+wheel (then `zotero-mcp-server>=0.9,<0.10`), not the checkout.
 
 1. **`csl_json_to_zotero` raises `AttributeError` on Crossref CSL.**
    `_set_if_in_template(template, "ISSN", (csl.get("ISSN") or "").strip())`
