@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.1] — 2026-10-28
+
+### Fixed
+
+- **EBSCO: an OpenURL that matches several records no longer fails.**
+  EBSCO answers such a link with a "Multiple items found" chooser, which
+  the handler did not recognise, so the item failed even when the reader
+  had access. The handler now opens the candidates whose links carry the
+  queried DOI — the same article indexed twice — and takes the first
+  that serves the PDF.
+- **Library routes that need no sign-in are preferred.** With two
+  libraries in `[library] openurl_base`, the order of the list used to
+  decide between equally good routes, so an EZproxy route that asks for
+  an SSO login could beat one that authenticates on the institutional
+  IP. Coverage and platform preference still come first.
+- **`enrich_pdfs` says when every route in a browser queue needs a
+  sign-in**, and names `[library] openurl_base` as the place to look.
+  That state used to degrade silently.
+- **A rate-limited (HTTP 429) PDF fetch is logged as `NETWORK_ERROR`**,
+  a retry, instead of `UNAVAILABLE`, which reads as "no full text
+  exists" and licenses an exclusion.
+- `import_to_zotero.py` requires `zotero-mcp-server>=0.11` with no upper
+  bound, matching what `/setup` installs, so it does not run an older
+  zotero-mcp than your MCP server once 0.12 ships.
+
+### Changed
+
+- `import_to_zotero.py` relies on zotero-mcp-server 0.11's own handling
+  of Crossref's array-valued fields and type names; its local copies of
+  both are gone. No change in the items it creates.
+
 ## [0.27.0] — 2026-10-24
 
 ### Changed — breaking
