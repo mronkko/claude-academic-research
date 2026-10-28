@@ -45,6 +45,22 @@ def test_floor_matches_the_pyproject_pin(floor) -> None:
     )
 
 
+def test_import_script_requires_the_floor_with_no_ceiling(floor) -> None:
+    """The user-run script floats above the floor, like the wizard install.
+
+    Only the dev group carries the `<CEILING` bound (E3, in
+    `test_zotero_mcp_sync.py`): a ceiling here would make `uv run` resolve
+    an older zotero-mcp than the one the user's MCP server runs.
+    """
+    script = REPO / "scripts" / "pipelines" / "import_to_zotero.py"
+    pins = re.findall(r'"zotero-mcp-server([^"]*)"',
+                      script.read_text(encoding="utf-8"))
+    assert pins == [f">={floor.FLOOR_STR}"], (
+        f"import_to_zotero.py pins zotero-mcp-server as {pins!r}; expected "
+        f"exactly ['>={floor.FLOOR_STR}'] — the floor, no upper bound."
+    )
+
+
 def test_derived_strings_are_built_from_the_floor(floor) -> None:
     assert floor.FLOOR_STR == f"{floor.FLOOR[0]}.{floor.FLOOR[1]}"
     assert floor.REQUIREMENT.endswith(f">={floor.FLOOR_STR}")
