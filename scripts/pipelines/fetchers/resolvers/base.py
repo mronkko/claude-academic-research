@@ -553,8 +553,8 @@ class LibraryResolver(ABC):
         *,
         pub_date: int | str | None = None,
         today_year: int | None = None,
-    ) -> tuple[int, int]:
-        """Ordering key: coverage first, then platform preference.
+    ) -> tuple[int, int, int]:
+        """Ordering key: coverage, then platform preference, then no login.
 
         Platform priority alone is not enough once coverage is known.
         EBSCOhost is ranked first because its PDFs are cleanest, but it
@@ -568,13 +568,23 @@ class LibraryResolver(ABC):
         a dialect that reports no coverage at all (SFX) keeps its
         existing order untouched: every target lands in bucket 1 and
         `rank_key` decides, exactly as before.
+
+        The last term prefers a route that needs no interactive sign-in
+        (`needs_interactive_login`). A reader with two affiliations gets
+        both libraries' routes merged, often the same platform twice, and
+        with coverage unknown list order alone used to decide: measured
+        live, JYU's SSO-walled EBSCO route beat Aalto's IP-authenticated
+        one whenever JYU came first in `openurl_base`. It sits below
+        coverage on purpose — a reachable route that does not hold the
+        year is worse than a sign-in for one that does.
         """
         covers = (
             None if pub_date is None
             else target.covers_year(pub_date, today_year=today_year)
         )
         bucket = 1 if covers is None else (0 if covers else 2)
-        return (bucket, self.rank_key(target, priority))
+        login = 1 if needs_interactive_login(target.url) else 0
+        return (bucket, self.rank_key(target, priority), login)
 
     def matches_domains(
         self, target: FulltextTarget, domains: tuple[str, ...],

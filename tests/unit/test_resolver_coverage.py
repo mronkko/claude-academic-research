@@ -361,3 +361,38 @@ def test_a_year_wall_is_unchanged_by_the_month() -> None:
         assert window.covers_year(2026, today_year=2026, today_month=month) is False
         assert window.covers_year(2025, today_year=2026, today_month=month) is None
         assert window.covers_year(2024, today_year=2026, today_month=month) is True
+
+
+def test_a_no_login_route_breaks_a_tie_with_an_sso_walled_one() -> None:
+    """Two affiliations, one platform, coverage unknown: list order used
+    to decide, so a JYU EZproxy route listed first beat Aalto's
+    IP-authenticated one. The route that needs no sign-in now wins."""
+    walled = FulltextTarget(
+        url="https://research-ebsco-com.ezproxy.jyu.fi/linkprocessor/plink?x=1",
+    )
+    open_ = FulltextTarget(
+        url="https://research-ebsco-com.libproxy.aalto.fi/linkprocessor/plink?x=1",
+    )
+    assert min([walled, open_], key=lambda t: SFX.sort_key(t)) is open_
+    assert min([walled, open_], key=lambda t: SFX.sort_key(t, pub_date=2024)) is open_
+
+
+def test_login_never_outranks_coverage() -> None:
+    """A reachable route that does not hold the year is worse than a
+    sign-in for one that does."""
+    walled = FulltextTarget(
+        url="https://research-ebsco-com.ezproxy.jyu.fi/x",
+        package_name="EBSCOhost", interface_name="EBSCOhost",
+        coverage=EBSCO_COV,
+    )
+    open_ = FulltextTarget(
+        url="https://research-ebsco-com.libproxy.aalto.fi/x",
+        package_name="EBSCOhost", interface_name="EBSCOhost",
+        coverage="Available from 2030.",
+    )
+    best = min([open_, walled],
+               key=lambda t: ALMA.sort_key(t, PLATFORM_PRIORITY,
+                                           pub_date=2000, today_year=2026))
+    assert walled.covers_year(2000, today_year=2026) is True
+    assert open_.covers_year(2000, today_year=2026) is False
+    assert best is walled

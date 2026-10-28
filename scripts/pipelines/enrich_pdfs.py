@@ -1844,6 +1844,30 @@ def _attach_and_log(
     return True
 
 
+def _all_routes_need_login_hint(handler, items: list[dict]) -> str:
+    """A one-line warning when every queued route needs a sign-in, or "".
+
+    That state degrades silently otherwise: the run stalls on, or defers
+    at, an SSO page, and nothing says the configuration is why. Route
+    ranking already prefers a no-login route when one exists
+    (`LibraryResolver.sort_key`), so reaching this means no configured
+    library offered one — commonly because the library that
+    authenticates on IP is missing from `[library] openurl_base`. Only
+    handlers that can tell (`proxied_route_count`) are asked.
+    """
+    if not items or not hasattr(handler, "proxied_route_count"):
+        return ""
+    if handler.proxied_route_count(items) < len(items):
+        return ""
+    name = getattr(handler, "display_name", "") or handler.name
+    return (
+        f"  NOTE: every {name} route in this queue ({len(items)}) goes "
+        f"through a proxy that asks you to sign in. If a library of yours "
+        f"authenticates on its IP range instead, check that its resolver is "
+        f"in [library] openurl_base — its routes are preferred when present."
+    )
+
+
 async def _drive_handler(
     handler,
     items: list[dict],
@@ -1945,6 +1969,9 @@ async def _drive_handler(
             if hasattr(handler, "needs_solve_for")
             else getattr(handler, "needs_interactive_solve", True)
         )
+        login_hint = _all_routes_need_login_hint(handler, items)
+        if login_hint:
+            print(login_hint, flush=True)
         # Deferring is only safe on one lane; `lanes` itself is computed
         # further down, after setup has already run, so ask
         # `effective_lanes` here — it is pure.
