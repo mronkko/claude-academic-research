@@ -203,3 +203,43 @@ def test_anthropic_generate_names_stop_reason_when_no_text():
     )
     with pytest.raises(ValueError, match="max_tokens"):
         p.generate("claude-haiku-5-5", "s", "p")
+
+
+def test_thinking_models_get_room_to_think_older_models_do_not():
+    p = _anthropic_provider()
+    p.client.messages.create.return_value = _reply()
+    p.generate("claude-haiku-5-5", "s", "p", max_tokens=200)
+    assert p.client.messages.create.call_args.kwargs["max_tokens"] == (
+        200 + llm_provider.THINKING_ALLOWANCE
+    )
+    p.generate("claude-sonnet-4-6", "s", "p", max_tokens=200)
+    assert p.client.messages.create.call_args.kwargs["max_tokens"] == 200
+
+
+def test_truncated_thinking_retries_once_with_double_budget():
+    p = _anthropic_provider()
+    p.client.messages.create.side_effect = [
+        _reply(None, thinking=True, stop_reason="max_tokens"),
+        _reply("INCLUDE", thinking=True),
+    ]
+    assert p.generate("claude-haiku-5-5", "s", "p", max_tokens=200) == "INCLUDE"
+    first, second = (c.kwargs["max_tokens"]
+                     for c in p.client.messages.create.call_args_list)
+    assert second == first * 2
+
+
+def test_truncated_twice_raises_after_exactly_one_retry():
+    p = _anthropic_provider()
+    p.client.messages.create.side_effect = [
+        _reply(None, thinking=True, stop_reason="max_tokens")
+    ] * 3
+    with pytest.raises(ValueError, match="max_tokens"):
+        p.generate("claude-haiku-5-5", "s", "p", max_tokens=200)
+    assert p.client.messages.create.call_count == 2
+
+
+def test_large_budget_passes_explicit_timeout():
+    p = _anthropic_provider()
+    p.client.messages.create.return_value = _reply()
+    p.generate("claude-opus-5-5", "s", "p", max_tokens=14400)
+    assert "timeout" in p.client.messages.create.call_args.kwargs

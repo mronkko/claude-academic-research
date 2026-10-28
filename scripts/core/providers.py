@@ -375,3 +375,14 @@ def anthropic_accepts_temperature(model: str) -> bool:
     """
     m = _CLAUDE_MAJOR.search(model.lower())
     return not (m and int(m.group(1)) >= 5)
+
+
+def anthropic_thinks_by_default(model: str) -> bool:
+    """True for Claude models whose thinking tokens eat `max_tokens`.
+
+    Claude 5+ think unless told not to (and Opus cannot be told not to),
+    so the budget must cover the thinking as well as the answer. Same
+    major-version rule as `anthropic_accepts_temperature`.
+    """
+    m = _CLAUDE_MAJOR.search(model.lower())
+    return bool(m and int(m.group(1)) >= 5)

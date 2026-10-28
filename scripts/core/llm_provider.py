@@ -184,6 +184,19 @@ def _api_key_for(spec: ProviderSpec, *, required: bool = True) -> str:
 # ---------------------------------------------------------------------------
 
 
+#: Output tokens added to a caller's `max_tokens` for models that think
+#: by default. A cap, not a spend: only tokens produced are billed.
+THINKING_ALLOWANCE = 6000
+_NONSTREAMING_MAX_TOKENS = 16000
+
+
+def _is_truncated_without_text(resp) -> bool:
+    return resp.stop_reason == "max_tokens" and not any(
+        getattr(b, "type", None) == "text" and b.text.strip()
+        for b in resp.content
+    )
+
+
 def _response_text(resp) -> str:
     """Join the `text` blocks of a Messages response.
 
@@ -241,6 +254,11 @@ class AnthropicProvider(LLMProvider):
         # no such keyword, and Claude 5+ models reject the parameter
         # (see `providers.anthropic_accepts_temperature`). For those the
         # call runs at the model's default sampling.
+        thinks = providers.anthropic_thinks_by_default(model)
+        if thinks:
+            # Thinking tokens count against max_tokens; callers size
+            # max_tokens for the answer alone, so add room to think.
+            max_tokens += THINKING_ALLOWANCE
         request: dict = {
             "model": model,
             "max_tokens": max_tokens,
@@ -249,14 +267,24 @@ class AnthropicProvider(LLMProvider):
         }
         if providers.anthropic_accepts_temperature(model):
             request["extra_body"] = {"temperature": temperature}
+        resp = self._create(request)
+        if thinks and _is_truncated_without_text(resp):
+            request["max_tokens"] = max_tokens * 2
+            resp = self._create(request)
+        return _response_text(resp)
+
+    def _create(self, request: dict):
+        # The SDK refuses a non-streaming call whose max_tokens implies
+        # >10 minutes unless a timeout is given explicitly.
+        if request["max_tokens"] > _NONSTREAMING_MAX_TOKENS:
+            request = {**request, "timeout": 900.0}
         try:
-            resp = self.client.messages.create(**request)
+            return self.client.messages.create(**request)
         except Exception as e:
             if "extra_body" not in request or not _rejects_temperature(e):
                 raise
-            del request["extra_body"]
-            resp = self.client.messages.create(**request)
-        return _response_text(resp)
+            request = {k: v for k, v in request.items() if k != "extra_body"}
+            return self.client.messages.create(**request)
 
 
 class GeminiProvider(LLMProvider):
