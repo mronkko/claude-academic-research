@@ -62,6 +62,22 @@ def test_classify_5xx_is_network_error() -> None:
         ), status
 
 
+def test_classify_429_is_network_error() -> None:
+    """A rate limit lifts; it is no evidence that the PDF is missing."""
+    assert (
+        pdf_fetch_log.classify_failure(item_type="journalArticle", http_status=429)
+        == pdf_fetch_log.FailureCause.NETWORK_ERROR
+    )
+    # An untried browser handler still outranks it, as it does a 5xx.
+    assert (
+        pdf_fetch_log.classify_failure(
+            item_type="journalArticle", http_status=429,
+            untried_browser_handler="sage",
+        )
+        == pdf_fetch_log.FailureCause.BROWSER_REQUIRED
+    )
+
+
 def test_classify_no_status_falls_back_to_unavailable() -> None:
     """Every fetcher returned None without raising, *and* the caller
     says no route is left — see the `browser_pass_untried` block below

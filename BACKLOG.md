@@ -198,10 +198,9 @@ Deferred from the 0.25.0 audit (findings file:
   covers each plus the cascade rows. Two deliberate limits: (1) a refusal
   from a *third-party* repository or OA host the lookup pointed at stays
   a miss — bepress/DSpace answer 403 to plain clients, so raising would
-  log a bot block as ACCESS_BLOCKED; (2) `classify_failure` has no 429
-  rule, so a 429 row now names its source and `http_status=429` but its
-  cause is unchanged (classing it NETWORK_ERROR is a one-line change in
-  the function the browser handlers share — not made). OpenAIRE, BASE, arXiv, ScienceDirect and OpenAlex return
+  log a bot block as ACCESS_BLOCKED; (2) a 429 was left
+  UNAVAILABLE by `classify_failure` — since 2026-10-28 it is
+  NETWORK_ERROR (`test_classify_429_is_network_error`). OpenAIRE, BASE, arXiv, ScienceDirect and OpenAlex return
   None on every failure, and `_try_cascade` takes `last_status` only from
   raised exceptions, so the HTTP-status triage (ACCESS_BLOCKED vs
   NETWORK_ERROR) never fires for API sources — a 429 storm at Elsevier is

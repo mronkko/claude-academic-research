@@ -291,8 +291,11 @@ def classify_failure(
          and in both cases the right next step is the browser pass, not
          an ILL request or an FE6 exclusion.
       3. http_status in (401, 402, 403) → ACCESS_BLOCKED.
-      4. http_status >= 500 (server error) → NETWORK_ERROR (treat as
-         transient — server may recover).
+      4. http_status 429 (rate limited) or >= 500 (server error) →
+         NETWORK_ERROR (treat as transient — the server may recover, and
+         a rate limit lifts). A 429 used to fall through to UNAVAILABLE,
+         the one cause that licenses an exclusion, so a rate-limit storm
+         at one publisher read as "no full text exists".
       5. Everything else — a 404 / 410, or no verdict from anyone —
          → UNAVAILABLE, *unless* `browser_pass_untried`, in which case
          BROWSER_REQUIRED.
@@ -324,7 +327,7 @@ def classify_failure(
         return FailureCause.BROWSER_REQUIRED
     if http_status in (401, 402, 403):
         return FailureCause.ACCESS_BLOCKED
-    if http_status is not None and http_status >= 500:
+    if http_status == 429 or (http_status is not None and http_status >= 500):
         return FailureCause.NETWORK_ERROR
     if browser_pass_untried:
         return FailureCause.BROWSER_REQUIRED
