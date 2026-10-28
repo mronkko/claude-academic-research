@@ -290,6 +290,13 @@ def _chat_request(
                 "model": model,
                 "max_tokens": PROBE_MAX_TOKENS,
                 "messages": [{"role": "user", "content": PROBE_PROMPT}],
+                # Same arguments as `AnthropicProvider.generate`, so a
+                # parameter the model rejects fails here, not mid-run.
+                **(
+                    {"temperature": 0}
+                    if providers.anthropic_accepts_temperature(model)
+                    else {}
+                ),
             },
         )
     if spec.transport == "google":

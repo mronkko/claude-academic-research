@@ -184,6 +184,11 @@ def _api_key_for(spec: ProviderSpec, *, required: bool = True) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _rejects_temperature(exc: Exception) -> bool:
+    """True for a 400 whose message blames the `temperature` parameter."""
+    return getattr(exc, "status_code", None) == 400 and "temperature" in str(exc)
+
+
 class AnthropicProvider(LLMProvider):
     """Anthropic, or any endpoint speaking the Anthropic Messages API."""
 
@@ -213,13 +218,25 @@ class AnthropicProvider(LLMProvider):
         temperature: float = 0.0,
         max_tokens: int = 1000,
     ) -> str:
-        resp = self.client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        # `temperature` goes through `extra_body`: anthropic SDK 2.x has
+        # no such keyword, and Claude 5+ models reject the parameter
+        # (see `providers.anthropic_accepts_temperature`). For those the
+        # call runs at the model's default sampling.
+        request: dict = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if providers.anthropic_accepts_temperature(model):
+            request["extra_body"] = {"temperature": temperature}
+        try:
+            resp = self.client.messages.create(**request)
+        except Exception as e:
+            if "extra_body" not in request or not _rejects_temperature(e):
+                raise
+            del request["extra_body"]
+            resp = self.client.messages.create(**request)
         return resp.content[0].text.strip()
 
 

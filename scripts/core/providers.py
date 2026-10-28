@@ -357,3 +357,21 @@ def redact(text: str, *secrets: str) -> str:
         for form in sorted(forms, key=len, reverse=True):
             out = out.replace(form, "***")
     return _URL_KEY_PARAM.sub(r"\1***", out)
+
+
+_CLAUDE_MAJOR = re.compile(r"(?:^|/)claude-(?:[a-z]+-)?(\d+)(?:-|$)")
+
+
+def anthropic_accepts_temperature(model: str) -> bool:
+    """False for Claude models that reject a `temperature` parameter.
+
+    From Claude 5 on the Messages API answers any request carrying
+    `temperature` with HTTP 400 ("`temperature` is deprecated for this
+    model"), and recent `anthropic` SDKs dropped the keyword outright.
+    Decided from the major version in the ID, not from a list of IDs, so
+    it needs no edit per release. An ID this cannot parse is assumed to
+    accept it; `AnthropicProvider.generate` retries without it on the
+    API's rejection, so a wrong guess costs one request, not a run.
+    """
+    m = _CLAUDE_MAJOR.search(model.lower())
+    return not (m and int(m.group(1)) >= 5)

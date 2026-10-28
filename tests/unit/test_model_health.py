@@ -282,3 +282,13 @@ def test_google_model_id_is_normalised_before_the_url(monkeypatch) -> None:
         providers.require("google"), "models/gemini-2.5-flash", api_key="k",
     )
     assert "models/models/" not in seen[0]
+
+
+def test_anthropic_probe_sends_the_arguments_a_real_call_sends():
+    from core.model_health import _chat_request
+
+    spec = providers.require("anthropic")
+    _, _, old = _chat_request(spec, "https://x", "claude-sonnet-4-6", "k")
+    _, _, new = _chat_request(spec, "https://x", "claude-haiku-5-5", "k")
+    assert old["temperature"] == 0
+    assert "temperature" not in new
