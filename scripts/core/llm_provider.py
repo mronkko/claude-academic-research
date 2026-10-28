@@ -184,6 +184,25 @@ def _api_key_for(spec: ProviderSpec, *, required: bool = True) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _response_text(resp) -> str:
+    """Join the `text` blocks of a Messages response.
+
+    Claude 5.x models think by default, so `content[0]` is usually a
+    `thinking` block with no `.text`. Blocks are picked by type.
+    """
+    text = "".join(
+        b.text for b in resp.content if getattr(b, "type", None) == "text"
+    )
+    if not text.strip():
+        kinds = [getattr(b, "type", "?") for b in resp.content]
+        raise ValueError(
+            f"Anthropic response has no text block (stop_reason="
+            f"{resp.stop_reason!r}, blocks={kinds}); thinking may have "
+            "used the whole max_tokens budget."
+        )
+    return text.strip()
+
+
 def _rejects_temperature(exc: Exception) -> bool:
     """True for a 400 whose message blames the `temperature` parameter."""
     return getattr(exc, "status_code", None) == 400 and "temperature" in str(exc)
@@ -237,7 +256,7 @@ class AnthropicProvider(LLMProvider):
                 raise
             del request["extra_body"]
             resp = self.client.messages.create(**request)
-        return resp.content[0].text.strip()
+        return _response_text(resp)
 
 
 class GeminiProvider(LLMProvider):

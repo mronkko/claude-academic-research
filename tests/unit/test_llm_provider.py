@@ -115,9 +115,14 @@ def _anthropic_provider():
         return llm_provider.AnthropicProvider()
 
 
-def _reply(text="ok"):
+def _reply(text="ok", *, thinking=False, stop_reason="end_turn"):
     r = MagicMock()
-    r.content = [MagicMock(text=text)]
+    r.stop_reason = stop_reason
+    blocks = [MagicMock(type="text", text=text)] if text is not None else []
+    if thinking:
+        # A real ThinkingBlock has no `.text` attribute.
+        blocks.insert(0, MagicMock(type="thinking", spec=["type", "thinking"]))
+    r.content = blocks
     return r
 
 
@@ -175,3 +180,26 @@ def test_anthropic_generate_does_not_swallow_other_errors():
     p.client.messages.create.side_effect = Rejected("max_tokens too large")
     with pytest.raises(Rejected):
         p.generate("claude-sonnet-4-6", "s", "p")
+
+
+def test_anthropic_generate_skips_leading_thinking_block():
+    p = _anthropic_provider()
+    p.client.messages.create.return_value = _reply("INCLUDE", thinking=True)
+    assert p.generate("claude-haiku-5-5", "s", "p") == "INCLUDE"
+
+
+def test_anthropic_generate_joins_text_blocks():
+    p = _anthropic_provider()
+    r = _reply("a ", thinking=True)
+    r.content.append(MagicMock(type="text", text="b"))
+    p.client.messages.create.return_value = r
+    assert p.generate("claude-haiku-5-5", "s", "p") == "a b"
+
+
+def test_anthropic_generate_names_stop_reason_when_no_text():
+    p = _anthropic_provider()
+    p.client.messages.create.return_value = _reply(
+        None, thinking=True, stop_reason="max_tokens"
+    )
+    with pytest.raises(ValueError, match="max_tokens"):
+        p.generate("claude-haiku-5-5", "s", "p")
