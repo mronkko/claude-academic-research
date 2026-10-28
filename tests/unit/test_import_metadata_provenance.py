@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import import_to_zotero as imp
 import pytest
-from zotero_mcp.citation_import import CSL_TYPE_MAP
+from zotero_mcp.citation_import import CSL_TYPE_MAP, csl_json_to_zotero
 
 #: Every review namespaces the tags it writes; the import stage stamps
 #: search provenance under it. A literal here rather than a fixture so the
@@ -344,16 +344,23 @@ def test_journal_name_is_canonicalized_on_the_authority_path(crossref) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _converted(csl: dict) -> dict:
+    return csl_json_to_zotero(imp._csl_for_converter(csl), imp._item_template)
+
+
 def test_issn_array_is_flattened() -> None:
-    """Crossref's `["0883-9026"]` reaches a converter that calls
-    `.strip()` on it. Unadapted, that AttributeError fails the fill for
-    essentially every journal article."""
-    assert imp._csl_for_converter(ARTICLE_CSL)["ISSN"] == "0883-9026"
+    """Crossref's `["0883-9026"]` used to reach a converter that called
+    `.strip()` on it — an AttributeError for essentially every journal
+    article. The converter flattens it since 0.11; this pins that."""
+    assert _converted(ARTICLE_CSL)["ISSN"] == "0883-9026"
 
 
-def test_crossref_type_names_are_translated_to_csl() -> None:
-    assert imp._csl_for_converter(ARTICLE_CSL)["type"] == "article-journal"
-    assert imp._csl_for_converter(CHAPTER_CSL)["type"] == "chapter"
+def test_crossref_type_names_reach_the_right_item_type() -> None:
+    """Crossref keeps its own type names (`journal-article`,
+    `book-chapter`) in its CSL transform; before 0.11 the converter made
+    every such record a `document`."""
+    assert _converted(ARTICLE_CSL)["itemType"] == "journalArticle"
+    assert _converted(CHAPTER_CSL)["itemType"] == "bookSection"
 
 
 def test_bookkeeping_fields_are_dropped() -> None:
@@ -379,17 +386,15 @@ def test_an_unknown_type_is_left_for_the_converter_to_default() -> None:
     assert adapted["type"] == "component"
 
 
-def test_crossref_and_csl_type_tables_agree() -> None:
-    """The seam with zotero-mcp: routing a type through the converter
-    must land where this module's own table says it should. If upstream
-    changes `CSL_TYPE_MAP`, this fails here rather than silently
-    mistyping a corpus."""
+def test_crossref_types_land_where_this_module_types_them() -> None:
+    """The seam with zotero-mcp: routing a Crossref type through the
+    converter must land where this module's own table says it should.
+    If upstream changes `CSL_TYPE_MAP`, this fails here rather than
+    silently mistyping a corpus."""
     for crossref_type, zotero_type in imp._CROSSREF_TYPE_TO_ZOTERO.items():
-        csl_type = imp._CROSSREF_TYPE_TO_CSL.get(crossref_type)
-        assert csl_type is not None, f"{crossref_type} has no CSL spelling"
-        assert CSL_TYPE_MAP.get(csl_type) == zotero_type, (
-            f"{crossref_type} → {csl_type} → "
-            f"{CSL_TYPE_MAP.get(csl_type)}, expected {zotero_type}"
+        assert CSL_TYPE_MAP.get(crossref_type) == zotero_type, (
+            f"{crossref_type} → {CSL_TYPE_MAP.get(crossref_type)}, "
+            f"expected {zotero_type}"
         )
 
 

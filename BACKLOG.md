@@ -531,12 +531,11 @@ Springer, Emerald, T&F and OUP, copied from JYU no-access pages.
 **Status: both fixed upstream by 0.11.0** (checked 2026-10-28 against the
 installed 0.11.0: `_csl_text` takes the first element of an array field,
 and `CSL_TYPE_MAP` has Crossref's `journal-article` / `book-chapter`
-aliases). The plugin's floor is 0.11, so nothing is left upstream. Left
-here: `_csl_for_converter` in `import_to_zotero.py` can drop its array
-coercion and type translation and keep only the `_CSL_FIELDS_KEPT`
-filter (the third point below, which is ours by design); update
-`tests/unit/test_import_metadata_provenance.py` to match. Not urgent:
-the workaround is redundant, not wrong. Original entry:
+aliases). The plugin's floor is 0.11, so nothing is left upstream, and
+on the same day `_csl_for_converter` shrank to the `_CSL_FIELDS_KEPT`
+filter (the third point below, ours by design);
+`tests/unit/test_import_metadata_provenance.py` now pins the
+converter's own output. Original entry:
 
 
 Both found by adopting `zotero_mcp.citation_import.csl_json_to_zotero`

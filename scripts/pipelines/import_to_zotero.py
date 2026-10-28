@@ -507,33 +507,6 @@ def _item_template(item_type: str) -> dict:
     return template
 
 
-#: Crossref `type` → CSL `type`, so `csl_json_to_zotero`'s own
-#: `CSL_TYPE_MAP` lands on the same Zotero itemType that
-#: `_CROSSREF_TYPE_TO_ZOTERO` would.
-#:
-#: Crossref's "CSL JSON" transform is not quite CSL: it keeps Crossref's
-#: type names (`journal-article`, `book-chapter`) where CSL says
-#: `article-journal` and `chapter`. The converter looks up the CSL
-#: spelling, so handing it Crossref's unchanged makes *every* record a
-#: `document` — a silent, total mistyping. `tests/unit/
-#: test_import_metadata_provenance.py` pins the two tables together.
-_CROSSREF_TYPE_TO_CSL = {
-    "journal-article": "article-journal",
-    "proceedings-article": "paper-conference",
-    "book-chapter": "chapter",
-    "book-part": "chapter",
-    "book-section": "chapter",
-    "reference-entry": "entry-dictionary",
-    "book": "book",
-    "monograph": "book",
-    "edited-book": "book",
-    "reference-book": "book",
-    "report": "report",
-    "report-component": "report",
-    "dissertation": "thesis",
-    "posted-content": "article",
-}
-
 #: CSL fields the converter knows how to map, and the only ones this
 #: pipeline passes it. An allowlist rather than a denylist because the
 #: converter *preserves* whatever it cannot map by dumping it into the
@@ -558,43 +531,17 @@ _CSL_FIELDS_KEPT = frozenset({
     "number-of-pages", "number", "genre",
 })
 
-#: Of those, the ones the converter calls `.strip()` on directly.
-#: Crossref returns several as arrays.
-_CSL_SCALAR_FIELDS = (
-    "title", "title-short", "container-title", "collection-title",
-    "publisher", "publisher-place", "ISBN", "ISSN", "DOI", "URL",
-    "language",
-)
-
-
 def _csl_for_converter(csl: dict) -> dict:
-    """Make one Crossref CSL record safe for `csl_json_to_zotero`.
+    """One Crossref CSL record with only the fields worth converting.
 
-    Three adjustments, all about Crossref rather than about Zotero:
-
-    - **Only mappable fields are forwarded** (`_CSL_FIELDS_KEPT`).
-    - **Arrays where the converter expects a string.** Crossref emits
-      `"ISSN": ["0883-9026"]` and the converter calls `.strip()` on it,
-      which raises `AttributeError` — that alone would fail the fill for
-      every journal article that has an ISSN, i.e. almost all of them.
-      The first entry is taken; the rest are the same journal's other
-      media forms.
-    - **Crossref type names** translated to CSL's, per
-      `_CROSSREF_TYPE_TO_CSL`.
+    Only mappable fields are forwarded (`_CSL_FIELDS_KEPT`). The
+    converter itself flattens Crossref's array-valued fields (`"ISSN":
+    ["0883-9026"]`) and accepts Crossref's type names (`journal-article`,
+    `book-chapter`) since zotero-mcp-server 0.11; this adapter used to do
+    both, and `test_import_metadata_provenance.py` still pins the
+    result.
     """
-    out = {k: v for k, v in csl.items() if k in _CSL_FIELDS_KEPT}
-    for field in _CSL_SCALAR_FIELDS:
-        value = out.get(field)
-        if isinstance(value, list):
-            out[field] = next(
-                (v for v in value if isinstance(v, str) and v.strip()), "",
-            )
-        elif value is not None and not isinstance(value, (str, dict, list)):
-            out[field] = str(value)
-    crossref_type = str(out.get("type") or "").strip().lower()
-    if crossref_type in _CROSSREF_TYPE_TO_CSL:
-        out["type"] = _CROSSREF_TYPE_TO_CSL[crossref_type]
-    return out
+    return {k: v for k, v in csl.items() if k in _CSL_FIELDS_KEPT}
 
 
 def _fetch_csl(
