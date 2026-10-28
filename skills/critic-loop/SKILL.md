@@ -5,7 +5,7 @@ description: Use when the user asks to revise, polish, critique, or finalize an 
 
 # critic-loop
 
-**Invocation:** `/critic-loop <document-path> [--critics evidence,method,argument,expert] [--max-iter 4] [--no-test] [--render-cmd "quarto render {doc} --to gfm"]`
+**Invocation:** `/critic-loop <document-path> [--critics evidence,method,argument,expert] [--max-iter 4] [--quick] [--no-test] [--render-cmd "quarto render {doc} --to gfm"]`
 
 **Plugin tools.** Steps name the tools of the plugin's own
 **academic-research** MCP server by bare name (`check_setup`); in Claude
@@ -83,6 +83,11 @@ Optional:
   prompt for each (describe the lens in 1–2 sentences when launching
   the Agent).
 - `--max-iter <N>` — iteration cap. Default **4**.
+- `--quick` — a time-boxed single pass for demos and drafts. Implies
+  `--max-iter 1`, `--no-test` and, unless `--critics` is given,
+  `--critics argument,method`. Every critic prompt gets the **Quick
+  mode** block below. The loop still saves `decisions.md`; apply the
+  MAJOR fixes, then stop. Never use it for a submission-grade revision.
 - `--no-test` — skip the test-suite gate. Only use when explicitly
   asked (e.g., when the repo has no test suite yet). Red flag otherwise.
 - `--render-cmd <cmd>` — shell template for the render step. `{doc}`
@@ -313,6 +318,13 @@ Read-only — STRICT:
   the repository (no Edit/Write, no `git commit`, no pipeline re-runs). If a
   fix requires changing a file, describe it in "Suggested revision" — applying
   it is the main agent's job in Step 5, never yours.
+
+Quick mode — ONLY when the run was started with --quick:
+  You have one pass and about a minute. Read the document once. List at most
+  5 issues, MAJOR first, each under 150 words in total. Do not look anything
+  up: no web search, no MCP citation lookups, no PDF or full-text reads, no
+  per-citation verification. If you cannot judge a point from the document
+  itself, skip it. Skip NITs.
 
 <perspective-specific prompt — see Perspective prompts section>
 

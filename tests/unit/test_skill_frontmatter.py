@@ -35,6 +35,7 @@ EXPECTED_SKILLS = {
     "retrieving-pdfs",
     "fact-check",
     "critic-loop",
+    "demo-slr",
     "setup",
     "cluster-screening",
     "verifying-citations",

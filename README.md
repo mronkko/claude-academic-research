@@ -60,6 +60,7 @@ Twelve user-invocable skills:
 | `fact-check` | procedure (explicit) | Verify citations and quantitative claims against sources. |
 | `word-zotero-track-changes` | procedure (explicit) | Edit a co-authored Word manuscript as tracked changes by one author, inserting live Zotero citation fields and preserving co-authors' pending changes. |
 | `critic-loop` | procedure (explicit) | Run 4 parallel critics (evidence / method / argument / expert) until no MAJOR issues remain. |
+| `demo-slr` | procedure (explicit) | Guided 5-10 minute mini systematic review with a per-step approval, ending with a highlighted PDF in Zotero. |
 | `setup` | procedure (explicit) | Hands you the terminal configuration wizard (API keys, LLM provider, MCP servers); switches LLM provider. |
 
 Plus one sub-skill, `verifying-citations` — not invoked directly by
