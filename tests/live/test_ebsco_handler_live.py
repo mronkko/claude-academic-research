@@ -106,14 +106,11 @@ def test_ebsco_handler_downloads_a_real_pdf(resolver_cfg, tmp_path) -> None:
     )
     from fetchers.browser import EbscoHandler, launch_context
     from fetchers.browser.base import Counter
-    from fetchers.library_resolver import lookup_fulltext_target
     from playwright.async_api import async_playwright
 
-    result = lookup_fulltext_target(
-        _PRE_1997_DOI, resolver_cfg, pub_date=_PUB_YEAR,
-    )
-    if not result.query_ok or result.url is None:
-        pytest.skip("resolver reported no route — needs the institutional network")
+    # Skips, like the chooser tests, on a route that signs the reader in:
+    # it used to open a browser onto the SAML prompt and burn its budget.
+    result = _route_or_skip(_PRE_1997_DOI, _PUB_YEAR, resolver_cfg)
 
     item = {
         "doi": _PRE_1997_DOI,
@@ -186,7 +183,12 @@ def _warm_profile() -> bool:
 
 
 def _chooser_route(resolver_cfg):
-    """The EBSCO route for `_CHOOSER_DOI`, or a skip.
+    """The EBSCO route for `_CHOOSER_DOI`, or a skip (`_route_or_skip`)."""
+    return _route_or_skip(_CHOOSER_DOI, _CHOOSER_PUB_DATE, resolver_cfg)
+
+
+def _route_or_skip(doi: str, pub_date, resolver_cfg):
+    """The EBSCO route for `doi`, or a skip.
 
     Skips rather than fails on a login-walled route: some tenants reach
     EBSCO through an EZproxy that demands SSO, and no unattended run can
@@ -196,16 +198,14 @@ def _chooser_route(resolver_cfg):
     from fetchers.library_resolver import lookup_fulltext_target
     from fetchers.resolvers.base import needs_interactive_login
 
-    result = lookup_fulltext_target(
-        _CHOOSER_DOI, resolver_cfg, pub_date=_CHOOSER_PUB_DATE,
-    )
+    result = lookup_fulltext_target(doi, resolver_cfg, pub_date=pub_date)
     if not result.query_ok:
         pytest.skip("resolver unreachable — needs the institutional network")
     if result.url is None:
-        pytest.skip(f"library reports no route for {_CHOOSER_DOI}")
+        pytest.skip(f"library reports no route for {doi}")
     if needs_interactive_login(result.url) and not _warm_profile():
         pytest.skip(
-            f"the route for {_CHOOSER_DOI} goes through a proxy that signs "
+            f"the route for {doi} goes through a proxy that signs "
             f"the reader in ({result.url[:60]}...), and no unattended run "
             f"can answer that. Configure a library whose EBSCO route "
             f"authenticates on institutional IP. {_PROFILE_ENV} forces the "

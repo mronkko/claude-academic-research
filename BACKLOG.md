@@ -361,7 +361,10 @@ though the reader had access. Root cause was the handler not recognising
 EBSCO's "Multiple items found" chooser; the loose ends are below, each
 confirmed against the code as it was read.
 
-**Branch state:** the chooser fix is committed on
+**Branch state (2026-10-28):** the chooser fix is on `main`,
+cherry-picked from `fix/ebsco-openurl-chooser` (where it sat unmerged
+from 0.23.2 until then); items 1, 2, 3 and 5 are fixed. What follows is
+the original note. The chooser fix was committed on
 `fix/ebsco-openurl-chooser`, **unpushed and unmerged**, one commit off
 `main` at 0.23.2. Unit suite green (2404 passed, 18 of them new); `ruff
 check scripts tests` clean; `.claude-plugin/plugin.json` deliberately
@@ -382,8 +385,10 @@ green**; item 4 is why, and it is not a defect in the fix.
    no-login preference as the last tiebreaker would make a misordered
    `openurl_base` degrade instead of fail.
 
-   *Status:* CONFIRMED against `fetchers/resolvers/base.py:433`. Low
-   effort. Careful: it must stay *below* coverage, since a reachable
+   *Status:* FIXED 2026-10-28: `sort_key` ends with a no-login term,
+   below coverage and platform (`test_a_no_login_route_breaks_a_tie_with_an_sso_walled_one`,
+   `test_login_never_outranks_coverage`). Originally: CONFIRMED against
+   `fetchers/resolvers/base.py:433`. Low effort. Careful: it must stay *below* coverage, since a reachable
    route that does not hold the year is worse than a login for one that
    does.
 
@@ -414,8 +419,9 @@ green**; item 4 is why, and it is not a defect in the fix.
    predates that and will open a browser onto a SAML prompt and burn its
    45 s budget. Same treatment, or share the helper.
 
-   *Status:* CONFIRMED by reading; not reproduced (reproducing it costs
-   the live browser lane).
+   *Status:* FIXED 2026-10-28 by reading — it now goes through the same
+   `_route_or_skip` helper; not run live (that costs the browser lane).
+   Originally: CONFIRMED by reading; not reproduced.
 
    *Files:* `tests/live/test_ebsco_handler_live.py`.
 
@@ -458,8 +464,9 @@ green**; item 4 is why, and it is not a defect in the fix.
    IP, check `[library] openurl_base`" would have turned this session's
    investigation into a one-line read.
 
-   *Status:* Design proposal, not a confirmed defect. Cheap. Best done
-   with item 1, since both touch how a login-walled route is weighed.
+   *Status:* DONE 2026-10-28 with item 1: `_all_routes_need_login_hint`
+   in `enrich_pdfs.py` prints one NOTE per browser queue whose every
+   route needs a sign-in. Originally a design proposal.
 
    *Files:* `scripts/pipelines/enrich_pdfs.py` (the resolver banner and
    the queue split around the `needs_solve` branch).
