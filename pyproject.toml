@@ -26,6 +26,8 @@ dev = [
     "requests>=2.31",
     # highlight_quotes.py reads PDF text layers; its tests build synthetic PDFs.
     "pymupdf>=1.24",
+    # export_coding_xlsx.py writes the workbook its tests read back.
+    "openpyxl>=3.1",
     # `core/llm_provider.py` imports openai lazily for the four
     # providers that share the OpenAI-compatible transport.
     "openai>=1.0",

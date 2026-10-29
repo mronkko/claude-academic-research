@@ -43,6 +43,7 @@ NON_ASCII_ENTRY_POINTS = [
     "scripts/pipelines/enrich_dois.py",
     "scripts/pipelines/enrich_pdfs.py",
     "scripts/pipelines/export_coded_includes.py",
+    "scripts/pipelines/export_coding_xlsx.py",
     "scripts/pipelines/highlight_quotes.py",
     "scripts/pipelines/filter_search_results.py",
     "scripts/pipelines/fulltext_code.py",
