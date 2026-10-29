@@ -22,9 +22,11 @@ class _Zot:
     def __init__(self, note_fails: bool = False):
         self.calls: list[str] = []
         self.note_fails = note_fails
+        self.note_html = ""
 
     def upsert_child_note(self, key, *, marker, note_html):
         self.calls.append("note")
+        self.note_html = note_html
         if self.note_fails:
             raise RuntimeError("HTTP 503")
 
@@ -60,7 +62,20 @@ def test_a_failed_note_leaves_the_include_untagged(tmp_path) -> None:
     assert (tmp_path / "log.csv").exists()  # the CSV row is still kept
 
 
-def test_an_exclude_is_tagged_without_a_note(tmp_path) -> None:
+def test_an_exclude_writes_its_note_before_its_tag(tmp_path) -> None:
     zot = _Zot()
-    _apply(zot, _row("exclude"), tmp_path)
-    assert zot.calls == ["tag"]
+    row = {**_row("exclude"), "exclusion_code": "FE1",
+           "reason": "cited only", "sample": "placeholder"}
+    _apply(zot, row, tmp_path)
+    assert zot.calls == ["note", "tag"]
+    assert "FE1" in zot.note_html and "cited only" in zot.note_html
+    # Coding fields stay out of an exclude's note, visible part and payload.
+    assert "placeholder" not in zot.note_html
+
+
+def test_a_failed_note_leaves_the_exclude_untagged(tmp_path) -> None:
+    zot = _Zot(note_fails=True)
+    row = _row("exclude")
+    _apply(zot, row, tmp_path)
+    assert zot.calls == ["note"]
+    assert "NOTE WRITE FAILED" in row["reason"]

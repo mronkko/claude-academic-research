@@ -1050,32 +1050,35 @@ def apply_coded_row(
                         f"{'; '.join(rejected)}",
                         flush=True,
                     )
-            # The SLR Coding child note is written for includes only, and
+            # Every decided item gets the SLR Coding child note, written
             # BEFORE the tag. The tag is what marks the item done; written
             # first, a failed note left an include that no re-run would
             # touch and that export_coded_includes could not export. Now
             # a failed note means no tag, so the next run codes it again.
-            # Excludes don't get a note — the tag plus the CSV row is
-            # enough provenance, and their coding fields are typically
-            # empty or placeholder.
+            # An exclude's note carries the decision, exclusion code and
+            # reason only: its coding fields are empty or placeholder.
+            # Without it, why a paper was excluded was visible only in the
+            # CSV, never in Zotero where the adjudicator works. Same
+            # marker for both, so a re-code that flips the decision
+            # replaces the note rather than leaving a stale one beside it.
             note_ok = True
-            if decision == "include":
-                try:
-                    note_html = _build_slr_coding_note_html(
-                        row, fields, prompt_version, ns,
-                    )
-                    zot.upsert_child_note(
-                        item_key,
-                        marker=zotero_io.slr_coding_marker(ns),
-                        note_html=note_html,
-                    )
-                except Exception as note_exc:  # noqa: BLE001
-                    note_ok = False
-                    existing_reason = row.get("reason", "")
-                    row["reason"] = (
-                        f"{existing_reason} [NOTE WRITE FAILED: {note_exc}; "
-                        f"left untagged so a re-run codes it again]"
-                    )[:500]
+            try:
+                note_html = _build_slr_coding_note_html(
+                    row, fields if decision == "include" else [],
+                    prompt_version, ns,
+                )
+                zot.upsert_child_note(
+                    item_key,
+                    marker=zotero_io.slr_coding_marker(ns),
+                    note_html=note_html,
+                )
+            except Exception as note_exc:  # noqa: BLE001
+                note_ok = False
+                existing_reason = row.get("reason", "")
+                row["reason"] = (
+                    f"{existing_reason} [NOTE WRITE FAILED: {note_exc}; "
+                    f"left untagged so a re-run codes it again]"
+                )[:500]
 
             if note_ok:
                 try:
