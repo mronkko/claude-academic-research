@@ -50,6 +50,7 @@ NON_ASCII_ENTRY_POINTS = [
     "scripts/pipelines/import_to_zotero.py",
     "scripts/pipelines/pilot_analyze.py",
     "scripts/pipelines/run_manifest.py",
+    "scripts/pipelines/run_manifest_batch.py",
     "scripts/pipelines/search.py",
     "scripts/setup/check_cluster_config.py",
     "scripts/setup/check_llm_provider.py",

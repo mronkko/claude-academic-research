@@ -490,6 +490,14 @@ covers the automation levels, the transfer, polling discipline, and the
 four conditions under which apply must refuse. Do not improvise it from
 here.
 
+The same split also buys **Anthropic's Message Batches API at half the
+synchronous price**: emit the manifest, run
+`run_manifest_batch.py --manifest <requests.jsonl> --model <claude-id>`
+(submits once, saves the batch id, polls until the batch ends, writes the
+responses file with real token usage), then `--apply-responses`.
+Re-running the command after an interruption collects the batch already
+submitted instead of paying for a second one. Anthropic models only.
+
 Two things to keep straight when a user's institution offers both:
 
 - An institutional **`gateway`** is a *provider* — a synchronous
