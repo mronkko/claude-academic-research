@@ -43,6 +43,7 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 import sys
 import unicodedata
 from dataclasses import dataclass, field
@@ -351,7 +352,13 @@ def main() -> int:
 
     ns = screening_common.load_tag_namespace(args.tag_prefix, args.config)
     themes = dict(t.split("=", 1) for t in args.theme if "=" in t)
-    storage = Path(args.zotero_storage).expanduser() if args.zotero_storage else None
+    # Same default as fulltext_code.py. Without it a run with no flag found
+    # no stored PDF at all and reported every item no_pdf.
+    storage = Path(
+        args.zotero_storage
+        or os.environ.get("ZOTERO_DATA_DIR")
+        or (Path.home() / "Zotero")
+    ).expanduser()
     zot = zotero_io.ZoteroClient.from_args(args)
     include_tag = f"{tag_prefix.family(ns, 'fulltext')}include"
     items = zot.items_with_tag(args.collection, include_tag)
