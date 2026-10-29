@@ -67,3 +67,11 @@ def test_select_columns_keeps_identity_first_and_rejects_unknown():
         assert "nope" in str(e)
     else:
         raise AssertionError("unknown field accepted")
+
+
+def test_exclusion_codes_accept_space_and_colon_styles_and_explicit_constant():
+    v4 = "  FE1 Citation only: it cites the method\n  FE2: other method\n"
+    assert x.exclusion_codes(v4) == {
+        "FE1": "Citation only: it cites the method", "FE2": "other method"}
+    cfg = SimpleNamespace(EXCLUSION_CODES={"FE9": "explicit"})
+    assert x.exclusion_codes(v4, cfg) == {"FE9": "explicit"}

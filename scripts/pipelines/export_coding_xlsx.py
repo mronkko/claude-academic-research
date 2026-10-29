@@ -26,9 +26,10 @@ item_key), `codebook` (every field's rule and allowed values), `run`
 (provenance), and a hidden `lists` sheet holding the drop-down values
 (an inline Excel list is capped at 255 characters).
 
-The full-text exclusion codes (`FE1-...`) are read from the line-starting
-`FEn-description` entries in `FULLTEXT_CODING_SYSTEM_PROMPT`, so the
-`exclusion_code` drop-down follows the project's own codebook.
+The `exclusion_code` drop-down follows the project's own codebook: an
+`EXCLUSION_CODES = {"FE1": "...", ...}` dict in `screening_config.py` if
+present, else the lines of `FULLTEXT_CODING_SYSTEM_PROMPT` that start with
+`FE<n>` followed by `-`, `:` or a space.
 
 Reads no Zotero data and no API key.
 """
@@ -79,17 +80,26 @@ WIDE = {"title": 50, "reason": 60, "evidence_quotes": 80}
 RED = PatternFill("solid", start_color="FFC7CE", end_color="FFC7CE")
 HEADER_FILL = PatternFill("solid", start_color="DDEBF7", end_color="DDEBF7")
 
-_FE_LINE = re.compile(r"^\s*(FE\d+)\s*[-:–]\s*(.+?)\s*$", re.MULTILINE)
+_FE_LINE = re.compile(r"^\s*(FE\d+)(?:\s*[-:–]\s*|\s+)(.+?)\s*$", re.MULTILINE)
 
 
-def exclusion_codes(prompt: str) -> dict[str, str]:
-    """`{"FE1": "citation only", ...}` from the coding prompt's code list."""
+def exclusion_codes(prompt: str, cfg=None) -> dict[str, str]:
+    """`{"FE1": "citation only", ...}`.
+
+    An explicit `EXCLUSION_CODES` dict in `screening_config.py` wins. Else
+    the codes are read from lines of the coding prompt that start with
+    `FE<n>` followed by `-`, `:` or a space ("FE1-citation only",
+    "FE1 Citation only: ...").
+    """
+    explicit = getattr(cfg, "EXCLUSION_CODES", None)
+    if explicit:
+        return dict(explicit)
     return {code: desc for code, desc in _FE_LINE.findall(prompt or "")}
 
 
 def sheet_columns(cfg) -> list[dict]:
     """Every column of the coding sheet, as `{name, description, values?}`."""
-    codes = exclusion_codes(getattr(cfg, "FULLTEXT_CODING_SYSTEM_PROMPT", ""))
+    codes = exclusion_codes(getattr(cfg, "FULLTEXT_CODING_SYSTEM_PROMPT", ""), cfg)
     cols: list[dict] = []
     for name in SHEET_BASE:
         col = {"name": name, "description": BASE_DESCRIPTIONS[name]}
