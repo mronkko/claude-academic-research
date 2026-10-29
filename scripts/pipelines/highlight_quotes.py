@@ -313,8 +313,15 @@ def process_item(
         if h in have:
             row("skipped_existing", entry, att_key, loc.page)
             continue
-        value = str((payload.get("fields") or {}).get(entry["field"], ""))[:120]
-        theme = themes.get(entry["field"], "other")
+        # One passage may support several fields, listed "a; b". The
+        # comment shows each field's coded value; the first field picks
+        # the colour.
+        names = [n.strip() for n in entry["field"].split(";") if n.strip()]
+        coded = payload.get("fields") or {}
+        value = "; ".join(
+            str(coded.get(n, "")) for n in names if coded.get(n, "")
+        )[:120] if len(names) > 1 else str(coded.get(entry["field"], ""))[:120]
+        theme = themes.get(names[0] if names else entry["field"], "other")
         batch.append((entry, build_annotation(att_key, loc, entry, value, theme, ns), loc))
     if batch and not dry_run:
         zot.create_highlights([b[1] for b in batch])
