@@ -79,3 +79,13 @@ def test_a_failed_note_leaves_the_exclude_untagged(tmp_path) -> None:
     _apply(zot, row, tmp_path)
     assert zot.calls == ["note"]
     assert "NOTE WRITE FAILED" in row["reason"]
+
+
+def test_rendered_prompt_has_single_braces_around_the_json_example() -> None:
+    import fulltext_code
+
+    tpl = "OUT:\n{{\n  {coding_fields_json_placeholder}\n}}\n"
+    out = fulltext_code._render_prompt(tpl, [{"name": "method"}])
+    assert "{{" not in out and "}}" not in out
+    assert out.startswith("OUT:\n{\n")
+    assert '"method": "<...>"' in out

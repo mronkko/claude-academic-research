@@ -494,6 +494,10 @@ def _render_prompt(template: str, fields: list[dict]) -> str:
             ).strip()
         guide_lines.append(f"- **{f['name']}**: {desc}")
     guide = "\n".join(guide_lines)
+    # The shipped templates write the output example's braces doubled
+    # (`{{ ... }}`) as if for str.format, but this substitutes with
+    # str.replace, so the model used to see literal double braces.
+    template = template.replace("{{", "{").replace("}}", "}")
     return template.replace(PLACEHOLDER, json_block) + (
         f"\n\nField descriptions:\n{guide}" if guide_lines else ""
     )
