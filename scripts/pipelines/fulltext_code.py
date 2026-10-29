@@ -1391,6 +1391,68 @@ def _row_for_skipped_unit(skip: dict, *, model: str, fields: list[dict]) -> dict
     return row
 
 
+def check_responses(
+    manifest_rows: list[dict], responses: list[dict], fields: list[dict],
+) -> dict:
+    """What an executed manifest would write, without writing anything.
+
+    Parses every response the way `--apply-responses` will and summarises:
+    decisions, exclusion codes, output tokens, the number of evidence
+    quotes per include, and every closed-vocabulary answer outside its
+    `values`. Pure; no Zotero, no LLM.
+    """
+    paired, unanswered, orphaned = batch_manifest.join_responses(
+        manifest_rows, responses,
+    )
+    closed = {f["name"]: f["values"] for f in fields if f.get("values")}
+    decisions: dict[str, int] = {}
+    codes: dict[str, int] = {}
+    statuses: dict[str, int] = {}
+    quote_counts: list[int] = []
+    out_tokens: list[int] = []
+    problems: list[str] = []
+    for req, resp in paired:
+        status = resp.get("call_status", "")
+        statuses[status] = statuses.get(status, 0) + 1
+        out_tokens.append(int(resp.get("output_tokens") or 0))
+        key = req.get("item_key", req.get("request_id", ""))
+        if status != "ok":
+            problems.append(f"{key}: call_status={status}")
+            continue
+        row = parse_coding_response(resp.get("response_text") or "", fields)
+        decisions[row["decision"]] = decisions.get(row["decision"], 0) + 1
+        if row["decision"] == "error":
+            problems.append(f"{key}: {row.get('reason', '')[:120]}")
+            continue
+        if row.get("exclusion_code"):
+            codes[row["exclusion_code"]] = codes.get(row["exclusion_code"], 0) + 1
+        if row["decision"] != "include":
+            continue
+        raw_q = row.get("evidence_quotes", "")
+        if raw_q:
+            try:
+                quote_counts.append(len(json.loads(raw_q)))
+            except (ValueError, TypeError):
+                problems.append(f"{key}: evidence_quotes is not a JSON list")
+        for name, allowed in closed.items():
+            val = (row.get(name) or "").strip()
+            if val and val not in allowed:
+                problems.append(f"{key}: {name}={val!r} not in {allowed}")
+    return {
+        "requests": len(manifest_rows), "answered": len(paired),
+        "unanswered": len(unanswered), "orphaned": len(orphaned),
+        "call_status": statuses, "decisions": decisions,
+        "exclusion_codes": codes,
+        "output_tokens_total": sum(out_tokens),
+        "output_tokens_max": max(out_tokens, default=0),
+        "quotes_per_include": (
+            {"min": min(quote_counts), "max": max(quote_counts),
+             "mean": round(sum(quote_counts) / len(quote_counts), 1)}
+            if quote_counts else None),
+        "problems": problems,
+    }
+
+
 def apply_responses(
     zot,
     *,
@@ -1730,6 +1792,12 @@ def main() -> int:
                              "--apply-responses. A .gz suffix compresses it, "
                              "which matters here: a 240-paper manifest is "
                              "~170 MB uncompressed.")
+    parser.add_argument("--check-responses", default="",
+                        help="Dry apply: summarise a responses file against "
+                             "--manifest (decisions, exclusion codes, "
+                             "tokens, quotes per include, out-of-vocabulary "
+                             "answers) and write nothing. Exit 1 if any "
+                             "response needs attention.")
     parser.add_argument("--apply-responses", default="",
                         help="Apply an executed manifest's responses: write "
                              "CSV rows, fulltext:* tags and SLR Coding notes. "
@@ -1800,6 +1868,24 @@ def main() -> int:
     # below, so a widened config cannot quietly add columns to a run
     # whose model was never asked about them.
     manifest_rows: list[dict] = []
+    if args.check_responses:
+        if not args.manifest:
+            sys.exit("ERROR: --check-responses needs --manifest too.")
+        _, manifest_rows = batch_manifest.read_manifest(Path(args.manifest))
+        _, response_rows = batch_manifest.read_responses(
+            Path(args.check_responses))
+        report = check_responses(
+            manifest_rows, response_rows,
+            coding_fields_from_manifest(manifest_rows),
+        )
+        print(json.dumps({k: v for k, v in report.items() if k != "problems"},
+                         indent=2))
+        for line in report["problems"]:
+            print(f"  PROBLEM {line}")
+        print(f"{len(report['problems'])} response(s) need attention before "
+              f"--apply-responses." if report["problems"] else
+              "No problems found. Safe to --apply-responses.")
+        return 1 if report["problems"] else 0
     if args.apply_responses:
         if not args.manifest:
             sys.exit(

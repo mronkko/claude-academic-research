@@ -102,3 +102,29 @@ def test_draw_sample_is_reproducible_and_pdf_only() -> None:
     assert info["pool_size"] == 10 and info["seed"] == 7
     assert all(has_pdf(i) for i in a) and len(a) == 4
     assert info["keys"] == [i["key"] for i in a]
+
+
+def test_check_responses_flags_bad_vocabulary_and_counts_quotes() -> None:
+    import json
+
+    import fulltext_code
+
+    fields = [{"name": "design", "values": ["panel", "survey"]},
+              {"name": "evidence_quotes"}]
+    mrows = [{"run_id": "r", "request_id": f"q{i}", "item_key": f"K{i}"}
+             for i in range(3)]
+
+    def resp(i, text, status="ok"):
+        return {"run_id": "r", "request_id": f"q{i}", "call_status": status,
+                "response_text": text, "output_tokens": 100 * (i + 1)}
+
+    good = json.dumps({"decision": "include", "design": "panel",
+                       "evidence_quotes": [{"field": "design", "quote": "x"}] * 3})
+    bad = json.dumps({"decision": "include", "design": "RCT",
+                      "evidence_quotes": []})
+    out = fulltext_code.check_responses(
+        mrows, [resp(0, good), resp(1, bad), resp(2, "", "truncated")], fields)
+    assert out["answered"] == 3 and out["decisions"] == {"include": 2}
+    assert out["quotes_per_include"]["max"] == 3
+    assert any("design='RCT'" in p for p in out["problems"])
+    assert any("truncated" in p for p in out["problems"])
