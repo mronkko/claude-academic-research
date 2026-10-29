@@ -138,3 +138,12 @@ def test_item_without_quotes_is_logged(tmp_path, raw):
     rows = hq.process_item(_FakeZot(), {"key": "I"}, {"fields": {"evidence_quotes": raw or ""}},
                            "demo-x/", None, {}, dry_run=True, replace=False)
     assert rows[0]["status"] == "no_quotes"
+
+
+def test_themes_come_from_the_config(tmp_path):
+    cfg = tmp_path / "screening_config.py"
+    cfg.write_text(
+        "FULLTEXT_CODING_FIELDS = [{'name': 'a', 'theme': 'setting'},"
+        " {'name': 'b'}]\nHIGHLIGHT_THEMES = {'b': 'overclaims', 'a': 'assumptions'}\n")
+    assert hq.themes_from_config(str(cfg)) == {"a": "assumptions", "b": "overclaims"}
+    assert hq.themes_from_config(str(tmp_path / "missing.py")) == {}

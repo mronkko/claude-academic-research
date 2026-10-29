@@ -1412,6 +1412,11 @@ START_FULLTEXT_CODE = Tool(
         COLLECTION_KEY, *LIBRARY_ARGS, CONFIG, TAG_PREFIX, MODEL,
         Param("limit", "Code at most N items (0 = all).", kind="option",
               flag="--limit", pattern=r"^[0-9]+$"),
+        Param("sample", "Code a random sample of N items that have a PDF "
+              "(reproducible with `seed`; the manifest records both).",
+              kind="option", flag="--sample", pattern=r"^[0-9]+$"),
+        Param("seed", "Seed for `sample` (default 0).", kind="option",
+              flag="--seed", pattern=r"^[0-9]+$"),
         Param("only_keys", "Comma-separated Zotero item keys to code.",
               kind="option", flag="--only-keys",
               pattern=r"^[A-Z0-9]{8}(,[A-Z0-9]{8})*$"),

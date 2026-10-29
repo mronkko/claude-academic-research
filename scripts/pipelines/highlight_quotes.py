@@ -140,6 +140,27 @@ def line_rects(words: list[tuple], page_height: float) -> list[list[float]]:
     ]
 
 
+def themes_from_config(config_path: str) -> dict[str, str]:
+    """Field → theme from the project's `screening_config.py`.
+
+    Either a `"theme"` key on a `FULLTEXT_CODING_FIELDS` entry, or a
+    `HIGHLIGHT_THEMES` dict (which wins on a clash). Missing file, missing
+    names and unknown themes all mean "no theme"; an unknown theme falls
+    back to the `other` colour when used.
+    """
+    path = Path(config_path)
+    if not path.is_file():
+        return {}
+    mod = screening_common.load_config_module(str(path), "screening_config")
+    themes = {
+        f["name"]: f["theme"]
+        for f in getattr(mod, "FULLTEXT_CODING_FIELDS", [])
+        if f.get("name") and f.get("theme")
+    }
+    themes.update(getattr(mod, "HIGHLIGHT_THEMES", {}) or {})
+    return themes
+
+
 def quote_hash(attachment_key: str, page: int, quote: str) -> str:
     raw = f"{attachment_key}|{page}|{squash(quote)}"
     return hashlib.sha1(raw.encode()).hexdigest()[:10]
@@ -343,7 +364,7 @@ def main() -> int:
                         help="Zotero data directory holding storage/<key>/<file>.")
     parser.add_argument("--keys", default="", help="Comma-separated item keys to limit to.")
     parser.add_argument("--theme", action="append", default=[], metavar="FIELD=THEME",
-                        help="Colour theme per coded field "
+                        help="Colour theme per coded field, overriding screening_config.py "
                              f"({', '.join(THEME_COLORS)}); repeatable.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--replace", action="store_true",
@@ -351,7 +372,8 @@ def main() -> int:
     args = parser.parse_args()
 
     ns = screening_common.load_tag_namespace(args.tag_prefix, args.config)
-    themes = dict(t.split("=", 1) for t in args.theme if "=" in t)
+    themes = themes_from_config(args.config)
+    themes.update(t.split("=", 1) for t in args.theme if "=" in t)
     # Same default as fulltext_code.py. Without it a run with no flag found
     # no stored PDF at all and reported every item no_pdf.
     storage = Path(

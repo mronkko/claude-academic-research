@@ -89,3 +89,16 @@ def test_rendered_prompt_has_single_braces_around_the_json_example() -> None:
     assert "{{" not in out and "}}" not in out
     assert out.startswith("OUT:\n{\n")
     assert '"method": "<...>"' in out
+
+
+def test_draw_sample_is_reproducible_and_pdf_only() -> None:
+    import fulltext_code
+
+    items = [{"key": f"K{i:02d}"} for i in range(20)]
+    has_pdf = lambda it: int(it["key"][1:]) % 2 == 0  # noqa: E731
+    a, info = fulltext_code.draw_sample(items, 4, 7, has_pdf=has_pdf)
+    b, _ = fulltext_code.draw_sample(list(reversed(items)), 4, 7, has_pdf=has_pdf)
+    assert [i["key"] for i in a] == [i["key"] for i in b]      # order-independent
+    assert info["pool_size"] == 10 and info["seed"] == 7
+    assert all(has_pdf(i) for i in a) and len(a) == 4
+    assert info["keys"] == [i["key"] for i in a]

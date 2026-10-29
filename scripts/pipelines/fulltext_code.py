@@ -205,6 +205,23 @@ def _build_slr_coding_note_html(
     return "\n".join(parts)
 
 
+def draw_sample(items: list[dict], n: int, seed: int, *, has_pdf) -> tuple[list[dict], dict]:
+    """A reproducible random sample of `n` items that have a PDF.
+
+    The pool is sorted by key before the draw, so the same seed gives the
+    same items however Zotero happened to order them. Returns the drawn
+    items and the record a manifest keeps (seed, pool size, drawn keys).
+    """
+    import random
+
+    pool = sorted((it for it in items if has_pdf(it)), key=lambda it: it["key"])
+    drawn = random.Random(seed).sample(pool, min(n, len(pool)))
+    return drawn, {
+        "n": n, "seed": seed, "pool_size": len(pool),
+        "keys": [it["key"] for it in drawn],
+    }
+
+
 def _file_sha256(path: str) -> str:
     """Hex SHA-256 of the file at `path`, '' when there is none to hash."""
     import hashlib
@@ -1672,6 +1689,14 @@ def main() -> int:
     parser.add_argument("--only-keys", default="",
                         help="Comma-separated Zotero item keys to process "
                              "(overrides collection enumeration).")
+    parser.add_argument("--sample", type=int, default=0,
+                        help="Code a random sample of N items that have a "
+                             "PDF, instead of all of them. Reproducible: "
+                             "the draw is made from the key-sorted pool "
+                             "with --seed, and a manifest records the seed, "
+                             "the pool size and the drawn keys.")
+    parser.add_argument("--seed", type=int, default=0,
+                        help="Seed for --sample (default: 0).")
     parser.add_argument("--rerun", action="store_true",
                         help="Retry ONLY the items whose last logged "
                              "decision is `error` (transient parse or API "
@@ -1986,6 +2011,19 @@ def main() -> int:
                 flush=True,
             )
 
+        sample_info: dict = {}
+        if args.sample:
+            to_code, sample_info = draw_sample(
+                to_code, args.sample, args.seed,
+                has_pdf=lambda it: _find_pdf_path(
+                    it, atts_by_parent, pdf_dir=pdf_dir,
+                    zotero_storage=zotero_storage,
+                ) is not None,
+            )
+            print(f"  --sample {args.sample} --seed {args.seed}: drew "
+                  f"{len(to_code)} of {sample_info['pool_size']} items "
+                  f"with a PDF", flush=True)
+
         if args.limit and args.limit < len(to_code):
             to_code = to_code[:args.limit]
 
@@ -2036,6 +2074,7 @@ def main() -> int:
                     "skipped_by_doctype": doctype_skipped,
                     "limit": args.limit,
                     "only_keys": args.only_keys,
+                    "sample": sample_info,
                     "rerun": args.rerun,
                     "max_input_chars": args.max_input_chars,
                     "model_hint": model,
