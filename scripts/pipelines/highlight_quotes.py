@@ -18,6 +18,19 @@ read, and create one highlight per quote — coloured by theme, commented
 with the field and its coded value, tagged `<prefix>/ai-highlight` so a
 human can filter or delete them all.
 
+Richer entries — `{field, quote, status, severity, comment}`, as an
+issue-list codebook writes them — get the entry's own comment
+(`A02 · present · minor — <comment>`), and with `--entry-tags` the tags
+`<prefix>/issue:<field>`, `<prefix>/status:<status>`,
+`<prefix>/severity:<severity>` and `<prefix>/layer:<layer>`. The layer
+comes from the id's letter prefix via `--layer D=design` (or
+`HIGHLIGHT_LAYERS` in screening_config.py); an `OTHER-n` entry takes the
+`layer` its `other_findings` record names, else `other`. `--color-by
+severity` colours by severity instead of theme. Entries quoting the same
+passage on the same page become one highlight carrying all their tags,
+with their comments joined. `HIGHLIGHT_COLOR_BY` and `HIGHLIGHT_ENTRY_TAGS`
+in screening_config.py set the defaults of the two flags.
+
 A quote that matches nothing is reported `not_found`, which is also a
 faithfulness check on the model: it claimed the words were verbatim. A
 quote on more than one page is `ambiguous` and, by default, not
@@ -73,6 +86,20 @@ THEME_COLORS = {
     "a2": "#e56eee",              # magenta
     "a3": "#ffd400",              # yellow
 }
+
+#: `--color-by severity`: a present entry by its severity, an exemplary one
+#: green, an uncodebooked `OTHER-n` finding purple, anything else gray.
+SEVERITY_COLORS = {
+    "major": "#ff6666",           # red
+    "moderate": "#f19837",        # orange
+    "minor": "#ffd400",           # yellow
+    "exemplary": "#5fb236",       # green
+    "other": "#a28ae5",           # purple
+    "unknown": "#aaaaaa",         # gray
+}
+COLOR_BY = ("theme", "severity")
+COMMENT_LIMIT = 4000
+_ENTRY_KEYS = ("status", "severity", "comment", "location")
 
 _QUOTE_TRANSLATION = str.maketrans({
     "‘": "'", "’": "'", "“": '"', "”": '"',
@@ -145,6 +172,37 @@ def line_rects(words: list[tuple], page_height: float) -> list[list[float]]:
     ]
 
 
+@dataclass
+class HighlightStyle:
+    """How entries become colours and tags; the defaults are the old behaviour."""
+
+    color_by: str = "theme"                 # theme | severity
+    entry_tags: bool = False                # issue/status/severity/layer tags
+    layers: dict[str, str] = field(default_factory=dict)   # id prefix → layer
+
+
+def _config_module(config_path: str):
+    path = Path(config_path)
+    if not path.is_file():
+        return None
+    return screening_common.load_config_module(str(path), "screening_config")
+
+
+def style_from_config(config_path: str) -> HighlightStyle:
+    """`HIGHLIGHT_COLOR_BY`, `HIGHLIGHT_ENTRY_TAGS`, `HIGHLIGHT_LAYERS`."""
+    mod = _config_module(config_path)
+    style = HighlightStyle()
+    if mod is None:
+        return style
+    color_by = getattr(mod, "HIGHLIGHT_COLOR_BY", "") or "theme"
+    if color_by not in COLOR_BY:
+        raise SystemExit(f"HIGHLIGHT_COLOR_BY must be one of {COLOR_BY}, not {color_by!r}")
+    style.color_by = color_by
+    style.entry_tags = bool(getattr(mod, "HIGHLIGHT_ENTRY_TAGS", False))
+    style.layers = dict(getattr(mod, "HIGHLIGHT_LAYERS", {}) or {})
+    return style
+
+
 def themes_from_config(config_path: str) -> dict[str, str]:
     """Field → theme from the project's `screening_config.py`.
 
@@ -153,10 +211,9 @@ def themes_from_config(config_path: str) -> dict[str, str]:
     names and unknown themes all mean "no theme"; an unknown theme falls
     back to the `other` colour when used.
     """
-    path = Path(config_path)
-    if not path.is_file():
+    mod = _config_module(config_path)
+    if mod is None:
         return {}
-    mod = screening_common.load_config_module(str(path), "screening_config")
     themes = {
         f["name"]: f["theme"]
         for f in getattr(mod, "FULLTEXT_CODING_FIELDS", [])
@@ -220,35 +277,125 @@ def read_pdf(path: Path) -> tuple[list[PageIndex], dict[int, float]]:
     return pages, heights
 
 
-def parse_quotes(raw: str) -> list[dict]:
-    """The `evidence_quotes` field value → [{field, quote}], tolerant."""
-    if not raw or not raw.strip():
+def _json_list(raw) -> list:
+    """A coded field holding a JSON list, as a string or already decoded."""
+    if isinstance(raw, list):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
         return []
     try:
-        data = json.loads(raw)
+        data = json.loads(raw, strict=False)
     except json.JSONDecodeError:
         return []
+    return data if isinstance(data, list) else []
+
+
+def parse_quotes(raw) -> list[dict]:
+    """The `evidence_quotes` field value → [{field, quote, ...}], tolerant.
+
+    `status`, `severity`, `comment` and `location` are kept when present.
+    """
     out = []
-    for e in data if isinstance(data, list) else []:
+    for e in _json_list(raw):
         if isinstance(e, dict) and str(e.get("quote", "")).strip():
-            out.append({"field": str(e.get("field", "")).strip(),
-                        "quote": str(e["quote"]).strip()})
+            entry = {"field": str(e.get("field", "")).strip(),
+                     "quote": str(e["quote"]).strip()}
+            for k in _ENTRY_KEYS:
+                if e.get(k) not in (None, ""):
+                    entry[k] = str(e[k]).strip()
+            out.append(entry)
     return out
+
+
+def parse_other_layers(raw) -> dict[str, str]:
+    """`other_findings` → {"OTHER-1": "analysis", ...}."""
+    return {
+        str(f["id"]).strip(): str(f["layer"]).strip()
+        for f in _json_list(raw)
+        if isinstance(f, dict) and f.get("id") and f.get("layer")
+    }
+
+
+def _field_names(entry: dict) -> list[str]:
+    # One passage may support several fields, listed "a; b".
+    return [n.strip() for n in entry["field"].split(";") if n.strip()] or [entry["field"]]
+
+
+def _is_other(name: str) -> bool:
+    return name.upper().startswith("OTHER")
+
+
+def entry_comment(entry: dict, value: str) -> str:
+    """`A02 · present · minor — <comment>`, else the old `field: value`."""
+    if not entry.get("comment"):
+        return entry["field"] + (f": {value}" if value else "")
+    head = " · ".join(
+        x for x in (entry["field"], entry.get("status"), entry.get("severity")) if x)
+    return f"{head} — {entry['comment']}"
+
+
+def entry_layer(name: str, style: HighlightStyle, other_layers: dict[str, str]) -> str:
+    if _is_other(name):
+        return other_layers.get(name, "other")
+    prefix = name.rstrip("0123456789")
+    return style.layers.get(prefix, "") if prefix != name else ""
+
+
+def entry_tags(entry: dict, ns: str, style: HighlightStyle,
+               other_layers: dict[str, str]) -> list[str]:
+    """issue/status/severity/layer tags for one entry; [] unless `entry_tags`."""
+    if not style.entry_tags:
+        return []
+    base = ns.rstrip("/")
+    tags = []
+    for name in _field_names(entry):
+        tags.append(f"{base}/issue:{name}")
+        layer = entry_layer(name, style, other_layers)
+        if layer:
+            tags.append(f"{base}/layer:{layer}")
+    for k in ("status", "severity"):
+        if entry.get(k):
+            tags.append(f"{base}/{k}:{entry[k]}")
+    return tags
+
+
+_SEVERITY_RANK = ["major", "moderate", "minor", "exemplary", "other", "unknown"]
+
+
+def severity_class(entry: dict) -> str:
+    """The `SEVERITY_COLORS` key for one entry."""
+    if all(_is_other(n) for n in _field_names(entry)):
+        return "other"
+    if entry.get("status") == "exemplary":
+        return "exemplary"
+    sev = entry.get("severity", "")
+    return sev if sev in ("major", "moderate", "minor") else "unknown"
+
+
+def merged_color(entries: list[dict], themes: dict[str, str], style: HighlightStyle) -> str:
+    """Theme colour of the first entry, or the most severe entry's colour."""
+    if style.color_by == "severity":
+        worst = min((severity_class(e) for e in entries), key=_SEVERITY_RANK.index)
+        return SEVERITY_COLORS[worst]
+    theme = themes.get(_field_names(entries[0])[0], "other")
+    return THEME_COLORS.get(theme, THEME_COLORS["other"])
 
 
 def build_annotation(
     attachment_key: str, located: Located, entry: dict, value: str,
-    theme: str, ns: str,
+    theme: str, ns: str, *, comment: str | None = None, color: str | None = None,
+    extra_tags: list[str] = (),
 ) -> dict:
     page_index = located.page - 1
-    comment = entry["field"] + (f": {value}" if value else "")
+    if comment is None:
+        comment = entry_comment(entry, value)
     return {
         "itemType": "annotation",
         "parentItem": attachment_key,
         "annotationType": "highlight",
         "annotationText": entry["quote"],
-        "annotationComment": comment[:500],
-        "annotationColor": THEME_COLORS.get(theme, THEME_COLORS["other"]),
+        "annotationComment": comment[:COMMENT_LIMIT],
+        "annotationColor": color or THEME_COLORS.get(theme, THEME_COLORS["other"]),
         "annotationPageLabel": str(located.page),
         "annotationSortIndex": sort_index(page_index, located.offset, located.top),
         "annotationPosition": json.dumps(
@@ -256,6 +403,7 @@ def build_annotation(
         "tags": [
             {"tag": f"{ns.rstrip('/')}/{AI_TAG_SUFFIX}"},
             {"tag": HASH_TAG + quote_hash(attachment_key, located.page, entry["quote"])},
+            *({"tag": t} for t in extra_tags),
         ],
     }
 
@@ -295,7 +443,9 @@ def choose_attachment(
 def process_item(
     zot, item: dict, payload: dict, ns: str, storage: Path | None,
     themes: dict[str, str], *, dry_run: bool, replace: bool,
+    style: HighlightStyle | None = None,
 ) -> list[dict]:
+    style = style or HighlightStyle()
     item_key = item["key"]
     rows: list[dict] = []
 
@@ -332,13 +482,14 @@ def process_item(
             break
         leftover = _highlight_on(zot, key, pdf, leftover, payload, ns, themes,
                                  row, dry_run=dry_run, replace=replace,
-                                 last=i == len(supplements))
+                                 last=i == len(supplements), style=style)
     return rows
 
 
 def _highlight_on(
     zot, att_key: str, path: Path, quotes: list[dict], payload: dict, ns: str,
     themes: dict[str, str], row, *, dry_run: bool, replace: bool, last: bool,
+    style: HighlightStyle,
 ) -> list[dict]:
     """Highlight `quotes` found in one attachment; return those not found.
 
@@ -362,7 +513,9 @@ def _highlight_on(
     have = {t["tag"] for a in mine for t in a["data"].get("tags", [])
             if t.get("tag", "").startswith(HASH_TAG)}
 
-    batch: list[tuple[dict, dict, Located]] = []
+    # Entries quoting the same passage on the same page share a hash and
+    # become one highlight: grouped here, in first-seen order.
+    groups: dict[str, tuple[Located, list[dict]]] = {}
     leftover: list[dict] = []
     for entry in quotes:
         loc = locate_quote(pages, heights, entry["quote"])
@@ -376,20 +529,34 @@ def _highlight_on(
         if h in have:
             row("skipped_existing", entry, att_key, loc.page)
             continue
-        # One passage may support several fields, listed "a; b". The
-        # comment shows each field's coded value; the first field picks
-        # the colour.
-        names = [n.strip() for n in entry["field"].split(";") if n.strip()]
-        coded = payload.get("fields") or {}
-        value = "; ".join(
-            str(coded.get(n, "")) for n in names if coded.get(n, "")
-        )[:120] if len(names) > 1 else str(coded.get(entry["field"], ""))[:120]
-        theme = themes.get(names[0] if names else entry["field"], "other")
-        batch.append((entry, build_annotation(att_key, loc, entry, value, theme, ns), loc))
+        groups.setdefault(h, (loc, []))[1].append(entry)
+
+    coded = payload.get("fields") or {}
+    other_layers = parse_other_layers(coded.get("other_findings", ""))
+    batch: list[tuple[list[dict], dict, Located]] = []
+    for loc, entries in groups.values():
+        comments, tags = [], []
+        for entry in entries:
+            # The fallback comment shows each field's coded value.
+            names = _field_names(entry)
+            value = "; ".join(
+                str(coded.get(n, "")) for n in names if coded.get(n, ""))[:120]
+            c = entry_comment(entry, value)
+            if c not in comments:
+                comments.append(c)
+            tags += [t for t in entry_tags(entry, ns, style, other_layers) if t not in tags]
+        first = entries[0]
+        theme = themes.get(_field_names(first)[0], "other")
+        batch.append((entries, build_annotation(
+            att_key, loc, first, "", theme, ns, comment="\n\n".join(comments),
+            color=merged_color(entries, themes, style), extra_tags=tags), loc))
     if batch and not dry_run:
         zot.create_highlights([b[1] for b in batch])
-    for entry, _ann, loc in batch:
-        row("would_create" if dry_run else "created", entry, att_key, loc.page)
+    for entries, _ann, loc in batch:
+        detail = f"merged {len(entries)}" if len(entries) > 1 else ""
+        for entry in entries:
+            row("would_create" if dry_run else "created", entry, att_key, loc.page,
+                detail=detail)
     return leftover
 
 
@@ -407,6 +574,16 @@ def main() -> int:
     parser.add_argument("--theme", action="append", default=[], metavar="FIELD=THEME",
                         help="Colour theme per coded field, overriding screening_config.py "
                              f"({', '.join(THEME_COLORS)}); repeatable.")
+    parser.add_argument("--color-by", choices=COLOR_BY, default=None,
+                        help="Colour by the field's theme or by the entry's severity "
+                             "(major red, moderate orange, minor yellow, exemplary green, "
+                             "OTHER-n purple). Default: HIGHLIGHT_COLOR_BY, else theme.")
+    parser.add_argument("--entry-tags", action=argparse.BooleanOptionalAction, default=None,
+                        help="Tag each highlight <prefix>/issue:<field>, status:, severity: "
+                             "and layer:. Default: HIGHLIGHT_ENTRY_TAGS, else off.")
+    parser.add_argument("--layer", action="append", default=[], metavar="PREFIX=LAYER",
+                        help="Layer tag for ids with this letter prefix, e.g. D=design, "
+                             "adding to HIGHLIGHT_LAYERS; repeatable.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--replace", action="store_true",
                         help="Delete this script's highlights on each attachment first.")
@@ -415,6 +592,12 @@ def main() -> int:
     ns = screening_common.load_tag_namespace(args.tag_prefix, args.config)
     themes = themes_from_config(args.config)
     themes.update(t.split("=", 1) for t in args.theme if "=" in t)
+    style = style_from_config(args.config)
+    if args.color_by:
+        style.color_by = args.color_by
+    if args.entry_tags is not None:
+        style.entry_tags = args.entry_tags
+    style.layers.update(t.split("=", 1) for t in args.layer if "=" in t)
     # Same default as fulltext_code.py. Without it a run with no flag found
     # no stored PDF at all and reported every item no_pdf.
     storage = Path(
@@ -445,7 +628,8 @@ def main() -> int:
                         "quote": "", "page": "", "status": "no_coding_note", "detail": ""})
             continue
         log.extend(process_item(zot, item, payload, ns, storage, themes,
-                                dry_run=args.dry_run, replace=args.replace))
+                                dry_run=args.dry_run, replace=args.replace,
+                                style=style))
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

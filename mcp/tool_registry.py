@@ -970,7 +970,9 @@ HIGHLIGHT_QUOTES = Tool(
     description=(
         "Creates Zotero PDF highlights from the verbatim evidence quotes "
         "the coder stored for each full-text include, tagged "
-        "<prefix>/ai-highlight so they can be filtered or deleted. A quote "
+        "<prefix>/ai-highlight so they can be filtered or deleted; an "
+        "entry's own comment becomes the highlight's comment, and entries "
+        "quoting one passage merge into one highlight. A quote "
         "found nowhere is reported not_found (a faithfulness check on the "
         "model); one on several pages is ambiguous and skipped. Re-running "
         "adds no duplicates. Log CSV: output/highlight_log.csv."
@@ -986,6 +988,13 @@ HIGHLIGHT_QUOTES = Tool(
               flag="--tag-prefix"),
         Param("keys", "Comma-separated item keys to limit to.",
               kind="option", flag="--keys"),
+        Param("color_by", "Colour by the field's theme or by the entry's "
+              "severity, overriding HIGHLIGHT_COLOR_BY in screening_config.py.",
+              kind="option", flag="--color-by", enum=("theme", "severity")),
+        Param("entry_tags", "Tag each highlight <prefix>/issue:, status:, "
+              "severity: and layer: from its entry, overriding "
+              "HIGHLIGHT_ENTRY_TAGS.", kind="switch", flag="--entry-tags",
+              type="boolean"),
         Param("dry_run", "Report what would be created; write nothing.",
               kind="switch", flag="--dry-run", type="boolean"),
     ),

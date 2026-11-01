@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.0] — 2026-11-01
+
+### Added
+
+- **Zotero highlights from coded evidence quotes.** `highlight_quotes.py`
+  (MCP tool `highlight_quotes`) reads the `evidence_quotes` the coder
+  stored in each include's SLR Coding note, finds each quote in the PDF's
+  text layer, and creates highlights tagged `<prefix>/ai-highlight`.
+  A quote found nowhere is reported `not_found`, which checks that the
+  model's quotes really are verbatim. Re-running adds no duplicates.
+  The coding note now records `pdf_sha256`, so the right PDF is used
+  when an item has several.
+- **Annotation content per entry.** An evidence-quote entry with its own
+  `comment` becomes the highlight's comment (`A02 · present · minor —
+  …`). `--entry-tags` (or `HIGHLIGHT_ENTRY_TAGS`) adds
+  `<prefix>/issue:`, `status:`, `severity:` and `layer:` tags; the
+  layer comes from the id's letter prefix via `--layer D=design` (or
+  `HIGHLIGHT_LAYERS`), and an `OTHER-n` entry takes the layer from its
+  `other_findings` record. `--color-by severity` (or
+  `HIGHLIGHT_COLOR_BY`) colours by severity instead of theme. Entries
+  quoting the same passage on the same page become one highlight, with
+  their comments joined and all their tags.
+- **Appendices and supplements are read with the article.** An
+  attachment titled like an appendix or supplement is appended to the
+  article's text for coding, never mistaken for the article, and searched
+  by the highlighter for quotes not found in the article.
+- **`run_manifest_batch.py`** runs a screening or coding manifest through
+  the Anthropic Batches API at half the price of synchronous calls. An
+  interrupted run picks up the batch already submitted.
+- **`export_coding_xlsx.py`** writes the coding as an Excel workbook, or a
+  blank template for hand coding.
+- **`fulltext_code.py --check-responses`** summarises a responses file
+  without writing anything; **`--sample N --seed S`** picks a
+  reproducible pilot sample. Highlight colours can be set per field in
+  `screening_config.py` (`HIGHLIGHT_THEMES`, or `theme` on a coding field).
+- **Excluded items get an SLR Coding note too**, carrying the decision,
+  exclusion code and reason, so the reason is visible in Zotero.
+- **`/demo-slr`**, a guided 5–10 minute mini review from search to a
+  highlighted PDF in a throwaway collection, with the `demo_cleanup` tool
+  to remove it afterwards. `critic-loop --quick` runs one short pass.
+
+### Fixed
+
+- **Claude 5+ models:** calls no longer fail on the `temperature`
+  parameter, read the answer rather than the thinking block, and get
+  room to think; a call cut off before it answered is retried once with
+  double the budget.
+- The coding prompt templates no longer show the model doubled braces.
+- `export_coded_includes` reads exclusion codes written as `FE1 Label:`
+  and honours `EXCLUSION_CODES`.
+- `highlight_quotes.py` finds stored PDFs without `--zotero-storage`
+  (it defaults to `$ZOTERO_DATA_DIR` or `~/Zotero`), and colours and
+  comments a quote listed under several fields.
+
 ## [0.27.1] — 2026-10-28
 
 ### Fixed
