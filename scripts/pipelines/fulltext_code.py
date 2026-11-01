@@ -944,6 +944,49 @@ def _find_pdf_path(
 # ---------------------------------------------------------------------------
 
 
+_HEADING_WORDS = (r"(?:\d+\.?[ \t]*)?(?:references|reference list|bibliography|"
+                  r"literature cited|works cited)")
+#: A reference-list heading ("References", "7. Bibliography"): alone on its
+#: line, or at the left margin with a second column's text after a gap
+#: (pdftotext -layout puts both columns on one line). A heading deeper in
+#: the line may have article text from another column after it, so it is
+#: not matched. `\f` is pdftotext's page break.
+_REFERENCES_HEADING = re.compile(
+    rf"^\f?(?:[ \t]*{_HEADING_WORDS}[ \t]*:?[ \t]*$"
+    rf"|[ \t]{{0,8}}{_HEADING_WORDS}[ \t]{{3,}}\S)",
+    re.IGNORECASE | re.MULTILINE,
+)
+#: Where a reference list ends before the article does: an appendix or
+#: supplementary-material heading, or a table/figure caption (accepted
+#: manuscripts put their tables and figures after the references).
+_AFTER_REFERENCES = re.compile(
+    r"^[ \t]*(?:(?:online[ \t]+)?appendix|appendices|supplementa(?:l|ry)[ \t]+"
+    r"(?:material|materials|information|online)|(?:table|figure|fig\.)[ \t]+"
+    r"[A-Z]?\d+)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+REFERENCES_OMITTED = "[REFERENCE LIST OMITTED]"
+
+
+def strip_references(text: str) -> tuple[str, int]:
+    """`(text, chars_removed)` with the article's reference list cut out.
+
+    From the last reference-list heading in the second half of the text
+    to the next appendix heading or table/figure caption, or the end.
+    A heading this cannot place safely (`_REFERENCES_HEADING`) is not
+    found and nothing is cut: the failure is a longer prompt, never a
+    missing methods section.
+    """
+    heads = [m for m in _REFERENCES_HEADING.finditer(text)
+             if m.start() >= len(text) // 2]
+    if not heads:
+        return text, 0
+    start = heads[-1].start()
+    after = _AFTER_REFERENCES.search(text, heads[-1].end())
+    end = after.start() if after else len(text)
+    return f"{text[:start]}{REFERENCES_OMITTED}\n\n{text[end:]}", end - start
+
+
 def output_budget(fields: list[dict]) -> int:
     """The output-token budget a coding call needs for this schema.
 
@@ -974,12 +1017,15 @@ def build_coding_request(
     model: str,
     fields: list[dict],
     supplement_paths: list[Path] = (),
+    strip_refs: bool = False,
 ) -> tuple[dict, str]:
     """`(base_row, user_message)` — everything one coding call needs.
 
     `supplement_paths` (appendix/supplement attachments) are appended after
     the article, each under its own heading; `pdf_path` stays the article,
-    which is what the highlighter's hash check refers to.
+    which is what the highlighter's hash check refers to. `strip_refs`
+    cuts the article's reference list (`strip_references`) before they
+    are appended; supplements are never cut.
 
     The base row is the identity and provenance half of the CSV row:
     what was read, from where, and how much of it. The user message is
@@ -1004,6 +1050,9 @@ def build_coding_request(
             return extract_pdf_text(str(path))
 
     fulltext = _text(pdf_path)
+    refs_removed = 0
+    if strip_refs:
+        fulltext, refs_removed = strip_references(fulltext)
     for sp in supplement_paths:
         fulltext += (f"\n\n===== ONLINE APPENDIX OR SUPPLEMENT ({sp.name}) "
                      f"=====\n{_text(sp)}")
@@ -1020,6 +1069,7 @@ def build_coding_request(
         "journal": d.get("publicationTitle", "") or "",
         "pdf_path": str(pdf_path),
         "fulltext_chars": len(fulltext),
+        "references_stripped_chars": refs_removed,
         "truncated": "true" if truncated else "false",
         "model": model,
     }
@@ -1168,10 +1218,11 @@ def apply_coded_row(
 
 
 def _code_one(item: dict, pdf_path: Path, client, model: str, prompt: str,
-              fields: list[dict], supplement_paths: list[Path] = ()) -> dict:
+              fields: list[dict], supplement_paths: list[Path] = (),
+              strip_refs: bool = False) -> dict:
     row, user_msg = build_coding_request(
         item, pdf_path, model=model, fields=fields,
-        supplement_paths=supplement_paths,
+        supplement_paths=supplement_paths, strip_refs=strip_refs,
     )
     try:
         text = client.generate(
@@ -1217,6 +1268,7 @@ def build_manifest_rows(
     max_input_chars: int = 0,
     mode: str = "code",
     target_fields: list[str] | None = None,
+    strip_refs: bool = False,
 ) -> tuple[list[dict], list[dict]]:
     """`(manifest_rows, skipped)` for a set of items to code.
 
@@ -1274,6 +1326,7 @@ def build_manifest_rows(
                 item, pdf_path, model=model, fields=fields,
                 supplement_paths=_find_supplement_paths(
                     item, attachments_by_parent, zotero_storage),
+                strip_refs=strip_refs,
             )
         except Exception as e:  # noqa: BLE001
             skipped.append({
@@ -1326,6 +1379,7 @@ def build_manifest_rows(
             "max_output_tokens": budget,
             "input_chars": len(user_msg),
             "fulltext_chars": base["fulltext_chars"],
+            "references_stripped_chars": base["references_stripped_chars"],
             "truncated": base["truncated"],
             "pdf_path": base["pdf_path"],
             "pdf_sha256": batch_manifest.file_sha256(pdf_path),
@@ -1483,7 +1537,7 @@ def check_responses(
         raw_q = row.get("evidence_quotes", "")
         if raw_q:
             try:
-                quote_counts.append(len(json.loads(raw_q)))
+                quote_counts.append(len(json.loads(raw_q, strict=False)))
             except (ValueError, TypeError):
                 problems.append(f"{key}: evidence_quotes is not a JSON list")
         for name, allowed in closed.items():
@@ -1702,6 +1756,7 @@ def emit_manifest(
     target_fields: list[str] | None,
     selection: dict,
     request_params: dict | None = None,
+    strip_refs: bool = False,
 ) -> int:
     """Write the manifest and its sidecar, say what happened, exit 0."""
     run_id = batch_manifest.new_run_id(batch_manifest.STAGE_FULLTEXT)
@@ -1726,6 +1781,7 @@ def emit_manifest(
         max_input_chars=max_input_chars,
         mode=mode,
         target_fields=target_fields,
+        strip_refs=strip_refs,
     )
     sidecar_path = batch_manifest.skipped_path(path)
     if not rows:
@@ -1863,6 +1919,14 @@ def main() -> int:
                              "only answers; the manifest carries which item "
                              "each answer belongs to and which coding fields "
                              "were asked for.")
+    parser.add_argument("--strip-references", action="store_true",
+                        help="Cut each article's reference list from the text "
+                             "sent to the model (from the last References / "
+                             "Bibliography heading to the next appendix "
+                             "heading or table/figure caption). Where the "
+                             "heading is found that is 10-30%% of the input; "
+                             "where it is not, nothing is cut. Supplements "
+                             "are never cut.")
     parser.add_argument("--max-input-chars", type=int, default=0,
                         help="Emit no request whose user message exceeds N "
                              "characters; over-long items go to the skipped "
@@ -2208,6 +2272,7 @@ def main() -> int:
                 zotero_storage=zotero_storage,
                 max_input_chars=args.max_input_chars,
                 request_params=request_params,
+                strip_refs=args.strip_references,
                 mode="code",
                 target_fields=None,
                 selection={
@@ -2312,6 +2377,7 @@ def main() -> int:
                 zotero_storage=zotero_storage,
                 max_input_chars=args.max_input_chars,
                 request_params=request_params,
+                strip_refs=args.strip_references,
                 mode="update_fields",
                 target_fields=sorted(target_fields),
                 selection={
@@ -2357,7 +2423,8 @@ def main() -> int:
                 return no_pdf_row(base, fields)
             row = _code_one(item, pdf_path, client, model, update_prompt, fields,
                             _find_supplement_paths(item, atts_by_parent,
-                                                   zotero_storage))
+                                                   zotero_storage),
+                            strip_refs=args.strip_references)
             if row.get("decision") == "error":
                 # Surface the failure instead of merging an empty update
                 # into the note (which would destroy the error reason and
@@ -2446,7 +2513,8 @@ def main() -> int:
             }, fields)
         return _code_one(item, pdf_path, client, model, rendered_prompt, fields,
                          _find_supplement_paths(item, atts_by_parent,
-                                                zotero_storage))
+                                                zotero_storage),
+                         strip_refs=args.strip_references)
 
     if not batch_mode:
         print(paid_run_banner(

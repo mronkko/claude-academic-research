@@ -405,7 +405,7 @@ def test_fulltext_code_emits_progress(tmp_path, monkeypatch) -> None:
                         classmethod(lambda cls, *a, **k: _ScreenZot(items)))
     monkeypatch.setattr(ftc, "_abstract_stage_eligible", lambda its, p: (its, "eligible"))
     monkeypatch.setattr(ftc, "_find_pdf_path", lambda item, *a, **k: tmp_path / "x.pdf")
-    monkeypatch.setattr(ftc, "_code_one", lambda item, *a: {
+    monkeypatch.setattr(ftc, "_code_one", lambda item, *a, **k: {
         "item_key": item["key"], "title": item["data"]["title"],
         "decision": "exclude" if item["key"] == "BBBB2222" else "include"})
     monkeypatch.setattr(ftc, "apply_coded_row", lambda *a, **k: None)

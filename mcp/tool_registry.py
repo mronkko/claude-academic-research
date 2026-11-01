@@ -1431,6 +1431,10 @@ START_FULLTEXT_CODE = Tool(
               pattern=r"^[A-Z0-9]{8}(,[A-Z0-9]{8})*$"),
         Param("rerun", "Retry only items whose last decision was `error`.",
               kind="switch", flag="--rerun", type="boolean"),
+        Param("strip_references", "Cut each article's reference list from "
+              "the text sent to the model (10-30% of the input where its "
+              "heading is found; nothing is cut where it is not).",
+              kind="switch", flag="--strip-references", type="boolean"),
         Param("full_recode", "Back up the log, clear this review's "
               "fulltext:* and coding tags, and re-code everything.",
               kind="switch", flag="--full-recode", type="boolean"),
