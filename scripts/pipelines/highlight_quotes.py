@@ -67,6 +67,11 @@ THEME_COLORS = {
     "setting": "#2ea8e5",         # blue
     "overclaims": "#ff6666",      # red
     "other": "#a28ae5",           # purple
+    # One colour per numbered assumption, for reviews that code several.
+    "a0": "#aaaaaa",              # gray
+    "a1": "#f19837",              # orange
+    "a2": "#e56eee",              # magenta
+    "a3": "#ffd400",              # yellow
 }
 
 _QUOTE_TRANSLATION = str.maketrans({
@@ -167,7 +172,9 @@ def quote_hash(attachment_key: str, page: int, quote: str) -> str:
 
 
 def sort_index(page_index: int, char_offset: int, top: float) -> str:
-    return f"{page_index:05d}|{char_offset:06d}|{int(top):05d}"
+    # Zotero rejects a negative field; a rect above the page top (an offset
+    # CropBox) would otherwise format as e.g. "-0127".
+    return f"{page_index:05d}|{max(char_offset, 0):06d}|{max(int(top), 0):05d}"
 
 
 @dataclass
@@ -304,15 +311,45 @@ def process_item(
     if not quotes:
         row("no_quotes")
         return rows
-    att_key, path, problem = choose_attachment(
-        item, zot.children(item_key), payload, storage)
+    children = zot.children(item_key)
+    att_key, path, problem = choose_attachment(item, children, payload, storage)
     if problem:
         row(problem)
         return rows
+    # A quote not in the article is looked for in the appendix/supplement
+    # attachments, which the coder read after it (fulltext_code appends them).
+    import fulltext_code
+    supplements = [
+        (a.get("key") or a.get("data", {}).get("key", ""), p)
+        for a in children if fulltext_code.is_supplement_attachment(a)
+        for p in [fulltext_code._find_pdf_path(
+            item, {item_key: [a]}, zotero_storage=storage, supplement=True)]
+        if p is not None
+    ]
+    leftover = quotes
+    for i, (key, pdf) in enumerate([(att_key, path)] + supplements):
+        if not leftover:
+            break
+        leftover = _highlight_on(zot, key, pdf, leftover, payload, ns, themes,
+                                 row, dry_run=dry_run, replace=replace,
+                                 last=i == len(supplements))
+    return rows
+
+
+def _highlight_on(
+    zot, att_key: str, path: Path, quotes: list[dict], payload: dict, ns: str,
+    themes: dict[str, str], row, *, dry_run: bool, replace: bool, last: bool,
+) -> list[dict]:
+    """Highlight `quotes` found in one attachment; return those not found.
+
+    Not-found and ambiguous quotes are logged only on the `last` attachment
+    tried, so a quote that turns up in an appendix is not also reported
+    missing from the article.
+    """
     pages, heights = read_pdf(path)
     if not any(p.text for p in pages):
         row("no_text_layer", att=att_key)
-        return rows
+        return quotes
 
     ai_tag = f"{ns.rstrip('/')}/{AI_TAG_SUFFIX}"
     existing = zot.list_annotations(att_key)
@@ -326,10 +363,14 @@ def process_item(
             if t.get("tag", "").startswith(HASH_TAG)}
 
     batch: list[tuple[dict, dict, Located]] = []
+    leftover: list[dict] = []
     for entry in quotes:
         loc = locate_quote(pages, heights, entry["quote"])
         if loc.status != "found":
-            row(loc.status, entry, att_key, detail=",".join(map(str, loc.pages)))
+            if last:
+                row(loc.status, entry, att_key, detail=",".join(map(str, loc.pages)))
+            else:
+                leftover.append(entry)
             continue
         h = HASH_TAG + quote_hash(att_key, loc.page, entry["quote"])
         if h in have:
@@ -349,7 +390,7 @@ def process_item(
         zot.create_highlights([b[1] for b in batch])
     for entry, _ann, loc in batch:
         row("would_create" if dry_run else "created", entry, att_key, loc.page)
-    return rows
+    return leftover
 
 
 def main() -> int:

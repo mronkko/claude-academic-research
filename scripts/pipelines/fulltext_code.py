@@ -828,13 +828,44 @@ def _run_csv_backfill(
 # ---------------------------------------------------------------------------
 
 
+#: An attachment *titled* like this is an online appendix or supplement: never
+#: the article itself, but appended to its text when coding. Matched on the
+#: attachment title only, because Zotero renames files after the paper's title.
+_SUPPLEMENT_TITLE_RE = re.compile(r"\b(appendix|appendices|supplement)", re.I)
+
+
+def is_supplement_attachment(att: dict) -> bool:
+    return bool(_SUPPLEMENT_TITLE_RE.search(att.get("data", {}).get("title", "") or ""))
+
+
+def _find_supplement_paths(
+    item: dict,
+    attachments_by_parent: dict[str, list[dict]],
+    zotero_storage: Path | None = None,
+) -> list[Path]:
+    """Readable PDF paths of the item's appendix/supplement attachments, by title."""
+    paths = []
+    for att in attachments_by_parent.get(item["key"], []):
+        if is_supplement_attachment(att):
+            p = _find_pdf_path(item, {item["key"]: [att]},
+                               zotero_storage=zotero_storage, supplement=True)
+            if p is not None:
+                paths.append(p)
+    return sorted(paths, key=lambda p: p.name)
+
+
 def _find_pdf_path(
     item: dict,
     attachments_by_parent: dict[str, list[dict]],
     pdf_dir: Path | None = None,
     zotero_storage: Path | None = None,
+    supplement: bool = False,
 ) -> Path | None:
     """Resolve an item's PDF path, preferring Zotero's own storage tree.
+
+    Appendix and supplement attachments (`is_supplement_attachment`) are
+    skipped, so the article is always the main text; `supplement=True`
+    resolves only those instead (and skips the pdf_dir fallbacks).
 
     Resolution order:
       1. **Linked-file attachments** (`linkMode == "linked_file"`):
@@ -861,6 +892,7 @@ def _find_pdf_path(
         a for a in atts
         if a.get("data", {}).get("contentType") == "application/pdf"
         and a.get("data", {}).get("md5")
+        and is_supplement_attachment(a) == supplement
     ]
 
     for att in pdfs:
@@ -889,7 +921,7 @@ def _find_pdf_path(
                 return candidate
 
         # 3. Legacy project-local pdfs/ dir.
-        if pdf_dir and filename:
+        if pdf_dir and filename and not supplement:
             candidate = pdf_dir / filename
             if candidate.exists():
                 return candidate
@@ -897,7 +929,7 @@ def _find_pdf_path(
     # 4. DOI-named fallback in the project-local pdf_dir: the name the
     # fetchers cache under (which also escapes `:` and the `<>` of SICI
     # DOIs), as given and lower-cased, then the older `/`-only form.
-    if pdf_dir and doi:
+    if pdf_dir and doi and not supplement:
         stems = (doi_utils.doi_safe(doi), doi_utils.doi_safe(doi.lower()),
                  doi.replace("/", "_"))
         for stem in dict.fromkeys(stems):
@@ -935,8 +967,13 @@ def build_coding_request(
     *,
     model: str,
     fields: list[dict],
+    supplement_paths: list[Path] = (),
 ) -> tuple[dict, str]:
     """`(base_row, user_message)` — everything one coding call needs.
+
+    `supplement_paths` (appendix/supplement attachments) are appended after
+    the article, each under its own heading; `pdf_path` stays the article,
+    which is what the highlighter's hash check refers to.
 
     The base row is the identity and provenance half of the CSV row:
     what was read, from where, and how much of it. The user message is
@@ -952,12 +989,18 @@ def build_coding_request(
     # Elsevier-TDM PDF replacement (P11) auto-invalidates the prior
     # entry. Falls back to direct extraction when the cache helper is
     # unavailable (e.g. pdftotext missing) — preserves the old contract.
-    try:
-        fulltext = pdf_text_cache.get_text(item_key, pdf_path)
-    except FileNotFoundError:
-        # pdftotext binary missing — let the existing extractor try
-        # (it has multiple internal fallbacks: pypdf, pdfplumber).
-        fulltext = extract_pdf_text(str(pdf_path))
+    def _text(path: Path) -> str:
+        try:
+            return pdf_text_cache.get_text(item_key, path)
+        except FileNotFoundError:
+            # pdftotext binary missing — let the existing extractor try
+            # (it has multiple internal fallbacks: pypdf, pdfplumber).
+            return extract_pdf_text(str(path))
+
+    fulltext = _text(pdf_path)
+    for sp in supplement_paths:
+        fulltext += (f"\n\n===== ONLINE APPENDIX OR SUPPLEMENT ({sp.name}) "
+                     f"=====\n{_text(sp)}")
     truncated = len(fulltext) > SOFT_FULLTEXT_CHAR_CAP
     if truncated:
         fulltext = fulltext[:SOFT_FULLTEXT_CHAR_CAP]
@@ -1119,9 +1162,10 @@ def apply_coded_row(
 
 
 def _code_one(item: dict, pdf_path: Path, client, model: str, prompt: str,
-              fields: list[dict]) -> dict:
+              fields: list[dict], supplement_paths: list[Path] = ()) -> dict:
     row, user_msg = build_coding_request(
         item, pdf_path, model=model, fields=fields,
+        supplement_paths=supplement_paths,
     )
     try:
         text = client.generate(
@@ -1222,6 +1266,8 @@ def build_manifest_rows(
         try:
             base, user_msg = build_coding_request(
                 item, pdf_path, model=model, fields=fields,
+                supplement_paths=_find_supplement_paths(
+                    item, attachments_by_parent, zotero_storage),
             )
         except Exception as e:  # noqa: BLE001
             skipped.append({
@@ -2296,7 +2342,9 @@ def main() -> int:
             }
             if pdf_path is None:
                 return no_pdf_row(base, fields)
-            row = _code_one(item, pdf_path, client, model, update_prompt, fields)
+            row = _code_one(item, pdf_path, client, model, update_prompt, fields,
+                            _find_supplement_paths(item, atts_by_parent,
+                                                   zotero_storage))
             if row.get("decision") == "error":
                 # Surface the failure instead of merging an empty update
                 # into the note (which would destroy the error reason and
@@ -2383,7 +2431,9 @@ def main() -> int:
                 "journal": d.get("publicationTitle", "") or "",
                 "model": model,
             }, fields)
-        return _code_one(item, pdf_path, client, model, rendered_prompt, fields)
+        return _code_one(item, pdf_path, client, model, rendered_prompt, fields,
+                         _find_supplement_paths(item, atts_by_parent,
+                                                zotero_storage))
 
     if not batch_mode:
         print(paid_run_banner(
