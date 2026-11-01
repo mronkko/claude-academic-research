@@ -1,7 +1,11 @@
 """Content-hash-keyed cache for `pdftotext`-extracted PDF text.
 
+The text is pdftotext's `-layout` and reading-order outputs merged page
+by page (`pdf_columns.merge`): `-layout` keeps tables aligned, reading
+order keeps two-column prose in order. One form feed per page either way.
+
 Without this cache, every consumer (`fulltext_code.py`, audits,
-re-codes) re-runs `pdftotext -layout` on the same PDF — slow, and
+re-codes) re-runs pdftotext on the same PDF — slow, and
 particularly painful after Elsevier TDM remediation replaces a PDF
 under the same `item_key` (the new content needs re-extraction; the
 old extraction is stale).
@@ -11,9 +15,11 @@ Contract:
 - Cache key is `(item_key, sha256(pdf_bytes)[:16])`. Replacing the
   PDF (different bytes) automatically invalidates the prior entry —
   next call extracts again.
-- Cache file lives at `<cache_dir>/<item_key>-<hash>.txt` so a single
-  `item_key` may have multiple snapshots on disk during a remediation
-  pass; the lookup picks the one matching the current PDF hash.
+- Cache file lives at `<cache_dir>/<item_key>-<hash>.v<N>.txt` so a
+  single `item_key` may have multiple snapshots on disk during a
+  remediation pass; the lookup picks the one matching the current PDF
+  hash. `N` is `EXTRACTION_VERSION`: changing how text is extracted
+  bumps it, so text cached by an older extractor is never served.
 - Default `cache_dir` is `Path.cwd() / ".claude" / "pdf_text"`. The
   setup wizard already adds `.claude/` to the project's `.gitignore`,
   so cached text doesn't get committed.
@@ -37,6 +43,10 @@ from pathlib import Path
 
 DEFAULT_CACHE_SUBDIR = Path(".claude") / "pdf_text"
 
+#: Bumped whenever extraction changes. 1: `pdftotext -layout` alone.
+#: 2: `-layout` and reading order merged by `pdf_columns`.
+EXTRACTION_VERSION = 2
+
 
 def _content_hash(pdf_path: Path) -> str:
     """Return the first 16 hex chars of SHA-256 of the PDF bytes.
@@ -52,7 +62,7 @@ def _content_hash(pdf_path: Path) -> str:
 
 
 def _cache_path(cache_dir: Path, item_key: str, content_hash: str) -> Path:
-    return cache_dir / f"{item_key}-{content_hash}.txt"
+    return cache_dir / f"{item_key}-{content_hash}.v{EXTRACTION_VERSION}.txt"
 
 
 def _resolve_cache_dir(cache_dir: str | Path | None) -> Path:
@@ -69,9 +79,9 @@ def get_text(
 ) -> str:
     """Return extracted text for `pdf_path`, caching by content hash.
 
-    On a cache hit, reads `<cache_dir>/<item_key>-<hash>.txt` and
-    returns its contents. On a miss, runs `pdftotext -layout`, writes
-    the cache file, and returns the text.
+    On a cache hit, reads `<cache_dir>/<item_key>-<hash>.v<N>.txt` and
+    returns its contents. On a miss, extracts (`_extract`), writes the
+    cache file, and returns the text.
 
     `item_key` and `pdf_path` together identify the entry; replacing
     the PDF bytes (e.g. Elsevier TDM remediation) flips the hash and
@@ -90,7 +100,7 @@ def get_text(
     if cache_file.is_file():
         return cache_file.read_text(encoding="utf-8", errors="replace")
 
-    text = _run_pdftotext(pdf_path)
+    text = _extract(pdf_path)
     cache_dir.mkdir(parents=True, exist_ok=True)
     # Write-then-rename. A plain write interrupted mid-way (Ctrl-C, a
     # full disk, two workers on one item) left a truncated file that the
@@ -104,12 +114,19 @@ def get_text(
     return text
 
 
-def _run_pdftotext(pdf_path: Path) -> str:
-    """Invoke `pdftotext -layout` and return decoded text.
+def _extract(pdf_path: Path) -> str:
+    """pdftotext's `-layout` and reading-order outputs, merged per page."""
+    import pdf_columns
 
-    Layout mode preserves column structure better than the default
-    flow mode for academic papers. Errors raise CalledProcessError so
-    the caller can decide whether to retry / fall back.
+    return pdf_columns.merge(
+        _run_pdftotext(pdf_path, "-layout"), _run_pdftotext(pdf_path))
+
+
+def _run_pdftotext(pdf_path: Path, *flags: str) -> str:
+    """Invoke `pdftotext [flags]` and return decoded text.
+
+    Errors raise CalledProcessError so the caller can decide whether to
+    retry / fall back.
     """
     if shutil.which("pdftotext") is None:
         raise FileNotFoundError(
@@ -118,7 +135,7 @@ def _run_pdftotext(pdf_path: Path) -> str:
             "on macOS, `apt install poppler-utils` on Debian/Ubuntu)."
         )
     proc = subprocess.run(  # noqa: S603 — input is a Path object, not user-supplied shell
-        ["pdftotext", "-layout", str(pdf_path), "-"],
+        ["pdftotext", *flags, str(pdf_path), "-"],
         check=True,
         capture_output=True,
     )

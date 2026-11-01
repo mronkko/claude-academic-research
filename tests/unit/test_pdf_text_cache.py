@@ -34,7 +34,8 @@ def test_first_call_runs_pdftotext_and_caches(tmp_path: Path, cache_dir: Path) -
     with patch.object(pdf_text_cache, "_run_pdftotext", return_value="extracted text") as mock:
         text = pdf_text_cache.get_text("ABCD0001", pdf, cache_dir=cache_dir)
     assert text == "extracted text"
-    mock.assert_called_once_with(pdf)
+    # Both pdftotext modes run once each; `pdf_columns` merges them.
+    assert [c.args for c in mock.call_args_list] == [(pdf, "-layout"), (pdf,)]
     # Cache file exists and has expected name shape.
     cached = list(cache_dir.glob("ABCD0001-*.txt"))
     assert len(cached) == 1
@@ -91,7 +92,7 @@ def test_replacing_pdf_bytes_invalidates_cache(tmp_path: Path, cache_dir: Path) 
     with patch.object(pdf_text_cache, "_run_pdftotext", return_value="full body text") as mock:
         second = pdf_text_cache.get_text("REM0001", pdf, cache_dir=cache_dir)
     assert second == "full body text"
-    mock.assert_called_once()
+    assert mock.call_count == 2          # one extraction: both modes
     # Both versions cached side by side: original preview-cache survives,
     # new full-body cache lives next to it. The hash distinguishes them.
     cached = sorted(cache_dir.glob("REM0001-*.txt"))
@@ -126,3 +127,25 @@ def test_get_text_requires_non_empty_item_key(tmp_path: Path, cache_dir: Path) -
     pdf = _write_pdf(tmp_path, "paper.pdf", b"%PDF-1.4 X")
     with pytest.raises(ValueError):
         pdf_text_cache.get_text("", pdf, cache_dir=cache_dir)
+
+
+def test_text_from_an_older_extractor_is_not_served(tmp_path: Path, cache_dir: Path) -> None:
+    """Version 1 cached `-layout` text alone, under `<key>-<hash>.txt`.
+    The merged extraction must not pick that file up."""
+    pdf = _write_pdf(tmp_path, "paper.pdf", b"%PDF-1.4 bytes")
+    cache_dir.mkdir(parents=True)
+    old = cache_dir / f"OLD0001-{pdf_text_cache._content_hash(pdf)}.txt"
+    old.write_text("interleaved layout text", encoding="utf-8")
+    with patch.object(pdf_text_cache, "_run_pdftotext", return_value="new text"):
+        assert pdf_text_cache.get_text("OLD0001", pdf, cache_dir=cache_dir) == "new text"
+    assert (cache_dir / old.name.replace(".txt", f".v{pdf_text_cache.EXTRACTION_VERSION}.txt")).is_file()
+    assert pdf_text_cache.clear_item("OLD0001", cache_dir=cache_dir) == 2   # both kinds removed
+
+
+def test_the_two_modes_are_merged_page_by_page(tmp_path: Path, cache_dir: Path) -> None:
+    pdf = _write_pdf(tmp_path, "paper.pdf", b"%PDF-1.4 bytes")
+    outputs = {("-layout",): "LAYOUT", (): "READING"}
+    with patch.object(pdf_text_cache, "_run_pdftotext",
+                      side_effect=lambda p, *f: outputs[f]), \
+            patch("pdf_columns.merge", side_effect=lambda lay, rd: f"{lay}+{rd}"):
+        assert pdf_text_cache.get_text("MRG0001", pdf, cache_dir=cache_dir) == "LAYOUT+READING"

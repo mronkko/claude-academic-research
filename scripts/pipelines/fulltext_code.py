@@ -948,7 +948,8 @@ _HEADING_WORDS = (r"(?:\d+\.?[ \t]*)?(?:references|reference list|bibliography|"
                   r"literature cited|works cited)")
 #: A reference-list heading ("References", "7. Bibliography"): alone on its
 #: line, or at the left margin with a second column's text after a gap
-#: (pdftotext -layout puts both columns on one line). A heading deeper in
+#: (pdftotext -layout puts both columns on one line where `pdf_columns`
+#: kept a page's -layout text). A heading deeper in
 #: the line may have article text from another column after it, so it is
 #: not matched. `\f` is pdftotext's page break.
 _REFERENCES_HEADING = re.compile(

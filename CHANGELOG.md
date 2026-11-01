@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.0] — 2026-11-01
+
+### Fixed
+
+- **Two-column articles reach the coder in reading order.** The full text
+  sent for coding came from `pdftotext -layout`, which puts both columns
+  of a two-column page on one line, so every sentence was interleaved
+  with the other column's: 26% of the coder's verbatim quotes on a
+  10-article pilot were not contiguous in the text it had been sent, all
+  on two-column articles. The text is now pdftotext's `-layout` and
+  reading-order outputs merged page by page (`pdf_columns.py`): a
+  two-column page uses reading order, and a two-column page with a table
+  is followed by that table copied verbatim from `-layout`, marked
+  `[TABLES ON THIS PAGE, AS LAID OUT]`, so tables stay aligned. Other
+  pages are unchanged. Quotes contiguous: 74% → 99.5% on the pilot;
+  prose paragraphs contiguous 37% → 91% on 40 held-out articles, with
+  96% of table rows kept verbatim and no word lost.
+- **`--strip-references` now also finds the reference list of two-column
+  articles**, whose heading the interleaved text had hidden (0% → 11–24%
+  cut on three pilot articles).
+
+### Changed
+
+- **Cached PDF text is re-extracted once.** The text cache's file names
+  carry an extraction version (`<key>-<hash>.v2.txt`), so text cached by
+  the old extractor is not served; the old files are left in place and
+  `clear_item` removes both kinds. Re-emit a batch manifest to send the
+  new text.
+
 ## [0.29.0] — 2026-11-01
 
 ### Added
