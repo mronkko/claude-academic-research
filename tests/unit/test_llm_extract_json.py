@@ -54,3 +54,12 @@ def test_nested_objects_and_braces_inside_strings() -> None:
                                   '{"decision": "include", "reason": '])
 def test_nothing_to_find_is_none(text) -> None:
     assert extract_json_from_response(text) is None
+
+
+@pytest.mark.parametrize("text", [
+    '{"comment": "line one\nline two\tend"}',
+    'Prose first. {"comment": "line one\nline two\tend"}',
+])
+def test_raw_control_characters_inside_strings_are_accepted(text) -> None:
+    # A Haiku pilot answer had a literal newline inside a string value.
+    assert extract_json_from_response(text) == {"comment": "line one\nline two\tend"}

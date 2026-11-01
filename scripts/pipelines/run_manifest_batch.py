@@ -38,7 +38,9 @@ batch could not answer is recorded as `error`; an answer cut off by
 `max_tokens` is `truncated`. Both leave the item untagged, and a re-emit
 picks them up. Requests are built exactly as the synchronous path builds
 them (`llm_provider.anthropic_request`): Claude 5+ get the output cap and
-medium effort, and the manifest's `request_params` go on top.
+medium effort, and the manifest's `request_params` go on top. The one
+difference is the system prompt's cache lifetime: one hour here, since a
+batch's requests can start more than five minutes apart.
 """
 
 from __future__ import annotations
@@ -81,6 +83,9 @@ def _build(req: dict, model: str) -> tuple[dict, dict]:
         max_tokens=int(req.get("max_output_tokens") or 1000),
         temperature=float(req.get("temperature", 0.0)),
         params=req.get("request_params"),
+        # A batch's requests run in an order and at times the server
+        # picks, often more than five minutes apart.
+        cache_ttl="1h",
     )
 
 

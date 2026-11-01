@@ -24,24 +24,26 @@ checked = "2026-08-13"
 # Prices are per million tokens, in USD, at list rates. Discounts,
 # introductory pricing, and batch rates are deliberately not modelled:
 # an estimate that is slightly high is a much better failure than one
-# that is low. (Sonnet 5 carries introductory pricing of 2.00/10.00
-# through 2026-08-31; the standard rate is quoted below so the estimate
-# does not get worse when it lapses.)
+# that is low.
 
+# Anthropic: the 5.5 generation, at the list prices in Anthropic's model
+# table as of 2026-10-06 (newer than `checked`, which covers the other
+# providers). Haiku 5.5's price is for prompts up to 100K tokens; longer
+# ones bill 0.50/2.50.
 [anthropic.fast]
-model = "claude-haiku-4-5-20251001"
-input_per_mtok = 1.00
-output_per_mtok = 5.00
+model = "claude-haiku-5-5"
+input_per_mtok = 0.10
+output_per_mtok = 0.50
 
 [anthropic.balanced]
-model = "claude-sonnet-5"
-input_per_mtok = 3.00
-output_per_mtok = 15.00
+model = "claude-sonnet-5-5"
+input_per_mtok = 2.00
+output_per_mtok = 10.00
 
 [anthropic.deep]
-model = "claude-sonnet-5"
-input_per_mtok = 3.00
-output_per_mtok = 15.00
+model = "claude-opus-5-5"
+input_per_mtok = 4.00
+output_per_mtok = 20.00
 
 [google.fast]
 model = "gemini-2.5-flash"

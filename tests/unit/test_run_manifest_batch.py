@@ -56,6 +56,8 @@ def test_a_claude_5_request_gets_the_cap_and_medium_effort_and_no_temperature() 
     assert params["output_config"] == {"effort": "medium"}
     assert "temperature" not in params  # Claude 5.x rejects it
     assert params["messages"] == [{"role": "user", "content": "paper 1"}]
+    # A batch's requests can start more than five minutes apart.
+    assert params["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
 
 
 def test_manifest_request_params_go_on_top_and_headers_go_on_the_batch(tmp_path) -> None:

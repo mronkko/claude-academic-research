@@ -52,6 +52,11 @@ def extract_json_from_response(text: str) -> dict | None:
 
     Returns the parsed dict on success, None otherwise.
 
+    Decoded with `strict=False`: a raw control character (a literal tab or
+    newline) inside a string is accepted. Models emit them in long
+    free-text values, and a strict decode turned an otherwise complete
+    answer into an `error` row.
+
     Example responses this handles:
       '{"decision": "include", ...}'                           # already strict
       '```json\\n{"decision": "include", ...}\\n```'          # markdown fenced
@@ -62,7 +67,7 @@ def extract_json_from_response(text: str) -> dict | None:
     stripped = re.sub(r"^```(?:json)?\s*", "", text.strip())
     stripped = re.sub(r"\s*```\s*$", "", stripped)
     try:
-        obj = json.loads(stripped)
+        obj = json.loads(stripped, strict=False)
         if isinstance(obj, dict):
             return obj
     except json.JSONDecodeError:
@@ -75,7 +80,7 @@ def extract_json_from_response(text: str) -> dict | None:
     # string) or a stray "}" (depth went negative and never recovered).
     # The decoder does its own string and nesting handling, so prose can
     # contain anything.
-    decoder = json.JSONDecoder()
+    decoder = json.JSONDecoder(strict=False)
     for m in re.finditer(r"\{", stripped):
         try:
             obj, _ = decoder.raw_decode(stripped, m.start())

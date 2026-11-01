@@ -235,15 +235,16 @@ def test_catalog_lookup_survives_a_missing_file(tmp_path) -> None:
 
 
 def test_abstract_screening_estimate_is_in_the_right_range() -> None:
-    """250 abstracts on Anthropic's fast tier is well under a dollar."""
+    """250 abstracts on Anthropic's fast tier is a few cents (Haiku 5.5)."""
     cost = md.estimate_cost("anthropic", "fast", 250)
-    assert 0.20 < cost < 0.60, cost
+    assert 0.02 < cost < 0.10, cost
 
 
 def test_fulltext_estimate_matches_the_documented_figure() -> None:
-    """125 papers on the balanced tier — the run this plugin was tuned on."""
+    """125 papers on the balanced tier — the run this plugin was tuned on —
+    at Sonnet 5.5 list prices."""
     cost = md.estimate_cost("anthropic", "balanced", 125, stage="fulltext_coding")
-    assert 5.0 < cost < 9.0, cost
+    assert 3.0 < cost < 7.0, cost
 
 
 def test_local_providers_cost_nothing() -> None:

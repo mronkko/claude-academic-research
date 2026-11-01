@@ -267,3 +267,23 @@ def test_get_provider_passes_params_to_claude_and_warns_for_others(capsys):
                   return_value=MagicMock(transport="openai")):
         llm_provider.get_provider("gpt-5", request_params={"top_k": 3})
     assert other.called and "Anthropic models only" in capsys.readouterr().out
+
+
+def test_the_system_prompt_is_cached_and_a_review_can_turn_it_off():
+    body, _ = llm_provider.anthropic_request("claude-opus-5-5", "SYS", "u", max_tokens=1)
+    assert body["system"] == [{"type": "text", "text": "SYS",
+                               "cache_control": {"type": "ephemeral"}}]
+    body, _ = llm_provider.anthropic_request("claude-opus-5-5", "SYS", "u", max_tokens=1,
+                                             cache_ttl="1h")
+    assert body["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    body, _ = llm_provider.anthropic_request(
+        "claude-opus-5-5", "SYS", "u", max_tokens=1,
+        params={"cache_system_prompt": False})
+    assert body["system"] == "SYS" and "cache_system_prompt" not in body
+    body, _ = llm_provider.anthropic_request("claude-opus-5-5", "", "u", max_tokens=1)
+    assert body["system"] == ""                       # nothing to cache
+
+
+def test_a_bad_cache_ttl_is_refused():
+    with pytest.raises(ValueError, match="cache_system_prompt"):
+        providers.check_request_params({"cache_system_prompt": "10m"})

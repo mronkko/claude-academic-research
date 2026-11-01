@@ -404,6 +404,13 @@ CLAUDE_REQUEST_DEFAULTS: dict = {
 #: Request fields the pipeline writes itself; a review cannot set them.
 RESERVED_REQUEST_PARAMS = ("model", "system", "messages")
 
+#: The one plugin-level key among request params, removed before sending:
+#: how long the shared system prompt is cached — "5m", "1h", or False for
+#: no caching. Unset, a synchronous run uses "5m" (its requests start
+#: seconds apart) and a batch "1h" (the server orders and times them).
+CACHE_SYSTEM_PROMPT = "cache_system_prompt"
+CACHE_TTLS = ("5m", "1h")
+
 
 def merge_request_params(base: dict, override: dict, *, keep_none: bool = False) -> dict:
     """`override` on top of `base`, recursing into dicts.
@@ -439,4 +446,8 @@ def check_request_params(params: object, where: str = "request params") -> dict:
     headers = params.get("extra_headers")
     if headers is not None and not isinstance(headers, dict):
         raise ValueError(f"{where}: extra_headers must be a dict of header: value")
+    ttl = params.get(CACHE_SYSTEM_PROMPT)
+    if ttl not in (None, False, *CACHE_TTLS):
+        raise ValueError(f"{where}: {CACHE_SYSTEM_PROMPT} must be one of "
+                         f"{', '.join(CACHE_TTLS)} or False, not {ttl!r}")
     return params

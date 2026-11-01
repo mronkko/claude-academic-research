@@ -201,9 +201,15 @@ _SDK_KEYWORDS = ("model", "max_tokens", "system", "messages")
 
 def anthropic_request(
     model: str, system: str, prompt: str, *, max_tokens: int,
-    temperature: float = 0.0, params: dict | None = None,
+    temperature: float = 0.0, params: dict | None = None, cache_ttl: str = "5m",
 ) -> tuple[dict, dict]:
     """`(body, headers)` for one Messages API request.
+
+    The system prompt — the same for every paper in a run — carries a
+    cache breakpoint with `cache_ttl` (or the review's
+    `cache_system_prompt`), so after the first request it is read at a
+    tenth of the input price. A prompt under the model's cacheable
+    minimum is simply not cached; the API does not error.
 
     Claude 5+ start from `providers.CLAUDE_REQUEST_DEFAULTS` — the output
     cap and medium effort — in place of the caller's `max_tokens`, which
@@ -225,6 +231,11 @@ def anthropic_request(
     body = providers.merge_request_params(
         body, providers.check_request_params(params))
     headers = body.pop("extra_headers", None) or {}
+    ttl = body.pop(providers.CACHE_SYSTEM_PROMPT, None)
+    ttl = cache_ttl if ttl is None else ttl
+    if ttl and system:
+        control = {"type": "ephemeral", **({"ttl": "1h"} if ttl == "1h" else {})}
+        body["system"] = [{"type": "text", "text": system, "cache_control": control}]
     return body, headers
 
 
