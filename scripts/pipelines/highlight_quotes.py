@@ -26,7 +26,10 @@ issue-list codebook writes them — get the entry's own comment
 comes from the id's letter prefix via `--layer D=design` (or
 `HIGHLIGHT_LAYERS` in screening_config.py); an `OTHER-n` entry takes the
 `layer` its `other_findings` record names, else `other`. `--color-by
-severity` colours by severity instead of theme. Entries quoting the same
+severity` colours by severity instead of theme. An entry flagged
+`supplement_may_cover` (coded from the article alone, but the detail may
+be in a supplement) is also tagged `<prefix>/supplement:may-cover`, and
+the flag is a column of the highlight log. Entries quoting the same
 passage on the same page become one highlight carrying all their tags,
 with their comments joined. `HIGHLIGHT_COLOR_BY` and `HIGHLIGHT_ENTRY_TAGS`
 in screening_config.py set the defaults of the two flags.
@@ -71,7 +74,8 @@ import zotero_io  # noqa: E402
 
 AI_TAG_SUFFIX = "ai-highlight"
 HASH_TAG = "ai-hl:"
-LOG_COLUMNS = ["item_key", "attachment_key", "field", "quote", "page", "status", "detail"]
+LOG_COLUMNS = ["item_key", "attachment_key", "field", "quote", "page", "status", "detail",
+               "supplement_may_cover"]
 
 #: Theme → highlight colour. Zotero's own annotation palette.
 THEME_COLORS = {
@@ -303,8 +307,17 @@ def parse_quotes(raw) -> list[dict]:
             for k in _ENTRY_KEYS:
                 if e.get(k) not in (None, ""):
                     entry[k] = str(e[k]).strip()
+            if _truthy(e.get("supplement_may_cover")):
+                entry["supplement_may_cover"] = True
             out.append(entry)
     return out
+
+
+def _truthy(value) -> bool:
+    """A JSON boolean, or the string a model sometimes writes instead."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1")
+    return value is True
 
 
 def parse_other_layers(raw) -> dict[str, str]:
@@ -356,6 +369,8 @@ def entry_tags(entry: dict, ns: str, style: HighlightStyle,
     for k in ("status", "severity"):
         if entry.get(k):
             tags.append(f"{base}/{k}:{entry[k]}")
+    if entry.get("supplement_may_cover"):
+        tags.append(f"{base}/supplement:may-cover")
     return tags
 
 
@@ -455,6 +470,8 @@ def process_item(
             "field": (entry or {}).get("field", ""),
             "quote": (entry or {}).get("quote", ""),
             "page": page or "", "status": status, "detail": detail,
+            "supplement_may_cover": "true" if (entry or {}).get(
+                "supplement_may_cover") else "",
         })
 
     quotes = parse_quotes((payload.get("fields") or {}).get("evidence_quotes", ""))

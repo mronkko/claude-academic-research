@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.29.0] — 2026-11-01
+
+### Added
+
+- **`fulltext_code.py --strip-references`** (MCP: `strip_references`)
+  cuts each article's reference list from the text sent to the model:
+  from the last References / Bibliography heading in the second half of
+  the article to the next appendix heading or table/figure caption, so
+  appendices and tables placed after the references are kept. On a
+  10-article pilot it removed 10–28% of the text where it found the
+  heading and nothing where it could not place the heading safely.
+  Supplements are never cut. Manifest rows record
+  `references_stripped_chars`.
+- **The system prompt is cached on Claude requests**, so after the first
+  paper of a run it is read at a tenth of the input price: a 5-minute
+  cache for synchronous runs, 1 hour for Batches API runs.
+  `cache_system_prompt` in the request params sets `"5m"`, `"1h"` or
+  `false`.
+- **`highlight_quotes.py` tags entries a supplement may cover.** With
+  `--entry-tags`, an evidence-quote entry with `supplement_may_cover`
+  true (a boolean or the string `"true"`) is tagged
+  `<prefix>/supplement:may-cover`, as is a merged highlight with any such
+  entry. The highlight log has a `supplement_may_cover` column.
+
+### Changed
+
+- **The Anthropic fallback models are the 5.5 generation**: Haiku 5.5
+  (fast), Sonnet 5.5 (balanced) and Opus 5.5 (deep), with their list
+  prices, replacing Haiku 4.5 and Sonnet 5. They are used when
+  `resolve_models.py` cannot ask the provider, and for cost estimates.
+
+### Fixed
+
+- **A model answer with a raw control character inside a string** (a
+  literal newline or tab) is parsed instead of becoming an `error` row.
+
 ## [0.28.0] — 2026-11-01
 
 ### Added

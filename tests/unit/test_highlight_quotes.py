@@ -256,3 +256,32 @@ def test_style_from_config(tmp_path):
     cfg.write_text("HIGHLIGHT_COLOR_BY = 'rainbow'\n")
     with pytest.raises(SystemExit):
         hq.style_from_config(str(cfg))
+
+
+@pytest.mark.parametrize("flag, kept", [(True, True), ("true", True), ("True", True),
+                                        (False, False), ("false", False), (None, False)])
+def test_supplement_may_cover_is_read_from_a_bool_or_a_string(flag, kept):
+    (entry,) = hq.parse_quotes([{"field": "R05", "quote": SENTENCE,
+                                 "supplement_may_cover": flag}])
+    assert entry.get("supplement_may_cover", False) is kept
+
+
+def test_supplement_flag_tags_a_merged_highlight_and_reaches_the_log(tmp_path, monkeypatch):
+    import fulltext_code
+    pdf = _pdf(tmp_path, [SENTENCE])
+    monkeypatch.setattr(fulltext_code, "_find_pdf_path", lambda *a, **k: pdf)
+    zot = _FakeZot()
+    payload = _issue_payload([
+        {"field": "R05", "quote": SENTENCE, "severity": "minor"},
+        {"field": "R06", "quote": SENTENCE, "severity": "minor",
+         "supplement_may_cover": "true"},
+    ])
+    rows = hq.process_item(zot, {"key": "I"}, payload, "slr/", None, {},
+                           dry_run=False, replace=False, style=ISSUE_STYLE)
+    (a,) = zot.created
+    assert {"tag": "slr/supplement:may-cover"} in a["tags"]
+    assert a["annotationColor"] == hq.SEVERITY_COLORS["minor"]       # no colour change
+    assert [r["supplement_may_cover"] for r in rows] == ["", "true"]
+    plain = hq.entry_tags({"field": "R06", "quote": SENTENCE, "supplement_may_cover": True},
+                          "slr/", hq.HighlightStyle(), {})
+    assert plain == []                                    # only with --entry-tags
