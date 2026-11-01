@@ -44,11 +44,13 @@ class _Client:
         self.lock = threading.Lock()
         self.interrupt_at = interrupt_at
 
-    def generate(self, *, model, system, prompt, temperature, max_tokens):
+    def generate(self, *, model, system, prompt, temperature, max_tokens,
+                 request_params=None):
         with self.lock:
             self.calls += 1
             n = self.calls
             self.prompts.append(prompt)
+            self.request_params = request_params
         if self.interrupt_at is not None and n == self.interrupt_at:
             raise KeyboardInterrupt
         return "DECISION: include\nREASON: fits the criteria well"
@@ -217,3 +219,11 @@ def test_a_fatal_provider_error_stops_the_run(tmp_path, monkeypatch, provider) -
     provider["client"] = _Dead()
     assert _run(manifest, out) == 1
     assert _Dead.calls <= 2   # the first, plus at most one in flight
+
+
+def test_the_manifests_request_params_reach_the_provider(tmp_path, provider) -> None:
+    _, rows = _manifest(tmp_path, n=1)
+    rows[0]["request_params"] = {"output_config": {"effort": "low"}}
+    path = bm.write_manifest(tmp_path / "rp.jsonl", rows)
+    assert _run(path, tmp_path / "out.jsonl") == 0
+    assert provider["client"].request_params == {"output_config": {"effort": "low"}}

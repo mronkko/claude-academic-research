@@ -36,9 +36,9 @@ other provider use `run_manifest.py`.
 **No retries inside the batch, and no placeholder text.** A request the
 batch could not answer is recorded as `error`; an answer cut off by
 `max_tokens` is `truncated`. Both leave the item untagged, and a re-emit
-picks them up. There is no second attempt with a larger budget as in the
-synchronous path, so the budget is set generously up front: only tokens
-produced are billed.
+picks them up. Requests are built exactly as the synchronous path builds
+them (`llm_provider.anthropic_request`): Claude 5+ get the output cap and
+medium effort, and the manifest's `request_params` go on top.
 """
 
 from __future__ import annotations
@@ -58,11 +58,9 @@ for p in (SCRIPT_DIR, SCRIPTS_ROOT):
 
 import batch_manifest  # noqa: E402
 import run_manifest  # noqa: E402
-from core import llm_provider, providers  # noqa: E402
+from core import llm_provider  # noqa: E402
 from core.models import effective_model, model_flag_help  # noqa: E402
 
-#: Largest output budget a request may ask for (the 5.x output cap).
-MAX_OUTPUT_TOKENS = 128_000
 #: Seconds between status polls. A small batch ends in minutes.
 POLL_SECONDS = 60
 
@@ -77,30 +75,29 @@ def custom_id(index: int) -> str:
     return f"r{index:05d}"
 
 
-def output_budget(req: dict, model: str) -> int:
-    """The request's `max_tokens`.
-
-    The manifest's budget is sized for the answer alone. A model that
-    thinks by default spends from the same budget, and a batch request
-    cannot be retried with more room the way `llm_provider` retries a
-    synchronous one, so the allowance is added and the total doubled.
-    """
-    budget = int(req.get("max_output_tokens") or 1000)
-    if providers.anthropic_thinks_by_default(model):
-        budget = (budget + llm_provider.THINKING_ALLOWANCE) * 2
-    return min(budget, MAX_OUTPUT_TOKENS)
+def _build(req: dict, model: str) -> tuple[dict, dict]:
+    return llm_provider.anthropic_request(
+        model, req.get("system", ""), req.get("user", ""),
+        max_tokens=int(req.get("max_output_tokens") or 1000),
+        temperature=float(req.get("temperature", 0.0)),
+        params=req.get("request_params"),
+    )
 
 
 def batch_request(req: dict, cid: str, model: str) -> dict:
-    params: dict = {
-        "model": model,
-        "max_tokens": output_budget(req, model),
-        "system": req.get("system", ""),
-        "messages": [{"role": "user", "content": req.get("user", "")}],
-    }
-    if providers.anthropic_accepts_temperature(model):
-        params["temperature"] = float(req.get("temperature", 0.0))
-    return {"custom_id": cid, "params": params}
+    return {"custom_id": cid, "params": _build(req, model)[0]}
+
+
+def batch_headers(requests: list[dict], model: str) -> dict:
+    """The `extra_headers` the requests ask for, which must agree.
+
+    A batch takes headers once, on submission, not per request.
+    """
+    found = {json.dumps(_build(r, model)[1], sort_keys=True) for r in requests}
+    if len(found) > 1:
+        raise SystemExit("ERROR: the manifest's requests ask for different "
+                         "extra_headers; a batch can carry only one set.")
+    return json.loads(found.pop()) if found else {}
 
 
 def load_state(path: Path) -> dict:
@@ -113,9 +110,12 @@ def submit(client, requests: list[dict], *, model: str, run_id: str,
            path: Path) -> dict:
     ids = {custom_id(i): r["request_id"] for i, r in enumerate(requests)}
     by_request = {v: k for k, v in ids.items()}
-    batch = client.messages.batches.create(requests=[
-        batch_request(r, by_request[r["request_id"]], model) for r in requests
-    ])
+    headers = batch_headers(requests, model)
+    batch = client.messages.batches.create(
+        requests=[batch_request(r, by_request[r["request_id"]], model)
+                  for r in requests],
+        **({"extra_headers": headers} if headers else {}),
+    )
     state = {
         "batch_id": batch.id,
         "run_id": run_id,

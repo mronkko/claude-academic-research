@@ -947,6 +947,12 @@ def _find_pdf_path(
 def output_budget(fields: list[dict]) -> int:
     """The output-token budget a coding call needs for this schema.
 
+    Sized for the answer alone, which is what non-Claude providers and the
+    cluster runner need. A Claude 5+ call ignores it: it gets the model's
+    output cap (`providers.CLAUDE_REQUEST_DEFAULTS`), since how long the
+    model thinks is not a function of the schema. A review that wants a
+    lower ceiling sets `max_tokens` in `FULLTEXT_CODING_REQUEST_PARAMS`.
+
     Scales with the number of fields: a fixed 3500 overflowed once
     configs grew past the 12-field template (truncated JSON → parse
     error; in `--update-fields` mode that surfaced as silently empty
@@ -1695,6 +1701,7 @@ def emit_manifest(
     mode: str,
     target_fields: list[str] | None,
     selection: dict,
+    request_params: dict | None = None,
 ) -> int:
     """Write the manifest and its sidecar, say what happened, exit 0."""
     run_id = batch_manifest.new_run_id(batch_manifest.STAGE_FULLTEXT)
@@ -1731,6 +1738,8 @@ def emit_manifest(
             "ERROR: every candidate was skipped; nothing to emit. See "
             f"{sidecar_path} for why."
         )
+    for row in rows:
+        row["request_params"] = request_params or {}
     batch_manifest.write_manifest(path, rows)
     batch_manifest.write_skipped(
         sidecar_path,
@@ -1907,6 +1916,7 @@ def main() -> int:
     model = effective_model(
         args.model, config_model, stage="FULLTEXT_CODING_MODEL",
     )
+    request_params = screening_common.request_params(config_mod, "FULLTEXT_CODING")
     rendered_prompt = _render_prompt(prompt_template, fields)
 
     # The manifest's own coding schema wins over the config's, and the
@@ -2197,6 +2207,7 @@ def main() -> int:
                 pdf_dir=pdf_dir,
                 zotero_storage=zotero_storage,
                 max_input_chars=args.max_input_chars,
+                request_params=request_params,
                 mode="code",
                 target_fields=None,
                 selection={
@@ -2216,7 +2227,8 @@ def main() -> int:
 
     # Emit and apply never generate, so they never need a provider — and
     # constructing one would demand a credential the user may not have.
-    client = None if batch_mode else llm_provider.get_provider(model)
+    client = None if batch_mode else llm_provider.get_provider(
+        model, request_params=request_params)
     # Schema-stable + idempotent writes via csv_io.upsert_by_item_key.
     # Re-running on the same item replaces the prior row instead of
     # appending; recovers cleanly from partial / interrupted runs.
@@ -2299,6 +2311,7 @@ def main() -> int:
                 pdf_dir=pdf_dir,
                 zotero_storage=zotero_storage,
                 max_input_chars=args.max_input_chars,
+                request_params=request_params,
                 mode="update_fields",
                 target_fields=sorted(target_fields),
                 selection={

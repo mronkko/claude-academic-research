@@ -88,6 +88,7 @@ def execute_one(req: dict, client, model: str) -> dict:
             prompt=req.get("user", ""),
             temperature=float(req.get("temperature", 0.0)),
             max_tokens=int(req.get("max_output_tokens") or 1000),
+            request_params=req.get("request_params"),
         )
     except Exception as e:  # noqa: BLE001 - classified, not swallowed
         verdict = llm_provider.classify_failure(e)

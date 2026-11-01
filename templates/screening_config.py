@@ -100,6 +100,25 @@ TAG_PREFIX = ""
 ABSTRACT_SCREENING_MODEL = ""
 ABSTRACT_SCREENING_PROMPT_VERSION = "v1-2026-04-21"
 
+# Request parameters (Claude models only; other providers ignore them with
+# a warning). Every Claude 5+ request starts from the plugin's defaults:
+#   max_tokens = 128000 (the output cap: a ceiling, not a spend — only
+#                        tokens produced are billed)
+#   output_config = {"effort": "medium"}
+# Anything set here goes on top: any Messages API field, plus
+# `extra_headers` for HTTP headers such as a beta flag. A value of None
+# removes a default. `model`, `system` and `messages` are the pipeline's.
+# LLM_REQUEST_PARAMS applies to every stage; a stage's own dict goes on top
+# of it. They are written into batch manifests, so a manifest runs with
+# the settings it was emitted with. Examples:
+#   LLM_REQUEST_PARAMS = {"output_config": {"effort": "low"}}
+#   FULLTEXT_CODING_REQUEST_PARAMS = {
+#       "max_tokens": 52000,
+#       "extra_headers": {"anthropic-beta": "<beta-flag>"},
+#   }
+LLM_REQUEST_PARAMS: dict = {}
+ABSTRACT_SCREENING_REQUEST_PARAMS: dict = {}
+
 
 ABSTRACT_SCREENING_SYSTEM_PROMPT = """\
 You are a systematic review screener. Your task is to decide whether a paper \
@@ -151,6 +170,9 @@ REASON: <one sentence citing which criterion or exclusion code triggered the dec
 # for a single run without touching the file.
 FULLTEXT_CODING_MODEL = ""
 FULLTEXT_CODING_PROMPT_VERSION = "v1-2026-04-21"
+
+# On top of LLM_REQUEST_PARAMS for this stage; see the note there.
+FULLTEXT_CODING_REQUEST_PARAMS: dict = {}
 
 
 # Define every coding field the script should extract. Each entry:

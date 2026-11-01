@@ -45,7 +45,8 @@ class _Client:
         self.replies = list(replies)
         self.prompts: list[str] = []
 
-    def generate(self, *, model, max_tokens, temperature, system, prompt):
+    def generate(self, *, model, max_tokens, temperature, system, prompt,
+                 request_params=None):
         self.prompts.append(prompt)
         reply = self.replies.pop(0)
         if isinstance(reply, Exception):

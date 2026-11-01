@@ -386,3 +386,57 @@ def anthropic_thinks_by_default(model: str) -> bool:
     """
     m = _CLAUDE_MAJOR.search(model.lower())
     return bool(m and int(m.group(1)) >= 5)
+
+
+# ---------------------------------------------------------------------------
+# Anthropic request parameters
+# ---------------------------------------------------------------------------
+
+#: What every Claude 5+ request starts from. `max_tokens` is the 5.x output
+#: cap: the model cannot see it and only tokens produced are billed, so the
+#: ceiling exists to stop a runaway answer, not to size a normal one. Effort
+#: is the lever that trades thinking depth for cost.
+CLAUDE_REQUEST_DEFAULTS: dict = {
+    "max_tokens": 128_000,
+    "output_config": {"effort": "medium"},
+}
+
+#: Request fields the pipeline writes itself; a review cannot set them.
+RESERVED_REQUEST_PARAMS = ("model", "system", "messages")
+
+
+def merge_request_params(base: dict, override: dict, *, keep_none: bool = False) -> dict:
+    """`override` on top of `base`, recursing into dicts.
+
+    A `None` value removes the key, so a review can drop a default
+    (`{"output_config": None}` sends no effort at all). Layers merged
+    with each other before they meet the defaults pass `keep_none=True`,
+    so the `None` survives to remove the default too.
+    """
+    out = dict(base)
+    for k, v in override.items():
+        if v is None and not keep_none:
+            out.pop(k, None)
+        elif isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = merge_request_params(out[k], v, keep_none=keep_none)
+        else:
+            out[k] = v
+    return out
+
+
+def check_request_params(params: object, where: str = "request params") -> dict:
+    """`params` as a dict, or ValueError naming what is wrong with it."""
+    if params is None:
+        return {}
+    if not isinstance(params, dict):
+        raise ValueError(f"{where} must be a dict, not {type(params).__name__}")
+    clash = sorted(set(params) & set(RESERVED_REQUEST_PARAMS))
+    if clash:
+        raise ValueError(
+            f"{where} cannot set {', '.join(clash)}: the pipeline writes "
+            f"{', '.join(RESERVED_REQUEST_PARAMS)} itself."
+        )
+    headers = params.get("extra_headers")
+    if headers is not None and not isinstance(headers, dict):
+        raise ValueError(f"{where}: extra_headers must be a dict of header: value")
+    return params

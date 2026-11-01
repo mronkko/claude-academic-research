@@ -297,6 +297,11 @@ def _chat_request(
                     if providers.anthropic_accepts_temperature(model)
                     else {}
                 ),
+                **(
+                    {"output_config": providers.CLAUDE_REQUEST_DEFAULTS["output_config"]}
+                    if providers.anthropic_thinks_by_default(model)
+                    else {}
+                ),
             },
         )
     if spec.transport == "google":

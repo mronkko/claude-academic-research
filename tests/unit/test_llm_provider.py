@@ -110,9 +110,9 @@ def test_gemini_provider_generate_error():
 # answer 400 "`temperature` is deprecated for this model".
 
 
-def _anthropic_provider():
+def _anthropic_provider(request_params=None):
     with patch("core.llm_provider._api_key_for", return_value="dummy-key"):
-        return llm_provider.AnthropicProvider()
+        return llm_provider.AnthropicProvider(request_params=request_params)
 
 
 def _reply(text="ok", *, thinking=False, stop_reason="end_turn"):
@@ -124,6 +124,32 @@ def _reply(text="ok", *, thinking=False, stop_reason="end_turn"):
         blocks.insert(0, MagicMock(type="thinking", spec=["type", "thinking"]))
     r.content = blocks
     return r
+
+
+def _answers(p, *replies):
+    """Serve `replies` (or exceptions) to both the create and stream paths."""
+    seq = iter(replies)
+
+    def nxt(*a, **k):
+        r = next(seq)
+        if isinstance(r, Exception):
+            raise r
+        return r
+    p.client.messages.create.side_effect = nxt
+    ctx = p.client.messages.stream.return_value.__enter__.return_value
+    ctx.get_final_message.side_effect = nxt
+
+    def stream(**kw):
+        p.streamed.append(kw)
+        return p.client.messages.stream.return_value
+    p.streamed = []
+    p.client.messages.stream.side_effect = stream
+
+
+def _sent(p):
+    """The keyword arguments of the last request, however it was sent."""
+    created = p.client.messages.create.call_args
+    return p.streamed[-1] if p.streamed else created.kwargs
 
 
 @pytest.mark.parametrize(
@@ -141,22 +167,53 @@ def test_anthropic_accepts_temperature_by_major_version(model, accepts):
     assert providers.anthropic_accepts_temperature(model) is accepts
 
 
-def test_anthropic_generate_omits_temperature_for_claude_5():
+def test_claude_5_gets_the_output_cap_and_medium_effort_and_no_temperature():
     p = _anthropic_provider()
-    p.client.messages.create.return_value = _reply()
-    p.generate("claude-haiku-5-5", "s", "p", temperature=0.0)
-    kwargs = p.client.messages.create.call_args.kwargs
-    assert "temperature" not in kwargs
-    assert "extra_body" not in kwargs
+    _answers(p, _reply())
+    p.generate("claude-haiku-5-5", "s", "p", temperature=0.0, max_tokens=200)
+    kw = _sent(p)
+    assert kw["max_tokens"] == 128_000          # the caller's 200 is for older models
+    assert kw["extra_body"] == {"output_config": {"effort": "medium"}}
+    assert "temperature" not in kw and p.client.messages.create.call_count == 0
 
 
-def test_anthropic_generate_sends_temperature_via_extra_body_otherwise():
+def test_older_models_keep_the_callers_budget_and_temperature():
     p = _anthropic_provider()
-    p.client.messages.create.return_value = _reply()
-    p.generate("claude-sonnet-4-6", "s", "p", temperature=0.0)
-    kwargs = p.client.messages.create.call_args.kwargs
-    assert "temperature" not in kwargs  # not a keyword on SDK 2.x
-    assert kwargs["extra_body"] == {"temperature": 0.0}
+    _answers(p, _reply())
+    p.generate("claude-sonnet-4-6", "s", "p", temperature=0.0, max_tokens=200)
+    kw = _sent(p)
+    assert kw["max_tokens"] == 200
+    assert "temperature" not in kw  # not a keyword on SDK 2.x
+    assert kw["extra_body"] == {"temperature": 0.0}
+    assert p.streamed == []                      # small budget: not streamed
+
+
+def test_review_params_merge_over_the_defaults_and_none_removes_one():
+    p = _anthropic_provider({"output_config": {"effort": "low"},
+                             "extra_headers": {"anthropic-beta": "x-2026"}})
+    _answers(p, _reply(), _reply())
+    p.generate("claude-opus-5-5", "s", "p",
+               request_params={"max_tokens": 20_000, "top_k": 5})
+    kw = _sent(p)
+    assert kw["max_tokens"] == 20_000
+    assert kw["extra_headers"] == {"anthropic-beta": "x-2026"}
+    assert kw["extra_body"] == {"output_config": {"effort": "low"}, "top_k": 5}
+    p.generate("claude-opus-5-5", "s", "p", request_params={"output_config": None})
+    assert "extra_body" not in _sent(p)
+
+
+@pytest.mark.parametrize("bad", [{"model": "x"}, {"messages": []}, "effort=low",
+                                 {"extra_headers": ["a"]}])
+def test_malformed_request_params_are_refused(bad):
+    with pytest.raises(ValueError):
+        _anthropic_provider(bad)
+
+
+def test_merge_request_params_recurses_and_removes():
+    base = {"a": {"b": 1, "c": 2}, "d": 3}
+    assert providers.merge_request_params(base, {"a": {"b": 9, "c": None}, "d": None}) == {
+        "a": {"b": 9}}
+    assert base == {"a": {"b": 1, "c": 2}, "d": 3}   # not mutated
 
 
 def test_anthropic_generate_retries_without_temperature_on_rejection():
@@ -164,12 +221,9 @@ def test_anthropic_generate_retries_without_temperature_on_rejection():
         status_code = 400
 
     p = _anthropic_provider()
-    p.client.messages.create.side_effect = [
-        Rejected("`temperature` is deprecated for this model."),
-        _reply("done"),
-    ]
+    _answers(p, Rejected("`temperature` is deprecated for this model."), _reply("done"))
     assert p.generate("claude-sonnet-4-6", "s", "p") == "done"
-    assert "extra_body" not in p.client.messages.create.call_args.kwargs
+    assert "extra_body" not in _sent(p)
 
 
 def test_anthropic_generate_does_not_swallow_other_errors():
@@ -177,14 +231,14 @@ def test_anthropic_generate_does_not_swallow_other_errors():
         status_code = 400
 
     p = _anthropic_provider()
-    p.client.messages.create.side_effect = Rejected("max_tokens too large")
+    _answers(p, Rejected("max_tokens too large"))
     with pytest.raises(Rejected):
         p.generate("claude-sonnet-4-6", "s", "p")
 
 
 def test_anthropic_generate_skips_leading_thinking_block():
     p = _anthropic_provider()
-    p.client.messages.create.return_value = _reply("INCLUDE", thinking=True)
+    _answers(p, _reply("INCLUDE", thinking=True))
     assert p.generate("claude-haiku-5-5", "s", "p") == "INCLUDE"
 
 
@@ -192,54 +246,24 @@ def test_anthropic_generate_joins_text_blocks():
     p = _anthropic_provider()
     r = _reply("a ", thinking=True)
     r.content.append(MagicMock(type="text", text="b"))
-    p.client.messages.create.return_value = r
+    _answers(p, r)
     assert p.generate("claude-haiku-5-5", "s", "p") == "a b"
 
 
-def test_anthropic_generate_names_stop_reason_when_no_text():
+def test_anthropic_generate_names_stop_reason_when_no_text_and_does_not_retry():
     p = _anthropic_provider()
-    p.client.messages.create.return_value = _reply(
-        None, thinking=True, stop_reason="max_tokens"
-    )
+    _answers(p, _reply(None, thinking=True, stop_reason="max_tokens"), _reply())
     with pytest.raises(ValueError, match="max_tokens"):
         p.generate("claude-haiku-5-5", "s", "p")
+    assert len(p.streamed) == 1
 
 
-def test_thinking_models_get_room_to_think_older_models_do_not():
-    p = _anthropic_provider()
-    p.client.messages.create.return_value = _reply()
-    p.generate("claude-haiku-5-5", "s", "p", max_tokens=200)
-    assert p.client.messages.create.call_args.kwargs["max_tokens"] == (
-        200 + llm_provider.THINKING_ALLOWANCE
-    )
-    p.generate("claude-sonnet-4-6", "s", "p", max_tokens=200)
-    assert p.client.messages.create.call_args.kwargs["max_tokens"] == 200
-
-
-def test_truncated_thinking_retries_once_with_double_budget():
-    p = _anthropic_provider()
-    p.client.messages.create.side_effect = [
-        _reply(None, thinking=True, stop_reason="max_tokens"),
-        _reply("INCLUDE", thinking=True),
-    ]
-    assert p.generate("claude-haiku-5-5", "s", "p", max_tokens=200) == "INCLUDE"
-    first, second = (c.kwargs["max_tokens"]
-                     for c in p.client.messages.create.call_args_list)
-    assert second == first * 2
-
-
-def test_truncated_twice_raises_after_exactly_one_retry():
-    p = _anthropic_provider()
-    p.client.messages.create.side_effect = [
-        _reply(None, thinking=True, stop_reason="max_tokens")
-    ] * 3
-    with pytest.raises(ValueError, match="max_tokens"):
-        p.generate("claude-haiku-5-5", "s", "p", max_tokens=200)
-    assert p.client.messages.create.call_count == 2
-
-
-def test_large_budget_passes_explicit_timeout():
-    p = _anthropic_provider()
-    p.client.messages.create.return_value = _reply()
-    p.generate("claude-opus-5-5", "s", "p", max_tokens=14400)
-    assert "timeout" in p.client.messages.create.call_args.kwargs
+def test_get_provider_passes_params_to_claude_and_warns_for_others(capsys):
+    with patch("core.llm_provider._api_key_for", return_value="dummy-key"):
+        p = llm_provider.get_provider("claude-opus-5-5", request_params={"top_k": 3})
+    assert p.request_params == {"top_k": 3}
+    with patch("core.llm_provider.OpenAICompatProvider") as other, \
+            patch("core.llm_provider.resolve_provider",
+                  return_value=MagicMock(transport="openai")):
+        llm_provider.get_provider("gpt-5", request_params={"top_k": 3})
+    assert other.called and "Anthropic models only" in capsys.readouterr().out

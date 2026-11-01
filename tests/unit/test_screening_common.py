@@ -218,3 +218,21 @@ def test_run_csv_backfill_honours_values_mode() -> None:
     )
     assert rc == 0
     assert zot.calls[0][0][0] == "A"
+
+
+def test_request_params_stage_dict_goes_on_top_of_the_global_one():
+    from types import SimpleNamespace as NS
+    mod = NS(LLM_REQUEST_PARAMS={"output_config": {"effort": "low"}, "top_k": 5},
+             FULLTEXT_CODING_REQUEST_PARAMS={"output_config": {"effort": "high"},
+                                             "top_k": None})
+    assert sc.request_params(mod, "FULLTEXT_CODING") == {
+        "output_config": {"effort": "high"}, "top_k": None}   # None removes later
+    assert sc.request_params(mod, "ABSTRACT_SCREENING") == {
+        "output_config": {"effort": "low"}, "top_k": 5}
+    assert sc.request_params(None, "FULLTEXT_CODING") == {}
+
+
+def test_request_params_refuses_a_reserved_field_before_any_spend():
+    from types import SimpleNamespace as NS
+    with pytest.raises(SystemExit, match="LLM_REQUEST_PARAMS cannot set model"):
+        sc.request_params(NS(LLM_REQUEST_PARAMS={"model": "x"}), "FULLTEXT_CODING")

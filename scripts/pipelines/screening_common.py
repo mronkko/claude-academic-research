@@ -45,6 +45,25 @@ import tag_prefix
 # ---------------------------------------------------------------------------
 
 
+def request_params(mod: ModuleType | None, stage: str) -> dict:
+    """The review's LLM request params for one stage.
+
+    `LLM_REQUEST_PARAMS` (every stage) with `<stage>_REQUEST_PARAMS` (e.g.
+    `FULLTEXT_CODING_REQUEST_PARAMS`) merged on top. Exits with the
+    reason on a malformed value, before any spend.
+    """
+    from core import providers
+
+    merged: dict = {}
+    for name in ("LLM_REQUEST_PARAMS", f"{stage}_REQUEST_PARAMS"):
+        try:
+            value = providers.check_request_params(getattr(mod, name, None), name)
+        except ValueError as e:
+            sys.exit(f"ERROR: {e}")
+        merged = providers.merge_request_params(merged, value, keep_none=True)
+    return merged
+
+
 def load_config_module(
     path: str,
     module_name: str,

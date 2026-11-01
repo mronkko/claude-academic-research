@@ -759,6 +759,7 @@ def main() -> int:
     model = effective_model(
         args.model, config_model, stage="ABSTRACT_SCREENING_MODEL",
     )
+    request_params = screening_common.request_params(config_mod, "ABSTRACT_SCREENING")
 
     batch_mode = bool(args.emit_manifest or args.apply_responses)
     if not (args.dry_run or args.csv_backfill or batch_mode):
@@ -857,6 +858,8 @@ def main() -> int:
                 "ERROR: every candidate was skipped; nothing to emit. See "
                 f"{batch_manifest.skipped_path(manifest_path)} for why."
             )
+        for row in rows:
+            row["request_params"] = request_params
         batch_manifest.write_manifest(manifest_path, rows)
         sidecar = batch_manifest.write_skipped(
             batch_manifest.skipped_path(manifest_path),
@@ -908,7 +911,7 @@ def main() -> int:
         model, stage="abstract_screening", n_items=len(to_screen),
     ), flush=True)
 
-    client = llm_provider.get_provider(model)
+    client = llm_provider.get_provider(model, request_params=request_params)
     # Schema-stable + idempotent writes via csv_io.upsert_by_item_key.
     # Re-running on the same item replaces the prior row instead of
     # appending, so partial-then-resumed screening passes don't double

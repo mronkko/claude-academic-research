@@ -6,6 +6,7 @@ import json
 from types import SimpleNamespace as NS
 
 import batch_manifest
+import pytest
 import run_manifest_batch as rmb
 
 MODEL = "claude-opus-5-5"
@@ -48,12 +49,36 @@ def test_custom_ids_satisfy_the_api_pattern() -> None:
     assert rmb.custom_id(12).isalnum() and len(rmb.custom_id(12)) <= 64
 
 
-def test_a_thinking_model_gets_room_to_think_and_no_temperature() -> None:
+def test_a_claude_5_request_gets_the_cap_and_medium_effort_and_no_temperature() -> None:
     body = rmb.batch_request(_req(1, budget=4000), "r00000", MODEL)
     params = body["params"]
-    assert params["max_tokens"] == (4000 + rmb.llm_provider.THINKING_ALLOWANCE) * 2
+    assert params["max_tokens"] == 128_000
+    assert params["output_config"] == {"effort": "medium"}
     assert "temperature" not in params  # Claude 5.x rejects it
     assert params["messages"] == [{"role": "user", "content": "paper 1"}]
+
+
+def test_manifest_request_params_go_on_top_and_headers_go_on_the_batch(tmp_path) -> None:
+    rp = {"max_tokens": 52_000, "output_config": {"effort": "low"},
+          "extra_headers": {"anthropic-beta": "x-2026"}}
+    reqs = [{**_req(i), "request_params": rp} for i in range(2)]
+    params = rmb.batch_request(reqs[0], "r00000", MODEL)["params"]
+    assert params["max_tokens"] == 52_000
+    assert params["output_config"] == {"effort": "low"}
+    assert "extra_headers" not in params
+    client = _client()
+    seen = {}
+    create = client.messages.batches.create
+    client.messages.batches.create = lambda **kw: seen.update(kw) or create(kw["requests"])
+    rmb.submit(client, reqs, model=MODEL, run_id="run1",
+               path=tmp_path / "s.json")
+    assert seen["extra_headers"] == {"anthropic-beta": "x-2026"}
+
+
+def test_requests_asking_for_different_headers_are_refused() -> None:
+    a = {**_req(0), "request_params": {"extra_headers": {"anthropic-beta": "a"}}}
+    with pytest.raises(SystemExit):
+        rmb.batch_headers([a, _req(1)], MODEL)
 
 
 def test_the_batch_id_is_saved_before_waiting(tmp_path) -> None:

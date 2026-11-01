@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `HIGHLIGHT_COLOR_BY`) colours by severity instead of theme. Entries
   quoting the same passage on the same page become one highlight, with
   their comments joined and all their tags.
+- **Request parameters for Claude, with generous defaults.** Every
+  Claude 5+ request now starts from the model's output cap (`max_tokens`
+  128,000) and medium effort. A review adds or overrides any Messages API
+  field in `screening_config.py` — `LLM_REQUEST_PARAMS` for every stage,
+  `ABSTRACT_SCREENING_REQUEST_PARAMS` / `FULLTEXT_CODING_REQUEST_PARAMS`
+  on top — including `extra_headers` for beta flags; `None` removes a
+  default. The settings are written into batch manifests, and the Batches
+  API runner builds its requests the same way as synchronous calls.
 - **Appendices and supplements are read with the article.** An
   attachment titled like an appendix or supplement is appended to the
   article's text for coding, never mistaken for the article, and searched
@@ -46,12 +54,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   highlighted PDF in a throwaway collection, with the `demo_cleanup` tool
   to remove it afterwards. `critic-loop --quick` runs one short pass.
 
+### Changed
+
+- **Claude 5+ answers are no longer cut off by a budget sized from the
+  number of coding fields.** The schema-based budget and the thinking
+  allowance added on top of it are gone for Claude; the output cap
+  replaces them, so the retry with a doubled budget is gone too. Large
+  synchronous calls are streamed. Other providers and the cluster runner
+  keep the schema-based budget.
+
 ### Fixed
 
 - **Claude 5+ models:** calls no longer fail on the `temperature`
-  parameter, read the answer rather than the thinking block, and get
-  room to think; a call cut off before it answered is retried once with
-  double the budget.
+  parameter, and read the answer rather than the thinking block.
 - The coding prompt templates no longer show the model doubled braces.
 - `export_coded_includes` reads exclusion codes written as `FE1 Label:`
   and honours `EXCLUSION_CODES`.

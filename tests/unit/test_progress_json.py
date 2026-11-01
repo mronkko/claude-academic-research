@@ -362,7 +362,7 @@ def test_abstract_screen_emits_progress(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(asc.tag_prefix, "resolve", lambda *a: "rev")
     monkeypatch.setattr(asc, "effective_model", lambda *a, **k: "test-model")
     monkeypatch.setattr(asc.llm_provider, "require_credentials", lambda m: None)
-    monkeypatch.setattr(asc.llm_provider, "get_provider", lambda m: object())
+    monkeypatch.setattr(asc.llm_provider, "get_provider", lambda m, **kw: object())
     monkeypatch.setattr(asc, "paid_run_banner", lambda *a, **k: "")
     monkeypatch.setattr(asc.zotero_io.ZoteroClient, "from_args",
                         classmethod(lambda cls, *a, **k: _ScreenZot(items)))
@@ -399,7 +399,7 @@ def test_fulltext_code_emits_progress(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(ftc.tag_prefix, "resolve", lambda *a: "rev")
     monkeypatch.setattr(ftc, "effective_model", lambda *a, **k: "test-model")
     monkeypatch.setattr(ftc.llm_provider, "require_credentials", lambda m: None)
-    monkeypatch.setattr(ftc.llm_provider, "get_provider", lambda m: object())
+    monkeypatch.setattr(ftc.llm_provider, "get_provider", lambda m, **kw: object())
     monkeypatch.setattr(ftc, "paid_run_banner", lambda *a, **k: "")
     monkeypatch.setattr(ftc.zotero_io.ZoteroClient, "from_args",
                         classmethod(lambda cls, *a, **k: _ScreenZot(items)))

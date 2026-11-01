@@ -55,8 +55,13 @@ class LLMProvider:
         prompt: str,
         temperature: float = 0.0,
         max_tokens: int = 1000,
+        request_params: dict | None = None,
     ) -> str:
-        """Generate a response from the LLM."""
+        """Generate a response from the LLM.
+
+        `request_params` are extra request fields; only the Anthropic
+        provider uses them (see `anthropic_request`).
+        """
         raise NotImplementedError("Subclasses must implement generate().")
 
 
@@ -184,17 +189,43 @@ def _api_key_for(spec: ProviderSpec, *, required: bool = True) -> str:
 # ---------------------------------------------------------------------------
 
 
-#: Output tokens added to a caller's `max_tokens` for models that think
-#: by default. A cap, not a spend: only tokens produced are billed.
-THINKING_ALLOWANCE = 6000
+#: Above this `max_tokens` a call is streamed: the SDK refuses a
+#: non-streaming call whose budget implies more than ten minutes.
 _NONSTREAMING_MAX_TOKENS = 16000
 
+#: The Messages API fields the SDK takes as keywords; everything else a
+#: request carries goes through `extra_body`, so a field newer than the
+#: installed SDK still reaches the API.
+_SDK_KEYWORDS = ("model", "max_tokens", "system", "messages")
 
-def _is_truncated_without_text(resp) -> bool:
-    return resp.stop_reason == "max_tokens" and not any(
-        getattr(b, "type", None) == "text" and b.text.strip()
-        for b in resp.content
-    )
+
+def anthropic_request(
+    model: str, system: str, prompt: str, *, max_tokens: int,
+    temperature: float = 0.0, params: dict | None = None,
+) -> tuple[dict, dict]:
+    """`(body, headers)` for one Messages API request.
+
+    Claude 5+ start from `providers.CLAUDE_REQUEST_DEFAULTS` — the output
+    cap and medium effort — in place of the caller's `max_tokens`, which
+    is sized for the answer alone and cannot know how long the model will
+    think. Older models keep the caller's budget. `params` (the review's
+    `*_REQUEST_PARAMS`) go on top of either; `extra_headers` among them
+    become HTTP headers, e.g. `{"anthropic-beta": "..."}`.
+    """
+    body: dict = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if providers.anthropic_thinks_by_default(model):
+        body = providers.merge_request_params(body, providers.CLAUDE_REQUEST_DEFAULTS)
+    if providers.anthropic_accepts_temperature(model):
+        body["temperature"] = temperature
+    body = providers.merge_request_params(
+        body, providers.check_request_params(params))
+    headers = body.pop("extra_headers", None) or {}
+    return body, headers
 
 
 def _response_text(resp) -> str:
@@ -224,7 +255,10 @@ def _rejects_temperature(exc: Exception) -> bool:
 class AnthropicProvider(LLMProvider):
     """Anthropic, or any endpoint speaking the Anthropic Messages API."""
 
-    def __init__(self, api_key: str | None = None, base_url: str | None = None):
+    def __init__(self, api_key: str | None = None, base_url: str | None = None,
+                 request_params: dict | None = None):
+        #: The review's request params, applied to every call this client makes.
+        self.request_params = providers.check_request_params(request_params)
         spec = providers.require("anthropic")
         if base_url is None:
             base_url = anthropic_base_url()
@@ -249,42 +283,36 @@ class AnthropicProvider(LLMProvider):
         prompt: str,
         temperature: float = 0.0,
         max_tokens: int = 1000,
+        request_params: dict | None = None,
     ) -> str:
-        # `temperature` goes through `extra_body`: anthropic SDK 2.x has
-        # no such keyword, and Claude 5+ models reject the parameter
-        # (see `providers.anthropic_accepts_temperature`). For those the
-        # call runs at the model's default sampling.
-        thinks = providers.anthropic_thinks_by_default(model)
-        if thinks:
-            # Thinking tokens count against max_tokens; callers size
-            # max_tokens for the answer alone, so add room to think.
-            max_tokens += THINKING_ALLOWANCE
-        request: dict = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "system": system,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        if providers.anthropic_accepts_temperature(model):
-            request["extra_body"] = {"temperature": temperature}
-        resp = self._create(request)
-        if thinks and _is_truncated_without_text(resp):
-            request["max_tokens"] = max_tokens * 2
-            resp = self._create(request)
-        return _response_text(resp)
+        # Claude 5+ runs at the model's default sampling: the API rejects
+        # `temperature` there (see `providers.anthropic_accepts_temperature`).
+        body, headers = anthropic_request(
+            model, system, prompt, max_tokens=max_tokens,
+            temperature=temperature,
+            params=providers.merge_request_params(
+                self.request_params, request_params or {}, keep_none=True),
+        )
+        return _response_text(self._create(body, headers))
 
-    def _create(self, request: dict):
-        # The SDK refuses a non-streaming call whose max_tokens implies
-        # >10 minutes unless a timeout is given explicitly.
-        if request["max_tokens"] > _NONSTREAMING_MAX_TOKENS:
-            request = {**request, "timeout": 900.0}
+    def _create(self, body: dict, headers: dict):
+        kw = {k: body[k] for k in _SDK_KEYWORDS if k in body}
+        extra = {k: v for k, v in body.items() if k not in _SDK_KEYWORDS}
+        if headers:
+            kw["extra_headers"] = headers
         try:
-            return self.client.messages.create(**request)
+            return self._send({**kw, **({"extra_body": extra} if extra else {})})
         except Exception as e:
-            if "extra_body" not in request or not _rejects_temperature(e):
+            if "temperature" not in extra or not _rejects_temperature(e):
                 raise
-            request = {k: v for k, v in request.items() if k != "extra_body"}
-            return self.client.messages.create(**request)
+            extra = {k: v for k, v in extra.items() if k != "temperature"}
+            return self._send({**kw, **({"extra_body": extra} if extra else {})})
+
+    def _send(self, kw: dict):
+        if kw["max_tokens"] > _NONSTREAMING_MAX_TOKENS:
+            with self.client.messages.stream(**kw) as stream:
+                return stream.get_final_message()
+        return self.client.messages.create(**kw)
 
 
 class GeminiProvider(LLMProvider):
@@ -309,6 +337,7 @@ class GeminiProvider(LLMProvider):
         prompt: str,
         temperature: float = 0.0,
         max_tokens: int = 1000,
+        request_params: dict | None = None,
     ) -> str:
         clean_model = model.removeprefix("models/")
 
@@ -375,6 +404,7 @@ class OpenAICompatProvider(LLMProvider):
         prompt: str,
         temperature: float = 0.0,
         max_tokens: int = 1000,
+        request_params: dict | None = None,
     ) -> str:
         messages: list[dict] = []
         if system:
@@ -449,11 +479,19 @@ def require_credentials(model_name: str = "", provider_hint: str = "") -> None:
     )
 
 
-def get_provider(model_name: str = "", provider_hint: str = "") -> LLMProvider:
-    """Build the client for the provider serving `model_name`."""
+def get_provider(model_name: str = "", provider_hint: str = "",
+                 request_params: dict | None = None) -> LLMProvider:
+    """Build the client for the provider serving `model_name`.
+
+    `request_params` are Anthropic-shaped; another provider ignores them,
+    with a warning, rather than sending fields its API would reject.
+    """
     spec = resolve_provider(model_name, provider_hint)
     if spec.transport == "anthropic":
-        return AnthropicProvider()
+        return AnthropicProvider(request_params=request_params)
+    if request_params:
+        print(f"WARNING: request params ({', '.join(request_params)}) apply to "
+              f"Anthropic models only; ignored for {model_name}.", flush=True)
     if spec.transport == "google":
         return GeminiProvider()
     return OpenAICompatProvider(spec)
