@@ -287,6 +287,38 @@ def summarise_screening(out: str, rc: int, project: Path) -> tuple[dict, list[st
     return summary, []
 
 
+def summarise_prisma(out: str, rc: int, project: Path) -> tuple[dict, list[str]]:
+    summary = _drop_none({
+        "identified": _int(r"^Identified:\s+(\d+)", out),
+        "removed_before_screening": _int(r"^Removed before:\s+(\d+)", out),
+        "screened": _int(r"^Screened:\s+(\d+)", out),
+        "sought": _int(r"^Sought:\s+(\d+)", out),
+        "assessed": _int(r"^Assessed:\s+(\d+)", out),
+        "included": _int(r"^Included:\s+(\d+)", out),
+        "checks_failed": _int(r"^Checks failed:\s+(\d+)", out),
+        "notes": len(re.findall(r"^\s+NOTE ", out, re.MULTILINE)) or None,
+    })
+    artifacts = []
+    m = re.search(r"^Wrote (.+prisma_flow\.json)$", out, re.MULTILINE)
+    if m:
+        base = _rel(Path(m.group(1).strip()), project)
+        artifacts = [base, base[:-5] + ".mmd", base[:-5] + ".md"]
+    return summary, artifacts
+
+
+def summarise_rob(out: str, rc: int, project: Path) -> tuple[dict, list[str]]:
+    summary = _drop_none({
+        "studies_scored": _int(r"(?:QUIN|QUADAS-2): (\d+) studies scored", out),
+        "error": out.strip().splitlines()[-1][:200]
+        if rc != 0 and out.strip() else None,
+    })
+    artifacts = []
+    m = re.search(r"studies scored -> (.+)$", out, re.MULTILINE)
+    if m:
+        artifacts.append(_rel(Path(m.group(1).strip()), project))
+    return summary, artifacts
+
+
 AUDIT_JSON = ".claude/audit/audit.json"
 
 
@@ -1063,6 +1095,70 @@ GENERATE_BIB = Tool(
 )
 
 
+PRISMA_FLOW = Tool(
+    name="prisma_flow",
+    title="PRISMA 2020 flow counts",
+    effect=WRITES_PROJECT,
+    description=(
+        "Builds every PRISMA 2020 flow-diagram count from search_metadata.json "
+        "and the abstract and full-text logs (latest decision per item), "
+        "checks the arithmetic, and writes analysis/results/prisma_flow.json, "
+        ".mmd (Mermaid diagram) and .md (table). Counts the pipeline cannot "
+        "know (Embase or Cochrane imports, registers, duplicates removed "
+        "outside the pipeline, reports not retrieved) come from a "
+        "reviewer-written extra JSON file. Never changes a number to make a "
+        "check pass."
+    ),
+    script="scripts/pipelines/prisma_flow.py",
+    params=(
+        Param("metadata", "Project-relative search_metadata.json. Default: "
+              "search_metadata.json.", kind="option", flag="--metadata",
+              path=True),
+        Param("abstract_log", "Project-relative abstract-screening log. "
+              "Default: screening/abstract_screening.csv.", kind="option",
+              flag="--abstract-log", path=True),
+        Param("fulltext_log", "Project-relative full-text coding log. "
+              "Default: screening/fulltext_screening.csv.", kind="option",
+              flag="--fulltext-log", path=True),
+        Param("extra", "Project-relative JSON of reviewer-reported counts "
+              "(databases_extra, registers, duplicates_removed_extra, "
+              "other_methods_extra, reports_not_retrieved, studies_included).",
+              kind="option", flag="--extra", path=True),
+        Param("strict", "Exit non-zero when any arithmetic check fails.",
+              kind="switch", flag="--strict", type="boolean"),
+    ),
+    read_only=False,
+    summarise=summarise_prisma,
+)
+
+SCORE_RISK_OF_BIAS = Tool(
+    name="score_risk_of_bias",
+    title="Score risk-of-bias ratings",
+    effect=WRITES_PROJECT,
+    description=(
+        "Deterministic arithmetic for reviewer-made risk-of-bias ratings: "
+        "QUIN percentages and low/medium/high categories for in vitro dental "
+        "studies, or QUADAS-2 per-domain counts and overall judgements. Reads "
+        "a ratings CSV the reviewers filled in and writes a scored CSV. It "
+        "makes no judgement itself and rejects values outside the tool's "
+        "scale."
+    ),
+    script="scripts/pipelines/rob_score.py",
+    params=(
+        Param("instrument", "Which instrument the ratings file uses.",
+              kind="option", flag="--instrument", enum=("quin", "quadas2"),
+              required=True),
+        Param("input", "Project-relative ratings CSV (QUIN: study_key, "
+              "c01..c12; QUADAS-2: study_key, d1_rob..d4_rob, d1_app..d3_app).",
+              kind="option", flag="--input", path=True, required=True),
+        Param("out", "Project-relative path for the scored CSV.",
+              kind="option", flag="--out", path=True, required=True),
+    ),
+    read_only=False,
+    summarise=summarise_rob,
+)
+
+
 # ---------------------------------------------------------------------------
 # Word manuscripts as tracked changes (skill: word-zotero-track-changes)
 # ---------------------------------------------------------------------------
@@ -1257,7 +1353,7 @@ START_SEARCH = Tool(
               "./search_config.py).", kind="option", flag="--config",
               path=True),
         Param("databases", "Comma-separated databases to search (scopus, "
-              "wos, openalex, semantic_scholar). Default: every database "
+              "wos, openalex, semantic_scholar, pubmed). Default: every database "
               "with usable credentials.", kind="option", flag="--databases",
               pattern=r"^[a-z_]+(,[a-z_]+)*$"),
         Param("streams", "`keyword,citation` (default), `keyword` or "
@@ -1757,6 +1853,8 @@ TOOLS: tuple[Tool, ...] = (
     HIGHLIGHT_QUOTES,
     DEMO_CLEANUP,
     GENERATE_BIB,
+    PRISMA_FLOW,
+    SCORE_RISK_OF_BIAS,
     TC_UNPACK,
     TC_INSPECT,
     TC_CHECK,

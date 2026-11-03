@@ -45,7 +45,7 @@ every commit against `windows-latest`.
 
 ## What's in the plugin
 
-Twelve user-invocable skills:
+Fourteen user-invocable skills:
 
 | Skill | Mode | Purpose |
 |---|---|---|
@@ -57,6 +57,8 @@ Twelve user-invocable skills:
 | `cluster-screening` | procedure (explicit) | Screening / coding on a GPU cluster or batch scheduler: emit a manifest, run it under SLURM, apply the responses. |
 | `zotero-operations` | procedure (explicit) | Import, dedup, enrich abstracts and DOIs, maintain BBT keys. |
 | `retrieving-pdfs` | procedure (explicit) | Find and attach PDFs: plan the retrieval with you (what the API cascade, paid OpenAlex, the browser / Connector passes — attended, or as a long unattended run after a short setup with you — and manual download would each get), record the agreed strategy, run it step by step, diagnose what is left. Loaded by `systematic-review` and `zotero-operations`. |
+| `prisma-reporting` | procedure (explicit) | PRISMA 2020 reporting: flow-diagram counts via the `prisma_flow` tool (Mermaid + table + arithmetic checks), search reporting, checklist tracker, AI-use disclosure. |
+| `risk-of-bias` | procedure (explicit) | Biomedical / dental reviews: appraise included studies with QUIN (in vitro) or QUADAS-2 (accuracy studies), route to ROBINS-I / RoB 2, and score deterministically with `rob_score.py`. Pairs with `templates/medical/`. |
 | `fact-check` | procedure (explicit) | Verify citations and quantitative claims against sources. |
 | `word-zotero-track-changes` | procedure (explicit) | Edit a co-authored Word manuscript as tracked changes by one author, inserting live Zotero citation fields and preserving co-authors' pending changes. |
 | `critic-loop` | procedure (explicit) | Run 4 parallel critics (evidence / method / argument / expert) until no MAJOR issues remain. |
@@ -69,6 +71,31 @@ share one citation-verification rule-book between the two callers.
 
 The separate `editorial-tools` plugin ships one skill,
 `suggesting-reviewers`, for journal editors and associate editors.
+
+## Biomedical and dental reviews (PubMed, medical templates, risk of bias)
+
+The social-science defaults (journal-ISSN scope, Scopus/WoS/OpenAlex) are not
+what a clinical review uses. For one, add:
+
+- **PubMed searcher** (`--databases pubmed`): native PubMed syntax from
+  `PUBMED_QUERY_DEFS` in `search_config.py`, via NCBI E-utilities. No key is
+  required; `NCBI_API_KEY` raises the rate limit and `NCBI_EMAIL` identifies
+  you to NCBI. Leave `JOURNALS = {}`. Embase and Cochrane have no API here:
+  export their results and import them into the Zotero collection.
+- **Medical templates** in `templates/medical/`: copy `search_config.py` and
+  `screening_config.py` to the project root. They are pre-filled for a review
+  of digital scanning for auricular prostheses; replace the concept blocks and
+  the PICO-style eligibility text for another topic.
+- **`risk-of-bias` skill** and the `score_risk_of_bias` tool: QUIN (in
+  vitro) and QUADAS-2 appraisal, with routing to ROBINS-I and RoB 2, and
+  deterministic scoring of the reviewers' ratings.
+- **`prisma-reporting` skill** and the `prisma_flow` tool: every PRISMA 2020
+  flow-diagram count computed from the logs, with arithmetic checks, a
+  Mermaid diagram and a checklist tracker
+  (`templates/medical/prisma_2020_checklist.csv`).
+
+Model decisions are a second reviewer at most: validate screening against a
+human-screened sample and report the agreement.
 
 ## Pipeline tools (MCP server)
 

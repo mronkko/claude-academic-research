@@ -53,7 +53,7 @@ def test_every_source_declares_scope_flags() -> None:
 
 def test_registry_is_complete() -> None:
     by_name = searchers_by_name()
-    expected = {"scopus", "wos", "openalex", "semantic_scholar"}
+    expected = {"scopus", "wos", "openalex", "semantic_scholar", "pubmed"}
     assert set(by_name) == expected
 
 

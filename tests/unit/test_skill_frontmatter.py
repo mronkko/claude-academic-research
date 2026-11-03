@@ -41,6 +41,8 @@ EXPECTED_SKILLS = {
     "verifying-citations",
     "suggesting-reviewers",
     "word-zotero-track-changes",
+    "risk-of-bias",
+    "prisma-reporting",
 }
 
 MAX_DESCRIPTION_CHARS = 500

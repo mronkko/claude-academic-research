@@ -130,6 +130,7 @@ def test_initialize_then_tools_list(project, stub, tmp_path) -> None:
         "enrich_pdfs_report", "pdf_manual_next", "pdf_manual_collect",
         "pdf_manual_assign", "pdf_manual_ignore", "screening_report", "audit_library",
         "export_coded_includes", "highlight_quotes", "demo_cleanup", "generate_bib",
+        "prisma_flow", "score_risk_of_bias",
         "track_changes_unpack", "track_changes_inspect", "track_changes_check",
         "start_pdf_plan", "start_enrich_pdfs", "start_enrich_pdfs_paid",
         "start_pdf_unattended_setup", "start_pdf_unattended_run",

@@ -313,6 +313,8 @@ def _keyword_skip_reason(name: str, cfg) -> str:
     """Why `name`'s keyword stream cannot run on `cfg`, or "" if it can."""
     if name in ("scopus", "wos") and not getattr(cfg, "QUERY_DEFS", None):
         return f"{name} needs QUERY_DEFS in the config"
+    if name == "pubmed" and not getattr(cfg, "PUBMED_QUERY_DEFS", None):
+        return "pubmed needs PUBMED_QUERY_DEFS in the config"
     if (name in ("openalex", "semantic_scholar")
         and not (getattr(cfg, "BLOCK_A_TERMS", None)
                  or getattr(cfg, "BLOCK_B_TERMS", None))):
@@ -367,7 +369,7 @@ def main() -> int:
                              "search_run.json (default: current directory).")
     parser.add_argument("--databases", default="",
                         help="Comma-separated source names (scopus, wos, "
-                             "openalex, semantic_scholar). Default: every "
+                             "openalex, semantic_scholar, pubmed). Default: every "
                              "source with usable credentials.")
     parser.add_argument("--keyword-databases", default="",
                         help="Override --databases for the keyword stream "
@@ -739,7 +741,9 @@ def main() -> int:
         "search_field_note": (
             "OpenAlex `search=` covers full text; Scopus TITLE-ABS-KEY "
             "and WoS TS= cover title, abstract and keywords only. "
-            "`title_abstract` restricts OpenAlex to match them."
+            "`title_abstract` restricts OpenAlex to match them. PubMed "
+            "searches exactly the fields named in its query (e.g. [tiab], "
+            "[MeSH Terms])."
         ),
         "citation_journal_scope": citation_scope,
         "citation_seeds": seeds,
@@ -758,6 +762,10 @@ def main() -> int:
         metadata["query_defs"] = [
             {"label": lbl, "scopus": sc, "wos": wc}
             for lbl, sc, wc in cfg.QUERY_DEFS
+        ]
+    if getattr(cfg, "PUBMED_QUERY_DEFS", None):
+        metadata["pubmed_query_defs"] = [
+            {"label": lbl, "pubmed": q} for lbl, q in cfg.PUBMED_QUERY_DEFS
         ]
     if getattr(cfg, "BLOCK_A_TERMS", None):
         metadata["block_a_terms"] = list(cfg.BLOCK_A_TERMS)

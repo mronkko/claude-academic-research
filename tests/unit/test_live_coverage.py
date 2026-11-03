@@ -406,6 +406,7 @@ SEARCH_LIVE_TESTS: dict[str, tuple[str, list[str]]] = {
     ),
     "scopus": ("test_search_scopus_wos.py", ["test_scopus_search_returns_rows_in_scope"]),
     "wos": ("test_search_scopus_wos.py", ["test_wos_search_returns_rows_in_scope"]),
+    "pubmed": ("test_search_pubmed.py", ["test_pubmed_search_returns_rows_in_window"]),
 }
 
 
