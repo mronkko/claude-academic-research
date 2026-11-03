@@ -2149,17 +2149,19 @@ def main() -> int:
         items, stage="full-text coding",
     )
 
-    attachments = zot.all_attachments()
+    if args.only_keys:
+        wanted = {k.strip() for k in args.only_keys.split(",") if k.strip()}
+        items = [it for it in items if it["key"] in wanted]
+
+    # Only these items' attachments are needed; listing every attachment in
+    # the library first took minutes on a large one.
+    attachments = zot.attachments_for([it["key"] for it in items])
     atts_by_parent: dict[str, list[dict]] = {}
     for a in attachments:
         p = a.get("data", {}).get("parentItem")
         if p:
             atts_by_parent.setdefault(p, []).append(a)
     print(f"  {len(items)} items, {len(attachments)} attachments", flush=True)
-
-    if args.only_keys:
-        wanted = {k.strip() for k in args.only_keys.split(",") if k.strip()}
-        items = [it for it in items if it["key"] in wanted]
 
     # --full-recode removes this review's fulltext:* tag from every item,
     # forcing re-processing. The CSV backup already happened above.

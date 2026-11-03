@@ -1470,3 +1470,11 @@ def test_pdf_map_without_parent_keys_is_unchanged():
     client = zotero_io.ZoteroClient.__new__(zotero_io.ZoteroClient)
     client.all_attachments = lambda: [_pdf("PAR00001")]
     assert client.pdf_map() == {"PAR00001": (True, [])}
+
+
+def test_attachments_for_scopes_to_the_parents_asked():
+    client = zotero_io.ZoteroClient.__new__(zotero_io.ZoteroClient)
+    client.children = lambda key: [_pdf(key), {"key": "N", "data": {"itemType": "note"}}]
+    client.all_attachments = lambda: pytest.fail("listed every attachment")
+    got = client.attachments_for(["PAR00002", "PAR00001"])
+    assert [a["data"]["parentItem"] for a in got] == ["PAR00001", "PAR00002"]

@@ -22,7 +22,7 @@ directory — not checked in because it references machine-local paths).
 
 ---
 
-## `demo-slr` changes (noted 2026-11-03; D1, D2 implemented, uncommitted)
+## `demo-slr` changes (noted 2026-11-03; D1, D2, D4-D9 implemented in 0.32.0; D3 open)
 
 Requested by the user after a walkthrough of `skills/demo-slr/SKILL.md`.
 
@@ -86,6 +86,19 @@ defaults to the COMPLETE view for `subscriber=True`, which carries
   `templates/demo_search_config.py`, and `pilot_analyze.py` for the
   existing pilot summaries. Check `tests/unit/test_mcp_tool_schema_sync.py`
   if a script flag that `start_search` passes changes.
+
+**Status (0.32.0, 2026-11-03):** D4, D5, D6, D7, D8 and D9 are implemented
+(skill rewrite; `start_import` `created_keys_out`; the template comment;
+OpenAlex-verified journal list; explanations; first page raised to 25, no OA
+filter since WoS `OA=` returned 0). Also from the same run: `check_setup`
+reports a stale MCP server (`stale_server`); abstract screening reports
+non-journal items it skips (the 15-vs-14 mystery was a conference paper);
+`enrich_pdfs` and `fulltext_code` read attachments only for the items in
+scope (`ZoteroClient.attachments_for`, `pdf_map(parent_keys=)`) instead of
+listing the whole library; screening/coding logs go into the demo folder
+(`output` parameter). **Not yet re-run live:** all of the above needs one demo
+run on a good network, with a stopwatch (target 10 minutes). Only D3 below
+remains open. The older text of D4-D9 describes the problems as found.
 
 - **D3 — ask pybliometrics for a page limit.** `searchers/scopus.py`
   `_first_page` fetches a Scopus first page by calling `get_content`

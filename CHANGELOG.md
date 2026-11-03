@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.0] — 2026-11-03
+
+### Changed
+
+- **`demo-slr` explains each step and asks only about choices and money.**
+  It asks for the topic, query and journals, which database to use, costs
+  above $0.50, paid PDFs, the critic round and cleanup; configs, imports and
+  small costs no longer stop for approval. It uses My Library without asking
+  and reports counts rather than record lists.
+- **`demo-slr` limits the search to journals** (proposed per topic and
+  verified in OpenAlex) and takes a 25-record first page (was 15) from the
+  chosen database, so more included papers have a chance of an open PDF.
+- `start_import` accepts `created_keys_out`; `start_abstract_screen` and
+  `start_fulltext_code` accept `output`, so the demo keeps its keys file and
+  logs inside its own folder.
+- `enrich_pdfs` and `fulltext_code` read attachments only for the items in
+  scope instead of listing every attachment in the library first (about two
+  minutes for a five-item run in a 26,000-item library).
+
+### Added
+
+- `check_setup` reports `server_version` and `stale_server` when the running
+  MCP server is older than the plugin on disk; the demo's pre-flight stops
+  and says to reload the window (a `/mcp` reconnect did not restart it).
+- Abstract screening says how many items it did not screen because they are
+  not journal articles (a conference paper was skipped silently).
+
 ## [0.31.1] — 2026-11-03
 
 ### Changed

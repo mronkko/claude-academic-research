@@ -899,6 +899,23 @@ class ZoteroClient:
         z = self._client()
         return _everything(z, lambda: z.items(itemType="attachment"))
 
+    def attachments_for(self, parent_keys: Iterable[str] | None) -> list[dict]:
+        """Attachment items of the given parents, or all of them if None.
+
+        For a small set the attachments come from one `children()` request
+        per parent; for a large set (or None) one walk over every
+        attachment in the library is cheaper. Listing the whole library to
+        use five items' attachments was the slow start of `enrich_pdfs` and
+        `fulltext_code` on a 26,000-item library over a poor connection.
+        """
+        keys = sorted(set(parent_keys)) if parent_keys is not None else None
+        if keys is not None and len(keys) <= _SCOPED_PDF_MAP_MAX:
+            return [
+                child for key in keys for child in self.children(key)
+                if (child.get("data") or {}).get("itemType") == "attachment"
+            ]
+        return self.all_attachments()
+
     def collection_items(self, collection: str, *,
                          item_type: str = "journalArticle") -> list[dict]:
         """Items in a collection, named by key **or** display name, by type.
@@ -1082,14 +1099,7 @@ class ZoteroClient:
         exists. Linked URLs are left out altogether.
         """
         import datetime
-        keys = sorted(set(parent_keys)) if parent_keys is not None else None
-        if keys is not None and len(keys) <= _SCOPED_PDF_MAP_MAX:
-            attachments = [
-                child for key in keys for child in self.children(key)
-                if (child.get("data") or {}).get("itemType") == "attachment"
-            ]
-        else:
-            attachments = self.all_attachments()
+        attachments = self.attachments_for(parent_keys)
         pdfs = [a for a in attachments
                 if a["data"].get("contentType") == "application/pdf"
                 and a["data"].get("parentItem")]

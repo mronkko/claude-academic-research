@@ -352,6 +352,9 @@ class _ScreenZot:
     def all_attachments(self):
         return []
 
+    def attachments_for(self, parent_keys):
+        return []
+
 
 def test_abstract_screen_emits_progress(tmp_path, monkeypatch) -> None:
     import abstract_screen as asc
