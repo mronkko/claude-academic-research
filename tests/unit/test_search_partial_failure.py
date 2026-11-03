@@ -202,3 +202,27 @@ def test_an_auto_selected_database_may_skip_but_is_not_listed_as_searched(
     metadata = json.loads((meta / "search_metadata.json").read_text("utf-8"))
     assert metadata["databases"] == ["alpha"]
     assert "wos" in metadata["skipped_databases"]
+
+
+# --- a pilot reports a failing database instead of aborting ------------
+
+def test_a_pilot_with_a_failing_database_still_writes_the_others_totals(
+        run_search, monkeypatch):
+    """Live 2026-11-03: Scopus refused (401) from a network its key is not
+    entitled on, and the pilot exited without a metadata file, so the demo
+    could not show the other databases' totals or say which one failed."""
+    import json
+
+    ok = _Source("alpha", rows=3)
+    ok.total_hits = 120
+    bad = _Source("bravo", error=RuntimeError("Scopus refused the request"))
+    main, _out, meta = run_search([ok, bad])
+    monkeypatch.setattr(sys, "argv", [*sys.argv, "--max-records", "3"])
+
+    assert main() == 0
+
+    data = json.loads((meta / "search_metadata.json").read_text("utf-8"))
+    assert data["max_records"] == 3
+    assert data["per_database_api_totals"] == {"alpha": 120}
+    assert "Scopus refused" in data["failed_databases"]["bravo"]
+    assert data["databases"] == ["alpha"]

@@ -1054,6 +1054,12 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="Parse and report without writing to Zotero.")
     parser.add_argument(
+        "--skip-existing-check", action="store_true",
+        help="Do not read the library to look for records already in it: "
+             "create every record as new (duplicates inside this batch are "
+             "still merged). For throwaway imports such as the demo; a real "
+             "review should keep the check.")
+    parser.add_argument(
         "--created-keys-out",
         help="Write the Zotero keys of newly CREATED items (one per line) "
              "to this path — the create-batch success map, not patched "
@@ -1088,7 +1094,16 @@ def main() -> int:
         _exit_if_key_refused(exc)
         raise
 
-    doi_map, title_map = _fetch_existing_items(zot, args.dry_run)
+    if args.skip_existing_check:
+        # Throwaway imports (the demo) gain nothing from reading the whole
+        # library first: on a 26,000-item library over a slow link that
+        # read dominated the run. Within-batch duplicates are still merged.
+        print("NOTE: not checking the library for existing copies "
+              "(--skip-existing-check); every record is created as new.",
+              flush=True)
+        doi_map, title_map = {}, {}
+    else:
+        doi_map, title_map = _fetch_existing_items(zot, args.dry_run)
     doi_by_key = {key: doi for doi, key in doi_map.items()}
 
     to_add: list[tuple[str, str, str]] = []

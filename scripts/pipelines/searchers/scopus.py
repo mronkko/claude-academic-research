@@ -59,15 +59,30 @@ class ScopusSearch(SearchSource):
         for label, scopus_core, _wos_core in config.QUERY_DEFS:
             q = self._full_query(scopus_core, ctx)
             print(f"  Scopus {label}: ", end="", flush=True)
+            try:
+                if ctx.max_records:
+                    results, total = self._first_page(
+                        PybScopusSearch, q, ctx.max_records,
+                    )
+                else:
+                    results = PybScopusSearch(q, download=True).results or []
+                    total = len(results)
+            except Exception as exc:  # noqa: BLE001
+                if type(exc).__name__ == "Scopus401Error":
+                    raise RuntimeError(
+                        "Scopus refused the request: this API key may read "
+                        "full records only from your institution's network "
+                        "(campus or VPN), and this connection is not "
+                        "recognised. Connect through the VPN and retry, or "
+                        "leave Scopus out. "
+                        f"(Elsevier said: {exc})"
+                    ) from exc
+                raise
             if ctx.max_records:
-                results, total = self._first_page(
-                    PybScopusSearch, q, ctx.max_records,
-                )
                 self.record_total(label, total)
                 print(f"{len(results)} results (API total: {total})",
                       flush=True)
             else:
-                results = PybScopusSearch(q, download=True).results or []
                 print(f"{len(results)} results", flush=True)
             for r in results:
                 rows.append(self._result_to_row(r, label))

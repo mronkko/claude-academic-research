@@ -24,7 +24,8 @@ SKILL = (REPO / "skills" / "demo-slr" / "SKILL.md").read_text(encoding="utf-8")
 USED = {
     "start_search": ["max_records", "output_dir", "metadata_dir", "config",
                      "databases", "streams"],
-    "start_import": ["created_keys_out", "collection", "input", "config", "user"],
+    "start_import": ["created_keys_out", "skip_existing_check", "collection", "input",
+                     "config", "user"],
     "start_enrich_abstracts": ["filter_keys_file", "user"],
     "start_abstract_screen": ["user", "model", "dry_run", "output"],
     "start_enrich_pdfs": ["user", "filter_keys_file"],
@@ -53,3 +54,12 @@ def test_the_skill_requires_printing_what_the_presenter_is_asked_to_judge():
     assert "Show first, then ask" in SKILL
     assert "Print the whole proposal as text first" in SKILL
     assert "Print the key lines of both files" in SKILL
+
+
+def test_the_skill_prints_the_pilot_table_with_failures_and_skips_dedup():
+    """Live 2026-11-03: the pilot verdict came without the per-database
+    counts, Scopus's 401 was not explained, and the import read the whole
+    library for duplicates."""
+    assert "Print the pilot table before anything else" in SKILL
+    assert "failed_databases" in SKILL
+    assert "skip_existing_check=true" in SKILL

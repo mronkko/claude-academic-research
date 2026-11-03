@@ -1315,6 +1315,10 @@ START_IMPORT = Tool(
               "collection.", kind="switch", flag="--no-create-collection",
               type="boolean"),
         CONFIG, TAG_PREFIX,
+        Param("skip_existing_check", "Do not read the library for records "
+              "already in it; create everything as new (for throwaway "
+              "imports such as the demo; a real review keeps the check).",
+              kind="switch", flag="--skip-existing-check", type="boolean"),
         Param("created_keys_out", "Project-relative file to write the keys "
               "of the items this run CREATED to (one per line; not items it "
               "merely patched), so demo_cleanup can delete exactly those.",

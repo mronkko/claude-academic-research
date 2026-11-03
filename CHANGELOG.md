@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.2] — 2026-11-03
+
+### Fixed
+
+- **A pilot search no longer aborts when one database fails.** With
+  `--max-records`, a refusing database (Scopus returns 401 outside the
+  institution's network) is recorded under `failed_databases` in
+  `search_metadata.json` and the other databases' totals are still written.
+  Scopus's 401 now explains itself (the key may read full records only from
+  the institution's network).
+- **`demo-slr` prints the per-database pilot table** (matches, fetched,
+  status in plain words, failures explained) before it recommends a database,
+  and recommends the first database that returned records.
+
+### Added
+
+- `import_to_zotero.py --skip-existing-check` (tool parameter
+  `skip_existing_check`): do not read the whole library for duplicates. The
+  demo uses it, because its records are deleted afterwards.
+
 ## [0.32.1] — 2026-11-03
 
 ### Fixed

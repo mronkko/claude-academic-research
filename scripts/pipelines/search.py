@@ -628,7 +628,16 @@ def main() -> int:
                            rows=len(rows), citation_rows=citation_counts[name],
                            done=done + 1, queued=len(selected))
 
-    if failed:
+    if failed and ctx.max_records:
+        # A pilot (--max-records) compares databases; it certifies no corpus.
+        # One refusing database (an API key not entitled from this network,
+        # say) must not stop the others' totals from being written, or the
+        # pilot cannot show which database failed and why. The failures go
+        # into search_metadata.json below and stay out of the run marker's
+        # certification only because a pilot is not a formal search.
+        print(f"PILOT: {len(failed)} database(s) failed and are reported, "
+              f"not fatal: {', '.join(failed)}", flush=True)
+    elif failed:
         # Deliberately still a hard failure. A corpus assembled from a
         # subset of its declared databases is not the corpus the protocol
         # describes, and writing the dedup CSV + search_run.json would
@@ -699,6 +708,9 @@ def main() -> int:
         # reported a search that never happened.
         "databases": [n for n in selected if n in counts],
         "skipped_databases": skipped,
+        # Only a pilot gets here with failures (a formal search exits above):
+        # name each database that did not answer, with the reason.
+        "failed_databases": failed,
         "from_year": ctx.from_year,
         "to_year": ctx.to_year,
         "journals": {issn: cfg.JOURNALS[issn][1] for issn in ctx.issns},

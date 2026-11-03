@@ -170,17 +170,34 @@ database from the pre-flight, `streams=keyword`, `max_records=25`,
 `config=output/demo/<DEMO_ID>/search_config.py`,
 `output_dir=output/demo/<DEMO_ID>/pilot` and
 `metadata_dir=output/demo/<DEMO_ID>/pilot`. Each database stops after its
-first page and reports how many records the query matches in total. Read
-those totals from `per_database_api_totals` in
-`output/demo/<DEMO_ID>/pilot/search_metadata.json` (the fetched rows are
-only a page and say nothing about volume) and show them as a table, one row
-per database. A database that failed or was skipped appears in the run's
-`summary`; report it rather than hiding it. Say that the Boolean databases
-(Web of Science, Scopus) and the phrase-based ones (OpenAlex, Semantic
-Scholar) run the query differently, so the totals are not like-for-like.
+first page and reports how many records the query matches in total.
 
-**Suggest one database and ask.** Recommend, in this order, the first that is
-configured: **Web of Science**, then **Scopus**, then OpenAlex, then
+**Print the pilot table before anything else**, one row per database you
+asked for, with three columns: the number of matching records, how many of
+those were fetched (at most 25), and a plain-language status. Read the totals
+from `per_database_api_totals`, the fetched counts from
+`per_database_counts` and each failure from `failed_databases`, all in
+`output/demo/<DEMO_ID>/pilot/search_metadata.json` (the fetched rows are only
+a page and say nothing about volume). A database must appear in the table
+even when it returned nothing, with the reason in words the audience can
+follow:
+- failed (`failed_databases`): say what the message means. Scopus refusing
+  the request means its key may read full records only from the institution's
+  network, so connect through the VPN or leave it out. Never paste the raw
+  error.
+- fetched papers but kept none (Semantic Scholar with a journal limit): its
+  records carry no ISSN and it names journals differently from the list, so
+  the journal filter removed everything; say this is a limit of that
+  database, not an empty literature.
+- very few matches (for example OpenAlex with the narrow combined phrases):
+  say the totals are not like-for-like, because Web of Science and Scopus
+  run the Boolean query while OpenAlex and Semantic Scholar run exact
+  phrases.
+
+The recommendation comes after the table, never instead of it.
+
+**Suggest one database and ask.** Recommend, in this order, the first that
+returned records in the pilot: **Web of Science**, then **Scopus**, then OpenAlex, then
 Semantic Scholar. Give the reason in a sentence: Web of Science and Scopus
 are faster to import (creators arrive split and bibliographic detail is
 complete, so no per-record Crossref lookup) and more complete (abstracts
@@ -199,11 +216,13 @@ cap.
 Explain: the records now go into **Zotero**, the reference manager where a
 review keeps everything: one new collection named `<DEMO_ID>` in My Library.
 
-**`start_import`** with `user=true`, `collection=<DEMO_ID>`,
+**`start_import`** with `user=true`, `skip_existing_check=true` (the demo's
+records are deleted afterwards, so there is no point reading the whole library
+for duplicates first; say so in a sentence), `collection=<DEMO_ID>`,
 `input=output/demo/<DEMO_ID>/analysis/raw/search_results.csv`,
 `config=output/demo/<DEMO_ID>/screening_config.py` and
 `created_keys_out=output/demo/<DEMO_ID>/created.keys` (terminal equivalent:
-`import_to_zotero.py --user ... --created-keys-out output/demo/<DEMO_ID>/created.keys`;
+`import_to_zotero.py --user --skip-existing-check ... --created-keys-out output/demo/<DEMO_ID>/created.keys`;
 the keys file is what `demo_cleanup` later deletes by). Then
 **`start_enrich_abstracts`** with `user=true` and
 `filter_keys_file=output/demo/<DEMO_ID>/created.keys`: it fills in any abstract
