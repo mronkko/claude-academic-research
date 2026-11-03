@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.1] — 2026-11-03
+
+### Fixed
+
+- **`demo-slr` prints what it asks the presenter to approve.** Step 1 asked
+  to approve a search recipe that was never shown, and step 2 did not show
+  the configs it had written. The skill now requires the full proposal (and
+  the configs' key lines, each with a sentence on what the file is for) to
+  be printed as text before any question.
+
 ## [0.32.0] — 2026-11-03
 
 ### Changed

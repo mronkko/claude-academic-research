@@ -45,3 +45,11 @@ def test_the_tool_declares_the_parameter_the_skill_passes(tool, param):
     assert param in declared, f"{tool} has no parameter {param}"
     assert re.search(rf"\b{re.escape(param)}\b", SKILL), (
         f"demo-slr no longer mentions {param}; update USED")
+
+
+def test_the_skill_requires_printing_what_the_presenter_is_asked_to_judge():
+    """A question dialog shows one line; the live run asked to approve a
+    recipe it had not printed (2026-11-03)."""
+    assert "Show first, then ask" in SKILL
+    assert "Print the whole proposal as text first" in SKILL
+    assert "Print the key lines of both files" in SKILL

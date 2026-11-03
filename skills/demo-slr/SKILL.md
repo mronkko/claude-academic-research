@@ -38,6 +38,14 @@ the server (see **Terminal equivalent** in the glossary).
   audience: turn them into one sentence (for example, "publishers often
   refuse automated downloads, so the demo tries about a dozen legal sources
   in turn and takes whichever answers").
+- **Show first, then ask.** A question dialog shows only its one-line
+  question, so everything the presenter is being asked to judge must already
+  be printed in your message above it, in full: the research question, the
+  criteria, the query, the years and the journals (step 1); the pilot table
+  (step 3). Never put the content only inside the question text, and never
+  ask "approve this recipe?" about something you have not printed. The same
+  goes for what a step produced: print the result (the config's key lines,
+  the counts, the decisions table) in the message, not only in a file.
 - **Ask only about a choice or about money.** Use AskUserQuestion, default
   first ("Recommended"). The only questions are: the topic, query and
   journals (step 1); which database to take records from (step 3); an LLM
@@ -108,6 +116,13 @@ window (default: the last three years), and **5 to 10 journals** that
 publish on the topic. Limiting the search to journals is what keeps the first
 page of results on topic.
 
+**Print the whole proposal as text first**, as a short list the audience can
+read: the question; the two criteria; the query as concept A and concept B,
+each with its terms; the years; the journals. After each item add a few words
+on what it is for (the criteria are what the model will screen against; the
+query is what the databases will be asked; the journals keep the results
+on topic). Only then ask.
+
 Resolve every journal against OpenAlex (the `search_sources` and
 `check_venue_quality` tools of the OpenAlex MCP server) and show each as
 title + ISSN. Never type an ISSN from memory; drop a journal OpenAlex cannot
@@ -134,7 +149,13 @@ Set `DEMO_ID` = `demo-` + today's date and time as `YYYYMMDD-HHMM`.
   leave `BLOCK_B_TERMS` empty, because OpenAlex and Semantic Scholar run the
   two blocks as separate queries, not as A AND B.
 
-Do not ask for approval: the presenter already approved the content in step 1.
+**Print the key lines of both files** with one sentence each on what the
+file is for: `search_config.py` is the written search recipe the databases
+run (years, journals, the Boolean query for Web of Science and Scopus, the
+phrases for OpenAlex and Semantic Scholar); `screening_config.py` holds the
+instructions the model follows when it screens and codes (the research
+question, the criteria and exclusion codes, the fields to extract). Do not ask
+for approval: the presenter already approved the content in step 1.
 
 ### 3. Pilot the databases, then search one
 
