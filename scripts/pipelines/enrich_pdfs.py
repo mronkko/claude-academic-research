@@ -5659,6 +5659,16 @@ def _print_run_report(
     print(pdf_run_report.format_report(rows, metadata=lookup))
 
 
+def _scoped_pdf_map(zot, items):
+    """`zot.pdf_map()` for just the items this run is about.
+
+    A run restricted to a few items (a keys file, `--only-keys`) used to
+    list every attachment in the library first; the scope is known, so
+    ask for only those parents' attachments (see `ZoteroClient.pdf_map`).
+    """
+    return zot.pdf_map(parent_keys=[it["key"] for it in items])
+
+
 def _fetch_scope_items(args: argparse.Namespace, zot) -> list[dict] | None:
     """The items this run is accountable for: `--filter-keys-file`'s
     keys, else every item of `--item-types`. None (after printing why)
@@ -5932,7 +5942,7 @@ def _run_manual(args: argparse.Namespace, zot, all_items: list[dict], run_date: 
     print(f"Manual download: Downloads folder {downloads}; batch size {batch_size}.",
           flush=True)
     print("Checking for existing PDF attachments...", flush=True)
-    pdf_map = zot.pdf_map()
+    pdf_map = _scoped_pdf_map(zot, all_items)
 
     resolver_cfg = None
     if args.manual == "next":
@@ -6300,7 +6310,7 @@ def _run_plan_strategy(args: argparse.Namespace, zot, all_items: list[dict]) -> 
                     "lookups": lookups, "queued": len(all_items)})
 
     print("Checking for existing PDF attachments...", flush=True)
-    pdf_map = zot.pdf_map()
+    pdf_map = _scoped_pdf_map(zot, all_items)
     queue = [it for it in all_items if not pdf_map.get(it["key"], (False, []))[0]]
     with_pdf = len(all_items) - len(queue)
 
@@ -7058,7 +7068,7 @@ def main() -> int:
     print(f"Items not yet processed: {len(candidates)}", flush=True)
 
     print("Checking for existing PDF attachments...", end=" ", flush=True)
-    pdf_map = zot.pdf_map()
+    pdf_map = _scoped_pdf_map(zot, all_items)
     if not args.replace:
         candidates += _logged_done_without_pdf(all_items, done_items, pdf_map)
     md5_map = zot.real_pdf_md5_map() if args.replace else {}
@@ -7222,7 +7232,7 @@ def main() -> int:
         # Pass 2 residuals — re-read pdf_map so items Pass 1 attached
         # drop out automatically.
         print("\n--- Pass 2: browser + Connector ---", flush=True)
-        updated_pdf_map = zot.pdf_map()
+        updated_pdf_map = _scoped_pdf_map(zot, all_items)
         residuals = [
             it for it in to_process
             if not updated_pdf_map.get(it["key"], (False, []))[0]

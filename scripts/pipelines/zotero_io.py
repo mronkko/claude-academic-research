@@ -288,6 +288,11 @@ def _read_page(fetch):
     )(fetch)()
 
 
+#: Up to this many parents, `pdf_map(parent_keys=...)` asks Zotero for each
+#: parent's children; beyond it, one walk over all attachments is cheaper.
+_SCOPED_PDF_MAP_MAX = 300
+
+
 def _everything(z: zotero.Zotero, first) -> list:
     """`z.everything(first())`, retrying each page rather than the lot.
 
@@ -1025,6 +1030,7 @@ class ZoteroClient:
 
     def pdf_map(
         self, *, stub_grace_seconds: int = 3600,
+        parent_keys: Iterable[str] | None = None,
     ) -> dict[str, tuple[bool, list[str]]]:
         """{parent_key: (has_real_pdf, [stub_keys])} across the whole library.
 
@@ -1048,16 +1054,25 @@ class ZoteroClient:
         those prematurely would destroy an in-flight upload. After
         the grace window expires, a missing md5 genuinely indicates
         a failed upload.
+
+        `parent_keys` limits the answer to those parents. For a small set
+        the attachments are read per parent (one request each) rather than
+        by listing every attachment in the library, which on a 26,000-item
+        library kept a 5-item `enrich_pdfs` run waiting about two minutes
+        before its first download. Parents not in the set are absent from
+        the result, so a caller must only look up keys it passed.
         """
         return {
             k: (bool(real or linked), [s["key"] for s in stubs])
             for k, (real, stubs, linked) in self._pdf_attachments_by_parent(
                 stub_grace_seconds=stub_grace_seconds,
+                parent_keys=parent_keys,
             ).items()
         }
 
     def _pdf_attachments_by_parent(
         self, *, stub_grace_seconds: int = 3600,
+        parent_keys: Iterable[str] | None = None,
     ) -> dict[str, tuple[list, list, list]]:
         """{parent_key: ([real], [stubs], [linked files])}, full dicts.
 
@@ -1067,7 +1082,15 @@ class ZoteroClient:
         exists. Linked URLs are left out altogether.
         """
         import datetime
-        pdfs = [a for a in self.all_attachments()
+        keys = sorted(set(parent_keys)) if parent_keys is not None else None
+        if keys is not None and len(keys) <= _SCOPED_PDF_MAP_MAX:
+            attachments = [
+                child for key in keys for child in self.children(key)
+                if (child.get("data") or {}).get("itemType") == "attachment"
+            ]
+        else:
+            attachments = self.all_attachments()
+        pdfs = [a for a in attachments
                 if a["data"].get("contentType") == "application/pdf"
                 and a["data"].get("parentItem")]
 

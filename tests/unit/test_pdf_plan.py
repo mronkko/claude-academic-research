@@ -208,7 +208,7 @@ class _Zot:
                                     "itemType": "journalArticle", "date": y}}
                 for k, d, y in ITEMS]
 
-    def pdf_map(self):
+    def pdf_map(self, **_kw):
         return {"HASPDF01": (True, [])}
 
     def __getattr__(self, name):

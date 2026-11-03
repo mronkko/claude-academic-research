@@ -1434,3 +1434,39 @@ def test_other_item_type_counts_never_raises():
 
     client._client = _boom
     assert client.other_item_type_counts("KEY12345") == {}
+
+
+def _pdf(parent, md5="abc"):
+    return {"key": f"A{parent}", "data": {
+        "itemType": "attachment", "contentType": "application/pdf",
+        "parentItem": parent, "linkMode": "imported_file", "md5": md5,
+        "dateAdded": "2020-01-01T00:00:00Z"}}
+
+
+def test_pdf_map_for_a_few_parents_never_lists_the_whole_library():
+    client = zotero_io.ZoteroClient.__new__(zotero_io.ZoteroClient)
+    asked = []
+
+    def _children(key):
+        asked.append(key)
+        return [_pdf(key), {"key": "N", "data": {"itemType": "note"}}]
+
+    client.children = _children
+    client.all_attachments = lambda: pytest.fail("listed every attachment")
+    result = client.pdf_map(parent_keys=["PAR00001", "PAR00002"])
+    assert asked == ["PAR00001", "PAR00002"]
+    assert result == {"PAR00001": (True, []), "PAR00002": (True, [])}
+
+
+def test_pdf_map_for_many_parents_falls_back_to_one_library_walk():
+    client = zotero_io.ZoteroClient.__new__(zotero_io.ZoteroClient)
+    keys = [f"K{i:07d}" for i in range(zotero_io._SCOPED_PDF_MAP_MAX + 1)]
+    client.children = lambda key: pytest.fail("per-parent request")
+    client.all_attachments = lambda: [_pdf(keys[0])]
+    assert client.pdf_map(parent_keys=keys) == {keys[0]: (True, [])}
+
+
+def test_pdf_map_without_parent_keys_is_unchanged():
+    client = zotero_io.ZoteroClient.__new__(zotero_io.ZoteroClient)
+    client.all_attachments = lambda: [_pdf("PAR00001")]
+    assert client.pdf_map() == {"PAR00001": (True, [])}

@@ -30,7 +30,7 @@ class _Zot:
         return [{"key": "K1", "data": {"DOI": DOI, "title": "T",
                                        "itemType": "journalArticle"}}]
 
-    def pdf_map(self):
+    def pdf_map(self, **_kw):
         return {"K1": (self._has_pdf, [])}
 
     def real_pdf_md5_map(self):
