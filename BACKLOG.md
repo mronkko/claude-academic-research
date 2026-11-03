@@ -99,6 +99,77 @@ defaults to the COMPLETE view for `subscriber=True`, which carries
   `scripts/pipelines/searchers/scopus.py`,
   `tests/unit/test_search_max_records.py`.
 
+- **D4 — drop approvals that decide nothing (from the first live run,
+  2026-11-03).** Steps 2 ("approve the filled configs") and 4 ("approve
+  before the import") each stopped for a yes/no whose answer was always yes.
+  Ask only where the presenter chooses something (topic and query; which
+  database, shown with the pilot totals) or where money is spent (LLM dry-run
+  cost, paid OpenAlex). Run the pilot straight after the topic is approved
+  and fold the config check into the database choice. Do not list the
+  imported or fetched records back to the presenter; counts are enough.
+  **Files:** `skills/demo-slr/SKILL.md` ("One approval per step" and steps
+  2-4).
+- **D5 — the Zotero library and collection are configured, not asked
+  (same run).** `import_to_zotero.py` refuses to run without `--group` /
+  `--user`, and the `start_import` tool passes neither, so the demo had to
+  ask which library to write to. Resolve the library in pre-flight (or right
+  after the topic) with no prompt, and take the collection name from
+  `DEMO_ID`. Needs a decision on where the demo's library setting lives
+  (config key vs. `ZOTERO_GROUP`), and a pre-flight check that reports it.
+  Also found in that run: `start_import` has no `created_keys_out`
+  parameter, though the skill's `demo_cleanup` needs the keys file, so the
+  run used the script's terminal equivalent. **Files:**
+  `mcp/tool_registry.py` (`START_IMPORT`), `skills/demo-slr/SKILL.md`
+  (pre-flight, step 4, step 11).
+- **D6 — the demo template's block comment is wrong.** `templates/
+  demo_search_config.py` says a paper must match a term from block A AND
+  block B, but `search.py` runs the blocks as separate queries for OpenAlex
+  and Semantic Scholar. The run worked around it by putting combined phrases
+  in block A and leaving block B empty. Fix the comment, or have the skill
+  fill block A that way.
+
+- **D7 — the demo search needs a journal limit (same run).** With
+  `JOURNALS = {}` the first page of results was fairly random: a plasma-beam
+  paper, a Canada Post valuation, an EU open-source piece for an "AI in
+  entrepreneurship" query, and 6 of 14 screened papers excluded. Have step 1
+  propose a short journal list for the topic (about 5-10 journals) with the
+  query, let the presenter edit it, and fill `JOURNALS` in
+  `search_config.py`. `JOURNALS` maps ISSN to `(rating, full title)`; Semantic
+  Scholar needs the titles, since it returns no ISSN. Resolve the ISSNs by
+  lookup (OpenAlex `search_sources` / `check_venue_quality` or the
+  `journals.json` presets), never from memory. The pilot totals then
+  describe the journal-limited literature. **Files:**
+  `skills/demo-slr/SKILL.md` step 1-3, `templates/demo_search_config.py`,
+  `scripts/pipelines/search.py` (scope handling).
+
+- **D8 — the demo explains what is going on (same run).** Assume the
+  audience has never seen the workflow. Before each step, say in plain
+  words what is about to happen, why it comes at this point of a literature
+  review, and what to look at in the result; no jargon left unexplained
+  (databases vs. Zotero, "pilot", "screening", "include / borderline /
+  exclude", "free API cascade", why a PDF can be missing). The run showed the
+  need: the log lines "crossref: rejected PDF … HTTP 403" and "BASE refused
+  this IP" are noise to a newcomer and must be put in one sentence
+  ("publishers block automated downloads; the demo tries about a dozen legal
+  sources in turn"). Add a one-paragraph opening that names the whole path
+  (search, import, screen, get PDFs, code, report, highlight) before step 1.
+  **Files:** `skills/demo-slr/SKILL.md` (rules and every step).
+- **D9 — filter the demo search by open access?** Asked after only 1 of 5
+  included papers got a PDF from the free cascade. Tested 2026-11-03 against
+  WoS Expanded: appending `AND OA=(...)` to the topic query was accepted
+  without error but returned 0 records for every value tried ("All Open
+  Access", Gold, "DOAJ Gold", "Green Published", "Green Accepted", Bronze, an
+  OR of them), where the unfiltered query returns 1,824. So the `OA=` tag
+  does not work through this API with this key, as far as tried; the cause
+  (value spelling, entitlement) is not established. Alternatives: OpenAlex
+  filters server-side (`open_access.is_oa:true`) and could drive the demo's
+  record choice, or the demo could pick records by checking Unpaywall/OpenAlex
+  OA status after the pilot. Caveat to state to the presenter: an OA filter
+  biases the sample toward open-access journals, and OA does not guarantee
+  the PDF downloads (an MDPI gold-OA paper in this run still returned 403
+  to every source). **Files:** `scripts/pipelines/searchers/wos.py`,
+  `searchers/openalex.py`, `skills/demo-slr/SKILL.md` step 3.
+
 ---
 
 ## 0.25.0 release — audit fixes and agent-first redesign (2026-10-15)
