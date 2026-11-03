@@ -1409,6 +1409,9 @@ START_ABSTRACT_SCREEN = Tool(
         COLLECTION_KEY, *LIBRARY_ARGS, CONFIG, TAG_PREFIX, MODEL,
         Param("sample", "Screen a random sample of N items (0 = all).",
               kind="option", flag="--sample", pattern=r"^[0-9]+$"),
+        Param("output", "Project-relative decision log CSV (default: "
+              "screening/abstract_screening.csv).", kind="option",
+              flag="--output", path=True),
         Param("search_csv", "Project-relative search_results.csv, for "
               "query provenance in the log.", kind="option",
               flag="--search-csv", path=True),
@@ -1436,6 +1439,9 @@ START_FULLTEXT_CODE = Tool(
     script="scripts/pipelines/fulltext_code.py",
     params=(
         COLLECTION_KEY, *LIBRARY_ARGS, CONFIG, TAG_PREFIX, MODEL,
+        Param("output", "Project-relative decision log CSV (default: "
+              "screening/fulltext_screening.csv).", kind="option",
+              flag="--output", path=True),
         Param("limit", "Code at most N items (0 = all).", kind="option",
               flag="--limit", pattern=r"^[0-9]+$"),
         Param("sample", "Code a random sample of N items that have a PDF "

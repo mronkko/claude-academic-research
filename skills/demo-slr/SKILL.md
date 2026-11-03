@@ -197,7 +197,8 @@ include, borderline or exclude, with a one-sentence reason. It is cheap and
 fast, and a real review checks a sample of its decisions by hand.
 
 **`start_abstract_screen`** with `user=true`, the collection key, `config`,
-`model=fast` and `dry_run=true` first; print the cost line, and run it for
+`model=fast`, `output=output/demo/<DEMO_ID>/screening/abstract_screening.csv`
+(keeps the log inside the demo folder) and `dry_run=true` first; print the cost line, and run it for
 real without asking unless the floor is above $0.50. Report counts per
 decision, then a short table of the included and borderline papers with the
 reason; give the excluded ones as counts per exclusion code.
@@ -229,6 +230,7 @@ quotes its evidence word for word, which step 9 can then check.
 
 Pick the included items that have a PDF, at most 3. Run
 **`start_fulltext_code`** with `user=true`, `only_keys=<their keys>`,
+`output=output/demo/<DEMO_ID>/screening/fulltext_screening.csv`,
 `dry_run=true`, print the cost line, then run it with `limit=3` and the
 balanced tier (`model=balanced`), asking only if the floor is above $0.50.
 Show each paper's coded fields and its evidence quotes.
