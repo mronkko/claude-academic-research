@@ -21,8 +21,9 @@ QUERY_DEFS = [
     ),
 ]
 
-# OpenAlex / Semantic Scholar: a paper must match a term from block A AND
-# a term from block B.
+# OpenAlex / Semantic Scholar: `search.py` runs block A and block B as two
+# separate queries, not as A AND B. So put phrases that already join both
+# concepts in block A ("<concept A> <concept B>") and leave block B empty.
 BLOCK_A_TERMS = [
     # "<first concept term>",
 ]

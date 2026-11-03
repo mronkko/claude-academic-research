@@ -1315,6 +1315,10 @@ START_IMPORT = Tool(
               "collection.", kind="switch", flag="--no-create-collection",
               type="boolean"),
         CONFIG, TAG_PREFIX,
+        Param("created_keys_out", "Project-relative file to write the keys "
+              "of the items this run CREATED to (one per line; not items it "
+              "merely patched), so demo_cleanup can delete exactly those.",
+              kind="option", flag="--created-keys-out", path=True),
         Param("dry_run", "Parse and report; write nothing to Zotero.",
               kind="switch", flag="--dry-run", type="boolean"),
     ),
