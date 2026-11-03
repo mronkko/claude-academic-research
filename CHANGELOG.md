@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.1] — 2026-11-03
+
+### Changed
+
+- **`demo-slr` pre-flight prints the LLM configuration** (provider, whether
+  it was selected, credential status, base URL) and stops if the
+  credential is missing, before it shows the models it will use.
+
 ## [0.31.0] — 2026-11-03
 
 ### Added

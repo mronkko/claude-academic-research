@@ -52,9 +52,16 @@ the server (see **Terminal equivalent** in the glossary).
 3. Which search databases are configured:
    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_database_access.py"`.
    Keep the list for step 3.
-4. Which models the demo will screen and code with:
+4. The LLM configuration. First
+   `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_llm_provider.py"`: print
+   its lines to the presenter as they are (provider, whether it was selected
+   or is the registry default, whether a credential is configured, base
+   URL; it never prints a key). If `credential:` says `missing`, stop and
+   tell them to run `/setup`; if `selected:` says `no (registry default)`,
+   say so and confirm that provider is the one they want. Then which models
+   the demo will screen and code with:
    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_demo_models.py"`. Show
-   the presenter its lines as they are: the provider, and the model behind
+   its lines as they are too: the provider, and the model behind
    `--model fast` (abstract screening, step 5) and `--model balanced`
    (full-text coding, step 7). If a line says "not resolved", tell the
    presenter that step's model is unknown and offer to stop and pin one
