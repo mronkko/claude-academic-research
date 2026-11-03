@@ -1405,3 +1405,32 @@ def test_merge_retries_a_child_whose_version_moved(monkeypatch) -> None:
     assert stats["moved_pdf_keys"] == ["PDF"]
     assert calls == ["", "bb"]
     assert pdf_v2["data"]["parentItem"] == "KEEPER"
+
+
+def test_other_item_type_counts_reports_what_a_journal_only_stage_skips():
+    client = zotero_io.ZoteroClient.__new__(zotero_io.ZoteroClient)
+
+    class _Z:
+        def collection_items(self, key, **kw):
+            assert "conferencePaper" in kw["itemType"]
+            return [{"data": {"itemType": "conferencePaper"}},
+                    {"data": {"itemType": "conferencePaper"}},
+                    {"data": {"itemType": "report"}}]
+
+        def everything(self, page):
+            return page
+
+    client._client = lambda: _Z()
+    client._resolve_collection_for_read = lambda c, z: "KEY12345"
+    assert client.other_item_type_counts("KEY12345") == {
+        "conferencePaper": 2, "report": 1}
+
+
+def test_other_item_type_counts_never_raises():
+    client = zotero_io.ZoteroClient.__new__(zotero_io.ZoteroClient)
+
+    def _boom():
+        raise RuntimeError("zotero down")
+
+    client._client = _boom
+    assert client.other_item_type_counts("KEY12345") == {}

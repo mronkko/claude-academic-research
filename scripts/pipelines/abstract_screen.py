@@ -783,6 +783,16 @@ def main() -> int:
           f"collection={args.collection})...", flush=True)
     coll_items = zot.collection_items(args.collection, item_type="journalArticle")
     print(f"  {len(coll_items)} items in collection", flush=True)
+    others = getattr(zot, "other_item_type_counts", lambda _c: {})(args.collection)
+    if others:
+        print(
+            f"  NOT SCREENED: {sum(others.values())} item(s) that are not "
+            f"journal articles ("
+            + ", ".join(f"{n} {kind}" for kind, n in sorted(others.items()))
+            + "). This stage screens journal articles only; they stay in "
+            "the collection untagged.",
+            flush=True,
+        )
 
     if args.csv_backfill:
         return _run_csv_backfill(zot, coll_items, output_path, stage_prefix)

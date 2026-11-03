@@ -909,6 +909,37 @@ class ZoteroClient:
         key = self._resolve_collection_for_read(collection, z)
         return _everything(z, lambda: z.collection_items(key, itemType=item_type))
 
+    #: Parent item types besides journal articles that a search import can
+    #: create (`import_to_zotero._CROSSREF_TYPE_TO_ZOTERO`). Used only to
+    #: count what a journal-article-only stage leaves out.
+    _OTHER_PARENT_TYPES = (
+        "conferencePaper", "bookSection", "book", "report", "thesis",
+        "preprint", "webpage", "document",
+    )
+
+    def other_item_type_counts(self, collection: str) -> dict[str, int]:
+        """Counts of non-journal-article parent items in a collection.
+
+        The screening stages list `journalArticle` items only, so a
+        conference paper that the import correctly typed as such is left
+        out without a word: a live demo imported 15 records and screened
+        14. This counts what was left out so the stage can say so; it
+        never raises, because the count is a courtesy.
+        """
+        try:
+            z = self._client()
+            key = self._resolve_collection_for_read(collection, z)
+            types = " || ".join(self._OTHER_PARENT_TYPES)
+            items = _everything(z, lambda: z.collection_items(key, itemType=types))
+        except Exception:  # noqa: BLE001 — informational only
+            return {}
+        counts: dict[str, int] = {}
+        for item in items:
+            kind = (item.get("data") or {}).get("itemType", "")
+            if kind:
+                counts[kind] = counts.get(kind, 0) + 1
+        return counts
+
     def _resolve_collection_for_read(self, collection: str, z) -> str:
         """A collection key for `collection`, resolving a name if needed.
 
