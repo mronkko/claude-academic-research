@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -571,3 +572,17 @@ def test_real_pdf_consent_round_trip(project, tmp_path) -> None:
     cfg = tomllib.loads(
         (home / ".config" / "academic-research" / "config.toml").read_text())
     assert cfg["publisher_consent"]["sage"]["automated"] == "deny"
+
+
+def test_stale_reason_flags_a_server_older_than_the_plugin_on_disk(monkeypatch) -> None:
+    monkeypatch.syspath_prepend(str(REPO / "mcp"))
+    import server
+
+    monkeypatch.setattr(server, "STARTED_AT", time.time() + 3600)
+    monkeypatch.setattr(server, "STARTED_VERSION", server.plugin_version())
+    assert server.stale_reason() == ""
+    monkeypatch.setattr(server, "STARTED_VERSION", "0.0.1")
+    assert "plugin on disk" in server.stale_reason()
+    monkeypatch.setattr(server, "STARTED_VERSION", server.plugin_version())
+    monkeypatch.setattr(server, "STARTED_AT", 0.0)
+    assert "changed after this server started" in server.stale_reason()

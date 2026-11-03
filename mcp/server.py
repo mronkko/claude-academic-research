@@ -43,6 +43,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -92,6 +93,33 @@ def plugin_version() -> str:
         return str(json.loads(manifest.read_text(encoding="utf-8"))["version"])
     except (OSError, ValueError, KeyError):
         return "0"
+
+
+#: What this process started with. A host keeps its MCP servers running
+#: across plugin updates and `/mcp` reconnects, so a long-lived server can
+#: serve a tool list older than the files on disk (seen live: new `start_search`
+#: parameters were rejected until the window was reloaded).
+STARTED_AT = time.time()
+STARTED_VERSION = plugin_version()
+
+
+def stale_reason() -> str:
+    """Why this server is older than the plugin on disk, or "" if it is not.
+
+    Two signals: the manifest version moved on, or a server/registry file was
+    written after the process started (which also catches a development
+    checkout edited between releases).
+    """
+    now = plugin_version()
+    if now != STARTED_VERSION:
+        return f"server started as {STARTED_VERSION}, plugin on disk is {now}"
+    for name in ("server.py", "tool_registry.py", "job_runner.py"):
+        try:
+            if (_HERE / name).stat().st_mtime > STARTED_AT:
+                return f"mcp/{name} changed after this server started"
+        except OSError:
+            continue
+    return ""
 
 
 def project_dir() -> Path:
@@ -294,7 +322,20 @@ def call_check_setup(tool: reg.Tool, arguments: dict, project: Path) -> dict:
     build_argv(tool, arguments, project)  # rejects any argument
     first = run_script(tool.script, [], project, tool.timeout)
     configured = "NOT CONFIGURED" not in first["output"] and first["exit_code"] == 0
-    summary: dict = {"configured": configured, "project_dir": str(project)}
+    summary: dict = {"configured": configured, "project_dir": str(project),
+                     "server_version": STARTED_VERSION}
+    stale = stale_reason()
+    if stale:
+        # Reconnecting from /mcp did not restart the process in the live
+        # run; reloading the window did.
+        summary["stale_server"] = True
+        summary["stale_reason"] = stale
+        summary["next_step"] = (
+            "This MCP server is older than the plugin on disk, so its tool "
+            "list may be out of date. Reload the window (VS Code: Command "
+            "Palette, 'Developer: Reload Window'; terminal: restart Claude "
+            "Code), then resume. A /mcp reconnect may not restart it."
+        )
     run = first
     if configured:
         second = run_script(tool.extra_scripts[0], [], project, tool.timeout)
@@ -320,7 +361,7 @@ def call_check_setup(tool: reg.Tool, arguments: dict, project: Path) -> dict:
         summary["next_step"] = (
             "Run the setup wizard in a terminal; API keys typed into chat "
             "reach the model provider and the transcript."
-        )
+        ) + (" " + summary["next_step"] if stale else "")
     return _result(tool, run, project, summary, [])
 
 

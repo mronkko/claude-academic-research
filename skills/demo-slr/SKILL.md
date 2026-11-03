@@ -68,7 +68,12 @@ Tell the audience in one sentence that this checks the machine is ready.
 
 1. **`check_setup`** (terminal equivalent:
    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_configured.py"`). If it
-   is not configured, stop and tell the user to run `/setup` first.
+   is not configured, stop and tell the user to run `/setup` first. If its
+   summary has `stale_server: true`, stop: this server is older than the
+   plugin on disk and may lack the tool parameters the demo passes. Tell the
+   user to reload the window (VS Code: Command Palette, "Developer: Reload
+   Window"; a `/mcp` reconnect may not restart it), then to run the demo
+   again.
 2. Zotero Desktop 10 must be running with local writes authorised (`/setup`
    verifies this). An LLM provider key must be configured. `pdftotext`
    (poppler) must be on the PATH. Report what is missing and stop. Say that
