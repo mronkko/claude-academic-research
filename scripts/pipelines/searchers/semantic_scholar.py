@@ -65,6 +65,9 @@ class SemanticScholarSearch(SearchSource):
         # so the second block query (run() calls _fetch_all twice) doesn't
         # re-send the dead key and re-print the warning.
         self._key_rejected = False
+        # The `total` the bulk endpoint reported for the last query; run()
+        # hands it to `record_total` for the pilot's per-database counts.
+        self._last_total: int | None = None
 
     def credentials_error(self, ctx: SearchContext) -> str | None:
         # Free tier works; key only recommended. Never a hard error.
@@ -119,6 +122,7 @@ class SemanticScholarSearch(SearchSource):
             query = " | ".join(f'"{t}"' for t in terms)
             print(f"  Semantic Scholar {label}: ", end="", flush=True)
             papers = self._fetch_all(query, ctx, api_key)
+            self.record_total(label, getattr(self, "_last_total", None))
             # Client-side scope filter — S2 does not do this server-side.
             kept = [p for p in papers if self._paper_in_scope(p, ctx)]
             print(f"{len(kept)} results (from {len(papers)} unfiltered)",
@@ -385,7 +389,12 @@ class SemanticScholarSearch(SearchSource):
             data = resp.json()
             batch = data.get("data") or []
             papers.extend(batch)
+            self._last_total = data.get("total")
             token = data.get("token")
+            if ctx.max_records and len(papers) >= ctx.max_records:
+                # A pilot: one bulk page is the first page.
+                del papers[ctx.max_records:]
+                break
             if not token or not batch:
                 break
             time.sleep(RATE_LIMIT_SLEEP)

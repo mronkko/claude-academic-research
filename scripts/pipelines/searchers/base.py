@@ -226,6 +226,12 @@ class SearchContext:
       rather than read by the searcher, so a context built in a test is
       keyless unless the test says otherwise. It decides how OpenAlex
       pages — see `searchers.openalex`.
+    - `max_records`: stop each keyword query after this many records
+      (0 = no cap). It exists for piloting: the first page of results
+      plus the API's own hit total answers "how big is this query in
+      this database" in one cheap request. A capped run is not a
+      formal search — `search.py` records the cap in
+      `search_metadata.json` so nothing downstream mistakes it for one.
     - `session`: the shared `requests.Session` every HTTP-based source
       must use — see `http()`.
     """
@@ -237,6 +243,7 @@ class SearchContext:
     search_fields: str = "all"
     mailto: str = ""
     openalex_api_key: str = field(default="", repr=False)
+    max_records: int = 0
     session: Any = field(default=None, repr=False)
 
     def journal_title_keys(self) -> frozenset[str]:
@@ -301,6 +308,24 @@ class SearchSource(ABC):
     # not failed, because a citation stream is a supplement to the
     # database search and not every database exposes the relation.
     supports_citation_search: bool = False
+
+    def record_total(self, label: str, total: int | None) -> None:
+        """Remember the hit count the database itself reported for a query.
+
+        `search.py` reads `api_totals` after `run()` to report how large
+        each query is in each database, which is the number a pilot is
+        for: with `ctx.max_records` set, the rows fetched are only the
+        first page and say nothing about volume. A non-integer (the API
+        reported nothing) is ignored rather than recorded as zero.
+        """
+        if isinstance(total, int):
+            self.__dict__.setdefault("api_totals", {})[label] = total
+
+    @property
+    def total_hits(self) -> int | None:
+        """Sum of the recorded per-query hit totals, or None if none."""
+        totals = self.__dict__.get("api_totals")
+        return sum(totals.values()) if totals else None
 
     @abstractmethod
     def run(self, config, ctx: SearchContext) -> list[dict]:

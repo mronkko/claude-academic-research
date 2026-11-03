@@ -52,6 +52,13 @@ the server (see **Terminal equivalent** in the glossary).
 3. Which search databases are configured:
    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_database_access.py"`.
    Keep the list for step 3.
+4. Which models the demo will screen and code with:
+   `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check_demo_models.py"`. Show
+   the presenter its lines as they are: the provider, and the model behind
+   `--model fast` (abstract screening, step 5) and `--model balanced`
+   (full-text coding, step 7). If a line says "not resolved", tell the
+   presenter that step's model is unknown and offer to stop and pin one
+   (`resolve_models.py`, see `setup`) before starting.
 
 ## Steps
 
@@ -77,20 +84,46 @@ Set `DEMO_ID` = `demo-` + today's date and time as `YYYYMMDD-HHMM`.
 
 Approve the filled configs (show the two files' key lines, not the whole text).
 
-### 3. Search across all configured databases
+### 3. Pilot the databases, then search one
 
-Run **`start_search`** with `databases` = every configured database from the
-pre-flight, `streams=keyword`, and the project's config. Show per-database
-counts and the deduplicated total. Let the presenter choose which databases
-to keep and how many records to carry on (default: all databases, trimmed
-to 8 records with
-`uv run "${CLAUDE_PLUGIN_ROOT}/scripts/pipelines/filter_search_results.py" --input <csv> --output <csv> --top-n 8`).
-Approve.
+The demo pilots first, as a real review does, but cheaply: one page of
+results per database, not the whole literature.
+
+**Pilot.** Run **`start_search`** with `databases` = every configured
+database from the pre-flight, `streams=keyword`, `max_records=15`,
+`config=output/demo/<DEMO_ID>/search_config.py`,
+`output_dir=output/demo/<DEMO_ID>/pilot` and
+`metadata_dir=output/demo/<DEMO_ID>/pilot`. Each database stops after its
+first page and reports how many records the query matches in total. Read
+those totals from `per_database_api_totals` in
+`output/demo/<DEMO_ID>/pilot/search_metadata.json` (the fetched rows are
+only a page and say nothing about volume) and show them as a table, one
+row per database. A database that failed or was skipped appears in the
+run's `summary`; report it rather than hiding it. Time the pilot out loud:
+this step should take seconds.
+
+**Suggest one database.** Recommend, in this order, the first that is
+configured: **Web of Science**, then **Scopus**, then OpenAlex, then
+Semantic Scholar. Give the reason in a sentence: Web of Science and Scopus
+are faster to import (creators arrive split and bibliographic detail is
+complete, so no per-record Crossref lookup) and more complete (abstracts
+arrive with the search). Say that the totals above are what each database
+holds for this query, and that a real review would pick on coverage too.
+Let the presenter choose another.
+
+**Search the chosen database.** Run **`start_search`** again with
+`databases=<chosen>`, `streams=keyword`, `max_records=15`, the same
+`config`, `output_dir=output/demo/<DEMO_ID>/analysis/raw` and
+`metadata_dir=output/demo/<DEMO_ID>`. This first page is the demo's
+records; show the titles. Scopus returns at most 25 records per page,
+which is why the cap is 15. Say once that a capped run is a pilot and not
+a formal search; `search_metadata.json` records the cap. Approve.
 
 ### 4. Import
 
-Create the collection named `<DEMO_ID>` and import the trimmed records:
-**`start_import`** with `collection=<DEMO_ID>` and the created-keys file
+Create the collection named `<DEMO_ID>` and import the first-page records:
+**`start_import`** with `collection=<DEMO_ID>`, `input=output/demo/<DEMO_ID>/analysis/raw/search_results.csv`
+and the created-keys file
 (`output/demo/<DEMO_ID>/created.keys`; terminal equivalent:
 `import_to_zotero.py ... --created-keys-out`). Then **`start_enrich_abstracts`**
 for the collection. Approve before the import.

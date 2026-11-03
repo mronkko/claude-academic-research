@@ -116,7 +116,13 @@ def get_text(
 
 def _extract(pdf_path: Path) -> str:
     """pdftotext's `-layout` and reading-order outputs, merged per page."""
-    import pdf_columns
+    try:
+        import pdf_columns
+    except ModuleNotFoundError:
+        # Loaded by file path (importlib.util.spec_from_file_location),
+        # so the sibling module is not on sys.path: find it next to this file.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import pdf_columns
 
     return pdf_columns.merge(
         _run_pdftotext(pdf_path, "-layout"), _run_pdftotext(pdf_path))

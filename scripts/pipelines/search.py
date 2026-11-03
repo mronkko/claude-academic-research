@@ -412,9 +412,19 @@ def main() -> int:
                              "CITATION_SEEDS). Default: both. Use "
                              "`--streams citation` to pilot a seed before "
                              "committing to a full run.")
+    parser.add_argument("--max-records", type=int, default=0,
+                        help="Pilot mode: stop each keyword query after the "
+                             "first N records (one page) and report the "
+                             "hit total each database gives for it. "
+                             "Default 0 = fetch everything. A capped run is "
+                             "recorded as such in search_metadata.json and "
+                             "is not a formal search; Scopus returns at "
+                             "most 25.")
     progress_json.add_argument(parser)
     args = parser.parse_args()
     progress_json.configure(args.progress_json)
+    if args.max_records < 0:
+        sys.exit("ERROR: --max-records must be 0 (no cap) or a positive number.")
 
     streams = [s.strip() for s in args.streams.split(",") if s.strip()]
     unknown_streams = [s for s in streams if s not in ("keyword", "citation")]
@@ -450,6 +460,7 @@ def main() -> int:
         openalex_api_key=config_get(
             "openalex", "api_key", env="OPENALEX_API_KEY",
         ),
+        max_records=args.max_records,
     )
 
     registry = searchers_by_name()
@@ -517,6 +528,9 @@ def main() -> int:
         print(f"  Blocks:    A={a} terms, B={b} terms (OpenAlex/S2)")
     print(f"  Fields:    {'title+abstract only' if search_fields == 'title_abstract' else 'full text where available (OpenAlex); title/abstract/keywords on Scopus + WoS'}")
     print(f"  Streams:   {', '.join(streams)}")
+    if ctx.max_records:
+        print(f"  PILOT:     first {ctx.max_records} record(s) per query only "
+              f"— not a formal search")
     if keyword_dbs != citation_dbs:
         # Only worth the lines when the two differ; otherwise the
         # Databases line above already said it.
@@ -541,6 +555,7 @@ def main() -> int:
                        streams=streams, queued=len(selected))
     all_rows: list[dict] = []
     counts: dict = {}
+    api_totals: dict = {}
     citation_counts: dict = {}
     failed: dict[str, str] = {}
     skipped: dict[str, str] = {}
@@ -599,6 +614,11 @@ def main() -> int:
                                queued=len(selected))
             continue
         counts[name] = len(rows)
+        # getattr: a source is any object with `run`, and only the
+        # built-in ones record the database's own hit total.
+        total_hits = getattr(source, "total_hits", None)
+        if total_hits is not None:
+            api_totals[name] = total_hits
         citation_counts[name] = sum(
             1 for r in rows if r.get("discovery_source") == DISCOVERY_CITATION
         )
@@ -684,6 +704,14 @@ def main() -> int:
         "journals": {issn: cfg.JOURNALS[issn][1] for issn in ctx.issns},
         "journal_count": len(cfg.JOURNALS),
         "per_database_counts": counts,
+        # What each database said the keyword queries match, which for a
+        # pilot (`max_records` > 0) is the number that matters: the rows
+        # fetched are only the first page. Absent for a database that
+        # reported no total.
+        "per_database_api_totals": api_totals,
+        # 0 = a full search. Anything else marks the output as a pilot, so
+        # no later stage or manuscript statistic reads it as the corpus.
+        "max_records": ctx.max_records,
         "total_raw_rows": len(all_rows),
         "total_unique_records": len(deduped),
         "records_without_doi": no_doi_count,
@@ -739,7 +767,9 @@ def main() -> int:
     )
 
     progress_json.emit(
-        "summary", per_database_counts=counts, skipped=skipped,
+        "summary", per_database_counts=counts,
+        per_database_api_totals=api_totals, max_records=ctx.max_records,
+        skipped=skipped,
         raw_rows=len(all_rows), unique_records=len(deduped),
         records_without_doi=no_doi_count, doctypes=doctype_counts,
         artifacts=[str(csv_dedup), str(csv_raw), str(metadata_path),

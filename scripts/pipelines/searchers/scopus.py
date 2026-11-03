@@ -59,11 +59,51 @@ class ScopusSearch(SearchSource):
         for label, scopus_core, _wos_core in config.QUERY_DEFS:
             q = self._full_query(scopus_core, ctx)
             print(f"  Scopus {label}: ", end="", flush=True)
-            results = PybScopusSearch(q, download=True).results or []
-            print(f"{len(results)} results", flush=True)
+            if ctx.max_records:
+                results, total = self._first_page(
+                    PybScopusSearch, q, ctx.max_records,
+                )
+                self.record_total(label, total)
+                print(f"{len(results)} results (API total: {total})",
+                      flush=True)
+            else:
+                results = PybScopusSearch(q, download=True).results or []
+                print(f"{len(results)} results", flush=True)
             for r in results:
                 rows.append(self._result_to_row(r, label))
         return rows
+
+    @staticmethod
+    def _first_page(search_cls, query: str, limit: int) -> tuple[list, int]:
+        """The first `limit` results of a query and Scopus's hit total.
+
+        pybliometrics offers no page limit: constructed with
+        `download=True` it pages through every result, 25 per request in
+        the COMPLETE view, so a pilot of a broad query would cost
+        hundreds of calls to keep ten rows. This works around that in
+        two requests: `download=False` costs one request and yields only
+        the total (and writes no cache file, so a later full download is
+        unaffected), and one raw request fetches the first page, which is
+        handed to the same object so its own `results` parser builds the
+        records. That reaches into pybliometrics' private `_json`, so it
+        is a stopgap until the library has a page-limit argument
+        (BACKLOG D3); the live pilot is where a change would show.
+        """
+        from pybliometrics.utils import get_content
+        from pybliometrics.utils.constants import URLS
+
+        search = search_cls(query, download=False)
+        total = search.get_results_size()
+        if not total:
+            return [], 0
+        resp = get_content(
+            URLS["ScopusSearch"], "ScopusSearch",
+            {"query": query, "view": search._view,
+             "count": min(limit, 25), "start": 0},
+        )
+        entries = resp.json().get("search-results", {}).get("entry", [])
+        search._json = entries[:limit]
+        return list(search.results or [])[:limit], total
 
     def _result_to_row(self, r, label: str) -> dict:
         """One pybliometrics result → the common row schema."""

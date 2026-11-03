@@ -17,6 +17,11 @@ So each page is taken from whichever output suits it:
     page's table blocks verbatim from `-layout` between `TABLE_START` and
     `TABLE_END`, so the prose reads in order and the table stays aligned.
 
+A full-width head above the columns (title, authors) is taken from
+`-layout` rather than from the reading-order text: poppler's reading-order
+mode splits a widely letter-spaced title into one word per paragraph and
+scrambles its order, while `-layout` has it intact (see `_with_layout_head`).
+
 Both outputs hold every word, so a misjudged page costs table alignment
 or reading order on that page, never text. The two must have the same
 page count (one form feed per page); if they do not, `-layout` is kept.
@@ -29,6 +34,7 @@ review: prose paragraphs contiguous 37% -> 91%, table rows kept verbatim
 from __future__ import annotations
 
 import re
+from collections import Counter
 
 #: Marks the aligned copy of a two-column page's tables.
 TABLE_START = "[TABLES ON THIS PAGE, AS LAID OUT]"
@@ -98,9 +104,49 @@ def table_blocks(page: str) -> list[str]:
     return out
 
 
+def _with_layout_head(layout: str, reading: str, c: int) -> str:
+    """`reading`, with the full-width head set from `layout`.
+
+    The head is every line above the first line that is two-sided at the
+    gutter: a title, author block or running head spanning the page.
+    Poppler's reading-order mode can emit such a block word by word and
+    out of order ("Intra-cultural / Implications / Variation: / for ..."),
+    where `-layout` keeps it intact. The head's words open the
+    reading-order text too, so they are matched off its start as a
+    multiset and the remainder is appended to the layout head.
+
+    Strict by design: if a word that is not in the head turns up before
+    every head word has been matched, the two outputs do not line up the
+    way this assumes and `reading` is returned unchanged, which is the
+    behaviour before this existed. Nothing is dropped either way.
+    """
+    lines = layout.split("\n")
+    first = next((i for i, ln in enumerate(lines) if _two_sided(ln, c)), 0)
+    head = [" ".join(ln.split()) for ln in lines[:first]]
+    while head and not head[0]:
+        head.pop(0)
+    while head and not head[-1]:
+        head.pop()
+    need = Counter(w for ln in head for w in ln.split())
+    left = sum(need.values())
+    if not left:
+        return reading
+    for m in re.finditer(r"\S+", reading):
+        if need[m.group()] <= 0:
+            return reading
+        need[m.group()] -= 1
+        left -= 1
+        if not left:
+            tail = reading[m.end():].lstrip("\n")
+            return "\n".join(head) + "\n\n" + tail
+    return reading
+
+
 def merge_page(layout: str, reading: str) -> str:
-    if gutter(layout) is None:
+    c = gutter(layout)
+    if c is None:
         return layout
+    reading = _with_layout_head(layout, reading, c)
     if table_rows(layout) < _TABLE_ROWS:
         return reading
     tables = "\n\n".join(table_blocks(layout))

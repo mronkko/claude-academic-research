@@ -64,9 +64,16 @@ class WosSearch(SearchSource):
             print(f"  WoS    {label}: ", end="", flush=True)
             data = self._fetch_page(ctx, api_key, q, first_record=1, count=1)
             total = data.get("QueryResult", {}).get("RecordsFound", 0)
+            self.record_total(label, total)
             first = 1
             page_size = 100
-            while first <= total:
+            # A pilot wants the first page only: shrink the page to the
+            # cap and stop after it, so the whole run is two requests.
+            fetch_upto = total
+            if ctx.max_records:
+                page_size = min(page_size, ctx.max_records)
+                fetch_upto = min(total, ctx.max_records)
+            while first <= fetch_upto:
                 data = self._fetch_page(ctx, api_key, q, first_record=first,
                                         count=page_size)
                 recs_data = (data.get("Data", {}).get("Records", {})

@@ -22,6 +22,85 @@ directory — not checked in because it references machine-local paths).
 
 ---
 
+## `demo-slr` changes (noted 2026-11-03; D1, D2 implemented, uncommitted)
+
+Requested by the user after a walkthrough of `skills/demo-slr/SKILL.md`.
+
+**Status (2026-11-03): D1 and D2 are implemented, not yet committed or
+live-tested.** D1: `scripts/setup/check_demo_models.py`, pre-flight step 4.
+D2: `search.py --max-records` (searchers honour `SearchContext.max_records`
+and record the database's own hit total via `record_total`; the totals land
+in `search_metadata.json` as `per_database_api_totals`, the cap as
+`max_records`), exposed on `start_search` with `output_dir` / `metadata_dir`;
+`demo-slr` step 3 is now pilot-then-search. Nothing here has run against a
+real WoS, Scopus, OpenAlex or Semantic Scholar account. The Scopus first page
+is the fragile part (D3). The resolved Scopus abstract question: pybliometrics
+defaults to the COMPLETE view for `subscriber=True`, which carries
+`description`, so abstracts should arrive; a live run is still the proof.
+
+- **D1 — pre-flight reports the models the demo will use.** The
+  pre-flight should tell the user which screening and coding models are
+  configured for the demo, before step 1. The demo runs abstract
+  screening with `model=fast` (step 5) and full-text coding with
+  `model=balanced` (step 7), and the demo configs leave the model pins
+  empty, so the answer is whatever those tiers resolve to for the
+  user's provider. **Files to look at:** `skills/demo-slr/SKILL.md`
+  (Pre-flight), `scripts/core/models.py` (tier mapping and aliases),
+  `scripts/setup/resolve_models.py` (fills pins at bootstrap),
+  `templates/demo_screening_config.py`. Open question for
+  implementation: whether an existing script already reports the
+  resolved tier-to-model mapping without reading `config.toml`
+  (skills must never read it); if not, a `check_*`-style status script
+  is needed.
+- **D2 — a pilot step before the search.** The demo currently runs one
+  formal `start_search` across every configured database (step 3) and
+  trims afterwards; the real workflow pilots first (`systematic-review`,
+  "Pilot before the formal run"). Add a pilot to the demo that (a) shows
+  item counts per database for the approved query and (b) suggests one
+  database to proceed with, then (c) runs the search against that one
+  database only and takes just the first page of results. Goal: much
+  faster demo, and it shows the pilot idea. Replaces the current step 3
+  "all databases, then trim to 8" flow, so the `filter_search_results.py
+  --top-n 8` trim may become unnecessary. **Open questions for
+  implementation:** how to get per-database counts cheaply (the
+  single-database `search_<db>.py` pilot wrappers, or a count-only mode
+  if one exists — `search.py` has no max-results or count-only flag
+  today); how to limit a run to the first page (a new flag or config
+  key, or keep the trim). **Decided (2026-11-03): the suggested
+  database is WoS if configured, else Scopus, else the rest**
+  (OpenAlex, Semantic Scholar); the reason to give the presenter is
+  that these are faster and more complete. Why faster: WoS and Scopus
+  rows carry creators already split at the comma plus volume, issue,
+  pages and type, so `import_to_zotero.py` builds the item with no
+  Crossref fetch (OpenAlex and Semantic Scholar rows need one Crossref
+  call per DOI). Why more complete: both searchers fill the `abstract`
+  column (`wos.py` from the full-record metadata, `scopus.py` from
+  pybliometrics' `description`), so `start_enrich_abstracts` has less
+  to do. **Unverified:** which Scopus API view the searcher requests;
+  `description` may be empty on a standard-view account, so test live
+  before promising abstracts. Also **cap the first-page import at a
+  small number of records** (around 10–20; OpenAlex's `PER_PAGE` is
+  200, far more than a 10-minute demo wants). **Files to look at:**
+  `skills/demo-slr/SKILL.md` step 3, `scripts/pipelines/search.py`,
+  `scripts/pipelines/search_<db>.py`, `scripts/pipelines/searchers/`,
+  `templates/demo_search_config.py`, and `pilot_analyze.py` for the
+  existing pilot summaries. Check `tests/unit/test_mcp_tool_schema_sync.py`
+  if a script flag that `start_search` passes changes.
+
+- **D3 — ask pybliometrics for a page limit.** `searchers/scopus.py`
+  `_first_page` fetches a Scopus first page by calling `get_content`
+  itself and assigning pybliometrics' private `_json`, because
+  `ScopusSearch` always pages through every result (25 per request in
+  COMPLETE view). Submit a feature request upstream
+  (pybliometrics-dev/pybliometrics) for a `max_results` / page-limit
+  argument, then replace the workaround. Until then a pybliometrics
+  release that renames `_json`, `_view` or `utils.get_content` breaks the
+  demo pilot's Scopus path (the full search is unaffected). **Files:**
+  `scripts/pipelines/searchers/scopus.py`,
+  `tests/unit/test_search_max_records.py`.
+
+---
+
 ## 0.25.0 release — audit fixes and agent-first redesign (2026-10-15)
 
 - **P20 — the setup wizard writes no permission rules.** **Status: done

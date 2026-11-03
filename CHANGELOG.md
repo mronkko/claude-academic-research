@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.0] — 2026-11-03
+
+### Added
+
+- **`demo-slr` pilots the databases before it searches.** Step 3 now runs
+  one capped search across every configured database, shows how many
+  records the query matches in each, suggests one (Web of Science, then
+  Scopus, then OpenAlex, then Semantic Scholar: faster to import and
+  more complete) and imports only its first page. New
+  `search.py --max-records N` (and `max_records`, `output_dir`,
+  `metadata_dir` on `start_search`); the database totals are written to
+  `search_metadata.json` as `per_database_api_totals`, and the cap as
+  `max_records` so a pilot is never mistaken for a formal search. The
+  Scopus first page reaches into pybliometrics' private `_json` until the
+  library has a page limit (BACKLOG D3).
+- **`demo-slr` pre-flight reports the models it will use**
+  (`scripts/setup/check_demo_models.py`): the provider and the model
+  behind `--model fast` (screening) and `--model balanced` (coding).
+
+### Fixed
+
+- **A full-width title above a two-column body is no longer scrambled.**
+  Poppler's reading-order mode split a widely spaced title into one word
+  per paragraph; the head above the columns now comes from `-layout`.
+- **`pdf_text_cache` works when loaded by file path**; it imported
+  `pdf_columns` by bare name and failed at the first extraction.
+
+### Note
+
+- Text extraction is `EXTRACTION_VERSION = 2` since 0.30.0: cache files are
+  named `<key>-<hash>.v2.txt`, so a consumer globbing `<key>-*.txt` meets
+  both generations for one attachment. Treat the current version as the
+  only valid text.
+
 ## [0.30.0] — 2026-11-01
 
 ### Fixed

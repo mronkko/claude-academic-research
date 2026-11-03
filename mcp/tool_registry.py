@@ -1268,6 +1268,19 @@ START_SEARCH = Tool(
               "`title_abstract` (comparable across databases).",
               kind="option", flag="--search-fields",
               enum=("all", "title_abstract")),
+        Param("max_records", "Pilot: fetch only the first N records of "
+              "each keyword query (Scopus returns at most 25) and report "
+              "the hit total each database gives. 0 = a full search "
+              "(default). A capped run is marked in search_metadata.json "
+              "and is not a formal search.", kind="option",
+              flag="--max-records", pattern=r"^[0-9]+$"),
+        Param("output_dir", "Project-relative directory for the result "
+              "CSVs (default: analysis/raw).", kind="option",
+              flag="--output-dir", path=True),
+        Param("metadata_dir", "Project-relative directory for "
+              "search_metadata.json and search_run.json (default: the "
+              "project root).", kind="option", flag="--metadata-dir",
+              path=True),
     ),
     job=True,
     read_only=False,

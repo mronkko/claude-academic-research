@@ -88,3 +88,38 @@ def test_pages_are_merged_one_for_one_and_a_count_mismatch_keeps_layout():
     reading = "\f".join(["single, reading order", _reading()])
     assert pc.merge(layout, reading) == "\f".join([single, _reading()])
     assert pc.merge(layout, "only one page") == layout
+
+
+TITLE_LAYOUT = [
+    "        Intra-cultural                  Variation:                    Evidence                      and",
+    "      Implications                for      International                             Business",
+    "                                    Kevin Y. Au*",
+]
+# Poppler's reading-order mode: the title split into one word per paragraph.
+TITLE_SCRAMBLED = (
+    "Intra-cultural\nImplications\n\nVariation:\nfor\n\nEvidence\n\n"
+    "International\n\nand\n\nBusiness\nKevin Y. Au*\n\n"
+)
+
+
+def _titled_page() -> str:
+    return "\n".join([*TITLE_LAYOUT, "", *_two_column().split("\n")])
+
+
+def test_a_full_width_title_above_the_columns_is_read_from_layout():
+    page = _titled_page()
+    out = pc.merge_page(page, TITLE_SCRAMBLED + _reading())
+    assert out.startswith(
+        "Intra-cultural Variation: Evidence and\n"
+        "Implications for International Business\n"
+        "Kevin Y. Au*\n\n"
+    )
+    # The body is the reading-order text, with no title word repeated or lost.
+    assert out.endswith(_reading())
+    assert out.count("Intra-cultural") == 1
+
+
+def test_a_head_that_does_not_line_up_falls_back_to_reading_order():
+    page = _titled_page()
+    reading = "A word the layout head lacks\n" + TITLE_SCRAMBLED + _reading()
+    assert pc.merge_page(page, reading) == reading

@@ -149,3 +149,20 @@ def test_the_two_modes_are_merged_page_by_page(tmp_path: Path, cache_dir: Path) 
                       side_effect=lambda p, *f: outputs[f]), \
             patch("pdf_columns.merge", side_effect=lambda lay, rd: f"{lay}+{rd}"):
         assert pdf_text_cache.get_text("MRG0001", pdf, cache_dir=cache_dir) == "LAYOUT+READING"
+
+
+def test_extract_works_when_the_module_is_loaded_by_file_path(monkeypatch, tmp_path):
+    # A caller that loads pdf_text_cache.py by path has no scripts/pipelines
+    # on sys.path, so the sibling pdf_columns must be found next to the file.
+    import importlib.util
+    import sys
+
+    src = Path(__file__).resolve().parents[2] / "scripts" / "pipelines"
+    spec = importlib.util.spec_from_file_location(
+        "pdf_text_cache_by_path", src / "pdf_text_cache.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.delitem(sys.modules, "pdf_columns", raising=False)
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if Path(p).resolve() != src])
+    monkeypatch.setattr(module, "_run_pdftotext", lambda *a, **k: "one page")
+    assert module._extract(tmp_path / "x.pdf") == "one page"

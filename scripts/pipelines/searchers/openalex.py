@@ -58,11 +58,13 @@ def _filter_safe(term: str) -> str:
 
 def _page_by_cursor(
     fetch: Callable[[str], dict],
+    limit: int = 0,
 ) -> tuple[list[dict], int | None]:
     """Collect every result of a cursor-paged OpenAlex query.
 
     Returns the works and `meta.count` from the first page (None when
-    the API did not report one).
+    the API did not report one). A positive `limit` stops paging once
+    that many works are in hand (the pilot's first page).
     """
     works: list[dict] = []
     total: int | None = None
@@ -76,6 +78,8 @@ def _page_by_cursor(
         if not results:
             break
         works.extend(results)
+        if limit and len(works) >= limit:
+            return works[:limit], total
         cursor = (data.get("meta") or {}).get("next_cursor") or ""
         if cursor:
             time.sleep(RATE_LIMIT_SLEEP)
@@ -84,6 +88,8 @@ def _page_by_cursor(
 
 def _page_by_number(
     fetch: Callable[[int], dict],
+    limit: int = 0,
+    per_page: int = PER_PAGE,
 ) -> tuple[list[dict], int | None]:
     """Collect a query's results by `page=`, up to `PAGE_PAGING_LIMIT`.
 
@@ -94,7 +100,7 @@ def _page_by_number(
     works: list[dict] = []
     total: int | None = None
     page = 1
-    while page * PER_PAGE <= PAGE_PAGING_LIMIT:
+    while page * per_page <= PAGE_PAGING_LIMIT:
         data = fetch(page)
         if total is None:
             count = (data.get("meta") or {}).get("count")
@@ -103,9 +109,11 @@ def _page_by_number(
         if not results:
             break
         works.extend(results)
+        if limit and len(works) >= limit:
+            return works[:limit], total
         if total is not None and len(works) >= total:
             break
-        if len(results) < PER_PAGE:
+        if len(results) < per_page:
             break
         page += 1
         time.sleep(RATE_LIMIT_SLEEP)
@@ -198,9 +206,19 @@ class OpenAlexSearch(SearchSource):
                 )
                 query = ""
             print(f"  OpenAlex {label}: ", end="", flush=True)
-            works, total = self._fetch_all(query, block_filter, ctx)
-            print(_count_line(len(works), total, "results"), flush=True)
-            self._print_cap_warning(len(works), total, ctx)
+            works, total = self._fetch_all(
+                query, block_filter, ctx, limit=ctx.max_records,
+            )
+            self.record_total(label, total)
+            if ctx.max_records:
+                # Only the first page was asked for, so the usual
+                # "fetched fewer than the API total" warning would fire
+                # on every pilot and mean nothing.
+                print(f"{len(works)} results (API total: {total})",
+                      flush=True)
+            else:
+                print(_count_line(len(works), total, "results"), flush=True)
+                self._print_cap_warning(len(works), total, ctx)
             for w in works:
                 rows.append(self._work_to_row(w, label))
         return rows
@@ -298,7 +316,8 @@ class OpenAlexSearch(SearchSource):
         return ",".join(parts)
 
     def _fetch_all(self, query: str, filter_str: str,
-                   ctx: SearchContext) -> tuple[list[dict], int | None]:
+                   ctx: SearchContext,
+                   limit: int = 0) -> tuple[list[dict], int | None]:
         """Every work for a query, and OpenAlex's own total.
 
         Both streams — keyword and citation — come through here. With an
@@ -310,12 +329,20 @@ class OpenAlexSearch(SearchSource):
         the caller can print it beside the number actually fetched, and
         warn when the keyless cap is why the two differ.
         """
+        per_page = min(PER_PAGE, limit) if limit else PER_PAGE
+        # per_page rides along only for a capped run, so a full run keeps
+        # calling `_fetch_page` with its original four arguments.
+        extra = {"per_page": per_page} if limit else {}
         if ctx.openalex_api_key:
             return _page_by_cursor(
-                lambda cursor: self._fetch_page(query, filter_str, cursor, ctx),
+                lambda cursor: self._fetch_page(
+                    query, filter_str, cursor, ctx, **extra),
+                limit=limit,
             )
         return _page_by_number(
-            lambda page: self._fetch_page(query, filter_str, page, ctx),
+            lambda page: self._fetch_page(
+                query, filter_str, page, ctx, **extra),
+            limit=limit, per_page=per_page,
         )
 
     def _print_cap_warning(self, fetched: int, total: int | None,
@@ -325,12 +352,12 @@ class OpenAlexSearch(SearchSource):
             print(warning, flush=True)
 
     def _fetch_page(self, query: str, filter_str: str, position: str | int,
-                    ctx: SearchContext) -> dict:
+                    ctx: SearchContext, per_page: int = PER_PAGE) -> dict:
         """One page of `/works`. `position` is a cursor (`str`, keyed
         paging) or a 1-based page number (`int`, keyless paging)."""
         params: dict = {
             "filter": filter_str,
-            "per_page": PER_PAGE,
+            "per_page": per_page,
             "select": ",".join([
                 "id", "doi", "title", "publication_year", "publication_date",
                 "cited_by_count", "type", "authorships", "biblio",
