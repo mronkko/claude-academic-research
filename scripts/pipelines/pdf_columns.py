@@ -115,6 +115,9 @@ def _with_layout_head(layout: str, reading: str, c: int) -> str:
     reading-order text too, so they are matched off its start as a
     multiset and the remainder is appended to the layout head.
 
+    The head ends at the first run of two blank lines, so a page that is
+    mostly single-column does not pull its abstract into the head.
+
     Strict by design: if a word that is not in the head turns up before
     every head word has been matched, the two outputs do not line up the
     way this assumes and `reading` is returned unchanged, which is the
@@ -125,6 +128,12 @@ def _with_layout_head(layout: str, reading: str, c: int) -> str:
     head = [" ".join(ln.split()) for ln in lines[:first]]
     while head and not head[0]:
         head.pop(0)
+    # A mostly single-column page has no two-sided line until far down, so the
+    # head would run through the authors and abstract and never match the
+    # reading-order text. Two blank lines in a row end the title block.
+    gap = next((i for i in range(len(head) - 1) if not head[i] and not head[i + 1]), None)
+    if gap is not None:
+        head = head[:gap]
     while head and not head[-1]:
         head.pop()
     need = Counter(w for ln in head for w in ln.split())

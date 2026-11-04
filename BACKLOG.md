@@ -2237,3 +2237,12 @@ S10's `csl_json_to_zotero` reasoning) — but it surfaced two live defects.
   deletion in favor of `zotero-cli duplicates merge` but kept — see
   R7 (narrowed) above; it is a load-bearing pipeline call, not an
   agent-facing convenience.
+
+- **pdf_columns: page-1 titles that `pdftotext -layout` itself interleaves.**
+  When a sidebar callout or journal header shares lines with the title, both
+  `-layout` and reading order are scrambled, so `_with_layout_head` cannot
+  recover the title. Seen on a Wagenaar article (sidebar "Spotlight on ...")
+  and a PER / PELJ article (journal header). Known `pdftotext` limit; a fix
+  would need bbox-level extraction (`pdftotext -bbox-layout`) or an OCR pass.
+  Downstream pipelines should abstain on such rows rather than trust the
+  title.

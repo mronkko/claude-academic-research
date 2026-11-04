@@ -123,3 +123,35 @@ def test_a_head_that_does_not_line_up_falls_back_to_reading_order():
     page = _titled_page()
     reading = "A word the layout head lacks\n" + TITLE_SCRAMBLED + _reading()
     assert pc.merge_page(page, reading) == reading
+
+
+# A mostly single-column page: the first line two-sided at the gutter comes
+# only far down, so without the blank-line cap the head would take the
+# authors and the abstract too and fail the match.
+SPREAD_TITLE_LAYOUT = [
+    "   EXPERIENCESOF                 ADULTS                  WITH         LEARNING",
+    "       DISABILITIES: POSITIVE                       AND         NEGATIVE",
+    "                IMPACTS            AND          OUTCOMES",
+]
+SPREAD_TITLE_SCRAMBLED = (
+    "EXPERIENCESOF\n\nADULTS\n\nWITH\n\nDISABILITIES: POSITIVE\nIMPACTS\n\n"
+    "AND\n\nAND\n\nLEARNING\nNEGATIVE\n\nOUTCOMES\n\n"
+)
+
+
+def test_a_title_block_ends_at_two_blank_lines_on_a_mostly_single_column_page():
+    prose = ["Abstract. This study examined the life experiences of adults.", "More prose."]
+    page = "\n".join(
+        [*SPREAD_TITLE_LAYOUT, "", "", "Isabel Shessel and Henry B. Reiff", "", "", *prose,
+         "", "", *_two_column().split("\n")]
+    )
+    reading = SPREAD_TITLE_SCRAMBLED + "Isabel Shessel and Henry B. Reiff\n\n" + "\n".join(prose) + "\n" + _reading()
+    out = pc.merge_page(page, reading)
+    assert out.startswith(
+        "EXPERIENCESOF ADULTS WITH LEARNING\n"
+        "DISABILITIES: POSITIVE AND NEGATIVE\n"
+        "IMPACTS AND OUTCOMES\n\n"
+        "Isabel Shessel and Henry B. Reiff"
+    )
+    assert out.count("EXPERIENCESOF") == 1
+    assert out.count("Isabel Shessel") == 1
