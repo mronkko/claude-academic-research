@@ -104,7 +104,7 @@ def table_blocks(page: str) -> list[str]:
     return out
 
 
-def _with_layout_head(layout: str, reading: str, c: int) -> str:
+def _with_layout_head(layout: str, reading: str, c: int, *, cap: bool = False) -> str:
     """`reading`, with the full-width head set from `layout`.
 
     The head is every line above the first line that is two-sided at the
@@ -115,8 +115,11 @@ def _with_layout_head(layout: str, reading: str, c: int) -> str:
     reading-order text too, so they are matched off its start as a
     multiset and the remainder is appended to the layout head.
 
-    The head ends at the first run of two blank lines, so a page that is
-    mostly single-column does not pull its abstract into the head.
+    With `cap` (page 1 only), the head ends at the first run of two blank
+    lines, so a page that is mostly single-column does not pull its abstract
+    into the head. Later pages are left uncapped: their "head" is a running
+    head, often followed by a table that the uncapped head already keeps
+    aligned, and capping it cut such tables into reading-order columns.
 
     Strict by design: if a word that is not in the head turns up before
     every head word has been matched, the two outputs do not line up the
@@ -132,7 +135,7 @@ def _with_layout_head(layout: str, reading: str, c: int) -> str:
     # head would run through the authors and abstract and never match the
     # reading-order text. Two blank lines in a row end the title block.
     gap = next((i for i in range(len(head) - 1) if not head[i] and not head[i + 1]), None)
-    if gap is not None:
+    if cap and gap is not None:
         head = head[:gap]
     while head and not head[-1]:
         head.pop()
@@ -151,11 +154,11 @@ def _with_layout_head(layout: str, reading: str, c: int) -> str:
     return reading
 
 
-def merge_page(layout: str, reading: str) -> str:
+def merge_page(layout: str, reading: str, *, first_page: bool = False) -> str:
     c = gutter(layout)
     if c is None:
         return layout
-    reading = _with_layout_head(layout, reading, c)
+    reading = _with_layout_head(layout, reading, c, cap=first_page)
     if table_rows(layout) < _TABLE_ROWS:
         return reading
     tables = "\n\n".join(table_blocks(layout))
@@ -167,4 +170,7 @@ def merge(layout: str, reading: str) -> str:
     lp, rp = layout.split("\f"), reading.split("\f")
     if len(lp) != len(rp):
         return layout
-    return "\f".join(merge_page(lay, rd) for lay, rd in zip(lp, rp, strict=True))
+    return "\f".join(
+        merge_page(lay, rd, first_page=i == 0)
+        for i, (lay, rd) in enumerate(zip(lp, rp, strict=True))
+    )

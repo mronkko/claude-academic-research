@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.4] — 2026-11-05
+
+### Fixed
+
+- **The v0.32.3 title-block cap now applies to page 1 only.** On later pages it
+  cut the "head" above a table at a double blank line, so the table header
+  came from reading order as separate columns instead of the aligned layout
+  rows. Later pages extract as they did in v0.32.2. Page 1 is unchanged from
+  v0.32.3. `EXTRACTION_VERSION` is still 2.
+
 ## [0.32.3] — 2026-11-04
 
 ### Fixed

@@ -146,7 +146,7 @@ def test_a_title_block_ends_at_two_blank_lines_on_a_mostly_single_column_page():
          "", "", *_two_column().split("\n")]
     )
     reading = SPREAD_TITLE_SCRAMBLED + "Isabel Shessel and Henry B. Reiff\n\n" + "\n".join(prose) + "\n" + _reading()
-    out = pc.merge_page(page, reading)
+    out = pc.merge_page(page, reading, first_page=True)
     assert out.startswith(
         "EXPERIENCESOF ADULTS WITH LEARNING\n"
         "DISABILITIES: POSITIVE AND NEGATIVE\n"
@@ -155,3 +155,18 @@ def test_a_title_block_ends_at_two_blank_lines_on_a_mostly_single_column_page():
     )
     assert out.count("EXPERIENCESOF") == 1
     assert out.count("Isabel Shessel") == 1
+
+
+def test_the_blank_line_cap_applies_to_page_one_only():
+    prose = ["Abstract. This study examined the life experiences of adults.", "More prose."]
+    page = "\n".join(
+        [*SPREAD_TITLE_LAYOUT, "", "", "Isabel Shessel and Henry B. Reiff", "", "", *prose,
+         "", "", *_two_column().split("\n")]
+    )
+    reading = SPREAD_TITLE_SCRAMBLED + "\n".join(prose) + "\n" + _reading()
+    # A later page is left as it was before the cap: the overrunning head fails the match.
+    assert pc.merge_page(page, reading) == reading
+    capped = pc.merge_page(page, reading, first_page=True)
+    assert capped != reading
+    merged = pc.merge("\f".join([page, page]), "\f".join([reading, reading]))
+    assert merged == capped + "\f" + reading
