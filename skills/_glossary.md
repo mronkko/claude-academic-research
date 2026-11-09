@@ -4,14 +4,14 @@ Compact reference for the acronyms and tooling terms the
 academic-research project's skills use. Each entry is one sentence —
 enough to anchor the term on first encounter; deeper context lives
 in the skill that introduces it. Skills are loaded independently by
-the agentic harness (such as Claude Code or Antigravity), so each skill
-*also* defines critical terms on first use within itself; this file is the
-canonical longer entry.
+the AI agent harness (Claude Code, Gemini Antigravity / Gemini CLI, or
+Codex), so each skill *also* defines critical terms on first use within
+itself; this file is the canonical longer entry.
 
 ## Tooling and infrastructure
 
-- **MCP** — *Model Context Protocol*. The standard the agentic
-  harness (such as Claude Code or Antigravity) uses to talk to "MCP servers" —
+- **MCP** — *Model Context Protocol*. The standard the AI agent
+  harness (Claude Code, Gemini, or Codex) uses to talk to "MCP servers" —
   small helper programs the agent calls in the background.
 - **MCP server** — a small helper process the agent can call. Examples
   registered by the setup wizard: Zotero, Scopus,
@@ -21,10 +21,10 @@ canonical longer entry.
   scripts on the agent's behalf. Skills name them by bare tool name
   (`check_setup`, `start_abstract_screen`, …). In Claude Code the full
   name is `mcp__plugin_academic-research_academic-research__<name>`;
-  other hosts (Antigravity, Codex) prefix them differently, so look for
-  the tool whose name *ends* in the bare name. Each description starts
-  with its effect class (`[read-only]`, `[writes Zotero]`, `[costs LLM
-  credits]`, …).
+  other hosts (Gemini Antigravity / Gemini CLI, Codex) prefix them
+  differently, so look for the tool whose name *ends* in the bare name.
+  Each description starts with its effect class (`[read-only]`, `[writes
+  Zotero]`, `[costs LLM credits]`, …).
 - **Job** — a long plugin tool (`start_*`) that returns a `job_id` at
   once and runs in the background. Follow it with `job_status`; when
   the status is `awaiting_user`, show the user the `prompt` verbatim and
@@ -37,9 +37,9 @@ canonical longer entry.
   plugin tools are not available** (the server is not registered, or
   `uv` is missing), and then tell the user once how to enable them:
   in Claude Code the server ships with the plugin and needs only `uv`
-  on `PATH` (restart the session after installing it); on Antigravity
-  or Codex, `/setup` registers it. Users can always run the same
-  command in their own terminal.
+  on `PATH` (restart the session after installing it); on Gemini
+  (Antigravity or Gemini CLI) or Codex, `/setup` registers it. Users can
+  always run the same command in their own terminal.
 - **Skill** — a prose rule-book the harness loads when a user's
   request matches the skill's trigger phrases. Skills tell the agent
   *how* to approach a task; they do not contain executable code.
@@ -57,7 +57,7 @@ canonical longer entry.
 - **`${CLAUDE_PLUGIN_ROOT}`** — the active plugin version's absolute
   directory. Claude Code supplies it; skills write every plugin path as
   `${CLAUDE_PLUGIN_ROOT}/scripts/...`. On a host that does not (such as
-  Antigravity), substitute the plugin's install directory — the
+  Gemini or Codex), substitute the plugin's install directory — the
   directory two levels above the skill's own `SKILL.md`. Never fall back
   to `.`: that is the user's project, which has no `scripts/setup/` or
   `scripts/pipelines/`. A command handed to the user for their own

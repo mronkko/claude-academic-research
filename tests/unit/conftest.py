@@ -19,9 +19,31 @@ Live tests are unaffected: this fixture is scoped to `tests/unit/`, and
 
 from __future__ import annotations
 
+import builtins
 import socket
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_dev_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent unit tests from opening the developer's real `/dev/tty`.
+
+    In headless CI there is no controlling terminal, so `open("/dev/tty")`
+    raises `OSError` and `TtyChannel` falls back to `sys.stdin`. On a local
+    terminal or agent PTY where `/dev/tty` exists, opening `/dev/tty`
+    succeeds and `tty.readline()` blocks forever waiting for keyboard input
+    (or stops the process with `SIGTTIN`), making tests pass in CI while
+    hanging locally.
+    """
+    real_open = builtins.open
+
+    def guarded_open(file, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if file == "/dev/tty":
+            raise OSError("unit tests may not open /dev/tty")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", guarded_open)
 
 
 class NetworkAccessInUnitTest(BaseException):

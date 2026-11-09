@@ -37,9 +37,10 @@ Zotero]`, `[costs LLM credits]`, …).
   available** (the server is not registered, or `uv` is missing), and
   then tell the user once how to enable them: in Claude Code the server
   ships with the plugin and needs only `uv` on `PATH` (restart the
-  session after installing it); on Antigravity or Codex, `/setup`
-  registers it. Steps with no tool (pilot analysis, tag pruning, LLM
-  provider and model pinning, …) are scripts either way.
+  session after installing it); on Gemini (Antigravity or Gemini CLI)
+  or Codex, `/setup` registers it. Steps with no tool (pilot analysis,
+  tag pruning, LLM provider and model pinning, …) are scripts either
+  way.
 
 ## Pre-flight (ALWAYS run first)
 

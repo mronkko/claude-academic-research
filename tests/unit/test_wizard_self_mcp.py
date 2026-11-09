@@ -29,6 +29,7 @@ def wiz(monkeypatch, tmp_path):
     sys.modules["wizard"] = mod
     spec.loader.exec_module(mod)
     monkeypatch.setattr(mod, "AGY_MCP_CONFIG_PATH", tmp_path / "gemini" / "mcp_config.json")
+    monkeypatch.setattr(mod, "GEMINI_CLI_MCP_CONFIG_PATH", tmp_path / "gemini" / "settings.json")
     monkeypatch.setattr(mod, "CODEX_HOME", tmp_path / "codex")
     monkeypatch.setattr(mod, "CODEX_CONFIG_PATH", tmp_path / "codex" / "config.toml")
     return mod
@@ -136,3 +137,16 @@ def test_codex_non_interactive_writes_nothing(wiz) -> None:
     wiz.CODEX_HOME.mkdir()
     assert wiz._register_self_codex(interactive=False) == "skipped"
     assert not wiz.CODEX_CONFIG_PATH.exists()
+
+
+def test_gemini_cli_registration_writes_and_is_idempotent(wiz, monkeypatch) -> None:
+    path = wiz.GEMINI_CLI_MCP_CONFIG_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"mcpServers": {"zotero": {"command": "zotero-mcp"}}}),
+                    encoding="utf-8")
+    _yes(monkeypatch)
+    assert wiz._register_self_gemini_cli(interactive=True) == "registered"
+    servers = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]
+    assert servers["academic-research"] == wiz._self_mcp_entry()
+    assert servers["zotero"] == {"command": "zotero-mcp"}
+    assert wiz._register_self_gemini_cli(interactive=True) == "current"

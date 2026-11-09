@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file gives Claude Code and Antigravity the context they need to work on this
+This file gives the AI agent the context it needs to work on this
 systematic review without re-discovering the layout every session.
 Adapt placeholders in angle brackets for your project.
 
@@ -152,7 +152,7 @@ independent of this project's configured library.
 All API keys (`ANTHROPIC_API_KEY`,
 `ELSEVIER_API_KEY`, `WOS_API_KEY_EXTENDED`, etc.) live in
 `~/.config/academic-research/config.toml` — never read or inspect
-that file from Claude Code or Antigravity.
+that file from the AI agent.
 
 ## Screening defaults
 

@@ -167,6 +167,28 @@ def test_antigravity_is_reported_separately(mod, project, tmp_path) -> None:
                for line in lines)
 
 
+def test_gemini_cli_and_codex_are_reported_separately(mod, project, tmp_path) -> None:
+    gcli = _tool_venv(tmp_path / "gcli", "0.14.1")
+    cdx = _tool_venv(tmp_path / "cdx", "0.10.0")
+    gcli_cfg = Path.home() / ".gemini" / "settings.json"
+    gcli_cfg.parent.mkdir(parents=True, exist_ok=True)
+    gcli_cfg.write_text(json.dumps({"mcpServers": {"zotero": _entry(str(gcli))}}),
+                        encoding="utf-8")
+    cdx_cfg = Path.home() / ".codex" / "config.toml"
+    cdx_cfg.parent.mkdir(parents=True, exist_ok=True)
+    cdx_cfg.write_text(
+        f'[mcp_servers.zotero]\ncommand = {json.dumps(str(cdx))}\nargs = ["serve"]\n'
+        f'[mcp_servers.zotero.env]\nZOTERO_API_KEY = "{SECRET}"\n',
+        encoding="utf-8",
+    )
+    lines = mod.report(project)
+    assert lines[0].startswith("zotero-mcp-server: 0.14.1 — Gemini CLI")
+    assert lines[1].startswith("zotero-mcp-server: 0.10.0 — Codex")
+    assert any(line.startswith("WARNING: the zotero-mcp-server Codex")
+               for line in lines)
+    assert SECRET not in "\n".join(lines)
+
+
 def test_secrets_in_env_and_args_are_never_printed(mod, project, tmp_path, capsys) -> None:
     exe = _tool_venv(tmp_path / "t", "0.14.1")
     _write_claude_json({"mcpServers": {"zotero": _entry(str(exe))}})
@@ -209,7 +231,8 @@ def test_no_config_and_nothing_on_path(mod, project) -> None:
     assert mod.report(project) == [
         f"zotero-mcp-server: not installed — no Zotero MCP server registered "
         f"(checked ~/.claude.json, {project / '.mcp.json'}, "
-        f"~/.gemini/config/mcp_config.json)"
+        f"~/.gemini/config/mcp_config.json, ~/.gemini/settings.json, "
+        f"~/.codex/config.toml)"
     ]
 
 

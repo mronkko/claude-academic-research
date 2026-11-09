@@ -34,16 +34,18 @@ What the wizard touches:
 
 - **Config written to:** `~/.config/academic-research/config.toml`
   (mode 0600 on macOS/Linux).
-- **MCP servers:** registered with Claude Code (`claude mcp add`) and,
-  if Antigravity (`agy`) is detected, also in
-  `~/.gemini/config/mcp_config.json` (backed up as `.bak-wizard`).
+- **MCP servers:** registered with every detected AI agent host —
+  Claude Code (`claude mcp add`), Gemini Antigravity
+  (`~/.gemini/config/mcp_config.json`, backed up as `.bak-wizard`),
+  Gemini CLI (`~/.gemini/settings.json`, backed up as `.bak-wizard`),
+  and Codex (`~/.codex/config.toml`, backed up as `.toml.bak-wizard`).
 - **The plugin's own `academic-research` MCP server** (the pipeline
   steps as tools): Claude Code loads it from the plugin itself, needing
-  only `uv`; for Antigravity, and Codex (untested), the wizard offers to
-  register it.
-- **No permission rules.** The wizard does not edit
-  `~/.claude/settings.json`; which tool calls to allow is the user's
-  own decision.
+  only `uv`; for Gemini (Antigravity and Gemini CLI) and Codex, the
+  wizard offers to register it.
+- **No permission rules.** The wizard does not edit the AI agent's
+  permission settings; which tool calls to allow is the user's own
+  decision.
 - **Idempotent:** re-running updates or adds keys without clobbering
   existing ones. It is also the way to rotate a single key.
 
@@ -61,7 +63,7 @@ plugin's real, absolute path. Work it out, then confirm it:
   Claude Code that variable is normally already replaced by an absolute
   path in the text you are reading.
 - If that path does not start with `/` or a drive letter — it still
-  begins with a `$` variable (other hosts, such as Antigravity) — use this skill's own location instead: this file
+  begins with a `$` variable (other hosts, such as Gemini or Codex) — use this skill's own location instead: this file
   is `<plugin root>/skills/setup/SKILL.md` (Claude Code reports it as
   "Base directory for this skill"), so the wizard is
   `<plugin root>/scripts/setup/wizard.py`. Write the path out in full —

@@ -77,7 +77,7 @@ def _get_json(
     """GET and parse JSON, retrying transient failures.
 
     `secret` is masked out of every error message: `DiscoveryError` text
-    is printed and returned to the assistant, and an exception from
+    is printed and returned to the AI agent, and an exception from
     `urllib`/`http.client` can quote a malformed header value verbatim.
     """
     req = urllib.request.Request(url, headers=headers)

@@ -9,7 +9,7 @@
     {
       "name": "academic-research",
       "source": "./",
-      "description": "Rule-books and procedures for academic research with Claude Code: MCP-grounded citations, empirical integrity, systematic reviews, Zotero operations, and a parallel-critic manuscript revision loop."
+      "description": "Rule-books and procedures for academic research with AI agents: MCP-grounded citations, empirical integrity, systematic reviews, Zotero operations, and a parallel-critic manuscript revision loop."
     },
     {
       "name": "editorial-tools",

@@ -333,8 +333,8 @@ def call_check_setup(tool: reg.Tool, arguments: dict, project: Path) -> dict:
         summary["next_step"] = (
             "This MCP server is older than the plugin on disk, so its tool "
             "list may be out of date. Reload the window (VS Code: Command "
-            "Palette, 'Developer: Reload Window'; terminal: restart Claude "
-            "Code), then resume. A /mcp reconnect may not restart it."
+            "Palette, 'Developer: Reload Window'; terminal: restart the AI "
+            "agent), then resume. A /mcp reconnect may not restart it."
         )
     run = first
     if configured:

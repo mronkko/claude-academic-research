@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.5] — 2026-11-09
+
+### Changed
+
+- **Multi-platform MCP registration for Claude Code, Gemini, and Codex.** The
+  setup wizard (`scripts/setup/wizard.py`) and Zotero MCP version checker
+  (`scripts/setup/check_zotero_mcp_version.py`) now inspect and offer to
+  register all five external MCP servers (`zotero`, `scopus`,
+  `semantic-scholar`, `openalex`, `paper-search`) and the plugin's own
+  `academic-research` MCP server across Claude Code (`~/.claude.json`), Gemini
+  Antigravity (`~/.gemini/config/mcp_config.json`), Gemini CLI
+  (`~/.gemini/settings.json`), and Codex (`~/.codex/config.toml`).
+- **Generic "AI agent" terminology.** Replaced product-specific references in
+  installer prompts, docstrings, templates, manifests, and skill documentation
+  with generic "AI agent" phrasing.
+
+### Fixed
+
+- **Unit tests no longer open the developer's real `/dev/tty`.** Added an
+  autouse `_no_dev_tty` guard in `tests/unit/conftest.py` so `TtyChannel` falls
+  back to `sys.stdin` locally just as it does in headless CI, preventing
+  `test_enrich_pdfs_prompt.py` from blocking on `/dev/tty`.
+
 ## [0.32.4] — 2026-11-05
 
 ### Fixed

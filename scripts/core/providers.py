@@ -340,7 +340,7 @@ def redact(text: str, *secrets: str) -> str:
     agent transcript. Keys travel in headers, but an exception message
     can still quote one — `http.client` names the offending header value
     when a pasted key contains a newline — and these messages are
-    printed, logged and handed back to the assistant. Also masks a
+    printed, logged and handed back to the AI agent. Also masks a
     `key=`-style URL parameter, whatever its value.
     """
     out = str(text)

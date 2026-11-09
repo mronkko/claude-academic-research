@@ -836,6 +836,95 @@ def test_merge_mcp_status_includes_all_keys_from_both_maps() -> None:
     }
 
 
+def test_merge_mcp_status_across_four_hosts() -> None:
+    mod = _load()
+    claude_status = {"zotero": mod.MCP_STATUS_MISSING}
+    agy_status = {"scopus": mod.MCP_STATUS_CONNECTED}
+    gemini_cli_status = {"openalex": mod.MCP_STATUS_CONNECTED}
+    codex_status = {"zotero": mod.MCP_STATUS_CONNECTED}
+
+    merged = mod._merge_mcp_status(
+        claude_status, agy_status, gemini_cli_status, codex_status,
+    )
+
+    assert merged == {
+        "zotero": mod.MCP_STATUS_CONNECTED,
+        "scopus": mod.MCP_STATUS_CONNECTED,
+        "openalex": mod.MCP_STATUS_CONNECTED,
+    }
+
+
+def test_offer_register_gemini_cli_mcp_writes_settings_json(monkeypatch, tmp_path) -> None:
+    mod = _load()
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps({"theme": "Default"}), encoding="utf-8")
+    monkeypatch.setattr(mod, "GEMINI_CLI_MCP_CONFIG_PATH", settings_path)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: "y")
+
+    registered, updated = mod._offer_register_gemini_cli_mcp(
+        mod.EXPECTED_MCP, {}, interactive=True,
+    )
+
+    assert registered == len(mod.EXPECTED_MCP)
+    assert all(updated[s.name] == mod.MCP_STATUS_CONNECTED for s in mod.EXPECTED_MCP)
+
+    written = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert written["theme"] == "Default"
+    assert written["mcpServers"]["openalex"] == {
+        "command": "npx", "args": ["-y", "openalex-research-mcp"],
+    }
+    assert settings_path.with_suffix(".json.bak-wizard").exists()
+
+
+def test_offer_register_codex_mcp_writes_config_toml_and_preserves_comments(
+    monkeypatch, tmp_path,
+) -> None:
+    import tomllib
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    config_path = codex_home / "config.toml"
+    original = '# user comment\nmodel = "o4-mini"\n'
+    config_path.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(mod, "CODEX_HOME", codex_home)
+    monkeypatch.setattr(mod, "CODEX_CONFIG_PATH", config_path)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: "y")
+
+    registered, updated = mod._offer_register_codex_mcp(
+        mod.EXPECTED_MCP, {}, interactive=True,
+    )
+
+    assert registered == len(mod.EXPECTED_MCP)
+    assert all(updated[s.name] == mod.MCP_STATUS_CONNECTED for s in mod.EXPECTED_MCP)
+
+    text = config_path.read_text(encoding="utf-8")
+    assert text.startswith(original.rstrip("\n"))
+    parsed = tomllib.loads(text)
+    assert parsed["model"] == "o4-mini"
+    assert parsed["mcp_servers"]["zotero"] == {
+        "command": "zotero-mcp",
+        "args": [],
+        "env": {
+            "ZOTERO_LOCAL": "true",
+            "ZOTERO_MCP_TOOLSETS": "libraries,search-admin,pdf-geometry,duplicates,scite",
+        },
+    }
+    assert parsed["mcp_servers"]["openalex"] == {
+        "command": "npx",
+        "args": ["-y", "openalex-research-mcp"],
+    }
+    assert mod._check_codex_mcp_servers()["openalex"] == mod.MCP_STATUS_CONNECTED
+    assert config_path.with_suffix(".toml.bak-wizard").exists()
+
+
+def test_wizard_uses_generic_ai_agent_phrasing() -> None:
+    text = WIZARD.read_text(encoding="utf-8")
+    assert "AI assistant" not in text
+    assert "tell Claude" not in text
+    assert "tell Gemini" not in text
+    assert "Return to your AI agent session and tell it setup is done." in text
+
+
 # ---------------------------------------------------------------------------
 # Zotero Desktop gate — help text (the gate itself: test_wizard_zotero_gate.py)
 # ---------------------------------------------------------------------------

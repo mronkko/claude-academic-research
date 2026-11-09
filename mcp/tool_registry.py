@@ -10,8 +10,8 @@ Rules every tool follows (BACKLOG P21):
 - The description starts with the effect class — `[read-only]`,
   `[writes project files]`, `[writes user config]`, `[writes Zotero]`,
   `[costs LLM credits]` or `[costs money]` —
-  because that, not the MCP annotations, is what a Claude Code user sees
-  when deciding whether to "always allow" a tool.
+  because that, not the MCP annotations, is what the user sees in the
+  AI agent when deciding whether to "always allow" a tool.
 - Parameters are the user's decisions only (which library, which
   collection, which layout). Tuning flags stay on the command line.
 - Path parameters are confined to the project directory by the server.

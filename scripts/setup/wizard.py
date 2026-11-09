@@ -5,14 +5,13 @@ Runs in the user's terminal. Prompts for API keys with hidden input
 (getpass), tests each key against its provider, writes
 ~/.config/academic-research/config.toml mode 0600, and reports status.
 
-It writes no Claude Code permission rules: ~/.claude/settings.json is
+It writes no AI agent permission rules: ~/.claude/settings.json is
 the user's file, and what to auto-approve is theirs to decide. Rules an
 older version of this wizard added are left as they are.
 
-API keys entered here NEVER pass through the invoking AI assistant's
-context (Claude Code or Antigravity) — the wizard is a normal process
-reading the terminal directly. The assistant only sees the final
-summary line.
+API keys entered here NEVER pass through the invoking AI agent's
+context — the wizard is a normal process reading the terminal
+directly. The AI agent only sees the final summary line.
 
 Usage:
     python3 wizard.py               # interactive; re-run to update keys
@@ -71,9 +70,9 @@ CONFIG_PATH = CONFIG_DIR / "config.toml"
 
 AGY_HOME = Path.home() / ".gemini"
 AGY_MCP_CONFIG_PATH = AGY_HOME / "config" / "mcp_config.json"
+GEMINI_CLI_MCP_CONFIG_PATH = AGY_HOME / "settings.json"
 
-# Codex CLI. Registration there is offered but UNTESTED by policy: the
-# plugin is developed against Claude Code and Antigravity only.
+# Codex CLI (`~/.codex/config.toml`).
 CODEX_HOME = Path.home() / ".codex"
 CODEX_CONFIG_PATH = CODEX_HOME / "config.toml"
 
@@ -505,12 +504,12 @@ KEYS: tuple[KeySpec, ...] = (
         required=False, hidden=True,
         what="Anthropic is the company that builds Claude. This API key lets the "
              "plugin's screening and coding scripts call Claude directly — separate "
-             "from your interactive Claude Code session.",
+             "from your interactive AI agent session.",
         used_by="systematic-review (Claude-driven abstract screening, full-text "
                 "screening, and structured coding of included papers).",
         impact="Systematic-review screening pipelines will fail. Skills that don't "
                "call Claude directly still work — for instance, critic-loop uses "
-               "your interactive Claude Code session, not this key.",
+               "your interactive AI agent session, not this key.",
         where="https://console.anthropic.com/settings/keys",
         verify=_verify_anthropic,
         llm_provider="anthropic",
@@ -541,7 +540,7 @@ KEYS: tuple[KeySpec, ...] = (
         required=False, hidden=True,
         what="Google is the company that builds Gemini. This API key lets the "
              "plugin's screening and coding scripts call Gemini directly — separate "
-             "from Antigravity's own Google sign-in.",
+             "from your interactive AI agent session.",
         used_by="systematic-review (Gemini-driven abstract screening, full-text "
                 "screening, and structured coding of included papers).",
         impact="Systematic-review screening pipelines will fail if you configure them "
@@ -558,7 +557,7 @@ KEYS: tuple[KeySpec, ...] = (
         used_by="systematic-review (abstract screening, full-text screening, "
                 "and structured coding of included papers).",
         impact="Screening pipelines will fail while OpenAI is your selected "
-               "provider. Skills that use your interactive assistant "
+               "provider. Skills that use your interactive AI agent "
                "session instead — critic-loop, fact-check — are unaffected.",
         where="https://platform.openai.com/api-keys",
         verify=_verify_openai,
@@ -933,7 +932,8 @@ EXPECTED_MCP: tuple[McpServerSpec, ...] = (
         homepage="https://github.com/oksure/openalex-research-mcp",
         install_cmd="",
         install_note="Requires Node.js + npm. npx downloads the package "
-                     "automatically on first use.",
+                     "automatically on first use. OPENALEX_API_KEY and "
+                     "OPENALEX_EMAIL are read from your shell env.",
         tier=MCP_TIER_SEARCH_DB,
     ),
     McpServerSpec(
@@ -1002,7 +1002,7 @@ def _print_header() -> None:
     print(f"    3. Write {CONFIG_PATH} (mode 0600)")
     print()
     print("  Your keys stay on this machine. They do not pass through")
-    print("  your AI assistant's context at any point.")
+    print("  your AI agent's context at any point.")
     print()
 
 
@@ -1310,7 +1310,7 @@ def _prompt_cluster_automation(interactive: bool, existing: dict) -> dict[str, o
 
     print()
     print(_wrap_body(
-        "How much of the remote loop may the assistant run on its own? "
+        "How much of the remote loop may the AI agent run on its own? "
         "This is about ssh, scp and sbatch — commands that touch your "
         "facility account and spend your allocation.",
         indent=4,
@@ -1323,7 +1323,7 @@ def _prompt_cluster_automation(interactive: bool, existing: dict) -> dict[str, o
     print(_wrap_body(
         "'manual' is the default and the recommendation. It is also the "
         "only level that works when reaching the cluster needs a VPN, "
-        "2FA or Kerberos — none of which an assistant can do for you. "
+        "2FA or Kerberos — none of which an AI agent can do for you. "
         "Note that 'confirm' relies on you answering a permission "
         "prompt: the plugin never allow-lists ssh/scp/rsync/sbatch, so "
         "the prompt is the approval.",
@@ -2385,29 +2385,80 @@ def _mcp_spec_to_agy_entry(spec: McpServerSpec) -> dict:
     return entry
 
 
-def _merge_mcp_status(claude_status: dict[str, str], agy_status: dict[str, str]) -> dict[str, str]:
-    """Combine Claude-CLI and Antigravity MCP status maps.
+def _merge_mcp_status(*status_maps: dict[str, str]) -> dict[str, str]:
+    """Combine MCP status maps across installed AI agent hosts.
 
-    A server counts as connected if *either* surface reports it connected —
-    an Antigravity-only user shouldn't see "not connected" for a server
-    `claude mcp list` doesn't know about, and vice versa.
+    A server counts as connected if *any* surface reports it connected —
+    a user on one AI agent shouldn't see "not connected" for a server
+    another host's CLI doesn't know about, and vice versa.
     """
     merged: dict[str, str] = {}
-    for name in set(claude_status) | set(agy_status):
-        c = claude_status.get(name, MCP_STATUS_MISSING)
-        a = agy_status.get(name, MCP_STATUS_MISSING)
-        if c == MCP_STATUS_CONNECTED or a == MCP_STATUS_CONNECTED:
+    all_names: set[str] = set()
+    for status_map in status_maps:
+        all_names.update(status_map)
+    for name in all_names:
+        statuses = [m.get(name, MCP_STATUS_MISSING) for m in status_maps]
+        if MCP_STATUS_CONNECTED in statuses:
             merged[name] = MCP_STATUS_CONNECTED
-        elif c != MCP_STATUS_MISSING:
-            merged[name] = c
         else:
-            merged[name] = a
+            non_missing = [s for s in statuses if s != MCP_STATUS_MISSING]
+            merged[name] = non_missing[0] if non_missing else MCP_STATUS_MISSING
     return merged
 
 
 def _agy_available() -> bool:
     """True if Antigravity (`agy`) appears to be installed on this machine."""
     return AGY_HOME.exists() or shutil.which("agy") is not None
+
+
+def _gemini_cli_available() -> bool:
+    """True if Gemini CLI (`~/.gemini/settings.json`) is present."""
+    return GEMINI_CLI_MCP_CONFIG_PATH.exists()
+
+
+def _codex_available() -> bool:
+    """True if Codex (`~/.codex`) appears to be installed on this machine."""
+    return CODEX_HOME.is_dir()
+
+
+def _check_json_mcp_servers(path: Path) -> dict[str, str]:
+    """Read a JSON MCP config (`mcpServers` dict) and return {name: status}."""
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    servers = data.get("mcpServers", {})
+    if not isinstance(servers, dict):
+        return {}
+    return {
+        name: MCP_STATUS_MISSING if entry.get("disabled") else MCP_STATUS_CONNECTED
+        for name, entry in servers.items()
+        if isinstance(entry, dict)
+    }
+
+
+def _load_json_mcp_config(path: Path) -> dict:
+    """Load `path`, backing up first to `<stem>.json.bak-wizard` if it exists."""
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"  ERROR: cannot parse {path}: {e}", file=sys.stderr)
+        print(f"  Back up {path.name}, then re-run the wizard.", file=sys.stderr)
+        sys.exit(3)
+    backup = path.with_suffix(".json.bak-wizard")
+    shutil.copy2(path, backup)
+    return data
+
+
+def _write_json_mcp_config(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def _check_agy_mcp_servers() -> dict[str, str]:
@@ -2418,38 +2469,55 @@ def _check_agy_mcp_servers() -> dict[str, str]:
     not `disabled` is reported as MCP_STATUS_CONNECTED; `disabled: true` or
     a missing/unreadable file is reported as MCP_STATUS_MISSING / `{}`.
     """
-    if not AGY_MCP_CONFIG_PATH.exists():
-        return {}
-    try:
-        data = json.loads(AGY_MCP_CONFIG_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    servers = data.get("mcpServers", {})
-    return {
-        name: MCP_STATUS_MISSING if entry.get("disabled") else MCP_STATUS_CONNECTED
-        for name, entry in servers.items()
-    }
+    return _check_json_mcp_servers(AGY_MCP_CONFIG_PATH)
 
 
 def _load_agy_mcp_config() -> dict:
     """Load `~/.gemini/config/mcp_config.json`, backing up first if it
     exists. Read, back up, merge, write."""
-    if not AGY_MCP_CONFIG_PATH.exists():
-        return {}
-    try:
-        data = json.loads(AGY_MCP_CONFIG_PATH.read_text(encoding="utf-8"))
-    except Exception as e:
-        print(f"  ERROR: cannot parse {AGY_MCP_CONFIG_PATH}: {e}", file=sys.stderr)
-        print("  Back up your mcp_config.json, then re-run the wizard.", file=sys.stderr)
-        sys.exit(3)
-    backup = AGY_MCP_CONFIG_PATH.with_suffix(".json.bak-wizard")
-    shutil.copy2(AGY_MCP_CONFIG_PATH, backup)
-    return data
+    return _load_json_mcp_config(AGY_MCP_CONFIG_PATH)
 
 
 def _write_agy_mcp_config(data: dict) -> None:
-    AGY_MCP_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    AGY_MCP_CONFIG_PATH.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    _write_json_mcp_config(AGY_MCP_CONFIG_PATH, data)
+
+
+def _check_gemini_cli_mcp_servers() -> dict[str, str]:
+    """Read `~/.gemini/settings.json` and return {name: status}."""
+    return _check_json_mcp_servers(GEMINI_CLI_MCP_CONFIG_PATH)
+
+
+def _load_gemini_cli_mcp_config() -> dict:
+    """Load `~/.gemini/settings.json`, backing up first if it exists."""
+    return _load_json_mcp_config(GEMINI_CLI_MCP_CONFIG_PATH)
+
+
+def _write_gemini_cli_mcp_config(data: dict) -> None:
+    _write_json_mcp_config(GEMINI_CLI_MCP_CONFIG_PATH, data)
+
+
+def _check_codex_mcp_servers() -> dict[str, str]:
+    """Read `~/.codex/config.toml` and return {name: status}."""
+    import tomllib
+
+    if not CODEX_CONFIG_PATH.exists():
+        return {}
+    try:
+        data = tomllib.loads(CODEX_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    servers = data.get("mcp_servers", {})
+    if not isinstance(servers, dict):
+        return {}
+    out: dict[str, str] = {}
+    for name, entry in servers.items():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("disabled") is True or entry.get("enabled") is False:
+            out[name] = MCP_STATUS_MISSING
+        else:
+            out[name] = MCP_STATUS_CONNECTED
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -2495,17 +2563,22 @@ def _ask_yes(prompt: str) -> bool:
     return answer in ("", "y", "yes")
 
 
-def _register_self_agy(interactive: bool) -> str:
-    """Add or refresh the plugin's server in Antigravity's mcp_config.json.
+def _register_self_json_host(
+    path: Path,
+    load_fn: Callable[[], dict],
+    write_fn: Callable[[dict], None],
+    interactive: bool,
+) -> str:
+    """Add or refresh the plugin's server in a JSON `mcpServers` config file.
 
     Returns "registered", "current" (already right), or "skipped".
     """
     entry = _self_mcp_entry()
-    if AGY_MCP_CONFIG_PATH.exists():
+    if path.exists():
         try:
-            current = json.loads(AGY_MCP_CONFIG_PATH.read_text(encoding="utf-8"))
+            current = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
-            current = None  # _load_agy_mcp_config reports it below
+            current = None  # load_fn reports it below
         if isinstance(current, dict):
             existing = (current.get("mcpServers") or {}).get(SELF_MCP_NAME)
             if existing == entry:
@@ -2516,33 +2589,61 @@ def _register_self_agy(interactive: bool) -> str:
     print(_wrap_body(
         "The plugin's own MCP server exposes the pipeline scripts as tools "
         "(setup check, project scaffold, PDF plan and report, library audit, "
-        f"screening report, export, bibliography). Add it to "
-        f"{AGY_MCP_CONFIG_PATH}?",
+        f"screening report, export, bibliography). Add it to {path}?",
     ))
     if not _ask_yes("    Register now? [Y/n] "):
         print("    Skipped.")
         return "skipped"
-    config = _load_agy_mcp_config()
+    config = load_fn()
     config.setdefault("mcpServers", {})[SELF_MCP_NAME] = entry
-    _write_agy_mcp_config(config)
+    write_fn(config)
     print(f"    ✓ Registered {SELF_MCP_NAME}.")
     return "registered"
 
 
-def _codex_block() -> str:
-    """The TOML table registering the plugin's server with Codex."""
-    entry = _self_mcp_entry()
-    render = _config_writer._render
-    return (
-        f"[mcp_servers.{SELF_MCP_NAME}]\n"
-        f"command = {render(entry['command'])}\n"
-        f"args = {render(entry['args'])}\n"
+def _register_self_agy(interactive: bool) -> str:
+    """Add or refresh the plugin's server in Antigravity's mcp_config.json."""
+    return _register_self_json_host(
+        AGY_MCP_CONFIG_PATH, _load_agy_mcp_config, _write_agy_mcp_config, interactive,
     )
 
 
-def _replace_codex_block(text: str) -> str | None:
-    """`text` with our `[mcp_servers.academic-research]` table (and any of
-    its sub-tables) swapped for the current one, or appended when absent.
+def _register_self_gemini_cli(interactive: bool) -> str:
+    """Add or refresh the plugin's server in Gemini CLI's settings.json."""
+    return _register_self_json_host(
+        GEMINI_CLI_MCP_CONFIG_PATH,
+        _load_gemini_cli_mcp_config,
+        _write_gemini_cli_mcp_config,
+        interactive,
+    )
+
+
+def _codex_server_block(name: str, entry: dict) -> str:
+    """Render a `[mcp_servers.<name>]` TOML table (and optional `.env` sub-table)."""
+    render = _config_writer._render
+    key = name if re.fullmatch(r"[A-Za-z0-9_-]+", name) else f'"{name}"'
+    lines = [
+        f"[mcp_servers.{key}]",
+        f"command = {render(entry['command'])}",
+        f"args = {render(entry.get('args', []))}",
+    ]
+    env = entry.get("env")
+    if isinstance(env, dict) and env:
+        lines.append("")
+        lines.append(f"[mcp_servers.{key}.env]")
+        for k, v in env.items():
+            lines.append(f"{k} = {render(str(v))}")
+    return "\n".join(lines) + "\n"
+
+
+def _codex_block() -> str:
+    """The TOML table registering the plugin's server with Codex."""
+    return _codex_server_block(SELF_MCP_NAME, _self_mcp_entry())
+
+
+def _replace_codex_server_block(text: str, name: str, entry: dict) -> str | None:
+    """`text` with `[mcp_servers.<name>]` (and any of its sub-tables)
+    swapped for `entry`, or appended when absent.
 
     Edits the file as text rather than parse-and-dump, because
     ~/.codex/config.toml is the user's own file and a round-trip through
@@ -2551,7 +2652,7 @@ def _replace_codex_block(text: str) -> str | None:
     inline table) — the caller then leaves the file alone.
     """
     header = re.compile(
-        rf'^\s*\[\s*mcp_servers\s*\.\s*(?:{re.escape(SELF_MCP_NAME)}|"{re.escape(SELF_MCP_NAME)}")'
+        rf'^\s*\[\s*mcp_servers\s*\.\s*(?:{re.escape(name)}|"{re.escape(name)}")'
         r'\s*(?:\.[^\]]*)?\]\s*(?:#.*)?$'
     )
     any_header = re.compile(r"^\s*\[")
@@ -2573,19 +2674,24 @@ def _replace_codex_block(text: str) -> str | None:
             parsed = tomllib.loads(text)
         except Exception:
             return None
-        if SELF_MCP_NAME in (parsed.get("mcp_servers") or {}):
+        if name in (parsed.get("mcp_servers") or {}):
             return None
     body = "".join(kept).rstrip("\n")
-    return (body + "\n\n" if body else "") + _codex_block()
+    return (body + "\n\n" if body else "") + _codex_server_block(name, entry)
+
+
+def _replace_codex_block(text: str) -> str | None:
+    """`text` with our `[mcp_servers.academic-research]` table swapped or appended."""
+    return _replace_codex_server_block(text, SELF_MCP_NAME, _self_mcp_entry())
 
 
 def _register_self_codex(interactive: bool) -> str:
     """Add or refresh the plugin's server in ~/.codex/config.toml.
 
     Only when ~/.codex exists — the wizard never creates a Codex install.
-    UNTESTED against a real Codex by policy; the TOML shape follows Codex's
-    documented `[mcp_servers.<name>]` table. Returns "registered",
-    "current", "skipped", "manual" (could not edit safely) or "absent".
+    The TOML shape follows Codex's documented `[mcp_servers.<name>]` table.
+    Returns "registered", "current", "skipped", "manual" (could not edit
+    safely) or "absent".
     """
     import tomllib
 
@@ -2605,8 +2711,7 @@ def _register_self_codex(interactive: bool) -> str:
         return "skipped"
     print()
     print(_wrap_body(
-        f"Codex detected. Add the plugin's MCP server to {CODEX_CONFIG_PATH}? "
-        "(Codex support is untested.)",
+        f"Codex detected. Add the plugin's MCP server to {CODEX_CONFIG_PATH}?",
     ))
     if not _ask_yes("    Register now? [Y/n] "):
         print("    Skipped.")
@@ -2619,7 +2724,7 @@ def _register_self_codex(interactive: bool) -> str:
     if CODEX_CONFIG_PATH.exists():
         shutil.copy2(CODEX_CONFIG_PATH, CODEX_CONFIG_PATH.with_suffix(".toml.bak-wizard"))
     CODEX_CONFIG_PATH.write_text(updated, encoding="utf-8")
-    print(f"    ✓ Registered {SELF_MCP_NAME} (Codex, untested).")
+    print(f"    ✓ Registered {SELF_MCP_NAME}.")
     return "registered"
 
 
@@ -2748,18 +2853,15 @@ def _offer_register_mcp(
     return registered, updated
 
 
-def _offer_register_agy_mcp(
+def _offer_register_json_mcp(
     specs: tuple[McpServerSpec, ...],
     current: dict[str, str],
     interactive: bool,
+    path: Path,
+    load_fn: Callable[[], dict],
+    write_fn: Callable[[dict], None],
 ) -> tuple[int, dict[str, str]]:
-    """For each spec not currently connected in `~/.gemini/config/mcp_config.json`,
-    offer to add it.
-
-    Mirrors `_offer_register_mcp`, but merges a JSON entry into Antigravity's
-    `mcpServers` config instead of shelling out to `claude mcp add`. Returns
-    (registered_count, updated_status_map).
-    """
+    """Offer to register missing `specs` in a JSON `mcpServers` config file."""
     updated = dict(current)
     if not interactive:
         return 0, updated
@@ -2770,7 +2872,7 @@ def _offer_register_agy_mcp(
         if status == MCP_STATUS_CONNECTED:
             continue
 
-        _print_mcp_offer(spec, status, register_line=f"add to {AGY_MCP_CONFIG_PATH}")
+        _print_mcp_offer(spec, status, register_line=f"add to {path}")
 
         try:
             answer = input("    Register now? [Y/n] ").strip().lower()
@@ -2783,10 +2885,113 @@ def _offer_register_agy_mcp(
             print("    Skipped.")
             continue
 
-        config = _load_agy_mcp_config()
+        config = load_fn()
         servers = config.setdefault("mcpServers", {})
         servers[spec.name] = _mcp_spec_to_agy_entry(spec)
-        _write_agy_mcp_config(config)
+        write_fn(config)
+
+        print(f"    ✓ Registered {spec.name}.")
+        updated[spec.name] = MCP_STATUS_CONNECTED
+        registered += 1
+
+    return registered, updated
+
+
+def _offer_register_agy_mcp(
+    specs: tuple[McpServerSpec, ...],
+    current: dict[str, str],
+    interactive: bool,
+) -> tuple[int, dict[str, str]]:
+    """For each spec not currently connected in `~/.gemini/config/mcp_config.json`,
+    offer to add it.
+
+    Mirrors `_offer_register_mcp`, but merges a JSON entry into Antigravity's
+    `mcpServers` config instead of shelling out to `claude mcp add`. Returns
+    (registered_count, updated_status_map).
+    """
+    return _offer_register_json_mcp(
+        specs, current, interactive,
+        AGY_MCP_CONFIG_PATH, _load_agy_mcp_config, _write_agy_mcp_config,
+    )
+
+
+def _offer_register_gemini_cli_mcp(
+    specs: tuple[McpServerSpec, ...],
+    current: dict[str, str],
+    interactive: bool,
+) -> tuple[int, dict[str, str]]:
+    """For each spec not currently connected in `~/.gemini/settings.json`,
+    offer to add it."""
+    return _offer_register_json_mcp(
+        specs, current, interactive,
+        GEMINI_CLI_MCP_CONFIG_PATH,
+        _load_gemini_cli_mcp_config,
+        _write_gemini_cli_mcp_config,
+    )
+
+
+def _offer_register_codex_mcp(
+    specs: tuple[McpServerSpec, ...],
+    current: dict[str, str],
+    interactive: bool,
+) -> tuple[int, dict[str, str]]:
+    """For each spec not currently connected in `~/.codex/config.toml`,
+    offer to add it.
+
+    Preserves comments and existing tables in `~/.codex/config.toml` by
+    editing the file as text through `_replace_codex_server_block`.
+    Returns (registered_count, updated_status_map).
+    """
+    import tomllib
+
+    updated = dict(current)
+    if not interactive or not CODEX_HOME.is_dir():
+        return 0, updated
+
+    registered = 0
+    backed_up = False
+    for spec in specs:
+        status = current.get(spec.name, MCP_STATUS_MISSING)
+        if status == MCP_STATUS_CONNECTED:
+            continue
+
+        _print_mcp_offer(spec, status, register_line=f"add to {CODEX_CONFIG_PATH}")
+
+        try:
+            answer = input("    Register now? [Y/n] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            print("    Skipped (input ended).")
+            continue
+
+        if answer not in ("", "y", "yes"):
+            print("    Skipped.")
+            continue
+
+        text = ""
+        if CODEX_CONFIG_PATH.exists():
+            text = CODEX_CONFIG_PATH.read_text(encoding="utf-8")
+            try:
+                tomllib.loads(text)
+            except tomllib.TOMLDecodeError:
+                print(f"    {CODEX_CONFIG_PATH} does not parse; not touching it.")
+                continue
+
+        entry = _mcp_spec_to_agy_entry(spec)
+        new_text = _replace_codex_server_block(text, spec.name, entry)
+        if new_text is None:
+            print(f"    Could not edit {CODEX_CONFIG_PATH} safely. Add this by hand:")
+            print(textwrap.indent(_codex_server_block(spec.name, entry), "      "))
+            continue
+
+        if CODEX_CONFIG_PATH.exists() and not backed_up:
+            shutil.copy2(
+                CODEX_CONFIG_PATH,
+                CODEX_CONFIG_PATH.with_suffix(".toml.bak-wizard"),
+            )
+            backed_up = True
+        CODEX_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CODEX_CONFIG_PATH.write_text(new_text, encoding="utf-8")
 
         print(f"    ✓ Registered {spec.name}.")
         updated[spec.name] = MCP_STATUS_CONNECTED
@@ -2946,7 +3151,7 @@ def main() -> int:
         print()
         print(_wrap_body(
             "Checking MCP (Model Context Protocol) servers. These are small "
-            "helper programs that let your AI assistant read your Zotero "
+            "helper programs that let your AI agent read your Zotero "
             "library, search citation databases, and fetch PDFs. The plugin uses "
             "five of them and offers to register any that are missing.",
         ))
@@ -2975,9 +3180,43 @@ def main() -> int:
                 EXPECTED_MCP, agy_mcp, interactive=True,
             )
         agy_self = _register_self_agy(interactive)
+
+    gemini_cli_available = _gemini_cli_available()
+    gemini_cli_mcp: dict[str, str] = {}
+    gemini_cli_registered = 0
+    gemini_cli_self = "skipped"
+    if gemini_cli_available:
+        gemini_cli_mcp = _check_gemini_cli_mcp_servers()
+        if interactive:
+            print()
+            print(_wrap_body(
+                "Gemini CLI detected. Registering the same MCP servers in "
+                f"{GEMINI_CLI_MCP_CONFIG_PATH} so they're available there too.",
+            ))
+            gemini_cli_registered, gemini_cli_mcp = _offer_register_gemini_cli_mcp(
+                EXPECTED_MCP, gemini_cli_mcp, interactive=True,
+            )
+        gemini_cli_self = _register_self_gemini_cli(interactive)
+
+    codex_available = _codex_available()
+    codex_mcp: dict[str, str] = {}
+    codex_registered = 0
+    if codex_available:
+        codex_mcp = _check_codex_mcp_servers()
+        if interactive:
+            print()
+            print(_wrap_body(
+                "Codex detected. Registering the same MCP servers in "
+                f"{CODEX_CONFIG_PATH} so they're available there too.",
+            ))
+            codex_registered, codex_mcp = _offer_register_codex_mcp(
+                EXPECTED_MCP, codex_mcp, interactive=True,
+            )
     codex_self = _register_self_codex(interactive)
 
-    current_mcp = _merge_mcp_status(current_mcp, agy_mcp)
+    current_mcp = _merge_mcp_status(
+        current_mcp, agy_mcp, gemini_cli_mcp, codex_mcp,
+    )
 
     print()
     print("  Setup complete.")
@@ -2988,8 +3227,12 @@ def main() -> int:
     if agy_available:
         print(f"    Antigravity MCP: {AGY_MCP_CONFIG_PATH} (+{agy_registered} registered)")
         print(f"    Pipeline tools (Antigravity): {_SELF_STATUS_TEXT[agy_self]}")
+    if gemini_cli_available:
+        print(f"    Gemini CLI MCP:  {GEMINI_CLI_MCP_CONFIG_PATH} (+{gemini_cli_registered} registered)")
+        print(f"    Pipeline tools (Gemini CLI): {_SELF_STATUS_TEXT[gemini_cli_self]}")
     if codex_self != "absent":
-        print(f"    Pipeline tools (Codex, untested): {_SELF_STATUS_TEXT[codex_self]}")
+        print(f"    Codex MCP:       {CODEX_CONFIG_PATH} (+{codex_registered} registered)")
+        print(f"    Pipeline tools (Codex): {_SELF_STATUS_TEXT[codex_self]}")
     print("    Zotero Desktop:   ✓ read and write tested")
     bbt_glyph = "✓" if zotero_bbt_status == ZOTERO_BBT_STATUS_OK else "✗"
     print(f"    Better BibTeX:    {bbt_glyph} {zotero_bbt_message}")
@@ -3026,14 +3269,8 @@ def main() -> int:
     ))
     print(f"    python3 {_HERE / 'resolve_models.py'}")
 
-    claude_code_available = (Path.home() / ".claude").exists()
     print()
-    if claude_code_available and agy_available:
-        print("  Return to your Claude Code or Antigravity session and tell it setup is done.")
-    elif agy_available:
-        print("  Return to your Antigravity session and tell Gemini setup is done.")
-    else:
-        print("  Return to your Claude Code session and tell Claude setup is done.")
+    print("  Return to your AI agent session and tell it setup is done.")
     print()
     return 4 if zotero_missing else 0
 

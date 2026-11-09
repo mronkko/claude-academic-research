@@ -12,7 +12,7 @@ including whether permission rules already in place mean the level will
 behave as something else.
 
 There is **no secret here** — a level is a policy statement, not a
-credential — so unlike an API key this is safe for an assistant to write
+credential — so unlike an API key this is safe for an AI agent to write
 on the user's behalf when they ask for it. What it is not safe to do is
 *decide*: the resource at stake is a shared facility account the plugin
 does not own. Set what the user asked for and report what it will

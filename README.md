@@ -1,6 +1,6 @@
 # claude-academic-research
 
-Academic research plugins for Claude Code and Antigravity: MCP-grounded citations, empirical
+Academic research plugins for AI agents (Claude Code, Gemini / Antigravity, and Codex): MCP-grounded citations, empirical
 integrity, systematic reviews, Zotero operations, and parallel-critic manuscript
 revision.
 
@@ -28,9 +28,9 @@ wizard asks for them in the terminal with hidden input and stores them
 only in a local file. The wizard writes no permission rules; what to
 allow is up to you.
 
-### Antigravity
+### Gemini (Antigravity and Gemini CLI) & Codex
 
-Inside the Antigravity session/CLI (or terminal):
+Inside Antigravity:
 
 ```bash
 # Install the main academic-research plugin
@@ -39,6 +39,11 @@ agy plugin install "https://github.com/mronkko/claude-academic-research.git"
 # (Optional) Install the editorial-tools sub-plugin
 agy plugin install "https://github.com/mronkko/claude-academic-research.git/editorial-tools"
 ```
+
+For Gemini CLI (`~/.gemini/settings.json`) and Codex (`~/.codex/config.toml`),
+clone this repository and run `python3 scripts/setup/wizard.py` to register
+the MCP servers (`zotero`, `scopus`, `semantic-scholar`, `openalex`,
+`paper-search`, and `academic-research`) and configure API keys.
 
 Works on Windows, macOS, and Linux. Windows users do **not** need WSL or
 Git Bash — native `cmd` and PowerShell are supported, and CI verifies
@@ -135,8 +140,8 @@ progress before stopping; `list_jobs` shows recent ones. A job lives in
 `.claude/jobs/<id>/` and keeps running if the host restarts.
 
 Claude Code picks the server up from the plugin automatically. For
-Antigravity, and for Codex (untested), the setup wizard offers to
-register it.
+Gemini (Antigravity and Gemini CLI) and Codex, the setup wizard offers
+to register it.
 
 ## Runtime model
 

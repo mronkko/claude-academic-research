@@ -9,7 +9,7 @@ Writes `[llm] provider` into `~/.config/academic-research/config.toml`
 and reports the new state, including which credential is still missing.
 
 It reports rather than prompts, deliberately. "Switch me to OpenAI" is a
-request an assistant can carry out on its own: the provider name is not
+request an AI agent can carry out on its own: the provider name is not
 a secret and the file it lands in is machine-local. Supplying the key is
 not — an API key typed into a conversation is an API key in a
 transcript, so a missing credential is reported here and collected by

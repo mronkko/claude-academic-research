@@ -9,12 +9,12 @@ install can miss tool names the skills document, or the batched
 a skill hits it mid-task.
 
 **Why it reads the MCP configuration instead of importing `zotero_mcp`.**
-The version that matters is the one in the server process Claude Code (or
-Antigravity) starts, and that is whatever install the configured `command`
-points at — typically `~/.local/bin/zotero-mcp`, a symlink into a uv tool
-venv. Importing `zotero_mcp` here instead reported the copy in whichever
-interpreter ran this script: in the plugin's own dev `.venv` that was 0.9.1
-while the server Claude Code launched was 0.14.1.
+The version that matters is the one in the server process the AI agent starts,
+and that is whatever install the configured `command` points at — typically
+`~/.local/bin/zotero-mcp`, a symlink into a uv tool venv. Importing `zotero_mcp`
+here instead reported the copy in whichever interpreter ran this script: in the
+plugin's own dev `.venv` that was 0.9.1 while the server the AI agent launched
+was 0.14.1.
 
 Resolution, per configured server:
 
@@ -22,9 +22,10 @@ Resolution, per configured server:
    `~/.claude.json` (local scope), then the project's `.mcp.json`, then
    `mcpServers` in `~/.claude.json` (user scope) — the first that has one
    wins, matching Claude Code's own precedence. Antigravity:
-   `~/.gemini/config/mcp_config.json`, reported separately when present.
-   Only `command` and `args` are read; `env` blocks can hold API keys and
-   are never touched or printed, and neither are `args`.
+   `~/.gemini/config/mcp_config.json`, Gemini CLI:
+   `~/.gemini/settings.json`, Codex: `~/.codex/config.toml`, each reported
+   separately when present. Only `command` and `args` are read; `env` blocks
+   can hold API keys and are never touched or printed, and neither are `args`.
 2. Find the executable (`command` as a path, else on PATH).
 3. Read the version without running anything: the
    `zotero_mcp_server-*.dist-info/METADATA` in the venv the executable
@@ -51,6 +52,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    import tomllib
+except ImportError:  # pragma: no cover
+    tomllib = None  # type: ignore[assignment]
+
 # Running this file as a script already puts its directory on sys.path[0],
 # but not when it is imported by path from a test. Be explicit.
 _HERE = Path(__file__).resolve().parent
@@ -73,7 +79,7 @@ _VERSION_RE = re.compile(r"(\d+\.\d+(?:\.\d+)?[0-9A-Za-z.+-]*)")
 
 @dataclass
 class ServerEntry:
-    host: str          # "Claude Code" / "Antigravity"
+    host: str          # "Claude Code" / "Antigravity" / "Gemini CLI" / "Codex"
     source: str        # human-readable config location, home shown as ~
     command: str
     args: list[str]
@@ -96,6 +102,16 @@ def _tilde(path: Path) -> str:
 def _load_json(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _load_toml(path: Path) -> dict:
+    if tomllib is None:
+        return {}
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -161,6 +177,24 @@ def antigravity_entry() -> ServerEntry | None:
         return None
     key, f = hit
     return ServerEntry("Antigravity", f"{_tilde(path)} mcpServers.{key}", **f)
+
+
+def gemini_cli_entry() -> ServerEntry | None:
+    path = Path.home() / ".gemini" / "settings.json"
+    hit = _pick_server(_load_json(path).get("mcpServers"))
+    if not hit:
+        return None
+    key, f = hit
+    return ServerEntry("Gemini CLI", f"{_tilde(path)} mcpServers.{key}", **f)
+
+
+def codex_entry() -> ServerEntry | None:
+    path = Path.home() / ".codex" / "config.toml"
+    hit = _pick_server(_load_toml(path).get("mcp_servers"))
+    if not hit:
+        return None
+    key, f = hit
+    return ServerEntry("Codex", f"{_tilde(path)} mcp_servers.{key}", **f)
 
 
 # ---------------------------------------------------------------------------
@@ -293,13 +327,23 @@ def _warning(version: str, host: str) -> str:
 
 def report(project: Path | None = None) -> list[str]:
     project = project or project_dir()
-    entries = [e for e in (claude_code_entry(project), antigravity_entry()) if e]
+    entries = [
+        e for e in (
+            claude_code_entry(project),
+            antigravity_entry(),
+            gemini_cli_entry(),
+            codex_entry(),
+        ) if e
+    ]
     lines: list[str] = []
     warnings: list[str] = []
     if not entries:
         exe = _find_executable("zotero-mcp")
-        where = ("no Zotero MCP server registered (checked ~/.claude.json, "
-                 f"{project / '.mcp.json'}, ~/.gemini/config/mcp_config.json)")
+        where = (
+            "no Zotero MCP server registered (checked ~/.claude.json, "
+            f"{project / '.mcp.json'}, ~/.gemini/config/mcp_config.json, "
+            "~/.gemini/settings.json, ~/.codex/config.toml)"
+        )
         if exe is None:
             return [f"zotero-mcp-server: not installed — {where}"]
         res = resolve(ServerEntry("PATH", "PATH", str(exe), []))
