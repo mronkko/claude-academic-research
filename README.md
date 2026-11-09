@@ -4,6 +4,9 @@ Academic research plugins for Claude Code and Antigravity: MCP-grounded citation
 integrity, systematic reviews, Zotero operations, and parallel-critic manuscript
 revision.
 
+**Demo video:** [an end-to-end literature review](https://www.youtube.com/watch?v=1K_4QqUlSBU),
+recorded with an early version of the toolset (commands and prompts have changed since).
+
 ## Install and Load
 
 ### Claude Code
