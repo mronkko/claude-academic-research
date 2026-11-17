@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.33.0] — 2026-11-17
+
+### Added
+
+- **Record-list coding fields.** A `FULLTEXT_CODING_FIELDS` entry with a
+  `records` spec holds a JSON list of records (e.g. measure, concept from a
+  closed list, context, verbatim quote). `fulltext_code.py` checks every quote
+  against the PDF text layer (article, then supplements) before the coding note
+  is written; unverifiable records are dropped and logged, and an answer left
+  with none becomes `error` so a re-run codes it again. See `scripts/pipelines/records.py`.
+- **`--provider NAME`** on `abstract_screen.py` and `fulltext_code.py`: a
+  per-run override of `[llm] provider` that leaves `config.toml` untouched.
+- **Record-based highlight comments.** `highlight_quotes.py` builds each record's
+  highlight comment from a template over the record's own fields, so the model
+  need not repeat them in `evidence_quotes`.
+
+### Fixed
+
+- **OpenAI models that reject `max_tokens`** (e.g. `gpt-6-luna`): the provider
+  and connection probe now send `max_completion_tokens` for OpenAI, adapt once on
+  the specific 400 for other compatible endpoints, and omit `temperature` for
+  models that accept only the default.
+
 ## [0.32.5] — 2026-11-09
 
 ### Changed
