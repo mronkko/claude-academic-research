@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.33.1] — 2026-11-17
+
+### Fixed
+
+- **OpenAI reasoning models returned empty answers.** The completion cap was sized
+  for the answer alone, so hidden reasoning tokens used it up (`gpt-6-luna`: ~2.1k
+  reasoning tokens of a 4k cap) and every paper failed with `JSON PARSE ERROR`.
+  Provider `openai` now gets a 32000-token cap (only tokens used are billed), and
+  an empty answer is reported per item with `finish_reason` and reasoning-token
+  counts instead of a blank `raw:`; it no longer aborts the stage.
+- **Temperature quirk with parallel workers.** A call already in flight when
+  another worker learned that the model rejects `temperature` is now retried
+  without it instead of failing the stage.
+
+### Added
+
+- `reasoning_effort` in `*_REQUEST_PARAMS` is honoured for provider `openai`
+  (e.g. `{"reasoning_effort": "low"}` roughly halves output tokens on `gpt-6-luna`).
+
 ## [0.33.0] — 2026-11-17
 
 ### Added

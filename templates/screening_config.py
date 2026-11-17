@@ -116,6 +116,12 @@ ABSTRACT_SCREENING_PROMPT_VERSION = "v1-2026-04-21"
 #       "max_tokens": 52000,
 #       "extra_headers": {"anthropic-beta": "<beta-flag>"},
 #   }
+# OpenAI (provider `openai`): only `reasoning_effort` ("none" | "low" |
+# "medium" | "high" | "xhigh", as the model supports) is honoured, e.g.
+#   FULLTEXT_CODING_REQUEST_PARAMS = {"reasoning_effort": "low"}
+# Reasoning models spend completion tokens thinking before they answer, so
+# the plugin gives OpenAI calls a 32000-token cap (billed by use only) and
+# a lower effort cuts that spend. Other fields are ignored with a warning.
 LLM_REQUEST_PARAMS: dict = {}
 ABSTRACT_SCREENING_REQUEST_PARAMS: dict = {}
 

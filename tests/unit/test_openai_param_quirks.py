@@ -14,6 +14,7 @@ def _provider(name, behaviour):
     p = llm_provider.OpenAICompatProvider.__new__(llm_provider.OpenAICompatProvider)
     p.spec = providers.require(name)
     p._quirks = {}
+    p.request_params = {}
     calls = []
 
     def create(**kw):
@@ -61,3 +62,45 @@ def test_provider_override_sets_env_and_rejects_unknown(monkeypatch):
     assert llm_provider.resolve_provider("anything").name == "openai"
     with pytest.raises(ValueError):
         llm_provider.apply_provider_override("nope")
+
+
+def test_parallel_worker_that_sent_temperature_still_retries():
+    # Another worker learns the quirk while this call is in flight, so by the
+    # time this one's 400 arrives the shared state already says "omit".
+    state = {}
+
+    def rule(kw):
+        if "temperature" in kw:
+            state["p"]._quirks["m"]["temperature"] = False  # learned elsewhere
+            return "temperature does not support 0.0"
+        return None
+    p, calls = _provider("openai", rule)
+    state["p"] = p
+    assert p.generate("m", "", "hi") == "OK"
+    assert "temperature" not in calls[-1]
+
+
+def test_empty_answer_is_a_per_item_failure_with_diagnostics():
+    def create(**kw):
+        msg = SimpleNamespace(content=None)
+        usage = SimpleNamespace(
+            completion_tokens=4000,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=4000))
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=msg, finish_reason="length")],
+            usage=usage)
+    p, _ = _provider("openai", lambda kw: None)
+    p.client.chat.completions.create = create
+    with pytest.raises(llm_provider.EmptyResponseError) as ei:
+        p.generate("m", "", "hi", max_tokens=4000)
+    assert "finish_reason=length" in str(ei.value) and "reasoning_tokens=4000" in str(ei.value)
+    verdict = llm_provider.classify_failure(ei.value)
+    assert verdict.retryable
+
+
+def test_openai_gets_roomy_cap_and_reasoning_effort():
+    p, calls = _provider("openai", lambda kw: None)
+    p.request_params = {"reasoning_effort": "low"}
+    p.generate("m", "", "hi", max_tokens=4000)
+    assert calls[-1]["max_completion_tokens"] == llm_provider.OPENAI_MIN_COMPLETION_CAP
+    assert calls[-1]["reasoning_effort"] == "low"

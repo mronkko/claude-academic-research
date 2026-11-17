@@ -66,6 +66,7 @@ class ConnectionStatus(StrEnum):
     MODEL_NOT_FOUND = "MODEL_NOT_FOUND"
     UNREACHABLE = "UNREACHABLE"
     BAD_REQUEST = "BAD_REQUEST"
+    EMPTY_RESPONSE = "EMPTY_RESPONSE"
     UNKNOWN = "UNKNOWN"
 
 
@@ -76,6 +77,8 @@ class ConnectionStatus(StrEnum):
 RETRYABLE: frozenset[str] = frozenset({
     ConnectionStatus.RATE_LIMITED.value,
     ConnectionStatus.UNREACHABLE.value,
+    # A per-item outcome: this paper got no text back, the next may.
+    ConnectionStatus.EMPTY_RESPONSE.value,
 })
 
 REMEDY: dict[str, str] = {
@@ -111,6 +114,11 @@ REMEDY: dict[str, str] = {
     ConnectionStatus.BAD_REQUEST.value: (
         "The provider rejected the request shape. This is a plugin bug "
         "rather than a configuration problem — please report it."
+    ),
+    ConnectionStatus.EMPTY_RESPONSE.value: (
+        "The model returned no text. For a reasoning model the budget was "
+        "spent on hidden reasoning; raise the output cap or lower "
+        "reasoning_effort."
     ),
     ConnectionStatus.UNKNOWN.value: (
         "Unrecognised failure. The provider's own message is above; it is "

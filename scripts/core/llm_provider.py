@@ -370,6 +370,18 @@ class GeminiProvider(LLMProvider):
             raise RuntimeError(f"Gemini API returned error: {e}") from e
 
 
+#: Floor for `max_completion_tokens` on provider `openai`; see `generate`.
+OPENAI_MIN_COMPLETION_CAP = 32000
+
+#: Request params an OpenAI-compatible call honours (the rest are
+#: Anthropic-shaped and ignored with a warning).
+OPENAI_REQUEST_PARAMS = ("reasoning_effort",)
+
+
+class EmptyResponseError(RuntimeError):
+    """The model answered with no text; the message says why."""
+
+
 class OpenAICompatProvider(LLMProvider):
     """OpenAI, OpenRouter, Ollama and LM Studio.
 
@@ -379,8 +391,12 @@ class OpenAICompatProvider(LLMProvider):
     acceptable there — the SDK requires *a* value, not a valid one.
     """
 
-    def __init__(self, spec: ProviderSpec, api_key: str | None = None):
+    def __init__(self, spec: ProviderSpec, api_key: str | None = None,
+                 request_params: dict | None = None):
         self.spec = spec
+        self.request_params = {
+            k: v for k, v in (request_params or {}).items()
+            if k in OPENAI_REQUEST_PARAMS}
         self._quirks: dict[str, dict] = {}
         if not api_key:
             api_key = _api_key_for(spec, required=not spec.local)
@@ -410,6 +426,11 @@ class OpenAICompatProvider(LLMProvider):
             max_retries=max_retries(),
         )
 
+    def _effective_params(self, per_call: dict | None) -> dict:
+        return {**self.request_params, **{
+            k: v for k, v in (per_call or {}).items()
+            if k in OPENAI_REQUEST_PARAMS}}
+
     def generate(
         self,
         model: str,
@@ -433,31 +454,60 @@ class OpenAICompatProvider(LLMProvider):
             "completion_tokens": self.spec.name == "openai",
             "temperature": True,
         })
-        for _ in range(3):
+        # OpenAI reasoning models spend completion tokens on hidden
+        # reasoning before any answer; a cap sized for the answer alone
+        # comes back empty. Billing is by tokens used, so a roomy cap costs
+        # nothing unless the model really uses it.
+        if self.spec.name == "openai":
+            max_tokens = max(max_tokens, OPENAI_MIN_COMPLETION_CAP)
+        for _ in range(4):
             kw: dict = {"model": model, "messages": messages}
             if quirks["temperature"]:
                 kw["temperature"] = temperature
             kw["max_completion_tokens" if quirks["completion_tokens"]
                else "max_tokens"] = max_tokens
+            extra = {k: v for k, v in self._effective_params(request_params).items()
+                     if k not in quirks.get("rejected", ())}
+            kw.update(extra)
             try:
                 resp = self.client.chat.completions.create(**kw)
                 break
             except Exception as e:
                 msg = str(e)
                 bad = getattr(e, "status_code", None) == 400
-                if bad and "max_tokens" in msg and "max_completion_tokens" in msg \
-                        and not quirks["completion_tokens"]:
+                # Decide from what THIS request sent, not from the shared
+                # quirk state: a parallel worker may have learned the quirk
+                # while this call was already in flight.
+                if bad and "max_tokens" in kw and "max_completion_tokens" in msg:
                     quirks["completion_tokens"] = True
-                elif bad and "temperature" in msg and quirks["temperature"]:
+                elif bad and "temperature" in kw and "temperature" in msg:
                     quirks["temperature"] = False
                     print(f"[llm] {model} rejects temperature; omitted "
                           f"(default sampling used).", file=sys.stderr)
+                elif bad and (rejected := next(
+                        (k for k in extra if k in msg), None)):
+                    quirks.setdefault("rejected", set()).add(rejected)
+                    print(f"[llm] {model} rejects {rejected}; omitted.",
+                          file=sys.stderr)
                 else:
                     raise RuntimeError(
                         f"{self.spec.label} returned error: {e}") from e
         else:
             raise RuntimeError(f"{self.spec.label}: request kept failing")
-        return (resp.choices[0].message.content or "").strip()
+        choice = resp.choices[0]
+        text = (choice.message.content or "").strip()
+        if not text:
+            usage = getattr(resp, "usage", None)
+            details = getattr(usage, "completion_tokens_details", None)
+            raise EmptyResponseError(
+                f"{self.spec.label} returned an empty answer "
+                f"(finish_reason={choice.finish_reason}, "
+                f"completion_tokens={getattr(usage, 'completion_tokens', '?')}, "
+                f"reasoning_tokens={getattr(details, 'reasoning_tokens', '?')}, "
+                f"cap={max_tokens}). A reasoning model likely spent the "
+                f"budget thinking; raise it or lower reasoning_effort in "
+                f"FULLTEXT_CODING_REQUEST_PARAMS.")
+        return text
 
 
 # ---------------------------------------------------------------------------
@@ -527,6 +577,13 @@ def get_provider(model_name: str = "", provider_hint: str = "",
     spec = resolve_provider(model_name, provider_hint)
     if spec.transport == "anthropic":
         return AnthropicProvider(request_params=request_params)
+    if spec.transport != "google" and spec.name == "openai":
+        request_params = dict(request_params or {})
+        ignored = [k for k in request_params if k not in OPENAI_REQUEST_PARAMS]
+        if ignored:
+            print(f"WARNING: request params ({', '.join(ignored)}) apply to "
+                  f"Anthropic models only; ignored for {model_name}.", flush=True)
+        return OpenAICompatProvider(spec, request_params=request_params)
     if request_params:
         print(f"WARNING: request params ({', '.join(request_params)}) apply to "
               f"Anthropic models only; ignored for {model_name}.", flush=True)
@@ -618,7 +675,11 @@ def classify_failure(exc: BaseException):
     """
     from core import model_health
 
-    status, detail, http_status = model_health.classify_exception(exc)
+    if isinstance(exc, EmptyResponseError):
+        status, detail, http_status = (
+            model_health.ConnectionStatus.EMPTY_RESPONSE, str(exc), None)
+    else:
+        status, detail, http_status = model_health.classify_exception(exc)
     return model_health.ConnectionResult(
         status=status,
         provider=configured_provider(),
