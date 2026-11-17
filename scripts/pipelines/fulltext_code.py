@@ -10,6 +10,7 @@
 #     "httpx>=0.25",
 #     "google-genai",
 #     "openai>=1.0",
+#     "pymupdf>=1.24",
 # ]
 # ///
 """LLM-driven full-text screening + structured coding for an SLR.
@@ -93,6 +94,7 @@ import csv_io  # noqa: E402
 import doi_utils  # noqa: E402
 import pdf_text_cache  # noqa: E402
 import progress_json  # noqa: E402
+import records  # noqa: E402
 import screening_common  # noqa: E402
 import tag_prefix  # noqa: E402
 import worker_pool  # noqa: E402
@@ -198,6 +200,9 @@ def _build_slr_coding_note_html(
         "fields": {f["name"]: row.get(f["name"], "")
                    for f in fields if f.get("name")},
     }
+    if row.get("_dropped_records"):
+        # What the quote check removed, so the coding is auditable.
+        data_payload["dropped_records"] = row["_dropped_records"]
     parts.append(
         f"<!-- SLR_CODING_DATA: "
         f"{json.dumps(data_payload, ensure_ascii=False)} -->"
@@ -436,6 +441,8 @@ def _validate_coding_field(field: dict) -> None:
                 f"slugged for tags: {sorted(dupes)}. Two values that differ "
                 f"only in case or punctuation would share one tag."
             )
+    for problem in records.validate_spec(name, field):
+        sys.exit(f"ERROR: {problem}")
     if field.get("tag") and values is None:
         sys.exit(
             f"ERROR: FULLTEXT_CODING_FIELDS[{name!r}] sets `tag` but declares "
@@ -495,7 +502,10 @@ def _render_prompt(template: str, fields: list[dict]) -> str:
     lines = []
     for i, f in enumerate(fields):
         values = f.get("values")
-        slot = " | ".join(f'"{v}"' for v in values) if values else '"<...>"'
+        rspec = records.spec_of(f)
+        slot = (records.prompt_slot(rspec) if rspec
+                else " | ".join(f'"{v}"' for v in values) if values
+                else '"<...>"')
         lines.append(f'  "{f["name"]}": {slot}'
                      + ("," if i + 1 < len(fields) else ""))
     json_block = "\n".join(lines)
@@ -509,6 +519,8 @@ def _render_prompt(template: str, fields: list[dict]) -> str:
                 f"{desc} Answer with exactly one of: "
                 f"{', '.join(values)}. Use no other wording."
             ).strip()
+        if records.spec_of(f):
+            desc = f"{desc}{records.prompt_guide(records.spec_of(f))}".strip()
         guide_lines.append(f"- **{f['name']}**: {desc}")
     guide = "\n".join(guide_lines)
     # The shipped templates write the output example's braces doubled
@@ -1076,6 +1088,8 @@ def build_coding_request(
     }
     for f in fields:
         row[f["name"]] = ""
+    if supplement_paths:
+        row["_supplement_paths"] = [str(p) for p in supplement_paths]
     return row, user_msg
 
 
@@ -1115,6 +1129,57 @@ def parse_coding_response(text: str, fields: list[dict]) -> dict:
     return out
 
 
+def verify_record_fields(row: dict, fields: list[dict]) -> None:
+    """Check every record field's quotes against the PDF text layer.
+
+    Runs before the coding note is written. A record whose quote the PDF
+    does not contain (or that lacks a key) is dropped from the coded value
+    and listed under `<field>_dropped` in the note data and in `reason`; if
+    that empties a non-empty answer the row becomes `error`, so a re-run
+    codes it again. The article PDF is searched first, then the appendix /
+    supplement PDFs the coder also read.
+    """
+    todo = [f for f in fields if records.spec_of(f)]
+    if not todo or row.get("decision") != "include":
+        return
+    import highlight_quotes as hq  # lazy: pulls in pymupdf
+
+    paths = [Path(row.get("pdf_path", ""))] + [
+        Path(p) for p in row.get("_supplement_paths") or []]
+    try:
+        indexed = [hq.read_pdf(p) for p in paths if p.is_file()]
+    except Exception as exc:  # noqa: BLE001
+        row["decision"] = "error"
+        row["reason"] = f"quote check failed, PDF unreadable: {exc}"[:500]
+        return
+
+    def found(quote: str) -> bool:
+        return any(hq.locate_quote(pages, heights, quote).status != "not_found"
+                   for pages, heights in indexed)
+
+    dropped_all: dict[str, list[str]] = {}
+    for f in todo:
+        name = f["name"]
+        raw = (row.get(name) or "").strip()
+        if not raw:
+            continue
+        verified, dropped, vocab = records.check(raw, records.spec_of(f), found)
+        row[name] = json.dumps(verified, ensure_ascii=False)
+        if dropped:
+            dropped_all[name] = dropped
+        if vocab:
+            print(f"  WARNING: {row.get('item_key', '')}: {name}: value(s) "
+                  f"outside the declared list, kept: {'; '.join(vocab)}",
+                  flush=True)
+        if dropped and not verified:
+            row["decision"] = "error"
+    if dropped_all:
+        row["_dropped_records"] = dropped_all
+        msg = "; ".join(f"{n}: {len(d)} record(s) dropped ({d[0]})"
+                        for n, d in dropped_all.items())
+        row["reason"] = f"{row.get('reason', '')} [{msg}]".strip()[:500]
+
+
 def apply_coded_row(
     zot,
     row: dict,
@@ -1143,6 +1208,7 @@ def apply_coded_row(
     own `generated_at`, because the log records when a decision was
     *made* and that can be days before it is filed.
     """
+    verify_record_fields(row, fields)
     decision = row.get("decision", "error")
     row["timestamp"] = timestamp or datetime.now(UTC).isoformat()
     row["prompt_version"] = prompt_version
@@ -1384,6 +1450,7 @@ def build_manifest_rows(
             "truncated": base["truncated"],
             "pdf_path": base["pdf_path"],
             "pdf_sha256": batch_manifest.file_sha256(pdf_path),
+            "supplement_paths": base.get("_supplement_paths", []),
         })
     return rows, skipped
 
@@ -1474,6 +1541,8 @@ def _base_row_from_manifest_row(
         "truncated": req.get("truncated", "false"),
         "model": model,
     }
+    if req.get("supplement_paths"):
+        row["_supplement_paths"] = list(req["supplement_paths"])
     for f in fields:
         row[f["name"]] = ""
     return row
@@ -1956,7 +2025,9 @@ def main() -> int:
                              "fulltext:include. Other fields in each note are "
                              "preserved. Use --only-keys to restrict to a subset.")
     progress_json.add_argument(parser)
+    llm_provider.add_provider_argument(parser)
     args = parser.parse_args()
+    llm_provider.apply_provider_override(args.provider)
     progress_json.configure(args.progress_json)
 
     if args.rerun and args.full_recode:

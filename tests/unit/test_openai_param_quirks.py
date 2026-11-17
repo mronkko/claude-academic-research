@@ -1,6 +1,8 @@
 """OpenAI provider adapts to models that reject max_tokens / temperature."""
+import argparse
 from types import SimpleNamespace
 
+import pytest
 from core import llm_provider, providers
 
 
@@ -46,3 +48,16 @@ def test_compatible_endpoint_retries_with_new_name_on_400():
     p, calls = _provider("ollama", rule)
     assert p.generate("m", "", "hi") == "OK"
     assert "max_tokens" in calls[0] and "max_completion_tokens" in calls[-1]
+
+
+def test_provider_override_sets_env_and_rejects_unknown(monkeypatch):
+    monkeypatch.setenv(providers.PROVIDER_ENV, "x")
+    monkeypatch.delenv(providers.PROVIDER_ENV)  # restored after the test
+    parser = argparse.ArgumentParser()
+    llm_provider.add_provider_argument(parser)
+    llm_provider.apply_provider_override(parser.parse_args([]).provider)
+    assert providers.PROVIDER_ENV not in __import__("os").environ
+    llm_provider.apply_provider_override(parser.parse_args(["--provider", "openai"]).provider)
+    assert llm_provider.resolve_provider("anything").name == "openai"
+    with pytest.raises(ValueError):
+        llm_provider.apply_provider_override("nope")

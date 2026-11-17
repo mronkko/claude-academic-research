@@ -68,6 +68,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import records  # noqa: E402
 import screening_common  # noqa: E402
 import tag_prefix  # noqa: E402
 import zotero_io  # noqa: E402
@@ -183,6 +184,8 @@ class HighlightStyle:
     color_by: str = "theme"                 # theme | severity
     entry_tags: bool = False                # issue/status/severity/layer tags
     layers: dict[str, str] = field(default_factory=dict)   # id prefix → layer
+    # Record-list coding fields (`records` spec), by field name.
+    records: dict[str, dict] = field(default_factory=dict)
 
 
 def _config_module(config_path: str):
@@ -204,6 +207,11 @@ def style_from_config(config_path: str) -> HighlightStyle:
     style.color_by = color_by
     style.entry_tags = bool(getattr(mod, "HIGHLIGHT_ENTRY_TAGS", False))
     style.layers = dict(getattr(mod, "HIGHLIGHT_LAYERS", {}) or {})
+    style.records = {
+        f["name"]: f["records"]
+        for f in getattr(mod, "FULLTEXT_CODING_FIELDS", [])
+        if f.get("name") and records.spec_of(f)
+    }
     return style
 
 
@@ -313,6 +321,29 @@ def parse_quotes(raw) -> list[dict]:
     return out
 
 
+def record_quotes(coded: dict, specs: dict[str, dict]) -> list[dict]:
+    """Highlight entries from record-list fields, comment built from the record.
+
+    Each record with a quote becomes one entry whose comment is the field's
+    `comment` template filled from the record itself (default: its non-quote
+    keys joined), so the model never repeats measure and concept in a
+    separate `evidence_quotes` entry. `bare` makes `entry_comment` use that
+    text as written, with no `field · status` head.
+    """
+    out = []
+    for name, spec in specs.items():
+        for rec in records.parse(coded.get(name, "")) or []:
+            quote = str(rec.get(records.quote_key(spec), "")).strip()
+            if not quote:
+                continue
+            entry = {"field": name, "quote": quote, "bare": True}
+            comment = records.render_comment(rec, spec)
+            if comment:
+                entry["comment"] = comment
+            out.append(entry)
+    return out
+
+
 def _truthy(value) -> bool:
     """A JSON boolean, or the string a model sometimes writes instead."""
     if isinstance(value, str):
@@ -340,6 +371,8 @@ def _is_other(name: str) -> bool:
 
 def entry_comment(entry: dict, value: str) -> str:
     """`A02 · present · minor — <comment>`, else the old `field: value`."""
+    if entry.get("bare"):
+        return entry.get("comment", "")
     if not entry.get("comment"):
         return entry["field"] + (f": {value}" if value else "")
     head = " · ".join(
@@ -474,7 +507,9 @@ def process_item(
                 "supplement_may_cover") else "",
         })
 
-    quotes = parse_quotes((payload.get("fields") or {}).get("evidence_quotes", ""))
+    coded_fields = payload.get("fields") or {}
+    quotes = parse_quotes(coded_fields.get("evidence_quotes", "")) + record_quotes(
+        coded_fields, style.records)
     if not quotes:
         row("no_quotes")
         return rows

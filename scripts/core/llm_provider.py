@@ -17,6 +17,7 @@ fallback for projects configured before `[llm] provider` existed.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -532,6 +533,33 @@ def get_provider(model_name: str = "", provider_hint: str = "",
     if spec.transport == "google":
         return GeminiProvider()
     return OpenAICompatProvider(spec)
+
+
+def add_provider_argument(parser) -> None:
+    """`--provider NAME`: a per-run override of `[llm] provider`.
+
+    Switching the configured provider is machine-wide and so changes every
+    other review; this changes it for one process only.
+    """
+    parser.add_argument(
+        "--provider", default="", metavar="NAME",
+        help="Use this LLM provider for this run only (e.g. openai, "
+             "anthropic), instead of [llm] provider in config.toml. Applies "
+             "to model defaults, the pre-flight probe and every call.")
+
+
+def apply_provider_override(value: str) -> None:
+    """Honour `--provider` by setting the env override the router reads.
+
+    Env beats `config.toml` everywhere (`providers.PROVIDER_ENV`), so every
+    later `resolve_provider`, model-default lookup and pre-flight in this
+    process sees the choice. A bad name fails here, before any work.
+    """
+    value = (value or "").strip()
+    if not value:
+        return
+    providers.require(value)
+    os.environ[providers.PROVIDER_ENV] = value
 
 
 # ---------------------------------------------------------------------------

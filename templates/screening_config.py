@@ -236,6 +236,22 @@ FULLTEXT_CODING_FIELDS = [
         ],
         "tag": True,
     },
+    # A LIST-of-records field: several structured records per paper (here,
+    # every measure with its concept and verbatim quote). Each quote is
+    # checked against the PDF text layer before the note is written; a
+    # record whose quote is not found is dropped and logged. highlight_quotes.py
+    # highlights each quote with the `comment` template filled from the record,
+    # so the model need not repeat it in evidence_quotes. Delete if unused.
+    # {
+    #     "name": "measures",
+    #     "description": "Every measure of the focal construct the paper uses.",
+    #     "records": {
+    #         "keys": ["id", "measure", "concept", "context", "quote"],
+    #         "values": {"concept": ["trust", "commitment", "not covered"]},
+    #         "quote": "quote",
+    #         "comment": "{measure} - {concept}",
+    #     },
+    # },
     # Add as many fields as your coding schema demands. 5–15 is typical.
     # Suggested additions for entrepreneurship SLRs:
     #   theories_and_references  — theoretical lenses used

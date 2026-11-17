@@ -744,7 +744,9 @@ def main() -> int:
                              "don't have one yet. Makes no LLM calls; exits "
                              "after.")
     progress_json.add_argument(parser)
+    llm_provider.add_provider_argument(parser)
     args = parser.parse_args()
+    llm_provider.apply_provider_override(args.provider)
     progress_json.configure(args.progress_json)
 
     system_prompt, config_model, prompt_version, config_mod = (
