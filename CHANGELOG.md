@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.34.0] — 2026-11-17
+
+### Added
+
+- **Usage and run settings in the full-text coding log.** Each row now carries
+  `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `finish_reason`,
+  `max_completion_tokens`, `reasoning_effort` and `temperature` (`sent` /
+  `omitted`) as reported by the provider (OpenAI, Anthropic, Gemini). The batch
+  path records the same per response and `--apply-responses` copies it to the row.
+  The columns are appended, so an existing log migrates in place on its next
+  write instead of failing the schema check.
+- **Run summary and prices.** `fulltext_code.py` ends with total prompt /
+  completion / reasoning tokens, and a cost when `screening_config.py` sets
+  `MODEL_PRICES` or `PRICE_PER_MTOK_INPUT` / `PRICE_PER_MTOK_OUTPUT`. The same prices
+  drive the dry-run estimate in place of list prices.
+
 ## [0.33.1] — 2026-11-17
 
 ### Fixed

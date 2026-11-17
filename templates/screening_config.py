@@ -122,6 +122,15 @@ ABSTRACT_SCREENING_PROMPT_VERSION = "v1-2026-04-21"
 # Reasoning models spend completion tokens thinking before they answer, so
 # the plugin gives OpenAI calls a 32000-token cap (billed by use only) and
 # a lower effort cuts that spend. Other fields are ignored with a warning.
+# Prices, so the dry-run estimate and the end-of-run summary use YOUR rates
+# (USD per million tokens) instead of the shipped list prices. Reasoning
+# tokens are billed as completion tokens. Without prices a run reports tokens
+# but no cost. The CSV log carries prompt_tokens, completion_tokens,
+# reasoning_tokens, finish_reason, the output cap, reasoning_effort and
+# whether temperature was sent, per paper.
+#   MODEL_PRICES = {"gpt-6-luna": (0.10, 0.50)}   # (input, output) per model
+#   PRICE_PER_MTOK_INPUT = 0.10                   # or one rate for whatever runs
+#   PRICE_PER_MTOK_OUTPUT = 0.50
 LLM_REQUEST_PARAMS: dict = {}
 ABSTRACT_SCREENING_REQUEST_PARAMS: dict = {}
 

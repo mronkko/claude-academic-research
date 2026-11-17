@@ -112,7 +112,8 @@ def sheet_columns(cfg) -> list[dict]:
         cols.append(col)
     cols += list(cfg.FULLTEXT_CODING_FIELDS)
     cols += [{"name": n, "description": BASE_DESCRIPTIONS[n]}
-             for n in log_schemas.FULLTEXT_TRAILING_FIELDS]
+             for n in log_schemas.FULLTEXT_TRAILING_FIELDS
+             if n not in log_schemas.FULLTEXT_USAGE_FIELDS]  # audit data, not for adjudicators
     return cols
 
 

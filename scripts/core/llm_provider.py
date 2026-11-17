@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -46,8 +47,30 @@ def max_retries() -> int:
         return DEFAULT_MAX_RETRIES
 
 
+USAGE_COLUMNS = (
+    "prompt_tokens", "completion_tokens", "reasoning_tokens", "finish_reason",
+    "max_completion_tokens", "reasoning_effort", "temperature",
+)
+
+
 class LLMProvider:
     """Base class for unified LLM providers."""
+
+    @property
+    def last_call(self) -> dict:
+        """What the calling thread's latest `generate` reported, as
+        `USAGE_COLUMNS`: token usage, finish reason, the effective output
+        cap and reasoning effort, and whether temperature was sent or
+        omitted. Per thread, so parallel workers do not read each other's.
+        Set before an empty answer raises, so a billed-but-empty call is
+        still accounted for. Empty before the first call; a field the
+        provider does not report is left out, never guessed."""
+        return dict(getattr(self.__dict__.setdefault(
+            "_tls", threading.local()), "call", {}))
+
+    def _record_call(self, **info) -> None:
+        tls = self.__dict__.setdefault("_tls", threading.local())
+        tls.call = {k: v for k, v in info.items() if v not in (None, "")}
 
     def generate(
         self,
@@ -240,6 +263,12 @@ def anthropic_request(
     return body, headers
 
 
+def _sum_tokens(usage, *names) -> int | None:
+    vals = [getattr(usage, n, None) for n in names]
+    vals = [v for v in vals if isinstance(v, int)]
+    return sum(vals) if vals else None
+
+
 def _response_text(resp) -> str:
     """Join the `text` blocks of a Messages response.
 
@@ -305,7 +334,20 @@ class AnthropicProvider(LLMProvider):
             params=providers.merge_request_params(
                 self.request_params, request_params or {}, keep_none=True),
         )
-        return _response_text(self._create(body, headers))
+        resp = self._create(body, headers)
+        usage = getattr(resp, "usage", None)
+        self._record_call(
+            prompt_tokens=_sum_tokens(
+                usage, "input_tokens", "cache_creation_input_tokens",
+                "cache_read_input_tokens"),
+            completion_tokens=getattr(usage, "output_tokens", None),
+            finish_reason=getattr(resp, "stop_reason", None),
+            max_completion_tokens=body.get("max_tokens"),
+            reasoning_effort=(body.get("output_config") or {}).get("effort")
+            or "default",
+            temperature="sent" if "temperature" in body else "omitted",
+        )
+        return _response_text(resp)
 
     def _create(self, body: dict, headers: dict):
         kw = {k: body[k] for k in _SDK_KEYWORDS if k in body}
@@ -364,6 +406,16 @@ class GeminiProvider(LLMProvider):
         try:
             response = self.client.models.generate_content(
                 model=clean_model, contents=prompt, config=config,
+            )
+            meta = getattr(response, "usage_metadata", None)
+            cands = getattr(response, "candidates", None) or [None]
+            self._record_call(
+                prompt_tokens=getattr(meta, "prompt_token_count", None),
+                completion_tokens=getattr(meta, "candidates_token_count", None),
+                reasoning_tokens=getattr(meta, "thoughts_token_count", None),
+                finish_reason=str(getattr(cands[0], "finish_reason", "") or ""),
+                max_completion_tokens=max_tokens or None,
+                reasoning_effort="default", temperature="sent",
             )
             return response.text.strip()
         except Exception as e:
@@ -496,9 +548,18 @@ class OpenAICompatProvider(LLMProvider):
             raise RuntimeError(f"{self.spec.label}: request kept failing")
         choice = resp.choices[0]
         text = (choice.message.content or "").strip()
+        usage = getattr(resp, "usage", None)
+        details = getattr(usage, "completion_tokens_details", None)
+        self._record_call(
+            prompt_tokens=getattr(usage, "prompt_tokens", None),
+            completion_tokens=getattr(usage, "completion_tokens", None),
+            reasoning_tokens=getattr(details, "reasoning_tokens", None),
+            finish_reason=getattr(choice, "finish_reason", None),
+            max_completion_tokens=max_tokens,
+            reasoning_effort=kw.get("reasoning_effort") or "default",
+            temperature="sent" if "temperature" in kw else "omitted",
+        )
         if not text:
-            usage = getattr(resp, "usage", None)
-            details = getattr(usage, "completion_tokens_details", None)
             raise EmptyResponseError(
                 f"{self.spec.label} returned an empty answer "
                 f"(finish_reason={choice.finish_reason}, "

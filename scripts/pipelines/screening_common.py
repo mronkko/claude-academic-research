@@ -258,3 +258,23 @@ def run_csv_backfill(
         flush=True,
     )
     return 0 if stats["failed"] == 0 else 1
+
+
+def model_prices(config_mod, model: str) -> tuple[float, float] | None:
+    """`(usd_per_mtok_input, usd_per_mtok_output)` the review configured.
+
+    `MODEL_PRICES = {"gpt-6-luna": (0.10, 0.50)}` is looked up by model id;
+    failing that, `PRICE_PER_MTOK_INPUT` / `PRICE_PER_MTOK_OUTPUT` apply to
+    whatever model runs. None when neither is set: the plugin then falls
+    back to the shipped list prices for estimates and reports no cost for a
+    run, since a guessed price on a paper's cost table is worse than none.
+    """
+    table = getattr(config_mod, "MODEL_PRICES", None) or {}
+    if model in table:
+        pair = table[model]
+        return float(pair[0]), float(pair[1])
+    in_p = getattr(config_mod, "PRICE_PER_MTOK_INPUT", None)
+    out_p = getattr(config_mod, "PRICE_PER_MTOK_OUTPUT", None)
+    if in_p is not None and out_p is not None:
+        return float(in_p), float(out_p)
+    return None

@@ -203,6 +203,7 @@ def paid_run_banner(
 
 def cost_estimate_line(
     model: str, *, stage: str, n_items: int, provider: str = "",
+    prices: tuple[float, float] | None = None,
 ) -> str:
     """One line of projected spend, for `--dry-run` and the paid-run banner.
 
@@ -218,6 +219,19 @@ def cost_estimate_line(
     from core import model_discovery
 
     name = provider or active_provider()
+    if prices:
+        # The review's own rates (screening_config.py), not list prices.
+        in_tok, out_tok = (
+            (model_discovery.FULLTEXT_INPUT_TOKENS, model_discovery.FULLTEXT_OUTPUT_TOKENS)
+            if stage == "fulltext_coding" else
+            (model_discovery.ABSTRACT_INPUT_TOKENS, model_discovery.ABSTRACT_OUTPUT_TOKENS))
+        usd = n_items * (in_tok * prices[0] + out_tok * prices[1]) / 1_000_000
+        return (
+            f"Estimated cost: ~${usd:,.2f} for {n_items:,} item(s) at your "
+            f"configured ${prices[0]}/M input and ${prices[1]}/M output, "
+            f"assuming ~{in_tok:,} input and ~{out_tok:,} output tokens per "
+            f"item (a reasoning model may use more; excludes retries)."
+        )
     spec = providers.get(name)
     if spec is None:
         return f"Estimated cost: unknown — unrecognised provider {name!r}."

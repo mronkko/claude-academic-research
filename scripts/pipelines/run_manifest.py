@@ -92,13 +92,15 @@ def execute_one(req: dict, client, model: str) -> dict:
         )
     except Exception as e:  # noqa: BLE001 - classified, not swallowed
         verdict = llm_provider.classify_failure(e)
+        usage = getattr(client, "last_call", {})
         return _stamped({
             "call_status": "error",
-            "finish_reason": None,
+            "finish_reason": usage.get("finish_reason"),
             "response_text": None,
             "error": f"{verdict.status.value}: {verdict.detail}"[:300],
-            "input_tokens": 0,
-            "output_tokens": 0,
+            "input_tokens": int(usage.get("prompt_tokens") or 0),
+            "output_tokens": int(usage.get("completion_tokens") or 0),
+            "usage": usage,
             "_fatal": "" if verdict.retryable else verdict.format(),
         })
     if not (text or "").strip():
@@ -106,19 +108,26 @@ def execute_one(req: dict, client, model: str) -> dict:
         # This is the signature of an unframed prompt, and the run
         # record's degeneracy check is what turns a corpus of these into
         # a refusal rather than 240 `borderline` tags.
+        usage = getattr(client, "last_call", {})
         return _stamped({
-            "call_status": "empty", "finish_reason": "stop",
-            "response_text": "", "input_tokens": 0, "output_tokens": 0,
+            "call_status": "empty",
+            "finish_reason": usage.get("finish_reason", "stop"),
+            "response_text": "",
+            "input_tokens": int(usage.get("prompt_tokens") or 0),
+            "output_tokens": int(usage.get("completion_tokens") or 0),
+            "usage": usage,
         })
+    usage = getattr(client, "last_call", {})
     return _stamped({
         "call_status": "ok",
-        "finish_reason": "stop",
+        "finish_reason": usage.get("finish_reason", "stop"),
         "response_text": text,
-        # The SDKs report usage inconsistently across providers and this
-        # layer does not see it; character counts are honest proxies and
-        # are labelled as estimates in the run record.
-        "input_tokens": (len(req.get("system", "")) + len(req.get("user", ""))) // 4,
-        "output_tokens": len(text) // 4,
+        # Reported usage where the provider gives it; otherwise character
+        # counts, honest proxies that the run record labels as estimates.
+        "input_tokens": int(usage.get("prompt_tokens")
+                            or (len(req.get("system", "")) + len(req.get("user", ""))) // 4),
+        "output_tokens": int(usage.get("completion_tokens") or len(text) // 4),
+        "usage": usage,
     })
 
 

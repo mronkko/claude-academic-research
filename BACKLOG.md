@@ -2251,6 +2251,6 @@ S10's `csl_json_to_zotero` reasoning) — but it surfaced two live defects.
 
 Landed: OpenAI `max_completion_tokens`/temperature handling, `--provider`, record-list coding fields (`records.py`), record-based highlight comments.
 
-- Record the temperature omission (stderr only today) in the CSV log row so runs stay auditable.
+- Usage columns exist for full-text coding only; `abstract_screen.py`'s log has none yet.
 - `--update-fields` re-coding (`merge_update_into_note`) does not run the record quote check.
 - `check_responses` does not yet report per-record quote counts.

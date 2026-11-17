@@ -31,8 +31,17 @@ FULLTEXT_BASE_FIELDS: list[str] = [
     "decision", "exclusion_code", "reason",
 ]
 
+#: Per-call accounting, appended after `prompt_version`. Appended — never
+#: inserted — so an older log whose header lacks them is migrated in place
+#: by `csv_io.upsert_by_item_key` (its header is an ordered subset of the
+#: new schema) rather than refused as a schema mismatch.
+FULLTEXT_USAGE_FIELDS: list[str] = [
+    "prompt_tokens", "completion_tokens", "reasoning_tokens", "finish_reason",
+    "max_completion_tokens", "reasoning_effort", "temperature",
+]
+
 FULLTEXT_TRAILING_FIELDS: list[str] = [
-    "model", "prompt_version",
+    "model", "prompt_version", *FULLTEXT_USAGE_FIELDS,
 ]
 
 

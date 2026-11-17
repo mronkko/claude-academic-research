@@ -1180,6 +1180,35 @@ def verify_record_fields(row: dict, fields: list[dict]) -> None:
         row["reason"] = f"{row.get('reason', '')} [{msg}]".strip()[:500]
 
 
+def usage_summary(output_path, rows: list[dict], model: str, config_mod) -> str:
+    """End-of-run token totals, and a cost when the review configured prices.
+
+    Totals are over this run's rows (the CSV carries the same numbers per
+    paper). Prices come from `screening_common.model_prices`; without them
+    only tokens are reported, never a guessed cost.
+    """
+    def total(col: str) -> int:
+        return sum(int(r.get(col) or 0) for r in rows)
+
+    prompt, completion = total("prompt_tokens"), total("completion_tokens")
+    if not (prompt or completion):
+        return ""
+    reasoning = total("reasoning_tokens")
+    line = (f"Tokens: {prompt:,} prompt, {completion:,} completion"
+            + (f" (of which {reasoning:,} reasoning)" if reasoning else ""))
+    prices = screening_common.model_prices(config_mod, model)
+    if prices:
+        usd = (prompt * prices[0] + completion * prices[1]) / 1_000_000
+        line += (f"\nCost: ${usd:,.4f} at ${prices[0]}/M input and "
+                 f"${prices[1]}/M output (your configured prices; reasoning "
+                 f"tokens are billed as completion)")
+    else:
+        line += ("\nCost: not computed - set MODEL_PRICES or "
+                 "PRICE_PER_MTOK_INPUT / PRICE_PER_MTOK_OUTPUT in "
+                 "screening_config.py")
+    return line
+
+
 def apply_coded_row(
     zot,
     row: dict,
@@ -1308,7 +1337,10 @@ def _code_one(item: dict, pdf_path: Path, client, model: str, prompt: str,
         row["decision"] = "error"
         row["reason"] = f"{verdict.status.value}: {verdict.detail}"[:300]
         row["_fatal"] = "" if verdict.retryable else verdict.format()
+        # An empty answer was still billed; a failed request has no usage.
+        row.update(getattr(client, "last_call", {}))
         return row
+    row.update(getattr(client, "last_call", {}))
     row.update(parse_coding_response(text, fields))
     return row
 
@@ -1716,6 +1748,8 @@ def apply_responses(
             continue
         model = resp.get("model", "") or req.get("model_hint", "")
         row = _base_row_from_manifest_row(req, model=model, fields=fields)
+        # Usage as the executor reported it, so the log carries the spend.
+        row.update(resp.get("usage") or {})
         status = resp.get("call_status", "error")
         if status == "ok":
             _, answer = batch_manifest.split_reasoning(
@@ -2327,6 +2361,7 @@ def main() -> int:
                                would_code=len(to_code), model=model)
             print(cost_estimate_line(
                 model, stage="fulltext_coding", n_items=len(to_code),
+                prices=screening_common.model_prices(config_mod, model),
             ), flush=True)
             return 0
 
@@ -2432,6 +2467,7 @@ def main() -> int:
                   flush=True)
             print(cost_estimate_line(
                 model, stage="fulltext_coding", n_items=len(to_update),
+                prices=screening_common.model_prices(config_mod, model),
             ), flush=True)
             return 0
 
@@ -2600,11 +2636,13 @@ def main() -> int:
                        model=model, mode="code")
 
     fatal: list[str] = []
+    run_rows: list[dict] = []
     # Cancels queued calls on any exception or Ctrl+C (worker_pool).
     with worker_pool.cancelling_pool(args.workers) as pool:
         futures = {pool.submit(worker, it): it for it in to_code}
         for fut in concurrent.futures.as_completed(futures):
             row = fut.result()
+            run_rows.append(row)
             # Carried out of the worker on the row because that is the
             # only channel back; popped before the row reaches the CSV,
             # which has a fixed schema.
@@ -2652,6 +2690,10 @@ def main() -> int:
     print(f"Done. Coded {done_count} of {total} items.")
     for k in ("include", "exclude", "error", "no_pdf"):
         print(f"  {k}: {counts.get(k, 0)}")
+    summary = usage_summary(
+        output_path, [r for r in run_rows], model, config_mod)
+    if summary:
+        print(summary)
     print(f"Log: {output_path}")
     return 1 if fatal else 0
 
