@@ -325,7 +325,8 @@ def _chat_request(
         headers,
         {
             "model": model,
-            "max_tokens": PROBE_MAX_TOKENS,
+            ("max_completion_tokens" if spec.name == "openai"
+             else "max_tokens"): PROBE_MAX_TOKENS,
             "messages": [{"role": "user", "content": PROBE_PROMPT}],
         },
     )

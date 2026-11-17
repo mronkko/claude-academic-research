@@ -380,6 +380,7 @@ class OpenAICompatProvider(LLMProvider):
 
     def __init__(self, spec: ProviderSpec, api_key: str | None = None):
         self.spec = spec
+        self._quirks: dict[str, dict] = {}
         if not api_key:
             api_key = _api_key_for(spec, required=not spec.local)
         try:
@@ -421,15 +422,40 @@ class OpenAICompatProvider(LLMProvider):
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        try:
-            resp = self.client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-        except Exception as e:
-            raise RuntimeError(f"{self.spec.label} returned error: {e}") from e
+        # Newer OpenAI models reject `max_tokens` (they want
+        # `max_completion_tokens`) and some accept only the default
+        # temperature. Other OpenAI-compatible endpoints (Ollama, gateways)
+        # may accept only the old name, so start from the provider's own
+        # convention and adapt once on the specific 400, remembering the
+        # outcome per model for the rest of the run.
+        quirks = self._quirks.setdefault(model, {
+            "completion_tokens": self.spec.name == "openai",
+            "temperature": True,
+        })
+        for _ in range(3):
+            kw: dict = {"model": model, "messages": messages}
+            if quirks["temperature"]:
+                kw["temperature"] = temperature
+            kw["max_completion_tokens" if quirks["completion_tokens"]
+               else "max_tokens"] = max_tokens
+            try:
+                resp = self.client.chat.completions.create(**kw)
+                break
+            except Exception as e:
+                msg = str(e)
+                bad = getattr(e, "status_code", None) == 400
+                if bad and "max_tokens" in msg and "max_completion_tokens" in msg \
+                        and not quirks["completion_tokens"]:
+                    quirks["completion_tokens"] = True
+                elif bad and "temperature" in msg and quirks["temperature"]:
+                    quirks["temperature"] = False
+                    print(f"[llm] {model} rejects temperature; omitted "
+                          f"(default sampling used).", file=sys.stderr)
+                else:
+                    raise RuntimeError(
+                        f"{self.spec.label} returned error: {e}") from e
+        else:
+            raise RuntimeError(f"{self.spec.label}: request kept failing")
         return (resp.choices[0].message.content or "").strip()
 
 

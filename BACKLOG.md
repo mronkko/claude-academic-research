@@ -2246,3 +2246,12 @@ S10's `csl_json_to_zotero` reasoning) — but it surfaced two live defects.
   would need bbox-level extraction (`pdftotext -bbox-layout`) or an OCR pass.
   Downstream pipelines should abstain on such rows rather than trust the
   title.
+
+## Requests from the metrics-classification project (2026-11-17)
+
+Deferred from a peer session; bug fix (OpenAI `max_completion_tokens` / temperature) already landed.
+
+1. **Several records per paper in fulltext coding.** A coding field holding a list of records (id, measure, concept from a closed list or "not covered", context, verbatim quote), with every quote checked against the PDF text layer (reuse `highlight_quotes.py` matching) before the note is written. Today only possible by stuffing JSON into a free-text field.
+2. **Per-run `--provider` flag** on the screening/coding scripts; switching `[llm] provider` in config.toml is machine-wide.
+3. **`highlight_quotes.py`: build the highlight comment from the record's own fields** (measure + concept) instead of requiring the model to repeat them in `evidence_quotes`.
+4. Temperature omission is currently only printed to stderr (`[llm] <model> rejects temperature`); record it in the CSV log row so runs stay auditable.
