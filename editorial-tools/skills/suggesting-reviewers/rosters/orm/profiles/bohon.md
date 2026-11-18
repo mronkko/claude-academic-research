@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 1999, works_count: 41, h_index: 13 }
 built: 2026-06-06
 works_through: 2025-08-01
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 0
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Stephanie A. Bohon — University of Tennessee-Knoxville, USA
@@ -30,4 +30,4 @@ Quantitative sociologist/demographer studying migration, race/ethnicity, and urb
 
 ## ORM publications
 
-No *Organizational Research Methods* articles found in the OpenAlex sweep (source S133599136, 2026-10-19). Board member without first-party ORM publications — eligibility and method fit rest on the profile above.
+0 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).

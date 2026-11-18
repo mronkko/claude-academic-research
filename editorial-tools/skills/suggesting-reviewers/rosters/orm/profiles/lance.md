@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 1988, works_count: 170, h_index: 49 }
 built: 2026-06-06
 works_through: 2025-03-04
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 8
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Charles E. Lance — Organizational Research & Development LLC, USA
@@ -31,13 +31,13 @@ Eminent measurement methodologist. Defining contributions to measurement invaria
 
 ## ORM publications
 
-8 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+8 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2010 — More Statistical and Methodological Myths and Urban Legends — _Management and Organizational Studies_
-- 2010 — What Is Method Variance and How Can We Cope With It? A Panel Discussion — _Psychometric Methodologies and Testing_
-- 2010 — A Cautionary Note on Modeling Multitrait-Multirater Data Arising From Ill-Structured Measurement Designs — _Psychometric Methodologies and Testing_
+- 2010 — What Is Method Variance and How Can We Cope With It? A Panel Discussion — _Business Strategies and Management Research_
+- 2010 — More Statistical and Methodological Myths and Urban Legends — _Business Strategies and Management Research_
 - 2010 — Method Effects, Measurement Error, and Substantive Conclusions — _Psychometric Methodologies and Testing_
-- 2007 — Case Study — _Psychometric Methodologies and Testing_
-- 2006 — The Sources of Four Commonly Reported Cutoff Criteria — _Evaluation and Performance Assessment_
+- 2010 — A Cautionary Note on Modeling Multitrait-Multirater Data Arising From Ill-Structured Measurement Designs — _Psychometric Methodologies and Testing_
+- 2007 — Case Study: A Monte Carlo Investigation of Assessment Center Construct Validity Models — _Psychometric Methodologies and Testing_
+- 2006 — The Sources of Four Commonly Reported Cutoff Criteria: What Did They Really Say? — _Meta-analysis and systematic reviews_
 - 2000 — A Review and Synthesis of the Measurement Invariance Literature: Suggestions, Practices, and Recommendations for Organizational Research — _Psychometric Methodologies and Testing_
-- 1999 — Ν2: A Proportional Variance-Accounted for Index for Some Cross-Level and Person-Situation Research Designs — _Behavioral and Psychological Studies_
+- 1999 — Ν2: A Proportional Variance-Accounted for Index for Some Cross-Level and Person-Situation Research Designs — _Psychometric Methodologies and Testing_

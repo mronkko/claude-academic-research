@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 1993, works_count: 73, h_index: 15 }
 built: 2026-06-06
 works_through: 2023-10-09
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 1
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Robert Wright — Hong Kong Polytechnic University, China
@@ -31,6 +31,6 @@ Methodologist in managerial and organizational cognition, best known for advanci
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
 - 2007 — Eliciting Cognitions of Strategizing Using Advanced Repertory Grids in a World Constructed and Reconstructed — _Cognitive and psychological constructs research_

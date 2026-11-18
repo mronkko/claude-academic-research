@@ -3,21 +3,15 @@
 ```yaml
 journal: Organizational Research Methods
 source_url: https://journals.sagepub.com/editorial-board/ORM
-snapshot_date: 2026-10-19
+snapshot_date: 2026-11-18
 ```
 
-> Extracted from the SAGE editorial-board page on the `snapshot_date` above
-> (2026-10-19: page text pasted by the editor — SAGE returns 403 to WebFetch).
-> The 2026-10 page lists only Editor / Associate Editors / Editorial Board; the
-> founding/past-editor roles below are carried forward from the 2026-06
-> snapshot (all six are still on the board). Minor typos on the page are
-> normalised here (e.g. "Urbana-Champaigne", "HEC, Canada"). Names/affiliations should be spot-checked against the
-> live page before relying on a borderline case. Eligibility is assigned by
-> **current role**: a person who is a current Editor or Associate Editor is
-> `eligible: no` even if they also appear in the alphabetical Editorial Board
-> list (deduped here to their highest current role). Past editors and the
-> founding editor who are still listed on the board are `eligible: yes` per the
-> editor's rule.
+> Extracted from the live SAGE editorial-board page on `snapshot_date` above.
+> Eligibility is assigned by **current role**: a person who is a current Editor
+> or Associate Editor is `eligible: no` even if they also appear in the
+> alphabetical Editorial Board list (deduped here to their highest current
+> role). Past editors and the founding editor who are still listed on the board
+> are `eligible: yes` per the editor's rule.
 
 ## Editors — `eligible: no`
 
@@ -98,7 +92,7 @@ omitted here to avoid duplicate entries; they keep their roles above.)
 - Louis Hickman — Virginia Tech, USA | eligible: yes
 - Joeri Hofmans — Vrije Universiteit Brussel, Belgium | eligible: yes
 - Christina Hoon — University of Bielefeld, Germany | eligible: yes
-- Gazi Islam — Grenoble Ecole de Management, France | eligible: yes
+- Gazi Islam — Grenoble École de Management, France | eligible: yes
 - Scott Johnson — Iowa State University, USA | eligible: yes
 - Harry Joo — Indiana University, USA | eligible: yes
 - Arturs Kalnins — University of Iowa, USA | eligible: yes
@@ -120,7 +114,7 @@ omitted here to avoid duplicate entries; they keep their roles above.)
 - Adam W. Meade — North Carolina State University, USA | eligible: yes
 - Jacqueline Mees-Buss — University of Sydney, Australia | eligible: yes
 - Erik Monsen — University of Vermont, USA | eligible: yes
-- Duc Nguyen — University of Manchester, UK (not listed on board page; identified via OpenAlex — Duc Cuong Nguyen) | eligible: yes
+- Duc Nguyen — University of Manchester, UK | eligible: yes
 - Chris Nye — Michigan State University, USA | eligible: yes
 - Paula O'Kane — University of Otago, New Zealand | eligible: yes
 - Ernest O'Boyle — Indiana University Bloomington Kelley School of Business, USA | eligible: yes
@@ -135,7 +129,7 @@ omitted here to avoid duplicate entries; they keep their roles above.)
 - Rhonda K. Reger — University of Tennessee, USA | eligible: yes
 - Hettie Richardson — Texas Christian University, USA | eligible: yes
 - Kevin Rockmann — George Mason University, USA | eligible: yes
-- Ingo Rohlfing — University of Passau, Germany (board page misspells as "Rolfing") | eligible: yes
+- Ingo Rohlfing — University of Passau, Germany | eligible: yes
 - Patrick Rosopa — Clemson University, USA | eligible: yes
 - Hannah R. Rothstein — Baruch College-CUNY, Zicklin School of Business, USA | eligible: yes
 - Linda Rouleau — HEC Montréal, Canada | eligible: yes
@@ -157,7 +151,7 @@ omitted here to avoid duplicate entries; they keep their roles above.)
 - Mo Wang — University of Florida, USA | eligible: yes
 - Bert Weijters — Ghent University, Belgium | eligible: yes
 - Andrea Whittle — Newcastle University Business School, UK | eligible: yes
-- Annika Wilhelmy — University of Zurich, Switzerland | eligible: yes
+- Annika Wilhelmy — University of Zürich, Switzerland | eligible: yes
 - David J. Woehr — University of North Carolina-Charlotte, USA | eligible: yes
 - Hyun-Soo Woo — University of Mississippi, USA | eligible: yes
 - Sang Eun Woo — Purdue University, USA | eligible: yes

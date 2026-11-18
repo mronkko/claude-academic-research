@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 1995, works_count: 270, h_index: 71 }
 built: 2026-06-06
 works_through: 2026-02-10
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 7
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Paul Bliese — Walter Reed Army Institute of Research, USA
@@ -31,12 +31,12 @@ Past editor of ORM and a leading quantitative methodologist in multilevel modeli
 
 ## ORM publications
 
-7 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+7 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2019 — Detecting Consensus Emergence in Organizational Multilevel Data: Power Simulations — _Social and Intergroup Psychology_
-- 2016 — Understanding Relative and Absolute Change in Discontinuous Growth Models — _Labor market dynamics and wage inequality_
-- 2007 — Multilevel Methods — _Social Capital and Networks_
-- 2005 — Conceptual Framework and Statistical Procedures for Delineating and Testing Multilevel Theories of Homology — _Qualitative Comparative Analysis Research_
-- 2004 — Being Both Too Liberal and Too Conservative: The Perils of Treating Grouped Data as though They Were Independent — _Qualitative Comparative Analysis Research_
+- 2019 — Detecting Consensus Emergence in Organizational Multilevel Data: Power Simulations — _Statistical Methods and Bayesian Inference_
+- 2016 — Understanding Relative and Absolute Change in Discontinuous Growth Models: Coding Alternatives and Implications for Hypothesis Testing — _Statistical Methods and Bayesian Inference_
+- 2007 — Multilevel Methods: Future Directions in Measurement, Longitudinal Analyses, and Nonnormal Outcomes — _Statistical Methods and Bayesian Inference_
+- 2005 — Conceptual Framework and Statistical Procedures for Delineating and Testing Multilevel Theories of Homology — _Business Strategies and Management Research_
+- 2004 — Being Both Too Liberal and Too Conservative: The Perils of Treating Grouped Data as though They Were Independent — _Statistical Methods and Bayesian Inference_
 - 2002 — Growth Modeling Using Random Coefficient Models: Model Building, Testing, and Illustrations — _Statistical Methods and Bayesian Inference_
-- 1998 — Group Size, ICC Values, and Group-Level Correlations: A Simulation — _Customer Service Quality and Loyalty_
+- 1998 — Group Size, ICC Values, and Group-Level Correlations: A Simulation — _Reliability and Agreement in Measurement_

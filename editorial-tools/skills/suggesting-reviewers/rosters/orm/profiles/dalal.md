@@ -10,9 +10,9 @@ career_stage: mid
 career_signals: { first_pub_year: 2010, works_count: 56, h_index: 18 }
 built: 2026-06-06
 works_through: 2023-08-21
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 3
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Dev Dalal — University at Albany SUNY, USA
@@ -32,7 +32,7 @@ Quantitative I-O methodologist focused on regression diagnostics (centering, mul
 
 ## ORM publications
 
-3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
 - 2016 — Experimental Comparisons of Methods for Reducing Deliberate Distortions to Self-Report Measures of Sensitive Constructs — _Survey Sampling and Estimation Techniques_
 - 2011 — Some Common Myths About Centering Predictor Variables in Moderated Multiple Regression and Polynomial Regression — _Advanced Statistical Methods and Models_

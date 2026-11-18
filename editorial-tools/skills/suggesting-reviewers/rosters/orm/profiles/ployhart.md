@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 1998, works_count: 208, h_index: 65 }
 built: 2026-06-06
 works_through: 2026-05-21
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 6
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Robert E. Ployhart — University of South Carolina, USA
@@ -31,11 +31,11 @@ Eminent quantitative methodologist specializing in the theory, design, and analy
 
 ## ORM publications
 
-6 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+6 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2011 — The Analysis of Mean Differences Using Mean and Covariance Structure Analysis — _Psychometric Methodologies and Testing_
-- 2007 — Multilevel Methods — _Social Capital and Networks_
-- 2005 — Assessing the Convergent and Discriminant Validity of Goldberg’s International Personality Item Pool — _Personality Traits and Psychology_
-- 2004 — A Monte Carlo Comparison of Relative Importance Methodologies — _Advanced Statistical Methods and Models_
+- 2011 — The Analysis of Mean Differences Using Mean and Covariance Structure Analysis: Effect Size Estimation and Error Rates — _Psychometric Methodologies and Testing_
+- 2007 — Multilevel Methods: Future Directions in Measurement, Longitudinal Analyses, and Nonnormal Outcomes — _Statistical Methods and Bayesian Inference_
+- 2005 — Assessing the Convergent and Discriminant Validity of Goldberg’s International Personality Item Pool: A Multitrait-Multimethod Examination — _Personality Traits and Psychology_
 - 2004 — Applications of Mean and Covariance Structure Analysis: Integrating Correlational and Experimental Approaches — _Psychometric Methodologies and Testing_
+- 2004 — A Monte Carlo Comparison of Relative Importance Methodologies — _Advanced Statistical Methods and Models_
 - 2002 — Growth Modeling Using Random Coefficient Models: Model Building, Testing, and Illustrations — _Statistical Methods and Bayesian Inference_

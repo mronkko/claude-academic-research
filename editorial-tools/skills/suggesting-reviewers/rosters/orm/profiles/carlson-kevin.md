@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 1999, works_count: 54, h_index: 14 }
 built: 2026-06-06
 works_through: 2024-07-09
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 4
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Kevin Carlson — Virginia Tech, USA
@@ -31,9 +31,9 @@ Quantitative methodologist best known for influential critiques of statistical-c
 
 ## ORM publications
 
-4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2013 — Random and Systematic Error Effects of Insomnia on Survey Behavior — _Behavioral Health and Interventions_
-- 2011 — The Illusion of Statistical Control — _Accounting and Organizational Management_
-- 2010 — Understanding the Impact of Convergent Validity on Research Results — _Qualitative Comparative Analysis Research_
-- 2010 — Citing and Building on Meta-Analytic Findings — _Job Satisfaction and Organizational Behavior_
+- 2013 — Random and Systematic Error Effects of Insomnia on Survey Behavior — _Survey Methodology and Nonresponse_
+- 2011 — The Illusion of Statistical Control: Control Variable Practice in Management Research — _Business Strategies and Management Research_
+- 2010 — Understanding the Impact of Convergent Validity on Research Results — _Psychometric Methodologies and Testing_
+- 2010 — Citing and Building on Meta-Analytic Findings: A Review and Recommendations — _Meta-analysis and systematic reviews_

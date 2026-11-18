@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 1999, works_count: 85, h_index: 39 }
 built: 2026-06-06
 works_through: 2026-04-27
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 3
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Kevin Corley — Imperial College London, UK
@@ -31,8 +31,8 @@ Qualitative methodologist and co-architect of the "Gioia methodology" for rigoro
 
 ## ORM publications
 
-3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2017 — Mixed Methods in the Organizational Sciences — _Management and Organizational Studies_
-- 2015 — A Commentary on “What Grounded Theory Is…” — _Management and Organizational Studies_
-- 2012 — Seeking Qualitative Rigor in Inductive Research — _Management and Organizational Studies_
+- 2017 — Mixed Methods in the Organizational Sciences: Taking Stock and Moving Forward — _Business Strategies and Management Research_
+- 2015 — A Commentary on “What Grounded Theory Is…”: Engaging a Phenomenon from the Perspective of Those Living it — _Qualitative Research Methods and Applications_
+- 2012 — Seeking Qualitative Rigor in Inductive Research: Notes on the Gioia Methodology — _Qualitative Research Methods and Applications_

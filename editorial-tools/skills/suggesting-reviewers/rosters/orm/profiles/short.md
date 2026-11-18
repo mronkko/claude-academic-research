@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 2000, works_count: 158, h_index: 55 }
 built: 2026-06-06
 works_through: 2026-04-01
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 5
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Jeremy C. Short — University of Oklahoma, USA
@@ -31,10 +31,10 @@ Senior entrepreneurship/strategy scholar (h=55) and a leading methodologist on c
 
 ## ORM publications
 
-5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2012 — Using Computer-Aided Text Analysis to Elevate Constructs — _Job Satisfaction and Organizational Behavior_
-- 2009 — Research Methods in Entrepreneurship — _Entrepreneurship Studies and Influences_
-- 2009 — Construct Validation Using Computer-Aided Text Analysis (CATA) — _Entrepreneurship Studies and Influences_
-- 2007 — The Application of DICTION to Content Analysis Research in Strategic Management — _Organizational Strategy and Culture_
-- 2006 — An Examination of Firm, Industry, and Time Effects on Performance Using Random Coefficients Modeling — _Corporate Finance and Governance_
+- 2012 — Using Computer-Aided Text Analysis to Elevate Constructs: An Illustration Using Psychological Capital — _Computational and Text Analysis Methods_
+- 2009 — Research Methods in Entrepreneurship: Opportunities and Challenges — _Entrepreneurship Studies and Influences_
+- 2009 — Construct Validation Using Computer-Aided Text Analysis (CATA): An Illustration Using Entrepreneurial Orientation — _Computational and Text Analysis Methods_
+- 2007 — The Application of DICTION to Content Analysis Research in Strategic Management — _Computational and Text Analysis Methods_
+- 2006 — An Examination of Firm, Industry, and Time Effects on Performance Using Random Coefficients Modeling — _Statistical Methods and Bayesian Inference_

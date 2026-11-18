@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 1999, works_count: 33, h_index: 13 }
 built: 2026-06-06
 works_through: 2026-02-01
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 1
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Christine Quinn Trank — Vanderbilt University, USA
@@ -31,6 +31,6 @@ Qualitative organizational scholar (institutional theory, rhetorical history, ma
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2016 — This Is Going to Hurt — _Management and Organizational Studies_
+- 2016 — This Is Going to Hurt: Compassionate Research Methods — _Qualitative Research Methods and Ethics_

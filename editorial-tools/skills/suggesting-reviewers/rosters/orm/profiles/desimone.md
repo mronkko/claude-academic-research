@@ -10,9 +10,9 @@ career_stage: mid
 career_signals: { first_pub_year: 2010, works_count: 66, h_index: 16 }
 built: 2026-06-16
 works_through: 2025-02-28
-checked: 2026-06-16
+checked: 2026-11-18
 orm_works_count: 5
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Justin A. DeSimone — University of Alabama System, USA
@@ -33,9 +33,10 @@ Justin DeSimone is a quantitative organizational-research methodologist at the U
 
 ## ORM publications
 
-5 articles in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19). Most recent shown.
-- 2020 — Recommendations for Reviewing Meta-Analyses in Organizational Research — _Organizational Research Methods_
-- 2018 — Insufficient Effort Responding as a Partial Function of Implicit Aggression — _Organizational Research Methods_
-- 2018 — If It Were Only That Easy: The Use of Meta-Analytic Research by Organizational Scholars — _Organizational Research Methods_
-- 2014 — New Techniques for Evaluating Temporal Consistency — _Organizational Research Methods_
-- 2010 — Exploring Joint Variance Between Independent Variables and a Criterion — _Organizational Research Methods_
+5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
+
+- 2020 — Recommendations for Reviewing Meta-Analyses in Organizational Research — _Meta-analysis and systematic reviews_
+- 2018 — Insufficient Effort Responding as a Partial Function of Implicit Aggression — _Psychometric Methodologies and Testing_
+- 2018 — If It Were Only That Easy: The Use of Meta-Analytic Research by Organizational Scholars — _Meta-analysis and systematic reviews_
+- 2014 — New Techniques for Evaluating Temporal Consistency — _Psychometric Methodologies and Testing_
+- 2010 — Exploring Joint Variance Between Independent Variables and a Criterion: Meaning, Effect, and Size — _Statistical Methods and Applications_

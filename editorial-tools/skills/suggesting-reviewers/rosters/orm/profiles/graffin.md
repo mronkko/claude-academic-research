@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 2006, works_count: 67, h_index: 23 }
 built: 2026-06-06
 works_through: 2026-02-24
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 1
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Scott Graffin — University of Georgia, USA
@@ -30,6 +30,6 @@ Strategy/corporate-governance scholar (CEOs, reputation, status) with a methodol
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2021 — A Marginal Effects Approach to Interpreting Main Effects and Moderation — _Qualitative Comparative Analysis Research_
+- 2021 — A Marginal Effects Approach to Interpreting Main Effects and Moderation — _Advanced Causal Inference Techniques_

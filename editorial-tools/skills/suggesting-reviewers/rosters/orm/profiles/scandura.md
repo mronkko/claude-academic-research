@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 1984, works_count: 163, h_index: 58 }
 built: 2026-06-06
 works_through: 2024-08-20
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 1
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Terri A. Scandura — University of Miami, USA
@@ -31,6 +31,6 @@ Senior organizational scholar (LMX, mentoring) with a strong, recurring methodol
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 1999 — An Empirical Comparison of Approaches for Quantitatively Assessing the Content Adequacy of Paper-and-Pencil Measurement Instruments — _Software Engineering Research_
+- 1999 — An Empirical Comparison of Approaches for Quantitatively Assessing the Content Adequacy of Paper-and-Pencil Measurement Instruments — _Psychometric Methodologies and Testing_

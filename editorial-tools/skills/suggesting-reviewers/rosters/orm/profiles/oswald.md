@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 1999, works_count: 285, h_index: 52 }
 built: 2026-06-06
 works_through: 2026-02-18
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 4
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Frederick Oswald — UC Irvine, USA
@@ -31,9 +31,9 @@ Eminent quantitative methodologist in personnel/applied psychology. Broad method
 
 ## ORM publications
 
-4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2025 — Reliability Evidence for AI-Based Scores in Organizational Contexts: Applying Lessons Learned From Psychometrics — _Explainable Artificial Intelligence (XAI)_
-- 2013 — Understanding the Results of Multiple Linear Regression — _Advanced Statistical Methods and Models_
-- 2005 — Extending a Practical Method for Developing Alternate Test Forms Using Independent Sets of Items — _Medical Education and Admissions_
+- 2025 — Reliability Evidence for AI-Based Scores in Organizational Contexts: Applying Lessons Learned From Psychometrics — _Psychometric Methodologies and Testing_
+- 2013 — Understanding the Results of Multiple Linear Regression: Beyond Standardized Regression Coefficients — _Advanced Statistical Methods and Models_
+- 2005 — Extending a Practical Method for Developing Alternate Test Forms Using Independent Sets of Items — _Psychometric Methodologies and Testing_
 - 2004 — Applications of Mean and Covariance Structure Analysis: Integrating Correlational and Experimental Approaches — _Psychometric Methodologies and Testing_

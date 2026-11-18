@@ -10,9 +10,9 @@ career_stage: mid
 career_signals: { first_pub_year: 2012, works_count: 46, h_index: 12 }
 built: 2026-06-06
 works_through: 2019-07-10
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 1
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Le (Betty) Zhou — University of Minnesota, USA
@@ -30,6 +30,6 @@ Quantitative methodologist in organizational psychology focused on dynamic/longi
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2019 — Intensive Longitudinal Data Analyses With Dynamic Structural Equation Modeling — _Spatial and Panel Data Analysis_
+- 2019 — Intensive Longitudinal Data Analyses With Dynamic Structural Equation Modeling — _Statistical Methods and Bayesian Inference_

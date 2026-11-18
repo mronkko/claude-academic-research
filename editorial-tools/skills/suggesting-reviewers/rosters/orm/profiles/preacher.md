@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 2001, works_count: 174, h_index: 69 }
 built: 2026-06-06
 works_through: 2026-05-01
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 4
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Kristopher Preacher — Vanderbilt University, USA
@@ -31,9 +31,9 @@ Eminent quantitative methodologist (Vanderbilt's Peabody College). Defining cont
 
 ## ORM publications
 
-4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2021 — Interaction Effects in Cross-Lagged Panel Models: SEM with Latent Interactions Applied to Work-Family Conflict, Job Satisfaction, and Gender — _Work-Family Balance Challenges_
+- 2021 — Interaction Effects in Cross-Lagged Panel Models: SEM with Latent Interactions Applied to Work-Family Conflict, Job Satisfaction, and Gender — _Statistical Methods and Bayesian Inference_
 - 2019 — From Data to Causes II: Comparing Approaches to Panel Data Analysis — _Spatial and Panel Data Analysis_
-- 2019 — From Data to Causes I: Building A General Cross-Lagged Panel Model (GCLM) — _Psychological Well-being and Life Satisfaction_
-- 2008 — Testing Multilevel Mediation Using Hierarchical Linear Models — _Gender Diversity and Inequality_
+- 2019 — From Data to Causes I: Building A General Cross-Lagged Panel Model (GCLM) — _Statistical Methods and Bayesian Inference_
+- 2008 — Testing Multilevel Mediation Using Hierarchical Linear Models: Problems and Solutions — _Advanced Causal Inference Techniques_

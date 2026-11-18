@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 1991, works_count: 167, h_index: 37 }
 built: 2026-06-06
 works_through: 2025-12-18
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 3
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # David J. Woehr — University of North Carolina-Charlotte, USA
@@ -31,8 +31,8 @@ Quantitative methodologist in industrial-organizational psychology: meta-analysi
 
 ## ORM publications
 
-3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2015 — Justifying Aggregation With Consensus-Based Constructs — _Social and Intergroup Psychology_
-- 2011 — An Examination of G-Theory Methods for Modeling Multitrait–Multimethod Data — _Cognitive and psychological constructs research_
-- 2007 — Case Study — _Psychometric Methodologies and Testing_
+- 2015 — Justifying Aggregation With Consensus-Based Constructs: A Review and Examination of Cutoff Values for Common Aggregation Indices — _Reliability and Agreement in Measurement_
+- 2011 — An Examination of G-Theory Methods for Modeling Multitrait–Multimethod Data: Clarifying Links to Construct Validity and Confirmatory Factor Analysis — _Psychometric Methodologies and Testing_
+- 2007 — Case Study: A Monte Carlo Investigation of Assessment Center Construct Validity Models — _Psychometric Methodologies and Testing_

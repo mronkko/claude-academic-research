@@ -10,9 +10,9 @@ career_stage: mid
 career_signals: { first_pub_year: 1998, works_count: 31, h_index: 10 }
 built: 2026-06-06
 works_through: 2016-04-08
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 0
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Boris F. Blumberg — Maastricht University, Netherlands
@@ -30,4 +30,4 @@ Quantitative entrepreneurship scholar (self-employment, interfirm cooperation, s
 
 ## ORM publications
 
-No *Organizational Research Methods* articles found in the OpenAlex sweep (source S133599136, 2026-10-19). Board member without first-party ORM publications — eligibility and method fit rest on the profile above.
+0 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).

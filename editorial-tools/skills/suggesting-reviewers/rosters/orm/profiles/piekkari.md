@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 1999, works_count: 268, h_index: 46 }
 built: 2026-06-06
 works_through: 2026-04-10
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 2
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Rebecca Piekkari — Aalto University, Finland
@@ -31,7 +31,7 @@ Leading qualitative methodologist in international business and management. Cent
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2020 — From Templates to Heuristics: How and Why to Move Beyond the Gioia Methodology — _Management and Organizational Studies_
-- 2008 — The Case Study as Disciplinary Convention — _Management and Organizational Studies_
+- 2020 — From Templates to Heuristics: How and Why to Move Beyond the Gioia Methodology — _Qualitative Research Methods and Applications_
+- 2008 — The Case Study as Disciplinary Convention: Evidence From International Business Journals — _Business and Management Studies_

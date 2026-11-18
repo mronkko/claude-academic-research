@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 2007, works_count: 114, h_index: 32 }
 built: 2026-06-06
 works_through: 2025-10-30
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 3
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Sang Eun Woo — Purdue University, USA
@@ -31,8 +31,8 @@ Methodologist in industrial-organizational psychology with a strong identity in 
 
 ## ORM publications
 
-3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+3 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2018 — Putting the “Person” in the Center — _Mental Health Research Topics_
-- 2014 — A Bayesian Primer for the Organizational Sciences — _Decision-Making and Behavioral Economics_
-- 2014 — A Conceptual and Methodological Framework for Psychometric Isomorphism — _Psychometric Methodologies and Testing_
+- 2018 — Putting the “Person” in the Center: Review and Synthesis of Person-Centered Approaches and Methods in Organizational Science — _Psychometric Methodologies and Testing_
+- 2014 — A Conceptual and Methodological Framework for Psychometric Isomorphism: Validation of Multilevel Construct Measures — _Psychometric Methodologies and Testing_
+- 2014 — A Bayesian Primer for the Organizational Sciences: The “Two Sources” and an Introduction to BugsXLA — _Statistical Methods and Bayesian Inference_

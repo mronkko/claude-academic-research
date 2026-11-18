@@ -10,9 +10,9 @@ career_stage: mid
 career_signals: { first_pub_year: 2010, works_count: 22, h_index: 8 }
 built: 2026-06-06
 works_through: 2026-03-15
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 4
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Jeremy L. Schoen — Tennessee Tech University, USA
@@ -32,9 +32,9 @@ Quantitative I-O methods researcher specializing in conditional-reasoning / impl
 
 ## ORM publications
 
-4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
 - 2019 — Conditional Reasoning: A Review and Suggestions for Future Test Development and Validation — _Psychological Testing and Assessment_
-- 2018 — Insufficient Effort Responding as a Partial Function of Implicit Aggression — _Social and Intergroup Psychology_
-- 2018 — If It Were Only That Easy: The Use of Meta-Analytic Research by Organizational Scholars — _Auditing, Earnings Management, Governance_
-- 2010 — Exploring Joint Variance Between Independent Variables and a Criterion — _Behavioral Health and Interventions_
+- 2018 — Insufficient Effort Responding as a Partial Function of Implicit Aggression — _Psychometric Methodologies and Testing_
+- 2018 — If It Were Only That Easy: The Use of Meta-Analytic Research by Organizational Scholars — _Meta-analysis and systematic reviews_
+- 2010 — Exploring Joint Variance Between Independent Variables and a Criterion: Meaning, Effect, and Size — _Statistical Methods and Applications_

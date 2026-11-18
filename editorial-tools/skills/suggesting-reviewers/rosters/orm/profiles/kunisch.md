@@ -10,9 +10,9 @@ career_stage: mid
 career_signals: { first_pub_year: 2009, works_count: 107, h_index: 20 }
 built: 2026-06-06
 works_through: 2026-04-24
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 2
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Sven Kunisch — Aarhus University, Denmark
@@ -31,7 +31,7 @@ Strategy scholar who is a leading authority on review research as a method — t
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2022 — Review Research as Scientific Inquiry — _Qualitative Comparative Analysis Research_
-- 2018 — Feature Topic at <i>Organizational Research Methods</i> — _Big Data and Business Intelligence_
+- 2022 — Review Research as Scientific Inquiry — _Meta-analysis and systematic reviews_
+- 2018 — Feature Topic at Organizational Research Methods: How to Conduct Rigorous and Impactful Literature Reviews? — _Meta-analysis and systematic reviews_

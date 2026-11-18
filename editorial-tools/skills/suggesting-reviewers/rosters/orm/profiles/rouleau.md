@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 2002, works_count: 132, h_index: 25 }
 built: 2026-06-06
 works_through: 2026-04-10
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 0
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Linda Rouleau — HEC Montréal, Canada
@@ -31,4 +31,4 @@ Leading qualitative strategy-as-practice and process scholar. Methodological sig
 
 ## ORM publications
 
-No *Organizational Research Methods* articles found in the OpenAlex sweep (source S133599136, 2026-10-19). Board member without first-party ORM publications — eligibility and method fit rest on the profile above.
+0 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).

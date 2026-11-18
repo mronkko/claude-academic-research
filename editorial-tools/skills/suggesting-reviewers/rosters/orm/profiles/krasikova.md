@@ -10,9 +10,9 @@ career_stage: mid
 career_signals: { first_pub_year: 2011, works_count: 43, h_index: 12 }
 built: 2026-06-16
 works_through: 2025-05-10
-checked: 2026-06-16
+checked: 2026-11-18
 orm_works_count: 1
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Dina V. Krasikova — University of Texas at San Antonio, USA
@@ -30,5 +30,6 @@ Krasikova is a quantitative organizational-behavior scholar at UTSA whose work p
 
 ## ORM publications
 
-1 article in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19). Most recent shown.
-- 2013 — Residualized Relative Importance Analysis — _Organizational Research Methods_
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
+
+- 2013 — Residualized Relative Importance Analysis: A Technique for the Comprehensive Decomposition of Variance in Higher Order Regression Models — _Advanced Statistical Methods and Models_

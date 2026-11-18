@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 2000, works_count: 91, h_index: 35 }
 built: 2026-06-06
 works_through: 2025-11-04
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 4
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Daniel J. Beal — Virginia Tech, USA
@@ -31,9 +31,9 @@ Quantitative methodologist; a primary authority on experience-sampling / ecologi
 
 ## ORM publications
 
-4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
 - 2018 — Experience Sampling Methods: A Discussion of Critical Trends and Considerations for Scholarly Advancement — _Mental Health Research Topics_
-- 2007 — On the Use of Likert-Type Scales in Multilevel Data — _Psychometric Methodologies and Testing_
+- 2007 — On the Use of Likert-Type Scales in Multilevel Data: Influence on Aggregate Variables — _Psychometric Methodologies and Testing_
 - 2003 — Methods of Ecological Momentary Assessment in Organizational Research — _Mental Health Research Topics_
-- 2000 — A Comparison of Approaches to Forming Composite Measures in Structural Equation Models — _Behavioral and Psychological Studies_
+- 2000 — A Comparison of Approaches to Forming Composite Measures in Structural Equation Models — _Psychometric Methodologies and Testing_

@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 2002, works_count: 136, h_index: 35 }
 built: 2026-06-16
 works_through: 2025-11-03
-checked: 2026-06-16
+checked: 2026-11-18
 orm_works_count: 5
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Catherine Welch — Trinity College Dublin, Ireland
@@ -32,9 +32,10 @@ Catherine Welch is a senior qualitative methodologist in international business 
 
 ## ORM publications
 
-5 articles in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19). Most recent shown.
-- 2025 — Generative Artificial Intelligence in Qualitative Data Analysis: Analyzing—Or Just Chatting? — _Organizational Research Methods_
-- 2023 — Qualitative Restudies: Research Designs for Retheorizing — _Organizational Research Methods_
-- 2020 — From Templates to Heuristics: How and Why to Move Beyond the Gioia Methodology — _Organizational Research Methods_
-- 2015 — Using Case Research to Reconstruct Concepts — _Organizational Research Methods_
-- 2008 — The Case Study as Disciplinary Convention — _Organizational Research Methods_
+5 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
+
+- 2025 — Generative Artificial Intelligence in Qualitative Data Analysis: Analyzing—Or Just Chatting? — _Computational and Text Analysis Methods_
+- 2023 — Qualitative Restudies: Research Designs for Retheorizing — _Qualitative Research Methods and Applications_
+- 2020 — From Templates to Heuristics: How and Why to Move Beyond the Gioia Methodology — _Qualitative Research Methods and Applications_
+- 2015 — Using Case Research to Reconstruct Concepts: A Methodology and Illustration — _Business and Management Studies_
+- 2008 — The Case Study as Disciplinary Convention: Evidence From International Business Journals — _Business and Management Studies_

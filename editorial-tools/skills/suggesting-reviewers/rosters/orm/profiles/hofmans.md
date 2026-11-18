@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 2003, works_count: 227, h_index: 42 }
 built: 2026-06-06
 works_through: 2026-04-06
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 2
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Joeri Hofmans — Vrije Universiteit Brussel, Belgium
@@ -30,7 +30,7 @@ Quantitative methodologist specializing in person-centered and within-person dyn
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2017 — <i>k</i> -Centres Functional Clustering — _Cognitive and psychological constructs research_
-- 2017 — The Too Little/Too Much Scale — _Job Satisfaction and Organizational Behavior_
+- 2017 — k -Centres Functional Clustering: A Person-Centered Approach to Modeling Complex Nonlinear Growth Trajectories — _Advanced Clustering Algorithms Research_
+- 2017 — The Too Little/Too Much Scale: A New Rating Format for Detecting Curvilinear Effects — _Psychometric Methodologies and Testing_

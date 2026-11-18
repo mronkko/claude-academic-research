@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 2002, works_count: 105, h_index: 38 }
 built: 2026-06-06
 works_through: 2025-08-09
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 2
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Michael Cole — University of California San Diego, USA
@@ -31,7 +31,7 @@ Quantitative organizational-behavior methodologist known for guidance on within-
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2010 — Dispersion-Composition Models in Multilevel Research — _Social and Intergroup Psychology_
-- 2006 — The Measurement Equivalence of Web-Based and Paper-and-Pencil Measures of Transformational Leadership — _Motivation and Self-Concept in Sports_
+- 2010 — Dispersion-Composition Models in Multilevel Research: A Data-Analytic Framework — _Reliability and Agreement in Measurement_
+- 2006 — The Measurement Equivalence of Web-Based and Paper-and-Pencil Measures of Transformational Leadership: A Multinational Test — _Psychometric Methodologies and Testing_

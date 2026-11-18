@@ -1,41 +1,39 @@
 ```yaml
-name: Nathan A. Bowling
+name: Nathan Bowling
 openalex_id: A5012406209
 orcid: 0000-0003-3768-4939
 role: Editorial Board
 eligible: yes
 methods_orientation: quantitative
-specialties: [careless / insufficient-effort responding, survey data quality, construct validity of self-report measures, scale development, meta-analysis, construct proliferation, job satisfaction and well-being, workplace harassment and CWB]
+specialties: [insufficient effort / careless responding, survey methodology, construct validity, meta-analysis, psychometrics, counterproductive work behavior]
 career_stage: senior
-career_signals: { first_pub_year: 2003, works_count: 176, h_index: 41 }
-built: 2026-10-19
+career_signals: { first_pub_year: 2004, works_count: 174, h_index: 45 }
+built: 2026-11-18
 works_through: 2026-07-09
-checked: 2026-10-19
+checked: 2026-11-18
 orm_works_count: 4
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Nathan Bowling — University of Central Florida, USA
 
-Senior quantitative I-O psychologist (University of Central Florida since 2024; Wright State University for most of his career). His substantive work covers job satisfaction, well-being, workplace harassment, and counterproductive work behavior, and much of it uses meta-analysis. His main methods program is careless / insufficient-effort responding (IER) in surveys: how to detect it (infrequency scales, page time, instructional manipulation checks), how it confounds substantive relationships, and how it changes over the course of a questionnaire. He also writes on construct validity, scale development, and construct proliferation. Four ORM articles, all on careless responding.
+Senior I-O psychologist and quantitative methodologist widely known for foundational work on insufficient effort / careless responding (IER) in surveys, construct validity/proliferation, and meta-analysis.
 
 **Representative method papers:**
-- Huang, Liu & Bowling (2014), "Insufficient effort responding: Examining an insidious confound in survey data," J. of Applied Psychology — shows IER can inflate or bias observed correlations.
-- Huang, Bowling, Liu & Li (2014), "Detecting Insufficient Effort Responding with an Infrequency Scale: Evaluating Validity and Participant Reactions," J. of Business and Psychology — validates an infrequency-item IER detector.
-- Bowling, Huang, Brower & Bragg (2021), "The Quick and the Careless: The Construct Validity of Page Time as a Measure of Insufficient Effort Responding to Surveys," ORM — response time as an IER indicator.
-- Bowling, Gibson, Houpt & Brower (2020), "Will the Questions Ever End? Person-Level Increases in Careless Responding During Questionnaire Completion," ORM — careless responding increases as the questionnaire goes on.
-- Ramsey, Bowling & Menke (2024), "Evaluating the Construct Validity of Instructional Manipulation Checks as Measures of Careless Responding to Surveys," Applied Psychological Measurement — validity of attention checks.
-- Bowling, Sessa, Shaffer & Banks (2026), "Read my lips: No new constructs! Construct proliferation as a threat to the future of I-O psychology," Industrial and Organizational Psychology — critique of construct proliferation.
+- Huang, Bowling, Liu & Li (2014/2015), "Insufficient effort responding: Examining an insidious confound in survey data," *Journal of Applied Psychology* — landmark demonstration of IER bias in survey research.
+- Bowling et al. (2021), "The Quick and the Careless: The Construct Validity of Page Time as a Measure of Insufficient Effort Responding to Surveys," *Organizational Research Methods* — paradata / page-time IER detection.
+- Bowling et al. (2024), "Building a Bigger Toolbox: The Construct Validity of Existing and Proposed Measures of Careless Responding to Cognitive Ability Tests," *Organizational Research Methods* — careless responding measurement.
+- Bowling et al. (2024), "Confounding Effects of Insufficient Effort Responding Across Survey Sources: The Case of Personality Predicting Performance," *Organizational Research Methods* — IER confounding across sources.
 
-**Would referee well:** careless responding / IER detection and its consequences, attention checks and survey data quality, construct validity and scale development (e.g., the 2024 Multi-Facet Organizational Constraints Scale), construct redundancy / proliferation, meta-analyses in I-O and occupational health psychology.
+**Would referee well:** survey data quality and careless/insufficient-effort responding, construct validation and construct proliferation, meta-analysis, psychometrics, OB/I-O survey designs.
 
-**Notes:** An unrelated chemist namesake, Nathan P. Bowling (A5070816498), exists in OpenAlex; the right record is clear from ORCID, topics, and the UCF affiliation, so there is no real disambiguation doubt. Quantitative/psychometric; not a fit for qualitative manuscripts.
+**Notes:** OpenAlex name listed as Nathan A. Bowling.
 
 ## ORM publications
 
-4 article(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+4 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
 - 2024 — Building a Bigger Toolbox: The Construct Validity of Existing and Proposed Measures of Careless Responding to Cognitive Ability Tests — _Psychometric Methodologies and Testing_
-- 2024 — Confounding Effects of Insufficient Effort Responding Across Survey Sources: The Case of Personality Predicting Performance — _Survey Methodology and Nonresponse_
+- 2024 — Confounding Effects of Insufficient Effort Responding Across Survey Sources: The Case of Personality Predicting Performance — _Personality Traits and Psychology_
 - 2021 — The Quick and the Careless: The Construct Validity of Page Time as a Measure of Insufficient Effort Responding to Surveys — _Survey Methodology and Nonresponse_
 - 2020 — Will the Questions Ever End? Person-Level Increases in Careless Responding During Questionnaire Completion — _Survey Methodology and Nonresponse_

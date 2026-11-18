@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 1989, works_count: 138, h_index: 39 }
 built: 2026-06-06
 works_through: 2021-05-07
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 1
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Hannah R. Rothstein — Baruch College CUNY, USA
@@ -31,6 +31,6 @@ Eminent meta-analysis and research-synthesis methodologist. Co-author of the fie
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2011 — Revealed or Concealed? Transparency of Procedures, Decisions, and Judgment Calls in Meta-Analyses — _Team Dynamics and Performance_
+- 2011 — Revealed or Concealed? Transparency of Procedures, Decisions, and Judgment Calls in Meta-Analyses — _Meta-analysis and systematic reviews_

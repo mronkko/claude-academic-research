@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 1997, works_count: 202, h_index: 33 }
 built: 2026-06-06
 works_through: 2026-03-19
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 1
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # John Amis — University of Edinburgh, UK
@@ -30,6 +30,6 @@ Qualitative organizational scholar known for longitudinal, real-time case resear
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2007 — The Philosophy and Politics of Quality in Qualitative Organizational Research — _Management and Organizational Studies_
+- 2007 — The Philosophy and Politics of Quality in Qualitative Organizational Research — _Qualitative Research Methods and Applications_

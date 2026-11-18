@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 2011, works_count: 107, h_index: 24 }
 built: 2026-06-16
 works_through: 2025-02-06
-checked: 2026-06-16
+checked: 2026-11-18
 orm_works_count: 6
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Mikko Rönkkö — University of Jyväskylä, Finland
@@ -33,10 +33,11 @@ Mikko Rönkkö is a quantitative methodologist working in management, informatio
 
 ## ORM publications
 
-6 articles in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19). Most recent shown.
-- 2023 — To Omit or to Include? Integrating the Frugal and Prolific Perspectives on Control Variable Use — _Organizational Research Methods_
-- 2021 — Eight Simple Guidelines for Improved Understanding of Transformations and Nonlinear Effects — _Organizational Research Methods_
-- 2020 — An Updated Guideline for Assessing Discriminant Validity — _Organizational Research Methods_
-- 2019 — On Ignoring the Random Effects Assumption in Multilevel Models: Review, Critique, and Recommendations — _Organizational Research Methods_
-- 2014 — The Effects of Chance Correlations on Partial Least Squares Path Modeling — _Organizational Research Methods_
-- 2013 — A Critical Examination of Common Beliefs About Partial Least Squares Path Modeling — _Organizational Research Methods_
+6 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
+
+- 2023 — To Omit or to Include? Integrating the Frugal and Prolific Perspectives on Control Variable Use — _Advanced Causal Inference Techniques_
+- 2021 — Eight Simple Guidelines for Improved Understanding of Transformations and Nonlinear Effects — _Statistical Methods and Applications_
+- 2020 — An Updated Guideline for Assessing Discriminant Validity — _Psychometric Methodologies and Testing_
+- 2019 — On Ignoring the Random Effects Assumption in Multilevel Models: Review, Critique, and Recommendations — _Statistical Methods and Bayesian Inference_
+- 2014 — The Effects of Chance Correlations on Partial Least Squares Path Modeling — _Psychometric Methodologies and Testing_
+- 2013 — A Critical Examination of Common Beliefs About Partial Least Squares Path Modeling — _Psychometric Methodologies and Testing_

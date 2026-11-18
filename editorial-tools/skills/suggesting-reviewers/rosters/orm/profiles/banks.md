@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 2011, works_count: 149, h_index: 45 }
 built: 2026-06-06
 works_through: 2026-04-02
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 2
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # George C. Banks — University of North Carolina at Charlotte, USA
@@ -31,7 +31,7 @@ Quantitative methodologist and leading voice on open science, publication bias, 
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2019 — Meta-Analyses as a Multi-Level Model — _Motivation and Self-Concept in Sports_
+- 2019 — Meta-Analyses as a Multi-Level Model — _Meta-analysis and systematic reviews_
 - 2012 — Publication Bias in the Organizational Sciences — _Meta-analysis and systematic reviews_

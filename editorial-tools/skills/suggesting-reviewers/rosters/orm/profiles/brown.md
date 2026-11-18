@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 2011, works_count: 85, h_index: 29 }
 built: 2026-06-06
 works_through: 2024-05-30
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 2
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Anna Brown — University of Kent, UK
@@ -31,7 +31,7 @@ Quantitative psychometrician; the leading authority on Thurstonian IRT modeling 
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2024 — Mixed-Keying or Desirability-Matching in the Construction of Forced-Choice Measures? An Empirical Investigation and Practical Recommendations — _Decision-Making and Behavioral Economics_
-- 2016 — Preventing Rater Biases in 360-Degree Feedback by Forcing Choice — _Job Satisfaction and Organizational Behavior_
+- 2024 — Mixed-Keying or Desirability-Matching in the Construction of Forced-Choice Measures? An Empirical Investigation and Practical Recommendations — _Psychometric Methodologies and Testing_
+- 2016 — Preventing Rater Biases in 360-Degree Feedback by Forcing Choice — _Psychometric Methodologies and Testing_

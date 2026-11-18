@@ -10,9 +10,9 @@ career_stage: mid
 career_signals: { first_pub_year: 2003, works_count: 86, h_index: 22 }
 built: 2026-06-06
 works_through: 2025-07-31
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 2
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Charles A. Scherbaum — Baruch College CUNY, USA
@@ -31,7 +31,7 @@ Quantitative I-O psychologist and psychometrician. Strong methods record on stat
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2007 — Estimating Statistical Power and Required Sample Sizes for Organizational Research Using Multilevel Modeling — _Job Satisfaction and Organizational Behavior_
-- 2004 — Testing a Computational Model of the Goal-Level Effect: An Example of a Neglected Methodology — _Complex Systems and Decision Making_
+- 2007 — Estimating Statistical Power and Required Sample Sizes for Organizational Research Using Multilevel Modeling — _Statistical Methods and Bayesian Inference_
+- 2004 — Testing a Computational Model of the Goal-Level Effect: An Example of a Neglected Methodology — _Behavioral Health and Interventions_

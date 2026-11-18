@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 2011, works_count: 77, h_index: 16 }
 built: 2026-06-16
 works_through: 2025-07-01
-checked: 2026-06-16
+checked: 2026-11-18
 orm_works_count: 2
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Jane K. Lê — WHU – Otto Beisheim School of Management, Germany
@@ -31,6 +31,7 @@ Jane K. Lê (also published as Jane Lê / J. K. Lê) is a senior organization an
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19). Most recent shown.
-- 2025 — Feature Topic for ORM: Advanced Analytic Approaches to Theorize From Qualitative Research — _Organizational Research Methods_
-- 2020 — The Practice of Innovating Research Methods — _Organizational Research Methods_
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
+
+- 2025 — Feature Topic for ORM: Advanced Analytic Approaches to Theorize From Qualitative Research — _Qualitative Research Methods and Applications_
+- 2020 — The Practice of Innovating Research Methods — _Business Strategies and Management Research_

@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 2009, works_count: 78, h_index: 28 }
 built: 2026-06-16
 works_through: 2026-04-10
-checked: 2026-06-16
+checked: 2026-11-18
 orm_works_count: 0
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Michael C. Withers — Texas A&M University, USA
@@ -32,4 +32,4 @@ Strategy and corporate-governance scholar (boards of directors, director selecti
 
 ## ORM publications
 
-No first-party ORM articles found in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+0 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).

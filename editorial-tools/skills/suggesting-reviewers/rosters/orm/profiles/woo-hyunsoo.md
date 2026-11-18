@@ -10,9 +10,9 @@ career_stage: mid
 career_signals: { first_pub_year: 2015, works_count: 21, h_index: 6 }
 built: 2026-06-06
 works_through: 2024-07-09
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 2
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Hyun-Soo Woo — University of Mississippi, USA
@@ -30,7 +30,7 @@ Quantitative methodologist in strategic management. Best known for methods paper
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2023 — Time Dependence in the Cox Proportional Hazard Model as a Theory Development Opportunity: A Step-by-Step Guide — _Innovation and Knowledge Management_
-- 2022 — How Rare Is Rare? How Common Is Common? Empirical Issues Associated With Binary Dependent Variables With Rare Or Common Event Rates — _Innovation Diffusion and Forecasting_
+- 2023 — Time Dependence in the Cox Proportional Hazard Model as a Theory Development Opportunity: A Step-by-Step Guide — _Statistical Methods and Inference_
+- 2022 — How Rare Is Rare? How Common Is Common? Empirical Issues Associated With Binary Dependent Variables With Rare Or Common Event Rates — _Statistical Methods and Bayesian Inference_

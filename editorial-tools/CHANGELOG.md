@@ -4,6 +4,17 @@ Versioned independently from the `academic-research` plugin in this
 same marketplace. See the root [CHANGELOG.md](../CHANGELOG.md) for
 that plugin's history.
 
+## [0.2.1] — 2026-11-18
+
+- Refreshed the bundled ORM (Organizational Research Methods) editorial-board
+  roster against the live SAGE board listing (`snapshot_date: 2026-11-18`):
+  131 members total (120 `eligible: yes`, 11 `eligible: no`), removing 24
+  departed members and adding 15 new eligible board members with
+  OpenAlex-grounded profiles.
+- Ran an OpenAlex ORM-journal sweep (`S133599136`, `type: article|review`)
+  across all 129 profiles, updating `## ORM publications`,
+  `orm_works_count`, `orm_swept`, and `checked` to `2026-11-18`.
+
 ## [0.2.0] — 2026-06-16
 
 - Added an associate-editor suggestion mode to `suggesting-reviewers`.

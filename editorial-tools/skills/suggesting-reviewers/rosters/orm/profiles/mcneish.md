@@ -10,9 +10,9 @@ career_stage: senior
 career_signals: { first_pub_year: 2014, works_count: 172, h_index: 41 }
 built: 2026-06-06
 works_through: 2026-04-16
-checked: 2026-06-06
+checked: 2026-11-18
 orm_works_count: 2
-orm_swept: 2026-10-19
+orm_swept: 2026-11-18
 ```
 
 # Daniel McNeish — Arizona State University, USA
@@ -38,7 +38,7 @@ MBR, Behavior Research Methods, SEM journal). Not a qualitative reviewer.
 
 ## ORM publications
 
-2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-10-19).
+2 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
 
-- 2020 — Specifying Location-Scale Models for Heterogeneous Variances as Multilevel SEMs — _Psychometric Methodologies and Testing_
-- 2018 — Should We Use <i>F</i> -Tests for Model Fit Instead of Chi-Square in Overidentified Structural Equation Models? — _Psychometric Methodologies and Testing_
+- 2020 — Specifying Location-Scale Models for Heterogeneous Variances as Multilevel SEMs — _Statistical Methods and Bayesian Inference_
+- 2018 — Should We Use F -Tests for Model Fit Instead of Chi-Square in Overidentified Structural Equation Models? — _Psychometric Methodologies and Testing_

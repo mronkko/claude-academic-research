@@ -10,9 +10,9 @@ career_stage: mid
 career_signals: { first_pub_year: 2012, works_count: 40, h_index: 11 }
 built: 2026-06-06
 works_through: 2026-03-20
-checked: 2026-06-06
-orm_works_count: 1
-orm_swept: 2026-06-06
+checked: 2026-11-18
+orm_works_count: 0
+orm_swept: 2026-11-18
 ```
 
 # Ivan Hernandez — Virginia Tech, USA
@@ -30,6 +30,4 @@ I/O psychologist and computational-methods specialist; applies NLP, machine lear
 
 ## ORM publications
 
-1 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-06-06).
-
-- 2023 — Demographic Inference in the Digital Age: Using Neural Networks to Assess Gender and Ethnicity at Scale — _Social and Intergroup Psychology_
+0 article(s)/review(s) in *Organizational Research Methods* (OpenAlex source S133599136, swept 2026-11-18).
